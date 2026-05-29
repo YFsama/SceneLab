@@ -1,6 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import { FeatureTree, createSketchFeature, createExtrudeFeature } from './tree';
+import {
+  FeatureTree,
+  createSketchFeature,
+  createExtrudeFeature,
+  createFilletFeature,
+  createChamferFeature,
+  createShellFeature,
+} from './tree';
 import { createSketch, addRectangle } from '../sketch/engine';
+
+/** A standalone extrude feature that produces a box-like body (no parent sketch). */
+function boxExtrude() {
+  return createExtrudeFeature(
+    {
+      profile: [
+        { x: -5, y: 0, z: -5 },
+        { x: 5, y: 0, z: -5 },
+        { x: 5, y: 0, z: 5 },
+        { x: -5, y: 0, z: 5 },
+      ],
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 10,
+    },
+    [],
+  );
+}
 
 describe('FeatureTree', () => {
   it('should start empty', () => {
@@ -84,6 +108,52 @@ describe('FeatureTree', () => {
     tree.recompute();
     // Suppressed features should not produce results
     expect(tree.getResult(feat.id)).toBeUndefined();
+  });
+
+  it('fillet consumes its parent body (output stays a single solid)', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const baseEdges = tree.getResult(ext.id)!.bodies[0]!.edges.slice(0, 4).map((e) => e.id);
+
+    const fillet = createFilletFeature(baseEdges, 0.5, [ext.id]);
+    tree.addFeature(fillet);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    // The extrude body is consumed by the fillet — only one body remains.
+    expect(bodies.length).toBe(1);
+    expect(tree.getResult(fillet.id)?.bodies.length).toBe(1);
+  });
+
+  it('chamfer and shell evaluate without error', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const body = tree.getResult(ext.id)!.bodies[0]!;
+
+    const chamfer = createChamferFeature(body.edges.slice(0, 2).map((e) => e.id), 0.5, [ext.id]);
+    tree.addFeature(chamfer);
+    tree.recompute();
+    expect(tree.getResult(chamfer.id)?.error).toBeUndefined();
+    expect(tree.getLatestBodies().length).toBe(1);
+
+    const shell = createShellFeature(body.faces.slice(0, 1).map((f) => f.id), 1, [chamfer.id]);
+    tree.addFeature(shell);
+    tree.recompute();
+    expect(tree.getResult(shell.id)?.error).toBeUndefined();
+    // chamfer→shell chain still yields a single output solid.
+    expect(tree.getLatestBodies().length).toBe(1);
+  });
+
+  it('records an error when a fillet has no parent body', () => {
+    const tree = new FeatureTree();
+    const fillet = createFilletFeature([], 1, ['missing']);
+    tree.addFeature(fillet);
+    tree.recompute();
+    expect(tree.getResult(fillet.id)?.error).toContain('parent body');
   });
 });
 

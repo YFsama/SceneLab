@@ -1,6 +1,16 @@
-import type { Feature, FeatureResult, SketchFeature, ExtrudeFeature } from './types';
+import type {
+  Feature,
+  FeatureResult,
+  SketchFeature,
+  ExtrudeFeature,
+  RevolveFeature,
+  FilletFeature,
+  ChamferFeature,
+  ShellFeature,
+} from './types';
 import type { SolidBody } from '../geometry/types';
-import { createExtrude } from '../geometry/brep';
+import { createExtrude, createRevolve } from '../geometry/brep';
+import { applyFillet, applyChamfer, applyShell } from '../geometry/operations';
 import { solveSketch } from '../sketch/engine';
 import type { Sketch } from '../sketch/types';
 
@@ -12,6 +22,9 @@ function genId(prefix: string): string {
 export class FeatureTree {
   readonly features: Feature[] = [];
   private results = new Map<string, FeatureResult>();
+  // Features whose body was consumed by a downstream operation (fillet, shell,
+  // …) and should therefore not appear on its own in the final output.
+  private consumed = new Set<string>();
 
   addFeature(feature: Feature): void {
     this.features.push(feature);
@@ -43,6 +56,7 @@ export class FeatureTree {
 
   recompute(): void {
     this.results.clear();
+    this.consumed.clear();
 
     for (const feature of this.features) {
       if (feature.suppressed) continue;
@@ -64,6 +78,7 @@ export class FeatureTree {
     const bodies: SolidBody[] = [];
     for (const feature of this.features) {
       if (feature.suppressed) continue;
+      if (this.consumed.has(feature.id)) continue;
       const result = this.results.get(feature.id);
       if (result && result.bodies.length > 0) {
         bodies.push(...result.bodies);
@@ -72,15 +87,73 @@ export class FeatureTree {
     return bodies;
   }
 
+  /** First parent feature that produced a body, or undefined. */
+  private firstParentBody(feature: Feature): { featureId: string; body: SolidBody } | undefined {
+    for (const id of feature.parentIds) {
+      const result = this.results.get(id);
+      if (result && result.bodies[0]) {
+        return { featureId: id, body: result.bodies[0] };
+      }
+    }
+    return undefined;
+  }
+
   private evaluateFeature(feature: Feature): FeatureResult {
     switch (feature.type) {
       case 'sketch':
         return this.evaluateSketch(feature);
       case 'extrude':
         return this.evaluateExtrude(feature);
-      default:
-        return { bodies: [] };
+      case 'revolve':
+        return this.evaluateRevolve(feature);
+      case 'fillet':
+        return this.evaluateFillet(feature);
+      case 'chamfer':
+        return this.evaluateChamfer(feature);
+      case 'shell':
+        return this.evaluateShell(feature);
     }
+  }
+
+  private evaluateRevolve(feature: RevolveFeature): FeatureResult {
+    const parentSketch = feature.parentIds
+      .map((id) => this.getFeature(id))
+      .find((f): f is SketchFeature => f?.type === 'sketch');
+    if (!parentSketch) throw new Error('Revolve requires a parent sketch');
+
+    const solved = solveSketch(parentSketch.sketch);
+    const profilePoints = extractProfileFromSketch(parentSketch.sketch, solved);
+    if (profilePoints.length < 3) {
+      throw new Error('Sketch profile has fewer than 3 points');
+    }
+
+    const body = createRevolve({
+      profile: profilePoints.map((p) => ({ x: p.x, y: p.y, z: 0 })),
+      axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } },
+      angle: feature.params.angle,
+    });
+    return { bodies: [body] };
+  }
+
+  private evaluateFillet(feature: FilletFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Fillet requires a parent body');
+    this.consumed.add(parent.featureId);
+    return { bodies: [applyFillet(parent.body, feature.params.edgeIds, feature.params.radius)] };
+  }
+
+  private evaluateChamfer(feature: ChamferFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Chamfer requires a parent body');
+    this.consumed.add(parent.featureId);
+    return { bodies: [applyChamfer(parent.body, feature.params.edgeIds, feature.params.distance)] };
+  }
+
+  private evaluateShell(feature: ShellFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Shell requires a parent body');
+    this.consumed.add(parent.featureId);
+    return { bodies: [applyShell(parent.body, feature.params.faceIds, feature.params.thickness)] };
   }
 
   private evaluateSketch(feature: SketchFeature): FeatureResult {
@@ -180,5 +253,61 @@ export function createExtrudeFeature(
     suppressed: false,
     parentIds,
     params,
+  };
+}
+
+export function createRevolveFeature(angle: number, parentIds: string[]): RevolveFeature {
+  return {
+    id: genId('feat'),
+    type: 'revolve',
+    name: 'Revolve',
+    suppressed: false,
+    parentIds,
+    params: { angle },
+  };
+}
+
+export function createFilletFeature(
+  edgeIds: string[],
+  radius: number,
+  parentIds: string[],
+): FilletFeature {
+  return {
+    id: genId('feat'),
+    type: 'fillet',
+    name: 'Fillet',
+    suppressed: false,
+    parentIds,
+    params: { edgeIds, radius },
+  };
+}
+
+export function createChamferFeature(
+  edgeIds: string[],
+  distance: number,
+  parentIds: string[],
+): ChamferFeature {
+  return {
+    id: genId('feat'),
+    type: 'chamfer',
+    name: 'Chamfer',
+    suppressed: false,
+    parentIds,
+    params: { edgeIds, distance },
+  };
+}
+
+export function createShellFeature(
+  faceIds: string[],
+  thickness: number,
+  parentIds: string[],
+): ShellFeature {
+  return {
+    id: genId('feat'),
+    type: 'shell',
+    name: 'Shell',
+    suppressed: false,
+    parentIds,
+    params: { faceIds, thickness },
   };
 }

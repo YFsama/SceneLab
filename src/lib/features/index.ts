@@ -11,4 +11,12 @@ export type {
   FeatureResult,
 } from './types';
 
-export { FeatureTree, createSketchFeature, createExtrudeFeature } from './tree';
+export {
+  FeatureTree,
+  createSketchFeature,
+  createExtrudeFeature,
+  createRevolveFeature,
+  createFilletFeature,
+  createChamferFeature,
+  createShellFeature,
+} from './tree';
