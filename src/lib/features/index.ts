@@ -8,6 +8,9 @@ export type {
   FilletFeature,
   ChamferFeature,
   ShellFeature,
+  LinearArrayFeature,
+  CircularArrayFeature,
+  MirrorFeature,
   FeatureResult,
 } from './types';
 
@@ -19,4 +22,7 @@ export {
   createFilletFeature,
   createChamferFeature,
   createShellFeature,
+  createLinearArrayFeature,
+  createCircularArrayFeature,
+  createMirrorFeature,
 } from './tree';

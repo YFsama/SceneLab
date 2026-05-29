@@ -6,6 +6,9 @@ import {
   createFilletFeature,
   createChamferFeature,
   createShellFeature,
+  createLinearArrayFeature,
+  createCircularArrayFeature,
+  createMirrorFeature,
 } from './tree';
 import { createSketch, addRectangle } from '../sketch/engine';
 
@@ -154,6 +157,50 @@ describe('FeatureTree', () => {
     tree.addFeature(fillet);
     tree.recompute();
     expect(tree.getResult(fillet.id)?.error).toContain('parent body');
+  });
+
+  it('linear array produces N instances and consumes the parent', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    const arr = createLinearArrayFeature({ x: 1, y: 0, z: 0 }, 4, 20, [ext.id]);
+    tree.addFeature(arr);
+    tree.recompute();
+    expect(tree.getResult(arr.id)?.bodies.length).toBe(4);
+    // Original is consumed; the 4 instances are the only output.
+    expect(tree.getLatestBodies().length).toBe(4);
+  });
+
+  it('circular array produces N instances', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    const arr = createCircularArrayFeature(
+      { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } },
+      6,
+      [ext.id],
+    );
+    tree.addFeature(arr);
+    tree.recompute();
+    expect(tree.getLatestBodies().length).toBe(6);
+  });
+
+  it('mirror keeps the original by default, drops it when asked', () => {
+    const plane = { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } };
+
+    const keep = new FeatureTree();
+    const e1 = boxExtrude();
+    keep.addFeature(e1);
+    keep.addFeature(createMirrorFeature(plane, [e1.id])); // keepOriginal default true
+    keep.recompute();
+    expect(keep.getLatestBodies().length).toBe(2);
+
+    const drop = new FeatureTree();
+    const e2 = boxExtrude();
+    drop.addFeature(e2);
+    drop.addFeature(createMirrorFeature(plane, [e2.id], false));
+    drop.recompute();
+    expect(drop.getLatestBodies().length).toBe(1);
   });
 });
 

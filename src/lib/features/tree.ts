@@ -7,10 +7,20 @@ import type {
   FilletFeature,
   ChamferFeature,
   ShellFeature,
+  LinearArrayFeature,
+  CircularArrayFeature,
+  MirrorFeature,
 } from './types';
-import type { SolidBody } from '../geometry/types';
+import type { SolidBody, Vec3 } from '../geometry/types';
 import { createExtrude, createRevolve } from '../geometry/brep';
-import { applyFillet, applyChamfer, applyShell } from '../geometry/operations';
+import {
+  applyFillet,
+  applyChamfer,
+  applyShell,
+  applyLinearArray,
+  applyCircularArray,
+  applyMirror,
+} from '../geometry/operations';
 import { solveSketch } from '../sketch/engine';
 import type { Sketch } from '../sketch/types';
 
@@ -112,6 +122,12 @@ export class FeatureTree {
         return this.evaluateChamfer(feature);
       case 'shell':
         return this.evaluateShell(feature);
+      case 'linearArray':
+        return this.evaluateLinearArray(feature);
+      case 'circularArray':
+        return this.evaluateCircularArray(feature);
+      case 'mirror':
+        return this.evaluateMirror(feature);
     }
   }
 
@@ -154,6 +170,33 @@ export class FeatureTree {
     if (!parent) throw new Error('Shell requires a parent body');
     this.consumed.add(parent.featureId);
     return { bodies: [applyShell(parent.body, feature.params.faceIds, feature.params.thickness)] };
+  }
+
+  private evaluateLinearArray(feature: LinearArrayFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Linear array requires a parent body');
+    this.consumed.add(parent.featureId);
+    const { direction, count, spacing } = feature.params;
+    return { bodies: applyLinearArray(parent.body, direction, count, spacing) };
+  }
+
+  private evaluateCircularArray(feature: CircularArrayFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Circular array requires a parent body');
+    this.consumed.add(parent.featureId);
+    return { bodies: applyCircularArray(parent.body, feature.params.axis, feature.params.count) };
+  }
+
+  private evaluateMirror(feature: MirrorFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Mirror requires a parent body');
+    const mirrored = applyMirror(parent.body, feature.params.plane);
+    if (feature.params.keepOriginal === false) {
+      this.consumed.add(parent.featureId);
+      return { bodies: [mirrored] };
+    }
+    // Keep the original (it stays as its own feature output) plus the reflection.
+    return { bodies: [mirrored] };
   }
 
   private evaluateSketch(feature: SketchFeature): FeatureResult {
@@ -309,5 +352,51 @@ export function createShellFeature(
     suppressed: false,
     parentIds,
     params: { faceIds, thickness },
+  };
+}
+
+export function createLinearArrayFeature(
+  direction: Vec3,
+  count: number,
+  spacing: number,
+  parentIds: string[],
+): LinearArrayFeature {
+  return {
+    id: genId('feat'),
+    type: 'linearArray',
+    name: 'Linear Array',
+    suppressed: false,
+    parentIds,
+    params: { direction, count, spacing },
+  };
+}
+
+export function createCircularArrayFeature(
+  axis: { origin: Vec3; direction: Vec3 },
+  count: number,
+  parentIds: string[],
+): CircularArrayFeature {
+  return {
+    id: genId('feat'),
+    type: 'circularArray',
+    name: 'Circular Array',
+    suppressed: false,
+    parentIds,
+    params: { axis, count },
+  };
+}
+
+export function createMirrorFeature(
+  plane: { origin: Vec3; normal: Vec3 },
+  parentIds: string[],
+  keepOriginal = true,
+): MirrorFeature {
+  return {
+    id: genId('feat'),
+    type: 'mirror',
+    name: 'Mirror',
+    suppressed: false,
+    parentIds,
+    params: { plane, keepOriginal },
   };
 }
