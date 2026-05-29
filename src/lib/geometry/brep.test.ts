@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import type { Vec3, SolidBody } from './types';
 
@@ -153,6 +153,17 @@ describe('computeVolumetricCentroid', () => {
     const c = computeVolumetricCentroid(merged);
     // Mass-weighted: (0·8000 + 100·1000) / 9000 ≈ 11.1 (not the 50 a vertex avg gives).
     expect(c.x).toBeCloseTo((100 * 1000) / 9000, 1);
+  });
+});
+
+describe('computeCenterOfMassOffset (volumetric)', () => {
+  it('places a cone CoM at h/4 from the base, below the bbox center', () => {
+    const cone = createCone(5, 0, 12, 64); // base y=0, apex y=12
+    const info = computeCenterOfMassOffset(cone);
+    // Solid cone CoM is h/4 = 3 above the base; bbox center is at y=6.
+    expect(info.centroid.y).toBeGreaterThan(2.8);
+    expect(info.centroid.y).toBeLessThan(3.2);
+    expect(info.offset.y).toBeCloseTo(-3, 0); // 3 - 6
   });
 });
 

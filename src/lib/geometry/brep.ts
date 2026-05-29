@@ -2154,7 +2154,8 @@ export interface CenterOfMassInfo {
 }
 
 export function computeCenterOfMassOffset(body: SolidBody): CenterOfMassInfo {
-  const centroid = computeCentroid(body);
+  // Use the true (volume-weighted) center of mass, not the vertex average.
+  const centroid = computeVolumetricCentroid(body);
   const bbCenter = computeBoundingBoxCenter(body);
 
   const offset = {
