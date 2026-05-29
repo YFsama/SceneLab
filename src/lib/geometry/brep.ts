@@ -3289,3 +3289,74 @@ export function computeVertexValencePercentiles(body: SolidBody): VertexValenceP
     whiskerHigh: Math.min(whiskerHigh, valences[valences.length - 1]!),
   };
 }
+
+export interface BoundaryLoops {
+  /** Number of closed boundary loops (holes). */
+  holeCount: number;
+  /** Total number of boundary edges (edges used by only one face). */
+  boundaryEdgeCount: number;
+  /** The vertices of each boundary loop, in order. */
+  loops: Vec3[][];
+}
+
+/**
+ * Find the open boundary loops ("holes") of a mesh: edges used by exactly one
+ * face, chained into loops. A watertight mesh has none. Useful for diagnosing
+ * and repairing imported STLs before printing.
+ */
+export function findBoundaryLoops(body: SolidBody, tolerance = 1e-6): BoundaryLoops {
+  const q = (n: number) => Math.round(n / tolerance) * tolerance;
+  const key = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
+
+  // Count how many faces use each undirected edge.
+  const undirected = new Map<string, number>();
+  const undirectedKey = (ka: string, kb: string) => (ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+  for (const f of body.faces) {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const ka = key(vs[i]!);
+      const kb = key(vs[(i + 1) % vs.length]!);
+      const uk = undirectedKey(ka, kb);
+      undirected.set(uk, (undirected.get(uk) ?? 0) + 1);
+    }
+  }
+
+  // Collect directed boundary edges and index them by start key.
+  interface DirEdge { a: Vec3; kb: string; used: boolean }
+  const dirEdges: DirEdge[] = [];
+  const startMap = new Map<string, number[]>();
+  for (const f of body.faces) {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const a = vs[i]!;
+      const b = vs[(i + 1) % vs.length]!;
+      const ka = key(a);
+      const kb = key(b);
+      if (undirected.get(undirectedKey(ka, kb)) === 1) {
+        const idx = dirEdges.length;
+        dirEdges.push({ a, kb, used: false });
+        const list = startMap.get(ka);
+        if (list) list.push(idx);
+        else startMap.set(ka, [idx]);
+      }
+    }
+  }
+
+  const loops: Vec3[][] = [];
+  for (let s = 0; s < dirEdges.length; s++) {
+    if (dirEdges[s]!.used) continue;
+    const loop: Vec3[] = [];
+    let cur = s;
+    let guard = 0;
+    while (cur !== -1 && !dirEdges[cur]!.used && guard++ <= dirEdges.length) {
+      const e = dirEdges[cur]!;
+      e.used = true;
+      loop.push(e.a);
+      const cands = startMap.get(e.kb) ?? [];
+      cur = cands.find((ci) => !dirEdges[ci]!.used) ?? -1;
+    }
+    if (loop.length > 0) loops.push(loop);
+  }
+
+  return { holeCount: loops.length, boundaryEdgeCount: dirEdges.length, loops };
+}

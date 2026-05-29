@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -479,6 +479,22 @@ export function registerBuiltinTools(): void {
       if (body.faces.length === 0) throw new Error('No faces parsed from the mesh');
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id, faces: body.faces.length, vertices: body.vertices.length };
+    },
+  });
+
+  registerTool({
+    name: 'find_holes',
+    description: 'Find open boundary loops (holes) in a body — a watertight mesh has none.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const r = findBoundaryLoops(body);
+      return { bodyId: body.id, holeCount: r.holeCount, boundaryEdges: r.boundaryEdgeCount };
     },
   });
 

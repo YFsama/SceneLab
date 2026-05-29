@@ -233,6 +233,14 @@ describe('builtin analysis tools', () => {
     expect(result.faces).toBe(1);
   });
 
+  it('find_holes reports zero holes for a watertight box', async () => {
+    useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] });
+    const tool = getTool('find_holes')!;
+    const result = (await tool.execute({})) as { holeCount: number; boundaryEdges: number };
+    expect(result.holeCount).toBe(0);
+    expect(result.boundaryEdges).toBe(0);
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');
