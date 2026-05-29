@@ -169,3 +169,8 @@ See the original design document for full tech stack rationale. Key choices:
     CAM feeds & speeds (lib + AI + panel UI); ~40 AI tools through a proper
     tool-use loop (fixed: tool results now fed back to the model); store
     directBodies + scene management (delete/clear/describe); current default model
+  - Later (tests → 362): full project round-trip (deserialize features + direct
+    bodies → loadProject → ProjectMenu open rebuilds geometry); persisted theme/
+    locale/API-key; AI system prompt; volumetric center of mass (mass props +
+    stability); bounding sphere; arrange-on-plate, stock block, measure/dimensions;
+    ~45 AI tools incl import/export/transform; finite-number & Vec3 input guards

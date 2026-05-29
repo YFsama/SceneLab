@@ -68,7 +68,9 @@ src/
   their parent so the output stays a single solid. Sketch profiles support lines
   (chained into an ordered loop), rectangles, circles and arcs.
 - **Body ops**: translate, rotate (Rodrigues), uniform scale, mirror, merge
-  bodies, and weld near-coincident vertices (mesh repair).
+  bodies, weld near-coincident vertices (mesh repair), bounding-box stock block,
+  and arrange-on-plate packing.
+- **Mass properties**: volume-weighted center of mass, bounding sphere.
 
 ### 3D-print analysis & optimization (`lib/print`)
 
@@ -81,11 +83,12 @@ and a one-call **print-readiness** assessment.
 
 ### AI (`lib/ai`)
 
-~40 operations are registered as Claude tools and run through a proper tool-use
-loop (the model sees each tool's result and can chain steps). The assistant can
-create primitives, sketch/extrude/revolve, edit & pattern bodies, move/rotate/
-scale/orient them, import meshes (STL/OBJ text), repair & inspect them, manage
-the scene (delete/clear/describe), and answer print questions ("how much
+~45 operations are registered as Claude tools and run through a proper tool-use
+loop (the model is system-prompted with role + units, sees each tool's result,
+and can chain steps). The assistant can create primitives, sketch/extrude/
+revolve, edit & pattern bodies, move/rotate/scale/orient them, arrange on the
+plate, import/export meshes (STL/OBJ text), repair & inspect, manage the scene
+(delete/clear/describe), measure, and answer print questions ("how much
 filament?", "will it tip?", "is it ready to print?", "best orientation?",
 "feeds & speeds for this tool?").
 
@@ -93,6 +96,12 @@ filament?", "will it tip?", "is it ready to print?", "best orientation?",
 
 3-axis pocket/contour/drill/face toolpaths, ISO G-code, a tool library, and a
 feeds & speeds calculator (surfaced in the CAM panel and as an AI tool).
+
+### Persistence
+
+Projects save/load as `.studio3d` round-tripping the full parametric feature
+tree **and** direct (AI-created/imported) bodies. Theme, locale and the AI API
+key persist across reloads.
 
 ### IO (`lib/io`)
 
