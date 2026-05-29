@@ -855,6 +855,34 @@ export function registerBuiltinTools(): void {
     },
   });
 
+  // Scene management
+  registerTool({
+    name: 'delete_body',
+    description: 'Remove a body from the scene by id (applies to directly-created bodies).',
+    parameters: {
+      type: 'object',
+      properties: { bodyId: { type: 'string', description: 'Body ID to remove' } },
+      required: ['bodyId'],
+    },
+    execute: async (args) => {
+      const id = assertString(args.bodyId, 'bodyId');
+      const before = useStore.getState().bodies.length;
+      useStore.getState().removeDirectBody(id);
+      const after = useStore.getState().bodies.length;
+      return { success: true, removed: before - after };
+    },
+  });
+
+  registerTool({
+    name: 'clear_scene',
+    description: 'Remove all bodies and features, resetting the scene to empty.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      useStore.getState().clearScene();
+      return { success: true };
+    },
+  });
+
   // Query tools
   registerTool({
     name: 'list_bodies',

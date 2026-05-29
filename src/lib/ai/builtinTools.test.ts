@@ -31,7 +31,10 @@ describe('builtin analysis tools', () => {
   beforeEach(() => {
     clearTools();
     registerBuiltinTools();
-    useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] }); // 1 cm³
+    // Reset the shared store (feature tree + direct bodies) to avoid cross-test
+    // pollution, then seed a 1 cm³ box for the analysis tools.
+    useStore.getState().clearScene();
+    useStore.setState({ bodies: [createBox(10, 10, 10)] });
   });
 
   it('estimate_mass returns PLA mass by default', async () => {
@@ -295,6 +298,24 @@ describe('builtin analysis tools', () => {
     const tool = getTool('revolve')!;
     await tool.execute({ angleDeg: 360 });
     expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
+  it('delete_body removes a direct body', async () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    useStore.setState({ bodies: [a, b], directBodies: [a, b] });
+    const tool = getTool('delete_body')!;
+    const result = (await tool.execute({ bodyId: a.id })) as { removed: number };
+    expect(result.removed).toBe(1);
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
+  it('clear_scene empties the scene', async () => {
+    useStore.setState({ bodies: [createBox(5, 5, 5)], directBodies: [createBox(5, 5, 5)] });
+    const tool = getTool('clear_scene')!;
+    await tool.execute({});
+    expect(useStore.getState().bodies).toHaveLength(0);
+    expect(useStore.getState().directBodies).toHaveLength(0);
   });
 
   it('throws a clear error when the body is missing', async () => {

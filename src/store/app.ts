@@ -56,6 +56,7 @@ interface AppState {
   addDirectBodies: (bodies: SolidBody[]) => void;
   replaceBody: (oldId: string, newBody: SolidBody) => void;
   removeDirectBody: (id: string) => void;
+  clearScene: () => void;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -206,6 +207,18 @@ export const useStore = create<AppState>((set, get) => {
   removeDirectBody: (id) => {
     set((s) => ({ directBodies: s.directBodies.filter((b) => b.id !== id) }));
     recombine();
+  },
+  clearScene: () => {
+    set({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
+      projectDirty: true,
+    });
   },
 
   showExtrudeDialog: false,
