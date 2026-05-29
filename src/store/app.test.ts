@@ -3,7 +3,7 @@ import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume } from '../lib/geometry';
 import { createSketch, addRectangle } from '../lib/sketch/engine';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures } from '../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
 describe('app store', () => {
   it('should have default theme', () => {
@@ -177,6 +177,25 @@ describe('app store — direct bodies', () => {
     const bodies = useStore.getState().bodies;
     expect(bodies).toHaveLength(1);
     expect(Math.abs(computeVolume(bodies[0]!))).toBeCloseTo(500, 3);
+  });
+
+  it('persists and restores direct (non-tree) bodies through save/load', () => {
+    const box = createBox(10, 10, 10);
+    const json = saveToFile(serializeProject('WithDirect', [], [box], [box]));
+    const project = loadFromFile(json);
+
+    useStore.getState().clearScene();
+    useStore.getState().loadProject(
+      deserializeFeatures(project),
+      project.name,
+      deserializeDirectBodies(project),
+    );
+
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    // Full mesh restored (faces, not just a vertex summary).
+    expect(bodies[0]!.faces.length).toBeGreaterThan(0);
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeCloseTo(1000, 3);
   });
 
   it('replaceBody edits a direct body in place and survives recompute', () => {

@@ -18,6 +18,8 @@ export interface ProjectFile {
   name: string;
   features: SerializedFeature[];
   bodies: SerializedBody[];
+  /** Full meshes of bodies created outside the feature tree (AI/imported). */
+  directBodies?: SolidBody[];
   metadata: {
     created: string;
     modified: string;
@@ -49,10 +51,12 @@ export function serializeProject(
   name: string,
   features: Feature[],
   bodies: SolidBody[],
+  directBodies: SolidBody[] = [],
 ): ProjectFile {
   return {
     version: FILE_VERSION,
     name,
+    directBodies,
     features: features.map((f) => ({
       id: f.id,
       type: f.type,
@@ -94,6 +98,11 @@ function serializeFeatureData(feature: Feature): unknown {
     case 'mirror':
       return feature.params;
   }
+}
+
+/** Full direct-body meshes stored in a loaded project (empty if none). */
+export function deserializeDirectBodies(project: ProjectFile): SolidBody[] {
+  return Array.isArray(project.directBodies) ? project.directBodies : [];
 }
 
 /** Reconstruct Feature objects (incl. sketch Maps) from a loaded project. */

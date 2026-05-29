@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, downloadFile, readFileAsText, exportSTLBinary, export3MF } from '../../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, downloadFile, readFileAsText, exportSTLBinary, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { Save, FolderOpen, Download, FileBox, Image } from 'lucide-react';
 
@@ -10,13 +10,14 @@ export function ProjectMenu() {
   const projectName = useStore((s) => s.projectName);
   const featureTree = useStore((s) => s.featureTree);
   const bodies = useStore((s) => s.bodies);
+  const directBodies = useStore((s) => s.directBodies);
   const setProjectDirty = useStore((s) => s.setProjectDirty);
   const loadProject = useStore((s) => s.loadProject);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
     try {
-      const project = serializeProject(projectName, featureTree.features, bodies);
+      const project = serializeProject(projectName, featureTree.features, bodies, directBodies);
       const json = saveToFile(project);
       downloadFile(json, `${projectName}.studio3d`);
       setProjectDirty(false);
@@ -34,7 +35,7 @@ export function ProjectMenu() {
       const json = await readFileAsText(file);
       const project = loadFromFile(json);
       // Rebuild the parametric model, not just the name.
-      loadProject(deserializeFeatures(project), project.name);
+      loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project));
       showToast(`${t('toast.loaded')} "${project.name}"`, 'success');
     } catch (err) {
       showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
