@@ -90,6 +90,24 @@ describe('solveConstraints', () => {
     expect(len1).toBeCloseTo(len2, 0);
   });
 
+  it('should equalize two circle radii with an equal constraint', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('pc1', { id: 'pc1', type: 'point', x: 0, y: 0 });
+    entities.set('pc2', { id: 'pc2', type: 'point', x: 20, y: 0 });
+    entities.set('c1', { id: 'c1', type: 'circle', centerId: 'pc1', radius: 5 });
+    entities.set('c2', { id: 'c2', type: 'circle', centerId: 'pc2', radius: 9 });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c', { id: 'c', type: 'equal', entityIds: ['c1', 'c2'] });
+
+    solveConstraints(entities, constraints);
+
+    const r1 = (entities.get('c1') as { radius: number }).radius;
+    const r2 = (entities.get('c2') as { radius: number }).radius;
+    expect(r1).toBeCloseTo(r2, 5);
+    expect(r1).toBeCloseTo(7, 5); // average of 5 and 9
+  });
+
   it('should apply parallel constraint between two lines', () => {
     const entities = new Map<string, SketchEntity>();
     // line1 horizontal; line2 starts skewed.
