@@ -1,8 +1,30 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { registerBuiltinTools } from './builtinTools';
-import { getTool, clearTools } from './toolRegistry';
+import { getTool, getAllTools, clearTools } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createBox } from '../geometry';
+
+describe('registerBuiltinTools registration', () => {
+  it('registers the full tool set with no name collisions', () => {
+    clearTools();
+    registerBuiltinTools();
+    const tools = getAllTools();
+    // Guard against tools silently disappearing.
+    expect(tools.length).toBeGreaterThanOrEqual(30);
+    const names = tools.map((t) => t.name);
+    expect(new Set(names).size).toBe(names.length); // unique
+    // A representative sample across categories must be present.
+    for (const n of [
+      'create_box', 'create_cylinder', 'create_sphere', 'create_cone', 'create_torus', 'create_wedge',
+      'extrude', 'fillet', 'mirror', 'import_mesh', 'repair_mesh', 'scale_to_fit', 'orient_for_print',
+      'estimate_mass', 'analyze_printability', 'check_print_readiness', 'estimate_print_cost',
+      'find_holes', 'recommend_orientation', 'suggest_feeds_speeds',
+    ]) {
+      expect(names).toContain(n);
+    }
+    clearTools();
+  });
+});
 
 describe('builtin analysis tools', () => {
   beforeEach(() => {

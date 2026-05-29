@@ -19,10 +19,13 @@ interface AnthropicResponse {
   stop_reason: string;
 }
 
+/** Default model for the AI panel — current Sonnet. */
+export const DEFAULT_MODEL = 'claude-sonnet-4-6';
+
 export async function sendMessage(
   apiKey: string,
   messages: AIMessage[],
-  model = 'claude-sonnet-4-20250514',
+  model = DEFAULT_MODEL,
   maxTokens = 4096,
   viewportScreenshot?: string,
 ): Promise<{ text: string; toolCalls: AIToolCall[] }> {
