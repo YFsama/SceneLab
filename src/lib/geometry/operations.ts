@@ -355,18 +355,19 @@ function translateBody(body: SolidBody, offset: Vec3, name: string): SolidBody {
   };
 }
 
-function rotateBody(
+/** Rotate a body by `angle` radians about an arbitrary axis (Rodrigues). */
+export function rotateBody(
   body: SolidBody,
   axis: { origin: Vec3; direction: Vec3 },
   angle: number,
-  name: string,
+  name: string = body.name,
 ): SolidBody {
   const dir = normalize(axis.direction);
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
 
-  const rotate = (v: Vec3): Vec3 => {
-    const p = { x: v.x - axis.origin.x, y: v.y - axis.origin.y, z: v.z - axis.origin.z };
+  // Rotate a direction vector about the axis direction (no translation).
+  const rotateDir = (p: Vec3): Vec3 => {
     const dot = dir.x * p.x + dir.y * p.y + dir.z * p.z;
     const cross = {
       x: dir.y * p.z - dir.z * p.y,
@@ -374,10 +375,16 @@ function rotateBody(
       z: dir.x * p.y - dir.y * p.x,
     };
     return {
-      x: axis.origin.x + p.x * cos + cross.x * sin + dir.x * dot * (1 - cos),
-      y: axis.origin.y + p.y * cos + cross.y * sin + dir.y * dot * (1 - cos),
-      z: axis.origin.z + p.z * cos + cross.z * sin + dir.z * dot * (1 - cos),
+      x: p.x * cos + cross.x * sin + dir.x * dot * (1 - cos),
+      y: p.y * cos + cross.y * sin + dir.y * dot * (1 - cos),
+      z: p.z * cos + cross.z * sin + dir.z * dot * (1 - cos),
     };
+  };
+
+  // Rotate a point: shift to the axis origin, rotate the offset, shift back.
+  const rotate = (v: Vec3): Vec3 => {
+    const r = rotateDir({ x: v.x - axis.origin.x, y: v.y - axis.origin.y, z: v.z - axis.origin.z });
+    return { x: axis.origin.x + r.x, y: axis.origin.y + r.y, z: axis.origin.z + r.z };
   };
 
   return {
@@ -387,7 +394,7 @@ function rotateBody(
     faces: body.faces.map((f) => ({
       id: genId('face'),
       vertices: f.vertices.map(rotate),
-      normal: rotate(f.normal),
+      normal: rotateDir(f.normal),
     })),
     edges: body.edges.map((e) => ({
       id: genId('edge'),
