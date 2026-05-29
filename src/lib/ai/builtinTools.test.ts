@@ -168,6 +168,16 @@ describe('builtin analysis tools', () => {
     expect(bodies[0]?.name).toBe('Torus');
   });
 
+  it('create_stock adds a margin-enclosing stock block', async () => {
+    const part = createBox(10, 10, 10);
+    useStore.setState({ bodies: [part], directBodies: [part] });
+    const tool = getTool('create_stock')!;
+    await tool.execute({ bodyId: part.id, margin: 2 });
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(2);
+    expect(bodies.some((b) => b.name === 'Stock')).toBe(true);
+  });
+
   it('create_wedge adds a wedge body to the scene', async () => {
     useStore.setState({ bodies: [], objectIds: [], directBodies: [] });
     const tool = getTool('create_wedge')!;

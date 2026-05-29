@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import type { Vec3, SolidBody } from './types';
 
@@ -129,6 +129,26 @@ describe('createBox', () => {
     expect(() => createBox(-1, 1, 1)).toThrow('positive');
     expect(() => createBox(NaN, 1, 1)).toThrow('positive');
     expect(() => createBox(Infinity, 1, 1)).toThrow('positive');
+  });
+});
+
+describe('createBoundingBoxBody', () => {
+  it('encloses the body with the given margin', () => {
+    const part = createBox(10, 20, 30);
+    const stock = createBoundingBoxBody(part, 2);
+    const bb = computeBoundingBox(stock);
+    expect(stock.name).toBe('Stock');
+    expect(bb.max.x - bb.min.x).toBeCloseTo(14, 5); // 10 + 2·2
+    expect(bb.max.y - bb.min.y).toBeCloseTo(24, 5);
+    expect(bb.max.z - bb.min.z).toBeCloseTo(34, 5);
+    // The stock fully contains the part's bounding box.
+    const pb = computeBoundingBox(part);
+    expect(bb.min.x).toBeLessThanOrEqual(pb.min.x);
+    expect(bb.max.y).toBeGreaterThanOrEqual(pb.max.y);
+  });
+
+  it('rejects a negative margin', () => {
+    expect(() => createBoundingBoxBody(createBox(1, 1, 1), -1)).toThrow('Margin');
   });
 });
 

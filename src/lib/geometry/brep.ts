@@ -287,6 +287,29 @@ export function createBox(width: number, height: number, depth: number): SolidBo
   };
 }
 
+/** Axis-aligned stock block enclosing a body's bounding box, with optional margin. */
+export function createBoundingBoxBody(body: SolidBody, margin = 0): SolidBody {
+  if (!Number.isFinite(margin) || margin < 0) throw new Error('Margin must be non-negative');
+  if (body.vertices.length === 0) throw new Error('Body has no geometry');
+  const bb = computeBoundingBox(body);
+  const y0 = bb.min.y - margin;
+  const profile: Vec3[] = [
+    { x: bb.min.x - margin, y: y0, z: bb.min.z - margin },
+    { x: bb.max.x + margin, y: y0, z: bb.min.z - margin },
+    { x: bb.max.x + margin, y: y0, z: bb.max.z + margin },
+    { x: bb.min.x - margin, y: y0, z: bb.max.z + margin },
+  ];
+  return {
+    ...createExtrude({
+      profile,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: bb.max.y - bb.min.y + 2 * margin,
+      symmetric: false,
+    }),
+    name: 'Stock',
+  };
+}
+
 /** Circular cylinder along +Y, approximated by an `segments`-gon prism. */
 export function createCylinder(radius: number, height: number, segments = 32): SolidBody {
   if (radius <= 0) throw new Error('Radius must be positive');

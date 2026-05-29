@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -278,6 +278,25 @@ export function registerBuiltinTools(): void {
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_stock',
+    description: 'Create a stock block (bounding box + margin) around a body — useful as CAM raw material.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body to enclose (defaults to the first body)' },
+        margin: { type: 'number', description: 'Margin on each side in mm (default 0)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const margin = args.margin !== undefined ? assertNumber(args.margin, 'margin') : 0;
+      const stock = createBoundingBoxBody(body, margin);
+      useStore.getState().addDirectBody(stock);
+      return { success: true, bodyId: stock.id };
     },
   });
 
