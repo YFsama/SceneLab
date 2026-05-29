@@ -265,6 +265,32 @@ export function applyCircularArray(
   return results;
 }
 
+/** Uniform scale of a body about an origin point (default world origin). */
+export function scaleBody(body: SolidBody, factor: number, origin: Vec3 = { x: 0, y: 0, z: 0 }): SolidBody {
+  if (factor <= 0) throw new Error('Scale factor must be positive');
+  const s = (v: Vec3): Vec3 => ({
+    x: origin.x + (v.x - origin.x) * factor,
+    y: origin.y + (v.y - origin.y) * factor,
+    z: origin.z + (v.z - origin.z) * factor,
+  });
+  return {
+    id: genId('body'),
+    name: body.name,
+    vertices: body.vertices.map(s),
+    faces: body.faces.map((f) => ({
+      id: genId('face'),
+      vertices: f.vertices.map(s),
+      // Uniform scaling preserves normal directions.
+      normal: { ...f.normal },
+    })),
+    edges: body.edges.map((e) => ({
+      id: genId('edge'),
+      start: s(e.start),
+      end: s(e.end),
+    })),
+  };
+}
+
 /** Mirror: reflect body across a plane */
 export function applyMirror(
   body: SolidBody,

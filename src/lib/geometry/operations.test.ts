@@ -1,6 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody } from './operations';
 import { createBox } from './brep';
+import { computeBoundingBox, computeVolume } from './brep';
+
+describe('scaleBody', () => {
+  it('scales dimensions by the factor and volume by factor³', () => {
+    const box = createBox(10, 10, 10);
+    const scaled = scaleBody(box, 2);
+    const bb = computeBoundingBox(scaled);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(20, 5);
+    expect(Math.abs(computeVolume(scaled))).toBeCloseTo(8 * Math.abs(computeVolume(box)), 3);
+  });
+
+  it('scales about a given origin', () => {
+    const box = createBox(10, 10, 10); // centered at origin in X/Z, Y in [0,10]
+    const scaled = scaleBody(box, 2, { x: 0, y: 0, z: 0 });
+    const bb = computeBoundingBox(scaled);
+    // Y was [0,10]; scaling about y=0 by 2 → [0,20].
+    expect(bb.min.y).toBeCloseTo(0, 5);
+    expect(bb.max.y).toBeCloseTo(20, 5);
+  });
+
+  it('rejects a non-positive factor', () => {
+    expect(() => scaleBody(createBox(1, 1, 1), 0)).toThrow('Scale factor');
+  });
+});
 
 describe('applyFillet', () => {
   it('should return same body when radius is 0', () => {
