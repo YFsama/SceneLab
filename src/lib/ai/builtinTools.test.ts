@@ -11,25 +11,26 @@ describe('registerBuiltinTools registration', () => {
     registerBuiltinTools();
     const tools = getAllTools();
     // Guard against tools silently disappearing.
-    expect(tools.length).toBeGreaterThanOrEqual(42);
+    expect(tools.length).toBeGreaterThanOrEqual(48);
     const names = tools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length); // unique
     // A representative sample across every category must be present.
     for (const n of [
       // primitives
       'create_box', 'create_cylinder', 'create_sphere', 'create_cone', 'create_torus', 'create_wedge',
+      'create_stock',
       // sketch/features
-      'create_sketch', 'draw_line', 'draw_circle', 'extrude', 'revolve', 'fillet', 'chamfer', 'shell',
-      'linear_array', 'circular_array', 'mirror',
+      'create_sketch', 'draw_line', 'draw_circle', 'draw_arc', 'add_constraint', 'extrude', 'revolve',
+      'fillet', 'chamfer', 'shell', 'linear_array', 'circular_array', 'mirror',
       // transform / scene
-      'move_body', 'rotate_body', 'scale_body', 'arrange_on_plate', 'delete_body', 'clear_scene',
-      'describe_scene', 'measure_distance', 'list_bodies',
+      'move_body', 'rotate_body', 'scale_body', 'resize_to_target', 'arrange_on_plate', 'delete_body',
+      'clear_scene', 'describe_scene', 'measure_distance', 'get_dimensions', 'list_bodies',
       // mesh io / repair
       'import_mesh', 'export_body', 'repair_mesh', 'find_holes',
       // print analysis / optimization
       'estimate_mass', 'analyze_stability', 'analyze_printability', 'check_print_readiness',
-      'estimate_print_cost', 'estimate_print_job', 'recommend_orientation', 'orient_for_print',
-      'scale_to_fit',
+      'estimate_print_cost', 'estimate_print_job', 'estimate_hollow_savings', 'recommend_orientation',
+      'orient_for_print', 'scale_to_fit',
       // cam / view
       'suggest_feeds_speeds', 'set_view',
     ]) {
