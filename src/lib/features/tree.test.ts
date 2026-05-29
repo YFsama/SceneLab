@@ -1,0 +1,118 @@
+import { describe, it, expect } from 'vitest';
+import { FeatureTree, createSketchFeature, createExtrudeFeature } from './tree';
+import { createSketch, addRectangle } from '../sketch/engine';
+
+describe('FeatureTree', () => {
+  it('should start empty', () => {
+    const tree = new FeatureTree();
+    expect(tree.features.length).toBe(0);
+    expect(tree.getLatestBodies().length).toBe(0);
+  });
+
+  it('should add features', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch);
+    tree.addFeature(feat);
+    expect(tree.features.length).toBe(1);
+    expect(tree.features[0]?.id).toBe(feat.id);
+  });
+
+  it('should remove features', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch);
+    tree.addFeature(feat);
+    tree.removeFeature(feat.id);
+    expect(tree.features.length).toBe(0);
+  });
+
+  it('should recompute and produce bodies from extrude', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+
+    const sketchFeat = createSketchFeature(sketch);
+    const extrudeFeat = createExtrudeFeature(
+      {
+        profile: [
+          { x: 0, y: 0, z: 0 },
+          { x: 10, y: 0, z: 0 },
+          { x: 10, y: 0, z: 10 },
+          { x: 0, y: 0, z: 10 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 5,
+      },
+      [sketchFeat.id],
+    );
+
+    tree.addFeature(sketchFeat);
+    tree.addFeature(extrudeFeat);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    expect(bodies.length).toBe(1);
+    expect(bodies[0]?.vertices.length).toBeGreaterThan(0);
+    expect(bodies[0]?.faces.length).toBeGreaterThan(0);
+  });
+
+  it('should get feature by id', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch);
+    tree.addFeature(feat);
+    expect(tree.getFeature(feat.id)).toBeDefined();
+    expect(tree.getFeature('nonexistent')).toBeUndefined();
+  });
+
+  it('should get result by id', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch);
+    tree.addFeature(feat);
+    tree.recompute();
+    expect(tree.getResult(feat.id)).toBeDefined();
+  });
+
+  it('should handle suppressed features', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch);
+    feat.suppressed = true;
+    tree.addFeature(feat);
+    tree.recompute();
+    // Suppressed features should not produce results
+    expect(tree.getResult(feat.id)).toBeUndefined();
+  });
+});
+
+describe('createSketchFeature', () => {
+  it('should create a sketch feature', () => {
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch);
+    expect(feat.type).toBe('sketch');
+    expect(feat.name).toContain('Sketch');
+    expect(feat.suppressed).toBe(false);
+    expect(feat.sketch.planeId).toBe('xy');
+  });
+
+  it('should accept parent ids', () => {
+    const sketch = createSketch('xy');
+    const feat = createSketchFeature(sketch, ['parent1']);
+    expect(feat.parentIds).toEqual(['parent1']);
+  });
+});
+
+describe('createExtrudeFeature', () => {
+  it('should create an extrude feature', () => {
+    const feat = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 10 },
+      ['sketch1'],
+    );
+    expect(feat.type).toBe('extrude');
+    expect(feat.name).toBe('Extrude');
+    expect(feat.params.distance).toBe(10);
+    expect(feat.parentIds).toEqual(['sketch1']);
+  });
+});

@@ -1,0 +1,3031 @@
+import type { Vec3, SolidBody, Face, Edge, ExtrudeParams, RevolveParams } from './types';
+
+let nextId = 1;
+function genId(prefix: string): string {
+  return `${prefix}_${nextId++}`;
+}
+
+export function createExtrude(params: ExtrudeParams): SolidBody {
+  const { profile, direction, distance, symmetric } = params;
+  const n = profile.length;
+  if (n < 3) throw new Error('Profile must have at least 3 points');
+  if (distance <= 0) throw new Error('Distance must be positive');
+
+  // Validate direction vector is not zero
+  const dirLen = Math.sqrt(direction.x ** 2 + direction.y ** 2 + direction.z ** 2);
+  if (dirLen < 1e-10) throw new Error('Direction vector cannot be zero');
+
+  const halfDist = symmetric ? distance / 2 : distance;
+  const offset = symmetric ? halfDist : distance;
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+
+  // Bottom face vertices
+  const bottomVerts: Vec3[] = profile.map((p) => ({ ...p }));
+  // Top face vertices
+  const topVerts: Vec3[] = profile.map((p) => ({
+    x: p.x + direction.x * offset,
+    y: p.y + direction.y * offset,
+    z: p.z + direction.z * offset,
+  }));
+
+  if (symmetric) {
+    for (const v of bottomVerts) {
+      v.x -= direction.x * halfDist;
+      v.y -= direction.y * halfDist;
+      v.z -= direction.z * halfDist;
+    }
+    for (const v of topVerts) {
+      v.x -= direction.x * halfDist;
+      v.y -= direction.y * halfDist;
+      v.z -= direction.z * halfDist;
+    }
+  }
+
+  vertices.push(...bottomVerts, ...topVerts);
+
+  // Bottom face
+  const bottomNormal: Vec3 = {
+    x: -direction.x,
+    y: -direction.y,
+    z: -direction.z,
+  };
+  faces.push({
+    id: genId('face'),
+    vertices: [...bottomVerts],
+    normal: normalize(bottomNormal),
+  });
+
+  // Top face
+  faces.push({
+    id: genId('face'),
+    vertices: [...topVerts],
+    normal: normalize({ ...direction }),
+  });
+
+  // Side faces
+  for (let i = 0; i < n; i++) {
+    const next = (i + 1) % n;
+    const b1 = bottomVerts[i]!;
+    const b2 = bottomVerts[next]!;
+    const t1 = topVerts[i]!;
+    const t2 = topVerts[next]!;
+
+    const sideNormal = computeFaceNormal(b1, b2, t2);
+    faces.push({
+      id: genId('face'),
+      vertices: [b1, b2, t2, t1],
+      normal: sideNormal,
+    });
+
+    // Bottom edge
+    edges.push({ id: genId('edge'), start: b1, end: b2 });
+    // Top edge
+    edges.push({ id: genId('edge'), start: t1, end: t2 });
+    // Vertical edge
+    edges.push({ id: genId('edge'), start: b1, end: t1 });
+  }
+
+  return {
+    id: genId('body'),
+    name: 'Extrude',
+    vertices,
+    faces,
+    edges,
+  };
+}
+
+export function createRevolve(params: RevolveParams): SolidBody {
+  const { profile, axis, angle } = params;
+  const n = profile.length;
+  if (n < 2) throw new Error('Profile must have at least 2 points');
+  if (Math.abs(angle) < 1e-10) throw new Error('Revolve angle cannot be zero');
+
+  // Validate axis direction is not zero
+  const dirLen = Math.sqrt(axis.direction.x ** 2 + axis.direction.y ** 2 + axis.direction.z ** 2);
+  if (dirLen < 1e-10) throw new Error('Axis direction vector cannot be zero');
+
+  const segments = Math.max(8, Math.round((Math.abs(angle) / (Math.PI * 2)) * 32));
+  const angleStep = angle / segments;
+  const dir = normalize(axis.direction);
+  const origin = axis.origin;
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+
+  // Generate vertices by rotating profile around axis
+  const rings: Vec3[][] = [];
+  for (let s = 0; s <= segments; s++) {
+    const a = angleStep * s;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    const ring: Vec3[] = [];
+
+    for (const p of profile) {
+      // Translate point relative to axis origin
+      const rel = { x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z };
+      // Project onto axis to get parallel component
+      const dot = dir.x * rel.x + dir.y * rel.y + dir.z * rel.z;
+      const parallel = { x: dir.x * dot, y: dir.y * dot, z: dir.z * dot };
+      // Perpendicular component
+      const perp = { x: rel.x - parallel.x, y: rel.y - parallel.y, z: rel.z - parallel.z };
+      // Cross product of axis and perpendicular
+      const cross = {
+        x: dir.y * perp.z - dir.z * perp.y,
+        y: dir.z * perp.x - dir.x * perp.z,
+        z: dir.x * perp.y - dir.y * perp.x,
+      };
+      // Rotate perpendicular component
+      const rotated = {
+        x: perp.x * cos + cross.x * sin,
+        y: perp.y * cos + cross.y * sin,
+        z: perp.z * cos + cross.z * sin,
+      };
+      ring.push({
+        x: origin.x + parallel.x + rotated.x,
+        y: origin.y + parallel.y + rotated.y,
+        z: origin.z + parallel.z + rotated.z,
+      });
+    }
+    rings.push(ring);
+  }
+
+  // Flatten rings into vertices array
+  for (const ring of rings) {
+    vertices.push(...ring);
+  }
+
+  // Generate faces between adjacent rings
+  for (let s = 0; s < segments; s++) {
+    for (let p = 0; p < n - 1; p++) {
+      const i0 = s * n + p;
+      const i1 = s * n + p + 1;
+      const i2 = (s + 1) * n + p + 1;
+      const i3 = (s + 1) * n + p;
+
+      const v0 = vertices[i0]!;
+      const v1 = vertices[i1]!;
+      const v2 = vertices[i2]!;
+      const v3 = vertices[i3]!;
+
+      const normal = computeFaceNormal(v0, v1, v2);
+      faces.push({
+        id: genId('face'),
+        vertices: [v0, v1, v2, v3],
+        normal,
+      });
+
+      edges.push({ id: genId('edge'), start: v0, end: v1 });
+      edges.push({ id: genId('edge'), start: v0, end: v3 });
+    }
+    // Close ring edge
+    const lastInRing = s * n + n - 1;
+    const firstInRing = s * n;
+    edges.push({ id: genId('edge'), start: vertices[lastInRing]!, end: vertices[firstInRing]! });
+  }
+
+  // End cap edges
+  for (let p = 0; p < n - 1; p++) {
+    edges.push({ id: genId('edge'), start: vertices[p]!, end: vertices[p + 1]! });
+    edges.push({ id: genId('edge'), start: vertices[segments * n + p]!, end: vertices[segments * n + p + 1]! });
+  }
+
+  return {
+    id: genId('body'),
+    name: 'Revolve',
+    vertices,
+    faces,
+    edges,
+  };
+}
+
+export function createBox(width: number, height: number, depth: number): SolidBody {
+  const hw = width / 2;
+  const hd = depth / 2;
+
+  const profile: Vec3[] = [
+    { x: -hw, y: 0, z: -hd },
+    { x: hw, y: 0, z: -hd },
+    { x: hw, y: 0, z: hd },
+    { x: -hw, y: 0, z: hd },
+  ];
+
+  return createExtrude({
+    profile,
+    direction: { x: 0, y: 1, z: 0 },
+    distance: height,
+    symmetric: false,
+  });
+}
+
+export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
+  const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
+  const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };
+
+  for (const v of body.vertices) {
+    min.x = Math.min(min.x, v.x);
+    min.y = Math.min(min.y, v.y);
+    min.z = Math.min(min.z, v.z);
+    max.x = Math.max(max.x, v.x);
+    max.y = Math.max(max.y, v.y);
+    max.z = Math.max(max.z, v.z);
+  }
+
+  return { min, max };
+}
+
+export function computeBoundingBoxCenter(body: SolidBody): Vec3 {
+  const bb = computeBoundingBox(body);
+  return {
+    x: (bb.min.x + bb.max.x) / 2,
+    y: (bb.min.y + bb.max.y) / 2,
+    z: (bb.min.z + bb.max.z) / 2,
+  };
+}
+
+export function computeCentroid(body: SolidBody): Vec3 {
+  if (body.vertices.length === 0) return { x: 0, y: 0, z: 0 };
+  let cx = 0, cy = 0, cz = 0;
+  for (const v of body.vertices) {
+    cx += v.x;
+    cy += v.y;
+    cz += v.z;
+  }
+  const n = body.vertices.length;
+  return { x: cx / n, y: cy / n, z: cz / n };
+}
+
+export function computeVolume(body: SolidBody): number {
+  // Signed volume using divergence theorem
+  let volume = 0;
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 1; i < verts.length - 1; i++) {
+      const v0 = verts[0]!;
+      const v1 = verts[i]!;
+      const v2 = verts[i + 1]!;
+      volume += signedTriangleVolume(v0, v1, v2);
+    }
+  }
+  return Math.abs(volume / 6);
+}
+
+function signedTriangleVolume(a: Vec3, b: Vec3, c: Vec3): number {
+  return (
+    a.x * (b.y * c.z - c.y * b.z) -
+    b.x * (a.y * c.z - c.y * a.z) +
+    c.x * (a.y * b.z - b.y * a.z)
+  );
+}
+
+function normalize(v: Vec3): Vec3 {
+  const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  if (len < 1e-10) return { x: 0, y: 0, z: 1 };
+  return { x: v.x / len, y: v.y / len, z: v.z / len };
+}
+
+function computeFaceNormal(a: Vec3, b: Vec3, c: Vec3): Vec3 {
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  return normalize({
+    x: ab.y * ac.z - ab.z * ac.y,
+    y: ab.z * ac.x - ab.x * ac.z,
+    z: ab.x * ac.y - ab.y * ac.x,
+  });
+}
+
+export function computeSurfaceArea(body: SolidBody): number {
+  let area = 0;
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    // Triangulate face using fan from first vertex
+    for (let i = 1; i < verts.length - 1; i++) {
+      const v0 = verts[0]!;
+      const v1 = verts[i]!;
+      const v2 = verts[i + 1]!;
+      area += triangleArea(v0, v1, v2);
+    }
+  }
+  return area;
+}
+
+function triangleArea(a: Vec3, b: Vec3, c: Vec3): number {
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  const cross = {
+    x: ab.y * ac.z - ab.z * ac.y,
+    y: ab.z * ac.x - ab.x * ac.z,
+    z: ab.x * ac.y - ab.y * ac.x,
+  };
+  return Math.sqrt(cross.x * cross.x + cross.y * cross.y + cross.z * cross.z) / 2;
+}
+
+export function computeEdgeLength(edge: Edge): number {
+  const dx = edge.end.x - edge.start.x;
+  const dy = edge.end.y - edge.start.y;
+  const dz = edge.end.z - edge.start.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+export function computeTotalEdgeLength(body: SolidBody): number {
+  let total = 0;
+  for (const edge of body.edges) {
+    total += computeEdgeLength(edge);
+  }
+  return total;
+}
+
+export function computeAngleBetweenEdges(edge1: Edge, edge2: Edge): number {
+  const d1 = {
+    x: edge1.end.x - edge1.start.x,
+    y: edge1.end.y - edge1.start.y,
+    z: edge1.end.z - edge1.start.z,
+  };
+  const d2 = {
+    x: edge2.end.x - edge2.start.x,
+    y: edge2.end.y - edge2.start.y,
+    z: edge2.end.z - edge2.start.z,
+  };
+
+  const dot = d1.x * d2.x + d1.y * d2.y + d1.z * d2.z;
+  const len1 = Math.sqrt(d1.x * d1.x + d1.y * d1.y + d1.z * d1.z);
+  const len2 = Math.sqrt(d2.x * d2.x + d2.y * d2.y + d2.z * d2.z);
+
+  if (len1 < 1e-10 || len2 < 1e-10) return 0;
+
+  const cosAngle = Math.max(-1, Math.min(1, dot / (len1 * len2)));
+  return Math.acos(cosAngle) * (180 / Math.PI); // Return in degrees
+}
+
+export function computeBoundingBoxDiagonal(body: SolidBody): number {
+  const bb = computeBoundingBox(body);
+  const dx = bb.max.x - bb.min.x;
+  const dy = bb.max.y - bb.min.y;
+  const dz = bb.max.z - bb.min.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+export interface MeshStatistics {
+  vertexCount: number;
+  faceCount: number;
+  edgeCount: number;
+  triangleCount: number;
+  averageEdgeLength: number;
+  minEdgeLength: number;
+  maxEdgeLength: number;
+}
+
+export function computeMeshStatistics(body: SolidBody): MeshStatistics {
+  let totalEdgeLength = 0;
+  let minEdgeLength = Infinity;
+  let maxEdgeLength = 0;
+  let triangleCount = 0;
+
+  for (const edge of body.edges) {
+    const len = computeEdgeLength(edge);
+    totalEdgeLength += len;
+    minEdgeLength = Math.min(minEdgeLength, len);
+    maxEdgeLength = Math.max(maxEdgeLength, len);
+  }
+
+  for (const face of body.faces) {
+    // Each face with n vertices produces n-2 triangles
+    triangleCount += Math.max(0, face.vertices.length - 2);
+  }
+
+  return {
+    vertexCount: body.vertices.length,
+    faceCount: body.faces.length,
+    edgeCount: body.edges.length,
+    triangleCount,
+    averageEdgeLength: body.edges.length > 0 ? totalEdgeLength / body.edges.length : 0,
+    minEdgeLength: body.edges.length > 0 ? minEdgeLength : 0,
+    maxEdgeLength,
+  };
+}
+
+export function computeVertexDegrees(body: SolidBody): Map<number, number> {
+  const degrees = new Map<number, number>();
+
+  for (const edge of body.edges) {
+    const startIdx = body.vertices.findIndex((v) =>
+      Math.abs(v.x - edge.start.x) < 1e-6 &&
+      Math.abs(v.y - edge.start.y) < 1e-6 &&
+      Math.abs(v.z - edge.start.z) < 1e-6,
+    );
+    const endIdx = body.vertices.findIndex((v) =>
+      Math.abs(v.x - edge.end.x) < 1e-6 &&
+      Math.abs(v.y - edge.end.y) < 1e-6 &&
+      Math.abs(v.z - edge.end.z) < 1e-6,
+    );
+
+    if (startIdx >= 0) degrees.set(startIdx, (degrees.get(startIdx) ?? 0) + 1);
+    if (endIdx >= 0) degrees.set(endIdx, (degrees.get(endIdx) ?? 0) + 1);
+  }
+
+  return degrees;
+}
+
+export function computeAverageVertexDegree(body: SolidBody): number {
+  const degrees = computeVertexDegrees(body);
+  if (degrees.size === 0) return 0;
+  let total = 0;
+  for (const d of degrees.values()) total += d;
+  return total / degrees.size;
+}
+
+export function computeFaceArea(face: Face): number {
+  let area = 0;
+  const verts = face.vertices;
+  for (let i = 1; i < verts.length - 1; i++) {
+    area += triangleArea(verts[0]!, verts[i]!, verts[i + 1]!);
+  }
+  return area;
+}
+
+export function computeFaceAreas(body: SolidBody): Array<{ faceId: string; area: number }> {
+  return body.faces.map((face) => ({
+    faceId: face.id,
+    area: computeFaceArea(face),
+  }));
+}
+
+export function computeLargestFace(body: SolidBody): { faceId: string; area: number } | null {
+  const areas = computeFaceAreas(body);
+  if (areas.length === 0) return null;
+  return areas.reduce((max, curr) => curr.area > max.area ? curr : max);
+}
+
+export interface ManifoldCheck {
+  isManifold: boolean;
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  isolatedVertices: number;
+}
+
+export function checkManifold(body: SolidBody): ManifoldCheck {
+  // Count how many faces each edge belongs to
+  const edgeFaceCount = new Map<string, number>();
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      // Create a canonical edge key (sorted)
+      const key = v1.x < v2.x || (v1.x === v2.x && v1.y < v2.y) || (v1.x === v2.x && v1.y === v2.y && v1.z < v2.z)
+        ? `${v1.x},${v1.y},${v1.z}-${v2.x},${v2.y},${v2.z}`
+        : `${v2.x},${v2.y},${v2.z}-${v1.x},${v1.y},${v1.z}`;
+      edgeFaceCount.set(key, (edgeFaceCount.get(key) ?? 0) + 1);
+    }
+  }
+
+  let boundaryEdges = 0;
+  let nonManifoldEdges = 0;
+
+  for (const count of edgeFaceCount.values()) {
+    if (count === 1) boundaryEdges++;
+    if (count > 2) nonManifoldEdges++;
+  }
+
+  // Count isolated vertices (vertices not used by any edge)
+  const usedVertices = new Set<string>();
+  for (const edge of body.edges) {
+    usedVertices.add(`${edge.start.x},${edge.start.y},${edge.start.z}`);
+    usedVertices.add(`${edge.end.x},${edge.end.y},${edge.end.z}`);
+  }
+  const isolatedVertices = body.vertices.filter(
+    (v) => !usedVertices.has(`${v.x},${v.y},${v.z}`),
+  ).length;
+
+  return {
+    isManifold: boundaryEdges === 0 && nonManifoldEdges === 0,
+    boundaryEdges,
+    nonManifoldEdges,
+    isolatedVertices,
+  };
+}
+
+export interface TopologyInfo {
+  eulerCharacteristic: number;
+  genus: number; // Number of "handles" (0 for sphere, 1 for torus, etc.)
+  isSphereLike: boolean;
+}
+
+export function computeTopology(body: SolidBody): TopologyInfo {
+  // Euler characteristic: V - E + F
+  const v = body.vertices.length;
+  const e = body.edges.length;
+  const f = body.faces.length;
+  const chi = v - e + f;
+
+  // For a closed orientable surface: chi = 2 - 2g
+  // So g = (2 - chi) / 2
+  const genus = (2 - chi) / 2;
+
+  return {
+    eulerCharacteristic: chi,
+    genus: Math.max(0, Math.round(genus)),
+    isSphereLike: chi === 2, // Sphere has chi=2
+  };
+}
+
+export interface MeshQuality {
+  aspectRatioAvg: number;
+  aspectRatioMax: number;
+  skewnessAvg: number;
+  skewnessMax: number;
+}
+
+export function computeMeshQuality(body: SolidBody): MeshQuality {
+  let totalAspectRatio = 0;
+  let maxAspectRatio = 0;
+  let totalSkewness = 0;
+  let maxSkewness = 0;
+  let faceCount = 0;
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) continue;
+
+    // For each triangle in the face
+    for (let i = 1; i < verts.length - 1; i++) {
+      const v0 = verts[0]!;
+      const v1 = verts[i]!;
+      const v2 = verts[i + 1]!;
+
+      // Edge lengths
+      const a = Math.sqrt((v1.x - v0.x) ** 2 + (v1.y - v0.y) ** 2 + (v1.z - v0.z) ** 2);
+      const b = Math.sqrt((v2.x - v1.x) ** 2 + (v2.y - v1.y) ** 2 + (v2.z - v1.z) ** 2);
+      const c = Math.sqrt((v0.x - v2.x) ** 2 + (v0.y - v2.y) ** 2 + (v0.z - v2.z) ** 2);
+
+      const minEdge = Math.min(a, b, c);
+      const maxEdge = Math.max(a, b, c);
+
+      // Aspect ratio (longest edge / shortest edge)
+      const aspectRatio = minEdge > 1e-10 ? maxEdge / minEdge : 0;
+      totalAspectRatio += aspectRatio;
+      maxAspectRatio = Math.max(maxAspectRatio, aspectRatio);
+
+      // Skewness (0 = equilateral, 1 = degenerate)
+      const s = (a + b + c) / 2;
+      const area = Math.sqrt(Math.max(0, s * (s - a) * (s - b) * (s - c)));
+      const idealArea = (Math.sqrt(3) / 4) * ((a + b + c) / 3) ** 2;
+      const skewness = idealArea > 1e-10 ? 1 - area / idealArea : 1;
+      totalSkewness += skewness;
+      maxSkewness = Math.max(maxSkewness, skewness);
+
+      faceCount++;
+    }
+  }
+
+  return {
+    aspectRatioAvg: faceCount > 0 ? totalAspectRatio / faceCount : 0,
+    aspectRatioMax: maxAspectRatio,
+    skewnessAvg: faceCount > 0 ? totalSkewness / faceCount : 0,
+    skewnessMax: maxSkewness,
+  };
+}
+
+export interface WindingCheck {
+  consistentWinding: boolean;
+  clockwiseFaces: number;
+  counterClockwiseFaces: number;
+  degenerateFaces: number;
+}
+
+export function checkWindingOrder(body: SolidBody): WindingCheck {
+  let clockwise = 0;
+  let counterClockwise = 0;
+  let degenerate = 0;
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) {
+      degenerate++;
+      continue;
+    }
+
+    // Use first triangle to determine winding
+    const v0 = verts[0]!;
+    const v1 = verts[1]!;
+    const v2 = verts[2]!;
+
+    // Cross product of edges
+    const ax = v1.x - v0.x;
+    const ay = v1.y - v0.y;
+    const az = v1.z - v0.z;
+    const bx = v2.x - v0.x;
+    const by = v2.y - v0.y;
+    const bz = v2.z - v0.z;
+
+    const crossX = ay * bz - az * by;
+    const crossY = az * bx - ax * bz;
+    const crossZ = ax * by - ay * bx;
+
+    // Dot with face normal
+    const dot = crossX * face.normal.x + crossY * face.normal.y + crossZ * face.normal.z;
+
+    if (Math.abs(dot) < 1e-10) {
+      degenerate++;
+    } else if (dot > 0) {
+      counterClockwise++;
+    } else {
+      clockwise++;
+    }
+  }
+
+  return {
+    consistentWinding: clockwise === 0 || counterClockwise === 0,
+    clockwiseFaces: clockwise,
+    counterClockwiseFaces: counterClockwise,
+    degenerateFaces: degenerate,
+  };
+}
+
+export interface AdjacencyInfo {
+  vertexToEdges: Map<number, number[]>;
+  vertexToFaces: Map<number, number[]>;
+  edgeToFaces: Map<number, number[]>;
+  faceToEdges: Map<number, number[]>;
+}
+
+export function computeAdjacency(body: SolidBody): AdjacencyInfo {
+  const vertexToEdges = new Map<number, number[]>();
+  const vertexToFaces = new Map<number, number[]>();
+  const edgeToFaces = new Map<number, number[]>();
+  const faceToEdges = new Map<number, number[]>();
+
+  // Build vertex-to-edge adjacency
+  for (let ei = 0; ei < body.edges.length; ei++) {
+    const edge = body.edges[ei]!;
+    const startIdx = findVertexIndex(body, edge.start);
+    const endIdx = findVertexIndex(body, edge.end);
+
+    if (startIdx >= 0) {
+      if (!vertexToEdges.has(startIdx)) vertexToEdges.set(startIdx, []);
+      vertexToEdges.get(startIdx)!.push(ei);
+    }
+    if (endIdx >= 0) {
+      if (!vertexToEdges.has(endIdx)) vertexToEdges.set(endIdx, []);
+      vertexToEdges.get(endIdx)!.push(ei);
+    }
+  }
+
+  // Build vertex-to-face adjacency
+  for (let fi = 0; fi < body.faces.length; fi++) {
+    const face = body.faces[fi]!;
+    for (const v of face.vertices) {
+      const idx = findVertexIndex(body, v);
+      if (idx >= 0) {
+        if (!vertexToFaces.has(idx)) vertexToFaces.set(idx, []);
+        vertexToFaces.get(idx)!.push(fi);
+      }
+    }
+  }
+
+  // Build edge-to-face and face-to-edge adjacency
+  for (let fi = 0; fi < body.faces.length; fi++) {
+    const face = body.faces[fi]!;
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const edgeIdx = findEdgeIndex(body, verts[i]!, verts[next]!);
+      if (edgeIdx >= 0) {
+        if (!edgeToFaces.has(edgeIdx)) edgeToFaces.set(edgeIdx, []);
+        edgeToFaces.get(edgeIdx)!.push(fi);
+
+        if (!faceToEdges.has(fi)) faceToEdges.set(fi, []);
+        faceToEdges.get(fi)!.push(edgeIdx);
+      }
+    }
+  }
+
+  return { vertexToEdges, vertexToFaces, edgeToFaces, faceToEdges };
+}
+
+function findVertexIndex(body: SolidBody, v: Vec3): number {
+  return body.vertices.findIndex(
+    (nv) => Math.abs(nv.x - v.x) < 1e-6 && Math.abs(nv.y - v.y) < 1e-6 && Math.abs(nv.z - v.z) < 1e-6,
+  );
+}
+
+function findEdgeIndex(body: SolidBody, v1: Vec3, v2: Vec3): number {
+  return body.edges.findIndex(
+    (e) =>
+      (Math.abs(e.start.x - v1.x) < 1e-6 && Math.abs(e.start.y - v1.y) < 1e-6 && Math.abs(e.start.z - v1.z) < 1e-6 &&
+       Math.abs(e.end.x - v2.x) < 1e-6 && Math.abs(e.end.y - v2.y) < 1e-6 && Math.abs(e.end.z - v2.z) < 1e-6) ||
+      (Math.abs(e.start.x - v2.x) < 1e-6 && Math.abs(e.start.y - v2.y) < 1e-6 && Math.abs(e.start.z - v2.z) < 1e-6 &&
+       Math.abs(e.end.x - v1.x) < 1e-6 && Math.abs(e.end.y - v1.y) < 1e-6 && Math.abs(e.end.z - v1.z) < 1e-6),
+  );
+}
+
+export interface ValenceDistribution {
+  minValence: number;
+  maxValence: number;
+  avgValence: number;
+  valenceHistogram: Map<number, number>; // valence -> count
+}
+
+export function computeValenceDistribution(body: SolidBody): ValenceDistribution {
+  const degrees = computeVertexDegrees(body);
+  const histogram = new Map<number, number>();
+
+  let minVal = Infinity;
+  let maxVal = 0;
+  let total = 0;
+
+  for (const val of degrees.values()) {
+    histogram.set(val, (histogram.get(val) ?? 0) + 1);
+    minVal = Math.min(minVal, val);
+    maxVal = Math.max(maxVal, val);
+    total += val;
+  }
+
+  return {
+    minValence: degrees.size > 0 ? minVal : 0,
+    maxValence: maxVal,
+    avgValence: degrees.size > 0 ? total / degrees.size : 0,
+    valenceHistogram: histogram,
+  };
+}
+
+export interface CurvatureInfo {
+  gaussianCurvatureAvg: number;
+  gaussianCurvatureMin: number;
+  gaussianCurvatureMax: number;
+  meanCurvatureAvg: number;
+}
+
+export function computeCurvature(body: SolidBody): CurvatureInfo {
+  // Approximate Gaussian curvature using angle defect method
+  // K(v) = 2π - Σ θ_i (sum of angles around vertex)
+  const vertexAngles = new Map<number, number>();
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const prev = (i - 1 + verts.length) % verts.length;
+      const next = (i + 1) % verts.length;
+      const v0 = verts[prev]!;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+
+      const idx = body.vertices.findIndex(
+        (v) => Math.abs(v.x - v1.x) < 1e-6 && Math.abs(v.y - v1.y) < 1e-6 && Math.abs(v.z - v1.z) < 1e-6,
+      );
+      if (idx < 0) continue;
+
+      // Compute angle at v1
+      const a = { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
+      const b = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+      const dot = a.x * b.x + a.y * b.y + a.z * b.z;
+      const lenA = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      const lenB = Math.sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
+      if (lenA < 1e-10 || lenB < 1e-10) continue;
+
+      const cosAngle = Math.max(-1, Math.min(1, dot / (lenA * lenB)));
+      const angle = Math.acos(cosAngle);
+
+      vertexAngles.set(idx, (vertexAngles.get(idx) ?? 0) + angle);
+    }
+  }
+
+  let totalGaussian = 0;
+  let minGaussian = Infinity;
+  let maxGaussian = -Infinity;
+  let count = 0;
+
+  for (const [, angleSum] of vertexAngles) {
+    const gaussian = 2 * Math.PI - angleSum;
+    totalGaussian += gaussian;
+    minGaussian = Math.min(minGaussian, gaussian);
+    maxGaussian = Math.max(maxGaussian, gaussian);
+    count++;
+  }
+
+  return {
+    gaussianCurvatureAvg: count > 0 ? totalGaussian / count : 0,
+    gaussianCurvatureMin: count > 0 ? minGaussian : 0,
+    gaussianCurvatureMax: count > 0 ? maxGaussian : 0,
+    meanCurvatureAvg: 0, // Would need more complex computation
+  };
+}
+
+export interface DihedralInfo {
+  minDihedral: number;
+  maxDihedral: number;
+  avgDihedral: number;
+  sharpEdges: number; // Edges with dihedral > 150°
+}
+
+export function computeDihedralAngles(body: SolidBody): DihedralInfo {
+  const edgeFaceCount = new Map<string, { faces: typeof body.faces; edge: typeof body.edges[0] }>();
+
+  // Group faces by edge
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      const key = edgeKey(v1, v2);
+
+      if (!edgeFaceCount.has(key)) {
+        edgeFaceCount.set(key, { faces: [], edge: { id: '', start: v1, end: v2 } });
+      }
+      edgeFaceCount.get(key)!.faces.push(face);
+    }
+  }
+
+  let minDihedral = Infinity;
+  let maxDihedral = 0;
+  let totalDihedral = 0;
+  let sharpEdges = 0;
+  let count = 0;
+
+  for (const { faces } of edgeFaceCount.values()) {
+    if (faces.length !== 2) continue;
+
+    const [f1, f2] = faces;
+    if (!f1 || !f2) continue;
+
+    const dot = f1.normal.x * f2.normal.x + f1.normal.y * f2.normal.y + f1.normal.z * f2.normal.z;
+    const angle = Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI);
+
+    minDihedral = Math.min(minDihedral, angle);
+    maxDihedral = Math.max(maxDihedral, angle);
+    totalDihedral += angle;
+    count++;
+
+    if (angle > 150) sharpEdges++;
+  }
+
+  return {
+    minDihedral: count > 0 ? minDihedral : 0,
+    maxDihedral: count > 0 ? maxDihedral : 0,
+    avgDihedral: count > 0 ? totalDihedral / count : 0,
+    sharpEdges,
+  };
+}
+
+function edgeKey(v1: Vec3, v2: Vec3): string {
+  if (v1.x < v2.x || (v1.x === v2.x && v1.y < v2.y) || (v1.x === v2.x && v1.y === v2.y && v1.z < v2.z)) {
+    return `${v1.x},${v1.y},${v1.z}-${v2.x},${v2.y},${v2.z}`;
+  }
+  return `${v2.x},${v2.y},${v2.z}-${v1.x},${v1.y},${v1.z}`;
+}
+
+export interface FaceAspectRatio {
+  faceId: string;
+  aspectRatio: number;
+  perimeter: number;
+  area: number;
+}
+
+export function computeFaceAspectRatios(body: SolidBody): FaceAspectRatio[] {
+  return body.faces.map((face) => {
+    const verts = face.vertices;
+    let perimeter = 0;
+    let minEdge = Infinity;
+    let maxEdge = 0;
+
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      const len = Math.sqrt((v2.x - v1.x) ** 2 + (v2.y - v1.y) ** 2 + (v2.z - v1.z) ** 2);
+      perimeter += len;
+      minEdge = Math.min(minEdge, len);
+      maxEdge = Math.max(maxEdge, len);
+    }
+
+    const area = computeFaceArea(face);
+    const aspectRatio = minEdge > 1e-10 ? maxEdge / minEdge : 0;
+
+    return {
+      faceId: face.id,
+      aspectRatio,
+      perimeter,
+      area,
+    };
+  });
+}
+
+export function computeWorstFaceAspectRatio(body: SolidBody): FaceAspectRatio | null {
+  const ratios = computeFaceAspectRatios(body);
+  if (ratios.length === 0) return null;
+  return ratios.reduce((worst, curr) => curr.aspectRatio > worst.aspectRatio ? curr : worst);
+}
+
+export interface EdgeCurvature {
+  edgeId: string;
+  length: number;
+  curvature: number; // 1/radius approximation
+}
+
+export function computeEdgeCurvatures(body: SolidBody): EdgeCurvature[] {
+  return body.edges.map((edge) => {
+    const length = computeEdgeLength(edge);
+    // Approximate curvature as inverse of edge length (shorter edges = higher curvature)
+    const curvature = length > 1e-10 ? 1 / length : 0;
+    return {
+      edgeId: edge.id,
+      length,
+      curvature,
+    };
+  });
+}
+
+export function computeMaxEdgeCurvature(body: SolidBody): EdgeCurvature | null {
+  const curvatures = computeEdgeCurvatures(body);
+  if (curvatures.length === 0) return null;
+  return curvatures.reduce((max, curr) => curr.curvature > max.curvature ? curr : max);
+}
+
+export interface NormalConsistency {
+  consistent: boolean;
+  inwardFaces: number;
+  outwardFaces: number;
+  flippedFaces: number;
+}
+
+export function checkNormalConsistency(body: SolidBody): NormalConsistency {
+  // Check if normals consistently point outward by comparing with face centroid direction
+  const bodyCentroid = computeCentroid(body);
+  let outward = 0;
+  let inward = 0;
+  let flipped = 0;
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) {
+      flipped++;
+      continue;
+    }
+
+    // Compute face centroid
+    let fx = 0, fy = 0, fz = 0;
+    for (const v of verts) {
+      fx += v.x;
+      fy += v.y;
+      fz += v.z;
+    }
+    fx /= verts.length;
+    fy /= verts.length;
+    fz /= verts.length;
+
+    // Direction from body centroid to face centroid
+    const dx = fx - bodyCentroid.x;
+    const dy = fy - bodyCentroid.y;
+    const dz = fz - bodyCentroid.z;
+
+    // Dot product with face normal
+    const dot = dx * face.normal.x + dy * face.normal.y + dz * face.normal.z;
+
+    if (Math.abs(dot) < 1e-10) {
+      flipped++;
+    } else if (dot > 0) {
+      outward++;
+    } else {
+      inward++;
+    }
+  }
+
+  return {
+    consistent: inward === 0 || outward === 0,
+    inwardFaces: inward,
+    outwardFaces: outward,
+    flippedFaces: flipped,
+  };
+}
+
+export interface EdgeAngleDistribution {
+  minAngle: number;
+  maxAngle: number;
+  avgAngle: number;
+  acuteEdges: number; // < 90°
+  obtuseEdges: number; // > 90°
+  rightEdges: number; // ≈ 90°
+}
+
+export function computeEdgeAngleDistribution(body: SolidBody): EdgeAngleDistribution {
+  let minAngle = Infinity;
+  let maxAngle = 0;
+  let totalAngle = 0;
+  let acute = 0;
+  let obtuse = 0;
+  let right = 0;
+  let count = 0;
+
+  // Compute angles between adjacent edges at each vertex
+  const vertexEdges = new Map<string, typeof body.edges>();
+
+  for (const edge of body.edges) {
+    const startKey = `${edge.start.x},${edge.start.y},${edge.start.z}`;
+    const endKey = `${edge.end.x},${edge.end.y},${edge.end.z}`;
+
+    if (!vertexEdges.has(startKey)) vertexEdges.set(startKey, []);
+    vertexEdges.get(startKey)!.push(edge);
+
+    if (!vertexEdges.has(endKey)) vertexEdges.set(endKey, []);
+    vertexEdges.get(endKey)!.push(edge);
+  }
+
+  for (const edges of vertexEdges.values()) {
+    if (edges.length < 2) continue;
+
+    for (let i = 0; i < edges.length; i++) {
+      for (let j = i + 1; j < edges.length; j++) {
+        const e1 = edges[i]!;
+        const e2 = edges[j]!;
+
+        const d1 = {
+          x: e1.end.x - e1.start.x,
+          y: e1.end.y - e1.start.y,
+          z: e1.end.z - e1.start.z,
+        };
+        const d2 = {
+          x: e2.end.x - e2.start.x,
+          y: e2.end.y - e2.start.y,
+          z: e2.end.z - e2.start.z,
+        };
+
+        const dot = d1.x * d2.x + d1.y * d2.y + d1.z * d2.z;
+        const len1 = Math.sqrt(d1.x * d1.x + d1.y * d1.y + d1.z * d1.z);
+        const len2 = Math.sqrt(d2.x * d2.x + d2.y * d2.y + d2.z * d2.z);
+
+        if (len1 < 1e-10 || len2 < 1e-10) continue;
+
+        const cosAngle = Math.max(-1, Math.min(1, dot / (len1 * len2)));
+        const angle = Math.acos(cosAngle) * (180 / Math.PI);
+
+        minAngle = Math.min(minAngle, angle);
+        maxAngle = Math.max(maxAngle, angle);
+        totalAngle += angle;
+        count++;
+
+        if (angle < 85) acute++;
+        else if (angle > 95) obtuse++;
+        else right++;
+      }
+    }
+  }
+
+  return {
+    minAngle: count > 0 ? minAngle : 0,
+    maxAngle: count > 0 ? maxAngle : 0,
+    avgAngle: count > 0 ? totalAngle / count : 0,
+    acuteEdges: acute,
+    obtuseEdges: obtuse,
+    rightEdges: right,
+  };
+}
+
+export interface FaceRegularity {
+  faceId: string;
+  isRegular: boolean;
+  edgeLengthVariance: number;
+  angleVariance: number;
+  sideCount: number;
+}
+
+export function computeFaceRegularity(body: SolidBody): FaceRegularity[] {
+  return body.faces.map((face) => {
+    const verts = face.vertices;
+    const n = verts.length;
+
+    if (n < 3) {
+      return { faceId: face.id, isRegular: false, edgeLengthVariance: 0, angleVariance: 0, sideCount: n };
+    }
+
+    // Compute edge lengths
+    const edgeLengths: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const next = (i + 1) % n;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      edgeLengths.push(Math.sqrt((v2.x - v1.x) ** 2 + (v2.y - v1.y) ** 2 + (v2.z - v1.z) ** 2));
+    }
+
+    // Compute angles
+    const angles: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const prev = (i - 1 + n) % n;
+      const next = (i + 1) % n;
+      const v0 = verts[prev]!;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+
+      const a = { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
+      const b = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+      const dot = a.x * b.x + a.y * b.y + a.z * b.z;
+      const lenA = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      const lenB = Math.sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
+
+      if (lenA > 1e-10 && lenB > 1e-10) {
+        angles.push(Math.acos(Math.max(-1, Math.min(1, dot / (lenA * lenB)))) * (180 / Math.PI));
+      }
+    }
+
+    // Compute variance
+    const avgLen = edgeLengths.reduce((s, l) => s + l, 0) / n;
+    const lenVariance = edgeLengths.reduce((s, l) => s + (l - avgLen) ** 2, 0) / n;
+
+    const avgAngle = angles.length > 0 ? angles.reduce((s, a) => s + a, 0) / angles.length : 0;
+    const angleVariance = angles.length > 0 ? angles.reduce((s, a) => s + (a - avgAngle) ** 2, 0) / angles.length : 0;
+
+    const isRegular = lenVariance < 0.01 && angleVariance < 1;
+
+    return {
+      faceId: face.id,
+      isRegular,
+      edgeLengthVariance: lenVariance,
+      angleVariance,
+      sideCount: n,
+    };
+  });
+}
+
+export function computeRegularFaceCount(body: SolidBody): number {
+  return computeFaceRegularity(body).filter((f) => f.isRegular).length;
+}
+
+export interface EdgeLengthDistribution {
+  minLength: number;
+  maxLength: number;
+  avgLength: number;
+  medianLength: number;
+  stdDeviation: number;
+  histogram: Map<number, number>; // bucket -> count
+}
+
+export function computeEdgeLengthDistribution(body: SolidBody): EdgeLengthDistribution {
+  const lengths = body.edges.map((e) => computeEdgeLength(e)).sort((a, b) => a - b);
+
+  if (lengths.length === 0) {
+    return { minLength: 0, maxLength: 0, avgLength: 0, medianLength: 0, stdDeviation: 0, histogram: new Map() };
+  }
+
+  const min = lengths[0]!;
+  const max = lengths[lengths.length - 1]!;
+  const avg = lengths.reduce((s, l) => s + l, 0) / lengths.length;
+  const median = lengths.length % 2 === 0
+    ? (lengths[lengths.length / 2 - 1]! + lengths[lengths.length / 2]!) / 2
+    : lengths[Math.floor(lengths.length / 2)]!;
+
+  const variance = lengths.reduce((s, l) => s + (l - avg) ** 2, 0) / lengths.length;
+  const stdDev = Math.sqrt(variance);
+
+  // Create histogram with 10 buckets
+  const bucketSize = (max - min) / 10 || 1;
+  const histogram = new Map<number, number>();
+  for (const len of lengths) {
+    const bucket = Math.min(9, Math.floor((len - min) / bucketSize));
+    histogram.set(bucket, (histogram.get(bucket) ?? 0) + 1);
+  }
+
+  return {
+    minLength: min,
+    maxLength: max,
+    avgLength: avg,
+    medianLength: median,
+    stdDeviation: stdDev,
+    histogram,
+  };
+}
+
+export interface FaceAngleDistribution {
+  minAngle: number;
+  maxAngle: number;
+  avgAngle: number;
+  acuteFaces: number;
+  obtuseFaces: number;
+  rightFaces: number;
+}
+
+export function computeFaceAngleDistribution(body: SolidBody): FaceAngleDistribution {
+  let minAngle = Infinity;
+  let maxAngle = 0;
+  let totalAngle = 0;
+  let acute = 0;
+  let obtuse = 0;
+  let right = 0;
+  let count = 0;
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    const n = verts.length;
+    if (n < 3) continue;
+
+    for (let i = 0; i < n; i++) {
+      const prev = (i - 1 + n) % n;
+      const next = (i + 1) % n;
+      const v0 = verts[prev]!;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+
+      const a = { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
+      const b = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+      const dot = a.x * b.x + a.y * b.y + a.z * b.z;
+      const lenA = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      const lenB = Math.sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
+
+      if (lenA < 1e-10 || lenB < 1e-10) continue;
+
+      const cosAngle = Math.max(-1, Math.min(1, dot / (lenA * lenB)));
+      const angle = Math.acos(cosAngle) * (180 / Math.PI);
+
+      minAngle = Math.min(minAngle, angle);
+      maxAngle = Math.max(maxAngle, angle);
+      totalAngle += angle;
+      count++;
+
+      if (angle < 85) acute++;
+      else if (angle > 95) obtuse++;
+      else right++;
+    }
+  }
+
+  return {
+    minAngle: count > 0 ? minAngle : 0,
+    maxAngle: count > 0 ? maxAngle : 0,
+    avgAngle: count > 0 ? totalAngle / count : 0,
+    acuteFaces: acute,
+    obtuseFaces: obtuse,
+    rightFaces: right,
+  };
+}
+
+export interface EdgeLengthRatio {
+  shortestEdgeId: string;
+  longestEdgeId: string;
+  ratio: number; // shortest / longest
+  normalizedRatio: number; // 0-1, 1 = all edges same length
+}
+
+export function computeEdgeLengthRatio(body: SolidBody): EdgeLengthRatio {
+  if (body.edges.length === 0) {
+    return { shortestEdgeId: '', longestEdgeId: '', ratio: 0, normalizedRatio: 0 };
+  }
+
+  let shortest = Infinity;
+  let longest = 0;
+  let shortestId = '';
+  let longestId = '';
+
+  for (const edge of body.edges) {
+    const len = computeEdgeLength(edge);
+    if (len < shortest) {
+      shortest = len;
+      shortestId = edge.id;
+    }
+    if (len > longest) {
+      longest = len;
+      longestId = edge.id;
+    }
+  }
+
+  const ratio = longest > 1e-10 ? shortest / longest : 0;
+  const normalizedRatio = 1 - ratio; // 0 = all same, 1 = very different
+
+  return {
+    shortestEdgeId: shortestId,
+    longestEdgeId: longestId,
+    ratio,
+    normalizedRatio,
+  };
+}
+
+export interface FaceTypeCount {
+  triangles: number;
+  quads: number;
+  pentagons: number;
+  hexagons: number;
+  other: number;
+}
+
+export function computeFaceTypeCount(body: SolidBody): FaceTypeCount {
+  let triangles = 0;
+  let quads = 0;
+  let pentagons = 0;
+  let hexagons = 0;
+  let other = 0;
+
+  for (const face of body.faces) {
+    const n = face.vertices.length;
+    if (n === 3) triangles++;
+    else if (n === 4) quads++;
+    else if (n === 5) pentagons++;
+    else if (n === 6) hexagons++;
+    else other++;
+  }
+
+  return { triangles, quads, pentagons, hexagons, other };
+}
+
+export interface EdgeTypeCount {
+  boundary: number;
+  interior: number;
+  nonManifold: number;
+  smooth: number;
+  sharp: number;
+}
+
+export function computeEdgeTypeCount(body: SolidBody): EdgeTypeCount {
+  const edgeFaceCount = new Map<string, number>();
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      const key = edgeKey(v1, v2);
+      edgeFaceCount.set(key, (edgeFaceCount.get(key) ?? 0) + 1);
+    }
+  }
+
+  let boundary = 0;
+  let interior = 0;
+  let nonManifold = 0;
+
+  for (const count of edgeFaceCount.values()) {
+    if (count === 1) boundary++;
+    else if (count === 2) interior++;
+    else nonManifold++;
+  }
+
+  // Classify by dihedral angle
+  let smooth = 0;
+  let sharp = 0;
+  for (const edge of body.edges) {
+    const key = edgeKey(edge.start, edge.end);
+    const faceCount = edgeFaceCount.get(key) ?? 0;
+    if (faceCount === 2) {
+      // Find the two faces and compute dihedral
+      const faces = body.faces.filter((f) => {
+        const verts = f.vertices;
+        for (let i = 0; i < verts.length; i++) {
+          const next = (i + 1) % verts.length;
+          if (edgeKey(verts[i]!, verts[next]!) === key) return true;
+        }
+        return false;
+      });
+      if (faces.length === 2) {
+        const f1 = faces[0]!;
+        const f2 = faces[1]!;
+        const dot = f1.normal.x * f2.normal.x + f1.normal.y * f2.normal.y + f1.normal.z * f2.normal.z;
+        const angle = Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI);
+        if (angle > 30) sharp++;
+        else smooth++;
+      }
+    }
+  }
+
+  return { boundary, interior, nonManifold, smooth, sharp };
+}
+
+export interface VertexTypeCount {
+  regular: number; // valence 6 for interior, 4 for boundary
+  irregular: number;
+  corner: number; // valence <= 3
+  dart: number; // valence 4 on boundary
+  crease: number; // valence 4 with 2 boundary edges
+}
+
+export function computeVertexTypeCount(body: SolidBody): VertexTypeCount {
+  const degrees = computeVertexDegrees(body);
+  const adjacency = computeAdjacency(body);
+
+  let regular = 0;
+  let irregular = 0;
+  let corner = 0;
+  let dart = 0;
+  let crease = 0;
+
+  for (const [idx, deg] of degrees) {
+    const edgeIndices = adjacency.vertexToEdges.get(idx) ?? [];
+
+    // Count boundary edges for this vertex
+    let boundaryEdgeCount = 0;
+    for (const ei of edgeIndices) {
+      const faces = adjacency.edgeToFaces.get(ei) ?? [];
+      if (faces.length === 1) boundaryEdgeCount++;
+    }
+
+    const isBoundary = boundaryEdgeCount > 0;
+
+    if (isBoundary) {
+      if (deg <= 3) corner++;
+      else if (deg === 4 && boundaryEdgeCount === 1) dart++;
+      else if (deg === 4 && boundaryEdgeCount === 2) crease++;
+      else if (deg === 4) regular++;
+      else irregular++;
+    } else {
+      if (deg === 6) regular++;
+      else if (deg <= 3) corner++;
+      else irregular++;
+    }
+  }
+
+  return { regular, irregular, corner, dart, crease };
+}
+
+export interface MeshGenus {
+  genus: number;
+  eulerCharacteristic: number;
+  handles: number; // Same as genus for orientable surfaces
+  crossCaps: number; // For non-orientable surfaces
+  isOrientable: boolean;
+}
+
+export function computeMeshGenus(body: SolidBody): MeshGenus {
+  const topo = computeTopology(body);
+
+  // For a closed orientable surface: χ = 2 - 2g
+  // g = (2 - χ) / 2
+  const genus = Math.max(0, Math.round((2 - topo.eulerCharacteristic) / 2));
+
+  // For non-orientable surfaces: χ = 2 - k (where k is cross-cap number)
+  const crossCaps = Math.max(0, 2 - topo.eulerCharacteristic);
+
+  // A surface is orientable if it has no cross-caps
+  // In practice, we check if the winding is consistent
+  const winding = checkWindingOrder(body);
+  const isOrientable = winding.consistentWinding;
+
+  return {
+    genus: isOrientable ? genus : 0,
+    eulerCharacteristic: topo.eulerCharacteristic,
+    handles: genus,
+    crossCaps: isOrientable ? 0 : crossCaps,
+    isOrientable,
+  };
+}
+
+export interface SymmetryInfo {
+  hasXSymmetry: boolean;
+  hasYSymmetry: boolean;
+  hasZSymmetry: boolean;
+  symmetryScore: number; // 0-1, 1 = perfectly symmetric
+}
+
+export function computeSymmetry(body: SolidBody): SymmetryInfo {
+  const center = computeCentroid(body);
+
+  // Check symmetry by comparing vertices on opposite sides
+  const checkAxisSymmetry = (axis: 'x' | 'y' | 'z'): boolean => {
+    const tolerance = 1e-3;
+    let symmetricCount = 0;
+    let totalCount = 0;
+
+    for (const v of body.vertices) {
+      const coord = v[axis];
+      const distFromCenter = coord - center[axis];
+
+      // Find a matching vertex on the opposite side
+      const hasMatch = body.vertices.some((other) => {
+        const otherDist = other[axis] - center[axis];
+        return Math.abs(distFromCenter + otherDist) < tolerance &&
+               Math.abs(v.x - other.x) < tolerance &&
+               Math.abs(v.y - other.y) < tolerance &&
+               Math.abs(v.z - other.z) < tolerance;
+      });
+
+      if (hasMatch) symmetricCount++;
+      totalCount++;
+    }
+
+    return totalCount > 0 && symmetricCount / totalCount > 0.95;
+  };
+
+  const hasX = checkAxisSymmetry('x');
+  const hasY = checkAxisSymmetry('y');
+  const hasZ = checkAxisSymmetry('z');
+
+  const symmetryScore = (Number(hasX) + Number(hasY) + Number(hasZ)) / 3;
+
+  return {
+    hasXSymmetry: hasX,
+    hasYSymmetry: hasY,
+    hasZSymmetry: hasZ,
+    symmetryScore,
+  };
+}
+
+export interface CompactnessInfo {
+  compactness: number; // 36π * V² / A³ (1 for sphere)
+  sphericity: number; // Similar to compactness, normalized
+  efficiency: number; // Volume / Surface area ratio
+  isCompact: boolean; // compactness > 0.5
+}
+
+export function computeCompactness(body: SolidBody): CompactnessInfo {
+  const volume = computeVolume(body);
+  const area = computeSurfaceArea(body);
+
+  if (area < 1e-10 || volume < 1e-10) {
+    return { compactness: 0, sphericity: 0, efficiency: 0, isCompact: false };
+  }
+
+  // Compactness: 36π * V² / A³ (equals 1 for a perfect sphere)
+  const compactness = (36 * Math.PI * volume * volume) / (area * area * area);
+
+  // Sphericity: cube root of compactness
+  const sphericity = Math.cbrt(compactness);
+
+  // Efficiency: volume to surface area ratio
+  const efficiency = volume / area;
+
+  return {
+    compactness,
+    sphericity,
+    efficiency,
+    isCompact: compactness > 0.5,
+  };
+}
+
+export interface ElongationInfo {
+  elongation: number; // Longest axis / Shortest axis
+  flatness: number; // Middle axis / Shortest axis
+  principalAxes: { x: number; y: number; z: number };
+  isElongated: boolean;
+  isFlat: boolean;
+}
+
+export function computeElongation(body: SolidBody): ElongationInfo {
+  const bb = computeBoundingBox(body);
+  const dx = bb.max.x - bb.min.x;
+  const dy = bb.max.y - bb.min.y;
+  const dz = bb.max.z - bb.min.z;
+
+  // Sort dimensions
+  const dims = [dx, dy, dz].sort((a, b) => a - b);
+  const shortest = dims[0] || 1;
+  const middle = dims[1] || 1;
+  const longest = dims[2] || 1;
+
+  const elongation = longest / shortest;
+  const flatness = middle / shortest;
+
+  return {
+    elongation,
+    flatness,
+    principalAxes: { x: dx, y: dy, z: dz },
+    isElongated: elongation > 3,
+    isFlat: flatness < 1.5 && elongation > 2,
+  };
+}
+
+export interface ConvexityInfo {
+  convexity: number; // Convex hull volume / actual volume
+  isConvex: boolean;
+  concavity: number; // 1 - convexity
+  convexDefect: number; // Volume difference
+}
+
+export function computeConvexity(body: SolidBody): ConvexityInfo {
+  const volume = computeVolume(body);
+  if (volume < 1e-10) {
+    return { convexity: 0, isConvex: false, concavity: 1, convexDefect: 0 };
+  }
+
+  // Approximate convex hull volume using bounding box
+  const bb = computeBoundingBox(body);
+  const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+
+  // Convexity ratio (actual volume / convex hull volume)
+  const convexity = hullVolume > 1e-10 ? volume / hullVolume : 0;
+  const concavity = 1 - convexity;
+  const convexDefect = hullVolume - volume;
+
+  return {
+    convexity,
+    isConvex: convexity > 0.95,
+    concavity,
+    convexDefect,
+  };
+}
+
+export interface SolidityInfo {
+  solidity: number; // Volume / Convex hull volume
+  isSolid: boolean;
+  voidRatio: number; // 1 - solidity
+  internalCavities: number; // Estimated number of internal voids
+}
+
+export function computeSolidity(body: SolidBody): SolidityInfo {
+  const volume = computeVolume(body);
+  if (volume < 1e-10) {
+    return { solidity: 0, isSolid: false, voidRatio: 1, internalCavities: 0 };
+  }
+
+  // Approximate convex hull volume using bounding box
+  const bb = computeBoundingBox(body);
+  const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+
+  const solidity = hullVolume > 1e-10 ? volume / hullVolume : 0;
+  const voidRatio = 1 - solidity;
+
+  // Estimate internal cavities based on void ratio
+  const internalCavities = voidRatio > 0.3 ? Math.ceil(voidRatio * 5) : 0;
+
+  return {
+    solidity,
+    isSolid: solidity > 0.8,
+    voidRatio,
+    internalCavities,
+  };
+}
+
+export interface RoughnessInfo {
+  roughness: number; // Average deviation from smooth surface
+  smoothness: number; // 1 - roughness
+  isSmooth: boolean;
+  roughFaces: number;
+  smoothFaces: number;
+}
+
+export function computeRoughness(body: SolidBody): RoughnessInfo {
+  const centroid = computeCentroid(body);
+  let totalDeviation = 0;
+  let roughFaces = 0;
+  let smoothFaces = 0;
+  let faceCount = 0;
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) continue;
+
+    // Compute face centroid
+    let fx = 0, fy = 0, fz = 0;
+    for (const v of verts) {
+      fx += v.x;
+      fy += v.y;
+      fz += v.z;
+    }
+    fx /= verts.length;
+    fy /= verts.length;
+    fz /= verts.length;
+
+    // Distance from body centroid to face centroid
+    const dist = Math.sqrt(
+      (fx - centroid.x) ** 2 +
+      (fy - centroid.y) ** 2 +
+      (fz - centroid.z) ** 2,
+    );
+
+    // Average vertex distance from face centroid
+    let avgVertexDist = 0;
+    for (const v of verts) {
+      avgVertexDist += Math.sqrt(
+        (v.x - fx) ** 2 +
+        (v.y - fy) ** 2 +
+        (v.z - fz) ** 2,
+      );
+    }
+    avgVertexDist /= verts.length;
+
+    // Roughness is deviation from expected smooth distance
+    const expectedDist = dist * 0.1; // Rough heuristic
+    const deviation = Math.abs(avgVertexDist - expectedDist) / (expectedDist || 1);
+    totalDeviation += deviation;
+
+    if (deviation > 0.5) roughFaces++;
+    else smoothFaces++;
+    faceCount++;
+  }
+
+  const roughness = faceCount > 0 ? totalDeviation / faceCount : 0;
+  const smoothness = 1 - Math.min(1, roughness);
+
+  return {
+    roughness,
+    smoothness,
+    isSmooth: roughness < 0.3,
+    roughFaces,
+    smoothFaces,
+  };
+}
+
+export interface ThicknessInfo {
+  minThickness: number;
+  maxThickness: number;
+  avgThickness: number;
+  isThin: boolean;
+  thinRegions: number;
+}
+
+export function computeThickness(body: SolidBody): ThicknessInfo {
+  const bb = computeBoundingBox(body);
+  const dx = bb.max.x - bb.min.x;
+  const dy = bb.max.y - bb.min.y;
+  const dz = bb.max.z - bb.min.z;
+
+  // Approximate thickness as minimum bounding box dimension
+  const minThickness = Math.min(dx, dy, dz);
+  const maxThickness = Math.max(dx, dy, dz);
+  const avgThickness = (dx + dy + dz) / 3;
+
+  // Count thin regions (faces with small bounding box)
+  let thinRegions = 0;
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) continue;
+
+    let faceMinX = Infinity, faceMaxX = -Infinity;
+    let faceMinY = Infinity, faceMaxY = -Infinity;
+    let faceMinZ = Infinity, faceMaxZ = -Infinity;
+
+    for (const v of verts) {
+      faceMinX = Math.min(faceMinX, v.x);
+      faceMaxX = Math.max(faceMaxX, v.x);
+      faceMinY = Math.min(faceMinY, v.y);
+      faceMaxY = Math.max(faceMaxY, v.y);
+      faceMinZ = Math.min(faceMinZ, v.z);
+      faceMaxZ = Math.max(faceMaxZ, v.z);
+    }
+
+    const faceDx = faceMaxX - faceMinX;
+    const faceDy = faceMaxY - faceMinY;
+    const faceDz = faceMaxZ - faceMinZ;
+    const faceThickness = Math.min(faceDx, faceDy, faceDz);
+
+    if (faceThickness < minThickness * 0.5) thinRegions++;
+  }
+
+  return {
+    minThickness,
+    maxThickness,
+    avgThickness,
+    isThin: minThickness < avgThickness * 0.2,
+    thinRegions,
+  };
+}
+
+export interface CenterOfMassInfo {
+  centroid: Vec3;
+  boundingBoxCenter: Vec3;
+  offset: Vec3;
+  offsetDistance: number;
+  isCentered: boolean;
+}
+
+export function computeCenterOfMassOffset(body: SolidBody): CenterOfMassInfo {
+  const centroid = computeCentroid(body);
+  const bbCenter = computeBoundingBoxCenter(body);
+
+  const offset = {
+    x: centroid.x - bbCenter.x,
+    y: centroid.y - bbCenter.y,
+    z: centroid.z - bbCenter.z,
+  };
+
+  const offsetDistance = Math.sqrt(offset.x ** 2 + offset.y ** 2 + offset.z ** 2);
+  const bb = computeBoundingBox(body);
+  const bbSize = Math.sqrt(
+    (bb.max.x - bb.min.x) ** 2 +
+    (bb.max.y - bb.min.y) ** 2 +
+    (bb.max.z - bb.min.z) ** 2,
+  );
+
+  return {
+    centroid,
+    boundingBoxCenter: bbCenter,
+    offset,
+    offsetDistance,
+    isCentered: bbSize > 1e-10 ? offsetDistance / bbSize < 0.1 : true,
+  };
+}
+
+export interface VolumeRatioInfo {
+  volumeToSurfaceRatio: number;
+  volumeToBoundingBoxRatio: number;
+  surfaceToBoundingBoxRatio: number;
+  isVolumetricallyEfficient: boolean;
+}
+
+export function computeVolumeRatios(body: SolidBody): VolumeRatioInfo {
+  const volume = computeVolume(body);
+  const surface = computeSurfaceArea(body);
+  const bb = computeBoundingBox(body);
+  const bbVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+
+  const volumeToSurfaceRatio = surface > 1e-10 ? volume / surface : 0;
+  const volumeToBoundingBoxRatio = bbVolume > 1e-10 ? volume / bbVolume : 0;
+  const surfaceToBoundingBoxRatio = bbVolume > 1e-10 ? surface / bbVolume : 0;
+
+  return {
+    volumeToSurfaceRatio,
+    volumeToBoundingBoxRatio,
+    surfaceToBoundingBoxRatio,
+    isVolumetricallyEfficient: volumeToBoundingBoxRatio > 0.5,
+  };
+}
+
+export interface AspectRatioDistribution {
+  minAspectRatio: number;
+  maxAspectRatio: number;
+  avgAspectRatio: number;
+  stdDeviation: number;
+  goodAspectRatioFaces: number; // AR < 3
+  poorAspectRatioFaces: number; // AR >= 3
+}
+
+export function computeAspectRatioDistribution(body: SolidBody): AspectRatioDistribution {
+  const ratios: number[] = [];
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) continue;
+
+    // Compute edge lengths
+    const edgeLengths: number[] = [];
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      edgeLengths.push(Math.sqrt((v2.x - v1.x) ** 2 + (v2.y - v1.y) ** 2 + (v2.z - v1.z) ** 2));
+    }
+
+    const minEdge = Math.min(...edgeLengths);
+    const maxEdge = Math.max(...edgeLengths);
+    const ar = minEdge > 1e-10 ? maxEdge / minEdge : 0;
+    ratios.push(ar);
+  }
+
+  if (ratios.length === 0) {
+    return { minAspectRatio: 0, maxAspectRatio: 0, avgAspectRatio: 0, stdDeviation: 0, goodAspectRatioFaces: 0, poorAspectRatioFaces: 0 };
+  }
+
+  const min = Math.min(...ratios);
+  const max = Math.max(...ratios);
+  const avg = ratios.reduce((s, r) => s + r, 0) / ratios.length;
+  const variance = ratios.reduce((s, r) => s + (r - avg) ** 2, 0) / ratios.length;
+  const stdDev = Math.sqrt(variance);
+
+  const good = ratios.filter((r) => r < 3).length;
+  const poor = ratios.length - good;
+
+  return {
+    minAspectRatio: min,
+    maxAspectRatio: max,
+    avgAspectRatio: avg,
+    stdDeviation: stdDev,
+    goodAspectRatioFaces: good,
+    poorAspectRatioFaces: poor,
+  };
+}
+
+export interface SkewnessDistribution {
+  minSkewness: number;
+  maxSkewness: number;
+  avgSkewness: number;
+  stdDeviation: number;
+  goodSkewnessFaces: number; // skewness < 0.5
+  poorSkewnessFaces: number; // skewness >= 0.5
+}
+
+export function computeSkewnessDistribution(body: SolidBody): SkewnessDistribution {
+  const skewnesses: number[] = [];
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    if (verts.length < 3) continue;
+
+    // Compute face centroid
+    let cx = 0, cy = 0, cz = 0;
+    for (const v of verts) {
+      cx += v.x;
+      cy += v.y;
+      cz += v.z;
+    }
+    cx /= verts.length;
+    cy /= verts.length;
+    cz /= verts.length;
+
+    // Compute distances from centroid to vertices
+    const distances = verts.map((v) =>
+      Math.sqrt((v.x - cx) ** 2 + (v.y - cy) ** 2 + (v.z - cz) ** 2),
+    );
+
+    const minDist = Math.min(...distances);
+    const maxDist = Math.max(...distances);
+    const skewness = maxDist > 1e-10 ? 1 - minDist / maxDist : 0;
+    skewnesses.push(skewness);
+  }
+
+  if (skewnesses.length === 0) {
+    return { minSkewness: 0, maxSkewness: 0, avgSkewness: 0, stdDeviation: 0, goodSkewnessFaces: 0, poorSkewnessFaces: 0 };
+  }
+
+  const min = Math.min(...skewnesses);
+  const max = Math.max(...skewnesses);
+  const avg = skewnesses.reduce((s, r) => s + r, 0) / skewnesses.length;
+  const variance = skewnesses.reduce((s, r) => s + (r - avg) ** 2, 0) / skewnesses.length;
+  const stdDev = Math.sqrt(variance);
+
+  const good = skewnesses.filter((r) => r < 0.5).length;
+  const poor = skewnesses.length - good;
+
+  return {
+    minSkewness: min,
+    maxSkewness: max,
+    avgSkewness: avg,
+    stdDeviation: stdDev,
+    goodSkewnessFaces: good,
+    poorSkewnessFaces: poor,
+  };
+}
+
+export interface FaceEdgeCountDistribution {
+  minEdges: number;
+  maxEdges: number;
+  avgEdges: number;
+  modeEdges: number; // Most common edge count
+  histogram: Map<number, number>; // edgeCount -> faceCount
+}
+
+export function computeFaceEdgeCountDistribution(body: SolidBody): FaceEdgeCountDistribution {
+  const histogram = new Map<number, number>();
+
+  for (const face of body.faces) {
+    const n = face.vertices.length;
+    histogram.set(n, (histogram.get(n) ?? 0) + 1);
+  }
+
+  if (histogram.size === 0) {
+    return { minEdges: 0, maxEdges: 0, avgEdges: 0, modeEdges: 0, histogram };
+  }
+
+  const counts = Array.from(histogram.keys());
+  const min = Math.min(...counts);
+  const max = Math.max(...counts);
+  const totalEdges = body.faces.reduce((s, f) => s + f.vertices.length, 0);
+  const avg = totalEdges / body.faces.length;
+
+  // Mode is the most common edge count
+  let mode = min;
+  let maxCount = 0;
+  for (const [edgeCount, faceCount] of histogram) {
+    if (faceCount > maxCount) {
+      maxCount = faceCount;
+      mode = edgeCount;
+    }
+  }
+
+  return {
+    minEdges: min,
+    maxEdges: max,
+    avgEdges: avg,
+    modeEdges: mode,
+    histogram,
+  };
+}
+
+export interface VertexValenceDistribution {
+  minValence: number;
+  maxValence: number;
+  avgValence: number;
+  modeValence: number;
+  histogram: Map<number, number>; // valence -> vertexCount
+  regularVertices: number; // Valence 6 for interior, 4 for boundary
+  irregularVertices: number;
+}
+
+export function computeVertexValenceDistribution(body: SolidBody): VertexValenceDistribution {
+  const degrees = computeVertexDegrees(body);
+  const histogram = new Map<number, number>();
+
+  for (const val of degrees.values()) {
+    histogram.set(val, (histogram.get(val) ?? 0) + 1);
+  }
+
+  if (degrees.size === 0) {
+    return { minValence: 0, maxValence: 0, avgValence: 0, modeValence: 0, histogram, regularVertices: 0, irregularVertices: 0 };
+  }
+
+  const values = Array.from(degrees.values());
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const avg = values.reduce((s, v) => s + v, 0) / values.length;
+
+  // Mode
+  let mode = min;
+  let maxCount = 0;
+  for (const [val, count] of histogram) {
+    if (count > maxCount) {
+      maxCount = count;
+      mode = val;
+    }
+  }
+
+  // Regular vertices: valence 6 for interior, 4 for boundary
+  const adjacency = computeAdjacency(body);
+  let regular = 0;
+  let irregular = 0;
+
+  for (const [idx, deg] of degrees) {
+    const edgeIndices = adjacency.vertexToEdges.get(idx) ?? [];
+    let boundaryEdgeCount = 0;
+    for (const ei of edgeIndices) {
+      const faces = adjacency.edgeToFaces.get(ei) ?? [];
+      if (faces.length === 1) boundaryEdgeCount++;
+    }
+
+    const isBoundary = boundaryEdgeCount > 0;
+    const expectedValence = isBoundary ? 4 : 6;
+
+    if (deg === expectedValence) regular++;
+    else irregular++;
+  }
+
+  return {
+    minValence: min,
+    maxValence: max,
+    avgValence: avg,
+    modeValence: mode,
+    histogram,
+    regularVertices: regular,
+    irregularVertices: irregular,
+  };
+}
+
+export interface EdgeLengthStatistics {
+  minLength: number;
+  maxLength: number;
+  avgLength: number;
+  medianLength: number;
+  q1Length: number; // 25th percentile
+  q3Length: number; // 75th percentile
+  iqrLength: number; // Interquartile range
+  outlierCount: number; // Edges outside 1.5*IQR
+}
+
+export function computeEdgeLengthStatistics(body: SolidBody): EdgeLengthStatistics {
+  const lengths = body.edges.map((e) => computeEdgeLength(e)).sort((a, b) => a - b);
+
+  if (lengths.length === 0) {
+    return { minLength: 0, maxLength: 0, avgLength: 0, medianLength: 0, q1Length: 0, q3Length: 0, iqrLength: 0, outlierCount: 0 };
+  }
+
+  const min = lengths[0]!;
+  const max = lengths[lengths.length - 1]!;
+  const avg = lengths.reduce((s, l) => s + l, 0) / lengths.length;
+
+  const median = lengths.length % 2 === 0
+    ? (lengths[lengths.length / 2 - 1]! + lengths[lengths.length / 2]!) / 2
+    : lengths[Math.floor(lengths.length / 2)]!;
+
+  const q1Idx = Math.floor(lengths.length * 0.25);
+  const q3Idx = Math.floor(lengths.length * 0.75);
+  const q1 = lengths[q1Idx]!;
+  const q3 = lengths[q3Idx]!;
+  const iqr = q3 - q1;
+
+  const lowerBound = q1 - 1.5 * iqr;
+  const upperBound = q3 + 1.5 * iqr;
+  const outliers = lengths.filter((l) => l < lowerBound || l > upperBound).length;
+
+  return {
+    minLength: min,
+    maxLength: max,
+    avgLength: avg,
+    medianLength: median,
+    q1Length: q1,
+    q3Length: q3,
+    iqrLength: iqr,
+    outlierCount: outliers,
+  };
+}
+
+export interface FaceAreaStatistics {
+  minArea: number;
+  maxArea: number;
+  avgArea: number;
+  medianArea: number;
+  totalArea: number;
+  smallFaces: number; // Area < avg * 0.1
+  largeFaces: number; // Area > avg * 10
+}
+
+export function computeFaceAreaStatistics(body: SolidBody): FaceAreaStatistics {
+  const areas = body.faces.map((f) => computeFaceArea(f)).sort((a, b) => a - b);
+
+  if (areas.length === 0) {
+    return { minArea: 0, maxArea: 0, avgArea: 0, medianArea: 0, totalArea: 0, smallFaces: 0, largeFaces: 0 };
+  }
+
+  const min = areas[0]!;
+  const max = areas[areas.length - 1]!;
+  const total = areas.reduce((s, a) => s + a, 0);
+  const avg = total / areas.length;
+  const median = areas.length % 2 === 0
+    ? (areas[areas.length / 2 - 1]! + areas[areas.length / 2]!) / 2
+    : areas[Math.floor(areas.length / 2)]!;
+
+  const small = areas.filter((a) => a < avg * 0.1).length;
+  const large = areas.filter((a) => a > avg * 10).length;
+
+  return {
+    minArea: min,
+    maxArea: max,
+    avgArea: avg,
+    medianArea: median,
+    totalArea: total,
+    smallFaces: small,
+    largeFaces: large,
+  };
+}
+
+export interface VertexDistanceStatistics {
+  minDistance: number;
+  maxDistance: number;
+  avgDistance: number;
+  medianDistance: number;
+  closeVertices: number; // Distance < avg * 0.1
+  farVertices: number; // Distance > avg * 5
+}
+
+export function computeVertexDistanceStatistics(body: SolidBody): VertexDistanceStatistics {
+  const centroid = computeCentroid(body);
+  const distances = body.vertices
+    .map((v) => Math.sqrt((v.x - centroid.x) ** 2 + (v.y - centroid.y) ** 2 + (v.z - centroid.z) ** 2))
+    .sort((a, b) => a - b);
+
+  if (distances.length === 0) {
+    return { minDistance: 0, maxDistance: 0, avgDistance: 0, medianDistance: 0, closeVertices: 0, farVertices: 0 };
+  }
+
+  const min = distances[0]!;
+  const max = distances[distances.length - 1]!;
+  const avg = distances.reduce((s, d) => s + d, 0) / distances.length;
+  const median = distances.length % 2 === 0
+    ? (distances[distances.length / 2 - 1]! + distances[distances.length / 2]!) / 2
+    : distances[Math.floor(distances.length / 2)]!;
+
+  const close = distances.filter((d) => d < avg * 0.1).length;
+  const far = distances.filter((d) => d > avg * 5).length;
+
+  return {
+    minDistance: min,
+    maxDistance: max,
+    avgDistance: avg,
+    medianDistance: median,
+    closeVertices: close,
+    farVertices: far,
+  };
+}
+
+export interface EdgeAngleStatistics {
+  minAngle: number;
+  maxAngle: number;
+  avgAngle: number;
+  medianAngle: number;
+  acuteEdges: number; // < 90°
+  rightEdges: number; // ≈ 90°
+  obtuseEdges: number; // > 90°
+  straightEdges: number; // ≈ 180°
+}
+
+export function computeEdgeAngleStatistics(body: SolidBody): EdgeAngleStatistics {
+  const angles: number[] = [];
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    const n = verts.length;
+    if (n < 3) continue;
+
+    for (let i = 0; i < n; i++) {
+      const prev = (i - 1 + n) % n;
+      const next = (i + 1) % n;
+      const v0 = verts[prev]!;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+
+      const a = { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
+      const b = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+      const dot = a.x * b.x + a.y * b.y + a.z * b.z;
+      const lenA = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      const lenB = Math.sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
+
+      if (lenA < 1e-10 || lenB < 1e-10) continue;
+
+      const cosAngle = Math.max(-1, Math.min(1, dot / (lenA * lenB)));
+      const angle = Math.acos(cosAngle) * (180 / Math.PI);
+      angles.push(angle);
+    }
+  }
+
+  if (angles.length === 0) {
+    return { minAngle: 0, maxAngle: 0, avgAngle: 0, medianAngle: 0, acuteEdges: 0, rightEdges: 0, obtuseEdges: 0, straightEdges: 0 };
+  }
+
+  angles.sort((a, b) => a - b);
+  const min = angles[0]!;
+  const max = angles[angles.length - 1]!;
+  const avg = angles.reduce((s, a) => s + a, 0) / angles.length;
+  const median = angles.length % 2 === 0
+    ? (angles[angles.length / 2 - 1]! + angles[angles.length / 2]!) / 2
+    : angles[Math.floor(angles.length / 2)]!;
+
+  const acute = angles.filter((a) => a < 85).length;
+  const right = angles.filter((a) => a >= 85 && a <= 95).length;
+  const obtuse = angles.filter((a) => a > 95 && a < 175).length;
+  const straight = angles.filter((a) => a >= 175).length;
+
+  return {
+    minAngle: min,
+    maxAngle: max,
+    avgAngle: avg,
+    medianAngle: median,
+    acuteEdges: acute,
+    rightEdges: right,
+    obtuseEdges: obtuse,
+    straightEdges: straight,
+  };
+}
+
+export interface FaceNormalStatistics {
+  avgNormalX: number;
+  avgNormalY: number;
+  avgNormalZ: number;
+  normalVariance: number;
+  upwardFaces: number; // Normal pointing up (Z > 0.5)
+  downwardFaces: number; // Normal pointing down (Z < -0.5)
+  lateralFaces: number; // Other orientations
+}
+
+export function computeFaceNormalStatistics(body: SolidBody): FaceNormalStatistics {
+  if (body.faces.length === 0) {
+    return { avgNormalX: 0, avgNormalY: 0, avgNormalZ: 0, normalVariance: 0, upwardFaces: 0, downwardFaces: 0, lateralFaces: 0 };
+  }
+
+  let sumX = 0, sumY = 0, sumZ = 0;
+  let upward = 0, downward = 0, lateral = 0;
+
+  for (const face of body.faces) {
+    sumX += face.normal.x;
+    sumY += face.normal.y;
+    sumZ += face.normal.z;
+
+    if (face.normal.z > 0.5) upward++;
+    else if (face.normal.z < -0.5) downward++;
+    else lateral++;
+  }
+
+  const n = body.faces.length;
+  const avgX = sumX / n;
+  const avgY = sumY / n;
+  const avgZ = sumZ / n;
+
+  // Compute variance of normal directions
+  let variance = 0;
+  for (const face of body.faces) {
+    const dx = face.normal.x - avgX;
+    const dy = face.normal.y - avgY;
+    const dz = face.normal.z - avgZ;
+    variance += dx * dx + dy * dy + dz * dz;
+  }
+  variance /= n;
+
+  return {
+    avgNormalX: avgX,
+    avgNormalY: avgY,
+    avgNormalZ: avgZ,
+    normalVariance: variance,
+    upwardFaces: upward,
+    downwardFaces: downward,
+    lateralFaces: lateral,
+  };
+}
+
+export interface EdgeNormalStatistics {
+  avgTangentX: number;
+  avgTangentY: number;
+  avgTangentZ: number;
+  tangentVariance: number;
+  horizontalEdges: number; // Tangent mostly horizontal
+  verticalEdges: number; // Tangent mostly vertical
+  diagonalEdges: number; // Other orientations
+}
+
+export function computeEdgeNormalStatistics(body: SolidBody): EdgeNormalStatistics {
+  if (body.edges.length === 0) {
+    return { avgTangentX: 0, avgTangentY: 0, avgTangentZ: 0, tangentVariance: 0, horizontalEdges: 0, verticalEdges: 0, diagonalEdges: 0 };
+  }
+
+  let sumX = 0, sumY = 0, sumZ = 0;
+  let horizontal = 0, vertical = 0, diagonal = 0;
+
+  for (const edge of body.edges) {
+    const dx = edge.end.x - edge.start.x;
+    const dy = edge.end.y - edge.start.y;
+    const dz = edge.end.z - edge.start.z;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (len < 1e-10) continue;
+
+    const nx = dx / len;
+    const ny = dy / len;
+    const nz = dz / len;
+
+    sumX += nx;
+    sumY += ny;
+    sumZ += nz;
+
+    // Classify edge orientation
+    const absX = Math.abs(nx);
+    const absY = Math.abs(ny);
+    const absZ = Math.abs(nz);
+
+    if (absZ > 0.8) vertical++;
+    else if (absX > 0.5 || absY > 0.5) horizontal++;
+    else diagonal++;
+  }
+
+  const n = body.edges.length;
+  const avgX = sumX / n;
+  const avgY = sumY / n;
+  const avgZ = sumZ / n;
+
+  // Compute variance of tangent directions
+  let variance = 0;
+  for (const edge of body.edges) {
+    const dx = edge.end.x - edge.start.x;
+    const dy = edge.end.y - edge.start.y;
+    const dz = edge.end.z - edge.start.z;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-10) continue;
+
+    const nx = dx / len;
+    const ny = dy / len;
+    const nz = dz / len;
+
+    const ddx = nx - avgX;
+    const ddy = ny - avgY;
+    const ddz = nz - avgZ;
+    variance += ddx * ddx + ddy * ddy + ddz * ddz;
+  }
+  variance /= n;
+
+  return {
+    avgTangentX: avgX,
+    avgTangentY: avgY,
+    avgTangentZ: avgZ,
+    tangentVariance: variance,
+    horizontalEdges: horizontal,
+    verticalEdges: vertical,
+    diagonalEdges: diagonal,
+  };
+}
+
+export interface EdgeDihedralStatistics {
+  minDihedral: number;
+  maxDihedral: number;
+  avgDihedral: number;
+  medianDihedral: number;
+  smoothEdges: number; // Dihedral < 30°
+  hardEdges: number; // Dihedral 30° - 150°
+  sharpEdges: number; // Dihedral > 150°
+}
+
+export function computeEdgeDihedralStatistics(body: SolidBody): EdgeDihedralStatistics {
+  const edgeFaceCount = new Map<string, { faces: typeof body.faces }>();
+
+  // Group faces by edge
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+      const key = edgeKey(v1, v2);
+
+      if (!edgeFaceCount.has(key)) {
+        edgeFaceCount.set(key, { faces: [] });
+      }
+      edgeFaceCount.get(key)!.faces.push(face);
+    }
+  }
+
+  const dihedrals: number[] = [];
+
+  for (const { faces } of edgeFaceCount.values()) {
+    if (faces.length !== 2) continue;
+
+    const f1 = faces[0]!;
+    const f2 = faces[1]!;
+    const dot = f1.normal.x * f2.normal.x + f1.normal.y * f2.normal.y + f1.normal.z * f2.normal.z;
+    const angle = Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI);
+    dihedrals.push(angle);
+  }
+
+  if (dihedrals.length === 0) {
+    return { minDihedral: 0, maxDihedral: 0, avgDihedral: 0, medianDihedral: 0, smoothEdges: 0, hardEdges: 0, sharpEdges: 0 };
+  }
+
+  dihedrals.sort((a, b) => a - b);
+  const min = dihedrals[0]!;
+  const max = dihedrals[dihedrals.length - 1]!;
+  const avg = dihedrals.reduce((s, a) => s + a, 0) / dihedrals.length;
+  const median = dihedrals.length % 2 === 0
+    ? (dihedrals[dihedrals.length / 2 - 1]! + dihedrals[dihedrals.length / 2]!) / 2
+    : dihedrals[Math.floor(dihedrals.length / 2)]!;
+
+  const smooth = dihedrals.filter((a) => a < 30).length;
+  const hard = dihedrals.filter((a) => a >= 30 && a <= 150).length;
+  const sharp = dihedrals.filter((a) => a > 150).length;
+
+  return {
+    minDihedral: min,
+    maxDihedral: max,
+    avgDihedral: avg,
+    medianDihedral: median,
+    smoothEdges: smooth,
+    hardEdges: hard,
+    sharpEdges: sharp,
+  };
+}
+
+export interface EdgeLengthPercentiles {
+  p5: number; // 5th percentile
+  p10: number;
+  p25: number; // Q1
+  p50: number; // Median
+  p75: number; // Q3
+  p90: number;
+  p95: number;
+  iqr: number; // Interquartile range
+  whiskerLow: number; // Q1 - 1.5*IQR
+  whiskerHigh: number; // Q3 + 1.5*IQR
+}
+
+export function computeEdgeLengthPercentiles(body: SolidBody): EdgeLengthPercentiles {
+  const lengths = body.edges.map((e) => computeEdgeLength(e)).sort((a, b) => a - b);
+
+  if (lengths.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(lengths.length * p / 100);
+    return lengths[Math.min(idx, lengths.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, lengths[0]!),
+    whiskerHigh: Math.min(whiskerHigh, lengths[lengths.length - 1]!),
+  };
+}
+
+export interface FaceAreaPercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeFaceAreaPercentiles(body: SolidBody): FaceAreaPercentiles {
+  const areas = body.faces.map((f) => computeFaceArea(f)).sort((a, b) => a - b);
+
+  if (areas.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(areas.length * p / 100);
+    return areas[Math.min(idx, areas.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, areas[0]!),
+    whiskerHigh: Math.min(whiskerHigh, areas[areas.length - 1]!),
+  };
+}
+
+export interface VertexDistancePercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeVertexDistancePercentiles(body: SolidBody): VertexDistancePercentiles {
+  const centroid = computeCentroid(body);
+  const distances = body.vertices
+    .map((v) => Math.sqrt((v.x - centroid.x) ** 2 + (v.y - centroid.y) ** 2 + (v.z - centroid.z) ** 2))
+    .sort((a, b) => a - b);
+
+  if (distances.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(distances.length * p / 100);
+    return distances[Math.min(idx, distances.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, distances[0]!),
+    whiskerHigh: Math.min(whiskerHigh, distances[distances.length - 1]!),
+  };
+}
+
+export interface EdgeDihedralPercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeEdgeDihedralPercentiles(body: SolidBody): EdgeDihedralPercentiles {
+  const dihedrals: number[] = [];
+
+  // Group faces by edge
+  const edgeFaceMap = new Map<string, typeof body.faces>();
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 0; i < verts.length; i++) {
+      const next = (i + 1) % verts.length;
+      const key = edgeKey(verts[i]!, verts[next]!);
+      if (!edgeFaceMap.has(key)) edgeFaceMap.set(key, []);
+      edgeFaceMap.get(key)!.push(face);
+    }
+  }
+
+  for (const faces of edgeFaceMap.values()) {
+    if (faces.length !== 2) continue;
+    const f1 = faces[0]!;
+    const f2 = faces[1]!;
+    const dot = f1.normal.x * f2.normal.x + f1.normal.y * f2.normal.y + f1.normal.z * f2.normal.z;
+    const angle = Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI);
+    dihedrals.push(angle);
+  }
+
+  dihedrals.sort((a, b) => a - b);
+
+  if (dihedrals.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(dihedrals.length * p / 100);
+    return dihedrals[Math.min(idx, dihedrals.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, dihedrals[0]!),
+    whiskerHigh: Math.min(whiskerHigh, dihedrals[dihedrals.length - 1]!),
+  };
+}
+
+export interface EdgeAnglePercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeEdgeAnglePercentiles(body: SolidBody): EdgeAnglePercentiles {
+  const angles: number[] = [];
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    const n = verts.length;
+    if (n < 3) continue;
+
+    for (let i = 0; i < n; i++) {
+      const prev = (i - 1 + n) % n;
+      const next = (i + 1) % n;
+      const v0 = verts[prev]!;
+      const v1 = verts[i]!;
+      const v2 = verts[next]!;
+
+      const a = { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
+      const b = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+      const dot = a.x * b.x + a.y * b.y + a.z * b.z;
+      const lenA = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      const lenB = Math.sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
+
+      if (lenA < 1e-10 || lenB < 1e-10) continue;
+
+      const cosAngle = Math.max(-1, Math.min(1, dot / (lenA * lenB)));
+      const angle = Math.acos(cosAngle) * (180 / Math.PI);
+      angles.push(angle);
+    }
+  }
+
+  angles.sort((a, b) => a - b);
+
+  if (angles.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(angles.length * p / 100);
+    return angles[Math.min(idx, angles.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, angles[0]!),
+    whiskerHigh: Math.min(whiskerHigh, angles[angles.length - 1]!),
+  };
+}
+
+export interface FaceNormalPercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeFaceNormalPercentiles(body: SolidBody): FaceNormalPercentiles {
+  const centroid = computeCentroid(body);
+  const dotProducts: number[] = [];
+
+  for (const face of body.faces) {
+    // Dot product of face normal with direction from centroid to face center
+    let fx = 0, fy = 0, fz = 0;
+    for (const v of face.vertices) {
+      fx += v.x;
+      fy += v.y;
+      fz += v.z;
+    }
+    fx /= face.vertices.length;
+    fy /= face.vertices.length;
+    fz /= face.vertices.length;
+
+    const dir = normalize({
+      x: fx - centroid.x,
+      y: fy - centroid.y,
+      z: fz - centroid.z,
+    });
+
+    const dot = face.normal.x * dir.x + face.normal.y * dir.y + face.normal.z * dir.z;
+    dotProducts.push(dot);
+  }
+
+  dotProducts.sort((a, b) => a - b);
+
+  if (dotProducts.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(dotProducts.length * p / 100);
+    return dotProducts[Math.min(idx, dotProducts.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, dotProducts[0]!),
+    whiskerHigh: Math.min(whiskerHigh, dotProducts[dotProducts.length - 1]!),
+  };
+}
+
+export interface EdgeTangentPercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeEdgeTangentPercentiles(body: SolidBody): EdgeTangentPercentiles {
+  const centroid = computeCentroid(body);
+  const tangents: number[] = [];
+
+  for (const edge of body.edges) {
+    const midX = (edge.start.x + edge.end.x) / 2;
+    const midY = (edge.start.y + edge.end.y) / 2;
+    const midZ = (edge.start.z + edge.end.z) / 2;
+
+    // Tangent direction
+    const dx = edge.end.x - edge.start.x;
+    const dy = edge.end.y - edge.start.y;
+    const dz = edge.end.z - edge.start.z;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-10) continue;
+
+    // Direction from centroid to edge midpoint
+    const dirX = midX - centroid.x;
+    const dirY = midY - centroid.y;
+    const dirZ = midZ - centroid.z;
+    const dirLen = Math.sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+    if (dirLen < 1e-10) continue;
+
+    // Dot product of tangent with radial direction
+    const dot = (dx * dirX + dy * dirY + dz * dirZ) / (len * dirLen);
+    tangents.push(dot);
+  }
+
+  tangents.sort((a, b) => a - b);
+
+  if (tangents.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(tangents.length * p / 100);
+    return tangents[Math.min(idx, tangents.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, tangents[0]!),
+    whiskerHigh: Math.min(whiskerHigh, tangents[tangents.length - 1]!),
+  };
+}
+
+export interface EdgeCurvaturePercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeEdgeCurvaturePercentiles(body: SolidBody): EdgeCurvaturePercentiles {
+  const curvatures: number[] = [];
+
+  for (const edge of body.edges) {
+    const len = computeEdgeLength(edge);
+    if (len > 1e-10) {
+      curvatures.push(1 / len);
+    }
+  }
+
+  curvatures.sort((a, b) => a - b);
+
+  if (curvatures.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(curvatures.length * p / 100);
+    return curvatures[Math.min(idx, curvatures.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, curvatures[0]!),
+    whiskerHigh: Math.min(whiskerHigh, curvatures[curvatures.length - 1]!),
+  };
+}
+
+export interface VertexValencePercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeVertexValencePercentiles(body: SolidBody): VertexValencePercentiles {
+  const degrees = computeVertexDegrees(body);
+  const valences: number[] = Array.from(degrees.values());
+  valences.sort((a, b) => a - b);
+
+  if (valences.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(valences.length * p / 100);
+    return valences[Math.min(idx, valences.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, valences[0]!),
+    whiskerHigh: Math.min(whiskerHigh, valences[valences.length - 1]!),
+  };
+}
+
+export interface VertexDistancePercentiles {
+  p5: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  p95: number;
+  iqr: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+}
+
+export function computeVertexDistancePercentiles(body: SolidBody): VertexDistancePercentiles {
+  const centroid = computeCentroid(body);
+  const distances: number[] = [];
+
+  for (const v of body.vertices) {
+    const dx = v.x - centroid.x;
+    const dy = v.y - centroid.y;
+    const dz = v.z - centroid.z;
+    distances.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
+  }
+
+  distances.sort((a, b) => a - b);
+
+  if (distances.length === 0) {
+    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  }
+
+  const getPercentile = (p: number) => {
+    const idx = Math.floor(distances.length * p / 100);
+    return distances[Math.min(idx, distances.length - 1)]!;
+  };
+
+  const p5 = getPercentile(5);
+  const p10 = getPercentile(10);
+  const p25 = getPercentile(25);
+  const p50 = getPercentile(50);
+  const p75 = getPercentile(75);
+  const p90 = getPercentile(90);
+  const p95 = getPercentile(95);
+
+  const iqr = p75 - p25;
+  const whiskerLow = p25 - 1.5 * iqr;
+  const whiskerHigh = p75 + 1.5 * iqr;
+
+  return {
+    p5, p10, p25, p50, p75, p90, p95,
+    iqr,
+    whiskerLow: Math.max(whiskerLow, distances[0]!),
+    whiskerHigh: Math.min(whiskerHigh, distances[distances.length - 1]!),
+  };
+}
