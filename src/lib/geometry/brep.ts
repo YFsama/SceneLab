@@ -604,6 +604,37 @@ export function computeCentroid(body: SolidBody): Vec3 {
   return { x: cx / n, y: cy / n, z: cz / n };
 }
 
+/**
+ * Volume-weighted centroid (true center of mass for a uniform-density solid),
+ * via signed tetrahedra from the origin. Falls back to the vertex centroid for
+ * degenerate (near-zero-volume) meshes.
+ */
+export function computeVolumetricCentroid(body: SolidBody): Vec3 {
+  let vol = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 1; i < verts.length - 1; i++) {
+      const a = verts[0]!;
+      const b = verts[i]!;
+      const c = verts[i + 1]!;
+      const tv =
+        (a.x * (b.y * c.z - b.z * c.y) -
+          a.y * (b.x * c.z - b.z * c.x) +
+          a.z * (b.x * c.y - b.y * c.x)) /
+        6;
+      vol += tv;
+      cx += (tv * (a.x + b.x + c.x)) / 4;
+      cy += (tv * (a.y + b.y + c.y)) / 4;
+      cz += (tv * (a.z + b.z + c.z)) / 4;
+    }
+  }
+  if (Math.abs(vol) < 1e-9) return computeCentroid(body);
+  return { x: cx / vol, y: cy / vol, z: cz / vol };
+}
+
 export function computeVolume(body: SolidBody): number {
   // Signed volume using divergence theorem
   let volume = 0;

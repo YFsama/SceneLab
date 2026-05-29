@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, createRevolve, findBoundaryLoops } from './brep';
+import { mergeBodies } from './operations';
 import type { Vec3, SolidBody } from './types';
 
 /** Translate every position of a body by an offset (helper for invariance tests). */
@@ -128,6 +129,30 @@ describe('createBox', () => {
     expect(() => createBox(-1, 1, 1)).toThrow('positive');
     expect(() => createBox(NaN, 1, 1)).toThrow('positive');
     expect(() => createBox(Infinity, 1, 1)).toThrow('positive');
+  });
+});
+
+describe('computeVolumetricCentroid', () => {
+  it('equals the geometric center for a symmetric box', () => {
+    const c = computeVolumetricCentroid(createBox(10, 10, 10));
+    expect(c.x).toBeCloseTo(0, 5);
+    expect(c.y).toBeCloseTo(5, 5); // box spans y∈[0,10]
+    expect(c.z).toBeCloseTo(0, 5);
+  });
+
+  it('is mass-weighted across unequal merged bodies', () => {
+    // 20³ box at origin (V=8000) + 10³ box centered at x=100 (V=1000).
+    const big = createBox(20, 20, 20); // x∈[-10,10], centroid x=0
+    const small = createBox(10, 10, 10);
+    const shifted = {
+      ...small,
+      vertices: small.vertices.map((v) => ({ ...v, x: v.x + 100 })),
+      faces: small.faces.map((f) => ({ ...f, vertices: f.vertices.map((v) => ({ ...v, x: v.x + 100 })) })),
+    };
+    const merged = mergeBodies([big, shifted]);
+    const c = computeVolumetricCentroid(merged);
+    // Mass-weighted: (0·8000 + 100·1000) / 9000 ≈ 11.1 (not the 50 a vertex avg gives).
+    expect(c.x).toBeCloseTo((100 * 1000) / 9000, 1);
   });
 });
 

@@ -1,5 +1,5 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
-import { computeCentroid } from '../geometry';
+import { computeVolumetricCentroid } from '../geometry';
 
 export interface StabilityOptions {
   /** Build / "up" axis. Defaults to +Y (model up). */
@@ -12,7 +12,7 @@ export interface StabilityOptions {
 }
 
 export interface StabilityReport {
-  /** Approximate center of mass (uniform-density vertex centroid). */
+  /** Center of mass (volume-weighted, uniform density). */
   centerOfMass: Vec3;
   /** Area of the base support polygon (mm²). */
   footprintArea: number;
@@ -137,7 +137,7 @@ function pointInConvex(p: Vec2, poly: Vec2[]): boolean {
  */
 export function analyzeStability(body: SolidBody, options: StabilityOptions = {}): StabilityReport {
   const up = norm(options.up ?? { x: 0, y: 1, z: 0 });
-  const com = computeCentroid(body);
+  const com = computeVolumetricCentroid(body);
 
   const empty: StabilityReport = {
     centerOfMass: com,
