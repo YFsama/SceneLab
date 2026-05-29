@@ -141,6 +141,33 @@ export function registerBuiltinTools(): void {
     },
   });
 
+  registerTool({
+    name: 'draw_arc',
+    description: 'Draw an arc in the current sketch: center (cx,cy), radius, and start/end angles in degrees.',
+    parameters: {
+      type: 'object',
+      properties: {
+        cx: { type: 'number', description: 'Center X' },
+        cy: { type: 'number', description: 'Center Y' },
+        radius: { type: 'number', description: 'Radius' },
+        startAngle: { type: 'number', description: 'Start angle in degrees' },
+        endAngle: { type: 'number', description: 'End angle in degrees' },
+      },
+      required: ['cx', 'cy', 'radius', 'startAngle', 'endAngle'],
+    },
+    execute: async (args) => {
+      const deg = Math.PI / 180;
+      useStore.getState().addSketchArc(
+        assertNumber(args.cx, 'cx'),
+        assertNumber(args.cy, 'cy'),
+        assertNumber(args.radius, 'radius'),
+        assertNumber(args.startAngle, 'startAngle') * deg,
+        assertNumber(args.endAngle, 'endAngle') * deg,
+      );
+      return { success: true };
+    },
+  });
+
   // Primitive tools (create a solid directly, no sketch needed)
   registerTool({
     name: 'create_box',

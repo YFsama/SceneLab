@@ -129,6 +129,14 @@ describe('builtin analysis tools', () => {
     expect(result.best.supportArea).toBe(0); // a box needs no support
   });
 
+  it('draw_arc adds an arc entity to the current sketch', async () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    const tool = getTool('draw_arc')!;
+    await tool.execute({ cx: 0, cy: 0, radius: 5, startAngle: 0, endAngle: 90 });
+    const sketch = useStore.getState().currentSketch!;
+    expect(Array.from(sketch.entities.values()).some((e) => e.type === 'arc')).toBe(true);
+  });
+
   it('create_box adds a box body to the scene', async () => {
     useStore.setState({ bodies: [], objectIds: [] });
     const tool = getTool('create_box')!;
