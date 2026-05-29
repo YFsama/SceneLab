@@ -1,17 +1,17 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { serializeProject, saveToFile, loadFromFile, downloadFile, readFileAsText, exportSTLBinary, export3MF } from '../../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, downloadFile, readFileAsText, exportSTLBinary, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { Save, FolderOpen, Download, FileBox, Image } from 'lucide-react';
 
 export function ProjectMenu() {
   const { t } = useT();
   const projectName = useStore((s) => s.projectName);
-  const setProjectName = useStore((s) => s.setProjectName);
   const featureTree = useStore((s) => s.featureTree);
   const bodies = useStore((s) => s.bodies);
   const setProjectDirty = useStore((s) => s.setProjectDirty);
+  const loadProject = useStore((s) => s.loadProject);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
@@ -33,9 +33,9 @@ export function ProjectMenu() {
     try {
       const json = await readFileAsText(file);
       const project = loadFromFile(json);
-      setProjectName(project.name);
+      // Rebuild the parametric model, not just the name.
+      loadProject(deserializeFeatures(project), project.name);
       showToast(`${t('toast.loaded')} "${project.name}"`, 'success');
-      setProjectDirty(false);
     } catch (err) {
       showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
     }
