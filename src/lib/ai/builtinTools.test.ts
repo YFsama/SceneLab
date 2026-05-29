@@ -310,6 +310,14 @@ describe('builtin analysis tools', () => {
     expect(useStore.getState().bodies).toHaveLength(1);
   });
 
+  it('describe_scene summarizes count and total volume', async () => {
+    useStore.setState({ bodies: [createBox(10, 10, 10), createBox(10, 10, 10)], directBodies: [] });
+    const tool = getTool('describe_scene')!;
+    const result = (await tool.execute({})) as { bodyCount: number; totalVolumeCm3: number };
+    expect(result.bodyCount).toBe(2);
+    expect(result.totalVolumeCm3).toBeCloseTo(2, 2); // 1000 + 1000 mm³ = 2 cm³
+  });
+
   it('clear_scene empties the scene', async () => {
     useStore.setState({ bodies: [createBox(5, 5, 5)], directBodies: [createBox(5, 5, 5)] });
     const tool = getTool('clear_scene')!;

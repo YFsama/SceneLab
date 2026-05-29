@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -880,6 +880,31 @@ export function registerBuiltinTools(): void {
     execute: async () => {
       useStore.getState().clearScene();
       return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'describe_scene',
+    description: 'Summarize the whole scene: body count, names, total volume, and combined bounding box.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const { bodies } = useStore.getState();
+      if (bodies.length === 0) return { bodyCount: 0 };
+      let totalVolumeMm3 = 0;
+      const min = { x: Infinity, y: Infinity, z: Infinity };
+      const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+      for (const b of bodies) {
+        totalVolumeMm3 += Math.abs(computeVolume(b));
+        const bb = computeBoundingBox(b);
+        min.x = Math.min(min.x, bb.min.x); min.y = Math.min(min.y, bb.min.y); min.z = Math.min(min.z, bb.min.z);
+        max.x = Math.max(max.x, bb.max.x); max.y = Math.max(max.y, bb.max.y); max.z = Math.max(max.z, bb.max.z);
+      }
+      return {
+        bodyCount: bodies.length,
+        names: bodies.map((b) => b.name),
+        totalVolumeCm3: Number((totalVolumeMm3 / 1000).toFixed(3)),
+        boundingBox: { min, max },
+      };
     },
   });
 
