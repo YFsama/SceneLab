@@ -1,8 +1,8 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops } from '../geometry/brep';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody } from '../geometry/operations';
+import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -532,6 +532,37 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const result = translateBody(body, args.offset as Vec3);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'rotate_body',
+    description: 'Rotate a body by an angle (degrees) about an axis, around the body center.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        axis: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Rotation axis (e.g. {x:0,y:1,z:0} for Y)',
+        },
+        angleDeg: { type: 'number', description: 'Rotation angle in degrees' },
+      },
+      required: ['axis', 'angleDeg'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const bb = computeBoundingBox(body);
+      const origin: Vec3 = {
+        x: (bb.min.x + bb.max.x) / 2,
+        y: (bb.min.y + bb.max.y) / 2,
+        z: (bb.min.z + bb.max.z) / 2,
+      };
+      const angle = (assertNumber(args.angleDeg, 'angleDeg') * Math.PI) / 180;
+      const result = rotateBody(body, { origin, direction: args.axis as Vec3 }, angle);
       useStore.getState().replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },

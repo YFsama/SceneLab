@@ -230,6 +230,19 @@ describe('builtin analysis tools', () => {
     expect(Math.min(...xs)).toBeCloseTo(95, 5); // -5 + 100
   });
 
+  it('rotate_body rotates in place, preserving volume', async () => {
+    const box = createBox(10, 20, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const before = box.vertices.length;
+    const tool = getTool('rotate_body')!;
+    await tool.execute({ bodyId: box.id, axis: { x: 0, y: 0, z: 1 }, angleDeg: 90 });
+    const rotated = useStore.getState().bodies[0]!;
+    expect(rotated.vertices).toHaveLength(before);
+    // After a 90° turn about Z, the part's X extent becomes the old Y extent (20).
+    const xs = rotated.vertices.map((v) => v.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 3);
+  });
+
   it('repair_mesh welds and replaces a direct body', async () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });
