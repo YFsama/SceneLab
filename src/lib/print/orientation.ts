@@ -17,6 +17,8 @@ export interface OrientationCandidate {
   supportFaces: number;
   /** Part height along the build axis. */
   buildHeight: number;
+  /** Area of faces resting on the bed in this orientation (first-layer adhesion). */
+  bedContactArea: number;
 }
 
 export interface OrientationReport {
@@ -63,7 +65,7 @@ export function recommendOrientation(body: SolidBody, options: OrientationOption
   const candidates: OrientationCandidate[] = DIRECTIONS.map(({ up, label }) => {
     const dir = normalize(up);
     if (body.vertices.length === 0) {
-      return { up, label, supportArea: 0, supportFaces: 0, buildHeight: 0 };
+      return { up, label, supportArea: 0, supportFaces: 0, buildHeight: 0, bedContactArea: 0 };
     }
 
     const heights = body.vertices.map((v) => dot(v, dir));
@@ -74,22 +76,33 @@ export function recommendOrientation(body: SolidBody, options: OrientationOption
 
     let supportArea = 0;
     let supportFaces = 0;
+    let bedContactArea = 0;
     for (const face of body.faces) {
       const n = normalize(face.normal);
       const d = dot(n, dir);
+      const onBed = faceCentroidHeight(face, dir) <= minH + tol;
+      if (d < 0 && onBed) {
+        bedContactArea += areaById.get(face.id) ?? 0; // first-layer contact
+        continue;
+      }
       if (d >= 0) continue; // not downward-facing
-      if (faceCentroidHeight(face, dir) <= minH + tol) continue; // resting on the bed
+      if (onBed) continue; // resting on the bed
       const angleDeg = Math.acos(Math.max(-1, Math.min(1, -d))) * DEG;
       if (angleDeg < thresholdDeg) {
         supportArea += areaById.get(face.id) ?? 0;
         supportFaces += 1;
       }
     }
-    return { up, label, supportArea, supportFaces, buildHeight };
+    return { up, label, supportArea, supportFaces, buildHeight, bedContactArea };
   });
 
+  // Prefer least support, then shortest build, then largest bed contact (best
+  // first-layer adhesion).
   const sorted = [...candidates].sort(
-    (a, b) => a.supportArea - b.supportArea || a.buildHeight - b.buildHeight,
+    (a, b) =>
+      a.supportArea - b.supportArea ||
+      a.buildHeight - b.buildHeight ||
+      b.bedContactArea - a.bedContactArea,
   );
 
   return { candidates: sorted, best: sorted[0]! };

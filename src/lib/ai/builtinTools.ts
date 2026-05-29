@@ -847,6 +847,7 @@ export function registerBuiltinTools(): void {
           supportArea: Number(report.best.supportArea.toFixed(2)),
           supportFaces: report.best.supportFaces,
           buildHeight: Number(report.best.buildHeight.toFixed(2)),
+          bedContactArea: Number(report.best.bedContactArea.toFixed(2)),
         },
         ranked: report.candidates.map((c) => ({
           orientation: c.label,

@@ -68,6 +68,19 @@ describe('recommendOrientation', () => {
     expect(report.best.supportArea).toBe(0);
   });
 
+  it('reports bed contact area and prefers it as a tie-break', () => {
+    // Box 10(X)×20(Y)×10(Z): the four 10-tall orientations tie on support(0)
+    // and height(10); each rests on a 20×10 = 200 mm² face.
+    const report = recommendOrientation(createBox(10, 20, 10));
+    expect(report.best.buildHeight).toBeCloseTo(10, 5);
+    expect(report.best.bedContactArea).toBeCloseTo(200, 0);
+
+    // A flat slab is best laid down (+/-Y), resting on its 40×40 face.
+    const slab = recommendOrientation(createBox(40, 5, 40));
+    expect(slab.best.buildHeight).toBeCloseTo(5, 5);
+    expect(slab.best.bedContactArea).toBeCloseTo(1600, 0);
+  });
+
   it('handles an empty body gracefully', () => {
     const body: SolidBody = { id: 'e', name: 'e', vertices: [], faces: [], edges: [] };
     const report = recommendOrientation(body);
