@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeVolume, createRevolve } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeVolume, createRevolve, findBoundaryLoops } from './brep';
 import type { Vec3, SolidBody } from './types';
 
 /** Translate every position of a body by an offset (helper for invariance tests). */
@@ -347,11 +347,41 @@ describe('createRevolve solid', () => {
     expect(computeVolume(moved)).toBeCloseTo(computeVolume(body), 4);
   });
 
-  it('a partial revolution produces a capped, non-empty body', () => {
+  it('a partial revolution is watertight with the fractional Pappus volume', () => {
     const body = createRevolve({ profile: rect, axis: axisY, angle: Math.PI });
-    expect(body.faces.length).toBeGreaterThan(0);
-    expect(Math.abs(computeVolume(body))).toBeGreaterThan(0);
+    // V = area(4) × angle(π) × centroidRadius(3) = 12π ≈ 37.7
+    const ideal = 4 * Math.PI * 3;
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(ideal * 0.98);
+    expect(Math.abs(computeVolume(body))).toBeLessThanOrEqual(ideal * 1.001);
+    expect(findBoundaryLoops(body).holeCount).toBe(0); // caps close the ends
   });
+});
+
+describe('primitives are watertight', () => {
+  const rect = [
+    { x: 2, y: 0, z: 0 },
+    { x: 4, y: 0, z: 0 },
+    { x: 4, y: 2, z: 0 },
+    { x: 2, y: 2, z: 0 },
+  ];
+  const axisY = { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } };
+  const cases: [string, () => import('./types').SolidBody][] = [
+    ['box', () => createBox(10, 10, 10)],
+    ['cylinder', () => createCylinder(5, 10, 32)],
+    ['sphere', () => createSphere(5, 16)],
+    ['frustum', () => createCone(5, 2, 10, 32)],
+    ['cone', () => createCone(5, 0, 10, 32)],
+    ['torus', () => createTorus(10, 3, 32, 16)],
+    ['wedge', () => createWedge(10, 6, 4)],
+    ['revolve-full', () => createRevolve({ profile: rect, axis: axisY, angle: Math.PI * 2 })],
+    ['revolve-partial', () => createRevolve({ profile: rect, axis: axisY, angle: Math.PI / 2 })],
+  ];
+
+  for (const [name, make] of cases) {
+    it(`${name} has no boundary holes`, () => {
+      expect(findBoundaryLoops(make()).holeCount).toBe(0);
+    });
+  }
 });
 
 describe('createWedge', () => {
