@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { exportSTLBinary, exportSTLAscii, importSTLAscii, importSTLBinary } from './stl';
+import { exportSTLBinary, exportSTLAscii, importSTLAscii, importSTLBinary, importSTL } from './stl';
 import { createBox, computeVolume } from '../geometry/brep';
 
 describe('exportSTLBinary', () => {
@@ -80,6 +80,27 @@ describe('importSTLBinary', () => {
 
   it('rejects a truncated buffer', () => {
     expect(() => importSTLBinary(new ArrayBuffer(10))).toThrow('too short');
+  });
+});
+
+describe('importSTL (auto-detect)', () => {
+  const box = createBox(10, 10, 10);
+
+  it('parses a binary STL buffer', () => {
+    const body = importSTL(exportSTLBinary(box));
+    expect(body.faces).toHaveLength(12);
+    expect(Math.abs(computeVolume(body))).toBeCloseTo(1000, 1);
+  });
+
+  it('parses an ASCII STL string', () => {
+    const body = importSTL(exportSTLAscii(box));
+    expect(body.faces).toHaveLength(12);
+  });
+
+  it('falls back to ASCII for ASCII bytes in a buffer', () => {
+    const buf = new TextEncoder().encode(exportSTLAscii(box)).buffer;
+    const body = importSTL(buf);
+    expect(body.faces).toHaveLength(12);
   });
 });
 

@@ -167,3 +167,17 @@ export function importSTLBinary(buffer: ArrayBuffer, weldTolerance = 1e-4): Soli
   const body = buildBody('Imported', tris);
   return weldTolerance > 0 ? weldVertices(body, weldTolerance) : body;
 }
+
+/**
+ * Parse STL from either a string (ASCII) or an ArrayBuffer, auto-detecting
+ * binary vs ASCII by the binary length formula (84 + 50·triangles).
+ */
+export function importSTL(data: string | ArrayBuffer, weldTolerance = 1e-4): SolidBody {
+  if (typeof data === 'string') return importSTLAscii(data, weldTolerance);
+  if (data.byteLength >= 84) {
+    const tri = new DataView(data).getUint32(80, true);
+    if (84 + tri * 50 === data.byteLength) return importSTLBinary(data, weldTolerance);
+  }
+  // Not a well-formed binary STL — treat the bytes as ASCII text.
+  return importSTLAscii(new TextDecoder().decode(data), weldTolerance);
+}
