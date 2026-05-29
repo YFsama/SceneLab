@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, computeBoundingBox, computeVolume, createRevolve } from './brep';
+import { createExtrude, createBox, createCylinder, computeBoundingBox, computeVolume, createRevolve } from './brep';
 import type { Vec3 } from './types';
 
 describe('createExtrude', () => {
@@ -168,5 +168,33 @@ describe('createRevolve', () => {
         angle: Math.PI,
       }),
     ).toThrow('Axis direction vector cannot be zero');
+  });
+});
+
+describe('createCylinder', () => {
+  it('approximates the analytic volume πr²h', () => {
+    const r = 5;
+    const h = 10;
+    const cyl = createCylinder(r, h, 64);
+    const ideal = Math.PI * r * r * h;
+    const vol = Math.abs(computeVolume(cyl));
+    // An inscribed 64-gon prism is slightly under the true cylinder (<0.5%).
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+    expect(vol).toBeGreaterThan(ideal * 0.99);
+  });
+
+  it('has the right bounding box and name', () => {
+    const cyl = createCylinder(5, 10, 32);
+    const bb = computeBoundingBox(cyl);
+    expect(cyl.name).toBe('Cylinder');
+    expect(bb.max.y - bb.min.y).toBeCloseTo(10, 5);
+    expect(bb.max.x).toBeCloseTo(5, 5);
+    expect(bb.min.x).toBeCloseTo(-5, 5);
+  });
+
+  it('rejects invalid parameters', () => {
+    expect(() => createCylinder(0, 10)).toThrow('Radius');
+    expect(() => createCylinder(5, 0)).toThrow('Height');
+    expect(() => createCylinder(5, 10, 2)).toThrow('segments');
   });
 });

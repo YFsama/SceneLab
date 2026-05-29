@@ -251,6 +251,29 @@ export function createBox(width: number, height: number, depth: number): SolidBo
   };
 }
 
+/** Circular cylinder along +Y, approximated by an `segments`-gon prism. */
+export function createCylinder(radius: number, height: number, segments = 32): SolidBody {
+  if (radius <= 0) throw new Error('Radius must be positive');
+  if (height <= 0) throw new Error('Height must be positive');
+  if (segments < 3) throw new Error('Cylinder needs at least 3 segments');
+
+  const profile: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    profile.push({ x: Math.cos(a) * radius, y: 0, z: Math.sin(a) * radius });
+  }
+
+  return {
+    ...createExtrude({
+      profile,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: height,
+      symmetric: false,
+    }),
+    name: 'Cylinder',
+  };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };

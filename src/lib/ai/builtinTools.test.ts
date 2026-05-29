@@ -71,6 +71,25 @@ describe('builtin analysis tools', () => {
     expect(result.best.supportArea).toBe(0); // a box needs no support
   });
 
+  it('create_box adds a box body to the scene', async () => {
+    useStore.setState({ bodies: [], objectIds: [] });
+    const tool = getTool('create_box')!;
+    const result = (await tool.execute({ width: 10, height: 10, depth: 10 })) as { bodyId: string };
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.name).toBe('Box');
+    expect(bodies[0]?.id).toBe(result.bodyId);
+  });
+
+  it('create_cylinder adds a cylinder body to the scene', async () => {
+    useStore.setState({ bodies: [], objectIds: [] });
+    const tool = getTool('create_cylinder')!;
+    await tool.execute({ radius: 5, height: 20 });
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.name).toBe('Cylinder');
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');

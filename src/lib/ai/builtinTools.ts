@@ -2,6 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
+import { createBox, createCylinder } from '../geometry/brep';
 import { assertNumber, assertBoolean, assertEnum } from './validate';
 import type { Vec3, SolidBody } from '../geometry/types';
 import {
@@ -124,6 +125,55 @@ export function registerBuiltinTools(): void {
         assertNumber(args.radius, 'radius'),
       );
       return { success: true };
+    },
+  });
+
+  // Primitive tools (create a solid directly, no sketch needed)
+  registerTool({
+    name: 'create_box',
+    description: 'Create a box solid (width × height × depth, mm) and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: 'Width (X) in mm' },
+        height: { type: 'number', description: 'Height (Y) in mm' },
+        depth: { type: 'number', description: 'Depth (Z) in mm' },
+      },
+      required: ['width', 'height', 'depth'],
+    },
+    execute: async (args) => {
+      const body = createBox(
+        assertNumber(args.width, 'width'),
+        assertNumber(args.height, 'height'),
+        assertNumber(args.depth, 'depth'),
+      );
+      const store = useStore.getState();
+      useStore.setState({ bodies: [...store.bodies, body], objectIds: [...store.objectIds, body.id] });
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_cylinder',
+    description: 'Create a cylinder solid (radius, height in mm) along +Y and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        radius: { type: 'number', description: 'Radius in mm' },
+        height: { type: 'number', description: 'Height in mm' },
+        segments: { type: 'number', description: 'Facet count (default 32)' },
+      },
+      required: ['radius', 'height'],
+    },
+    execute: async (args) => {
+      const body = createCylinder(
+        assertNumber(args.radius, 'radius'),
+        assertNumber(args.height, 'height'),
+        args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
+      );
+      const store = useStore.getState();
+      useStore.setState({ bodies: [...store.bodies, body], objectIds: [...store.objectIds, body.id] });
+      return { success: true, bodyId: body.id };
     },
   });
 
