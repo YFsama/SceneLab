@@ -82,3 +82,35 @@ describe('importSTLBinary', () => {
     expect(() => importSTLBinary(new ArrayBuffer(10))).toThrow('too short');
   });
 });
+
+describe('importSTLAscii welding', () => {
+  // Two triangles; one shared corner is jittered by 1e-6.
+  const jittered = `solid j
+ facet normal 0 0 1
+  outer loop
+   vertex 0 0 0
+   vertex 1 0 0
+   vertex 0 1 0
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex 1 0 0
+   vertex 1 1 0
+   vertex 0.000001 1 0
+  endloop
+ endfacet
+endsolid j
+`;
+
+  it('welds the jittered corner by default', () => {
+    const body = importSTLAscii(jittered); // default weldTolerance 1e-4
+    // {0,1,0} and {0.000001,1,0} merge → 4 unique corners.
+    expect(body.vertices).toHaveLength(4);
+  });
+
+  it('keeps the jittered corner when welding is disabled', () => {
+    const body = importSTLAscii(jittered, 0);
+    expect(body.vertices).toHaveLength(5);
+  });
+});

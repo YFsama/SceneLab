@@ -1,4 +1,5 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
+import { weldVertices } from '../geometry';
 
 /** Export a body as binary STL */
 export function exportSTLBinary(body: SolidBody): ArrayBuffer {
@@ -108,8 +109,11 @@ function buildBody(
   return { id: `body_${importId++}`, name, vertices, faces, edges };
 }
 
-/** Parse an ASCII STL string into a SolidBody (one face per triangle). */
-export function importSTLAscii(text: string): SolidBody {
+/**
+ * Parse an ASCII STL string into a SolidBody (one face per triangle).
+ * Near-coincident vertices are welded (set weldTolerance to 0 to disable).
+ */
+export function importSTLAscii(text: string, weldTolerance = 1e-4): SolidBody {
   const tris: Array<{ normal: Vec3; verts: [Vec3, Vec3, Vec3] }> = [];
   const nameMatch = text.match(/^\s*solid\s+(.*)$/m);
   const name = nameMatch?.[1]?.trim() || 'Imported';
@@ -132,11 +136,15 @@ export function importSTLAscii(text: string): SolidBody {
     }
   }
 
-  return buildBody(name, tris);
+  const body = buildBody(name, tris);
+  return weldTolerance > 0 ? weldVertices(body, weldTolerance) : body;
 }
 
-/** Parse a binary STL buffer into a SolidBody (one face per triangle). */
-export function importSTLBinary(buffer: ArrayBuffer): SolidBody {
+/**
+ * Parse a binary STL buffer into a SolidBody (one face per triangle).
+ * Near-coincident vertices are welded (set weldTolerance to 0 to disable).
+ */
+export function importSTLBinary(buffer: ArrayBuffer, weldTolerance = 1e-4): SolidBody {
   const view = new DataView(buffer);
   if (buffer.byteLength < 84) throw new Error('Invalid binary STL: too short');
   const count = view.getUint32(80, true);
@@ -156,5 +164,6 @@ export function importSTLBinary(buffer: ArrayBuffer): SolidBody {
     tris.push({ normal, verts });
   }
 
-  return buildBody('Imported', tris);
+  const body = buildBody('Imported', tris);
+  return weldTolerance > 0 ? weldVertices(body, weldTolerance) : body;
 }
