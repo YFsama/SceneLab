@@ -274,6 +274,69 @@ export function createCylinder(radius: number, height: number, segments = 32): S
   };
 }
 
+/** UV sphere centred at the origin. Normals come straight from position. */
+export function createSphere(radius: number, segments = 16): SolidBody {
+  if (radius <= 0) throw new Error('Radius must be positive');
+  if (segments < 3) throw new Error('Sphere needs at least 3 segments');
+
+  const lon = segments;
+  const lat = Math.max(3, Math.round(segments / 2));
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+  const unit = (v: Vec3): Vec3 => {
+    const l = Math.hypot(v.x, v.y, v.z) || 1;
+    return { x: v.x / l, y: v.y / l, z: v.z / l };
+  };
+
+  const top = vertices.length; // index 0
+  vertices.push({ x: 0, y: radius, z: 0 });
+
+  // Middle latitude rings i = 1 .. lat-1.
+  const ringStart = (i: number) => 1 + (i - 1) * lon;
+  for (let i = 1; i < lat; i++) {
+    const theta = (i / lat) * Math.PI;
+    const y = Math.cos(theta) * radius;
+    const r = Math.sin(theta) * radius;
+    for (let j = 0; j < lon; j++) {
+      const phi = (j / lon) * Math.PI * 2;
+      vertices.push({ x: r * Math.cos(phi), y, z: r * Math.sin(phi) });
+    }
+  }
+  const bottom = vertices.length;
+  vertices.push({ x: 0, y: -radius, z: 0 });
+
+  const v = (idx: number) => vertices[idx]!;
+
+  // Top cap triangles.
+  for (let j = 0; j < lon; j++) {
+    const a = ringStart(1) + j;
+    const b = ringStart(1) + ((j + 1) % lon);
+    faces.push({ id: genId('face'), vertices: [v(top), v(a), v(b)], normal: unit(v(a)) });
+  }
+  // Middle quads.
+  for (let i = 1; i < lat - 1; i++) {
+    for (let j = 0; j < lon; j++) {
+      const a = ringStart(i) + j;
+      const b = ringStart(i + 1) + j;
+      const c = ringStart(i + 1) + ((j + 1) % lon);
+      const d = ringStart(i) + ((j + 1) % lon);
+      faces.push({ id: genId('face'), vertices: [v(a), v(b), v(c), v(d)], normal: unit(v(a)) });
+      edges.push({ id: genId('edge'), start: v(a), end: v(d) });
+      edges.push({ id: genId('edge'), start: v(a), end: v(b) });
+    }
+  }
+  // Bottom cap triangles.
+  for (let j = 0; j < lon; j++) {
+    const a = ringStart(lat - 1) + ((j + 1) % lon);
+    const b = ringStart(lat - 1) + j;
+    faces.push({ id: genId('face'), vertices: [v(bottom), v(a), v(b)], normal: unit(v(a)) });
+  }
+
+  return { id: genId('body'), name: 'Sphere', vertices, faces, edges };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };

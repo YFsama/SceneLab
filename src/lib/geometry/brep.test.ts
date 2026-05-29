@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, computeBoundingBox, computeVolume, createRevolve } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, computeBoundingBox, computeVolume, createRevolve } from './brep';
 import type { Vec3 } from './types';
 
 describe('createExtrude', () => {
@@ -196,5 +196,31 @@ describe('createCylinder', () => {
     expect(() => createCylinder(0, 10)).toThrow('Radius');
     expect(() => createCylinder(5, 0)).toThrow('Height');
     expect(() => createCylinder(5, 10, 2)).toThrow('segments');
+  });
+});
+
+describe('createSphere', () => {
+  it('approximates the analytic volume 4/3πr³', () => {
+    const r = 5;
+    const sphere = createSphere(r, 48);
+    const ideal = (4 / 3) * Math.PI * r ** 3;
+    const vol = Math.abs(computeVolume(sphere));
+    // A UV sphere is inscribed in the true sphere → slightly under, within ~2%.
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+    expect(vol).toBeGreaterThan(ideal * 0.98);
+  });
+
+  it('has a 2r bounding box centered at the origin', () => {
+    const sphere = createSphere(5, 24);
+    const bb = computeBoundingBox(sphere);
+    expect(sphere.name).toBe('Sphere');
+    expect(bb.max.x - bb.min.x).toBeCloseTo(10, 1);
+    expect(bb.max.y).toBeCloseTo(5, 5);
+    expect(bb.min.y).toBeCloseTo(-5, 5);
+  });
+
+  it('rejects invalid parameters', () => {
+    expect(() => createSphere(0)).toThrow('Radius');
+    expect(() => createSphere(5, 2)).toThrow('segments');
   });
 });

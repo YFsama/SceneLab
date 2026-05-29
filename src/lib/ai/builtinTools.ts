@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
-import { createBox, createCylinder } from '../geometry/brep';
+import { createBox, createCylinder, createSphere } from '../geometry/brep';
 import { assertNumber, assertBoolean, assertEnum } from './validate';
 import type { Vec3, SolidBody } from '../geometry/types';
 import {
@@ -169,6 +169,27 @@ export function registerBuiltinTools(): void {
       const body = createCylinder(
         assertNumber(args.radius, 'radius'),
         assertNumber(args.height, 'height'),
+        args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_sphere',
+    description: 'Create a sphere solid (radius in mm) centered at the origin and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        radius: { type: 'number', description: 'Radius in mm' },
+        segments: { type: 'number', description: 'Facet count (default 16)' },
+      },
+      required: ['radius'],
+    },
+    execute: async (args) => {
+      const body = createSphere(
+        assertNumber(args.radius, 'radius'),
         args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
       );
       useStore.getState().addDirectBody(body);

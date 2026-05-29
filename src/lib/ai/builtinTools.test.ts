@@ -82,12 +82,21 @@ describe('builtin analysis tools', () => {
   });
 
   it('create_cylinder adds a cylinder body to the scene', async () => {
-    useStore.setState({ bodies: [], objectIds: [] });
+    useStore.setState({ bodies: [], objectIds: [], directBodies: [] });
     const tool = getTool('create_cylinder')!;
     await tool.execute({ radius: 5, height: 20 });
     const bodies = useStore.getState().bodies;
     expect(bodies).toHaveLength(1);
     expect(bodies[0]?.name).toBe('Cylinder');
+  });
+
+  it('create_sphere adds a sphere body to the scene', async () => {
+    useStore.setState({ bodies: [], objectIds: [], directBodies: [] });
+    const tool = getTool('create_sphere')!;
+    await tool.execute({ radius: 8 });
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.name).toBe('Sphere');
   });
 
   it('throws a clear error when the body is missing', async () => {
