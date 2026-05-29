@@ -11,6 +11,7 @@ import {
   estimateMass,
   estimateMassForMaterial,
   estimatePrintJob,
+  estimateSupportVolume,
   recommendOrientation,
   MATERIAL_DENSITIES,
 } from '../print';
@@ -432,12 +433,16 @@ export function registerBuiltinTools(): void {
       });
       const stability = analyzeStability(body);
       const support = report.overhangs.faces.filter((f) => f.needsSupport);
+      const supportVol = estimateSupportVolume(body, {
+        thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
+      });
       return {
         bodyId: body.id,
         overhangs: {
           thresholdDeg: report.overhangs.thresholdDeg,
           facesNeedingSupport: support.length,
           overhangArea: Number(report.overhangs.overhangArea.toFixed(2)),
+          supportVolumeCm3: Number((supportVol.supportVolumeMm3 / 1000).toFixed(2)),
         },
         mass: { material, grams: Number(report.mass.massGrams.toFixed(3)) },
         buildVolume: report.buildVolume
