@@ -16,6 +16,7 @@ import {
   estimateMassForMaterial,
   estimatePrintJob,
   estimatePrintCost,
+  estimateHollowSavings,
   estimateSupportVolume,
   recommendOrientation,
   scaleToFit,
@@ -881,6 +882,32 @@ export function registerBuiltinTools(): void {
         materialVolumeCm3: Number((est.materialVolumeMm3 / 1000).toFixed(2)),
         layerCount: est.layerCount,
         infill: est.infill,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'estimate_hollow_savings',
+    description: 'Estimate material saved by hollowing (shelling) a body to a wall thickness.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        wallThickness: { type: 'number', description: 'Wall thickness in mm (default 1.2)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const r = estimateHollowSavings(
+        body,
+        args.wallThickness !== undefined ? assertNumber(args.wallThickness, 'wallThickness') : undefined,
+      );
+      return {
+        bodyId: body.id,
+        solidCm3: Number((r.solidVolumeMm3 / 1000).toFixed(2)),
+        shellCm3: Number((r.shellVolumeMm3 / 1000).toFixed(2)),
+        savedCm3: Number((r.savedVolumeMm3 / 1000).toFixed(2)),
+        savedPercent: Number(r.savedPercent.toFixed(1)),
       };
     },
   });

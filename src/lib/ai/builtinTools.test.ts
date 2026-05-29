@@ -101,6 +101,13 @@ describe('builtin analysis tools', () => {
     expect(result.printTimeMinutes).toBeGreaterThan(0);
   });
 
+  it('estimate_hollow_savings reports shell savings', async () => {
+    useStore.setState({ bodies: [createBox(20, 20, 20)], directBodies: [] });
+    const tool = getTool('estimate_hollow_savings')!;
+    const result = (await tool.execute({ wallThickness: 1.2 })) as { savedPercent: number };
+    expect(result.savedPercent).toBeCloseTo(64, 0);
+  });
+
   it('estimate_print_cost returns material and total cost', async () => {
     useStore.setState({ bodies: [createBox(20, 20, 20)], directBodies: [] });
     const tool = getTool('estimate_print_cost')!;
