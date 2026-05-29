@@ -6,6 +6,8 @@ export {
   analyzePrintability,
 } from './analysis';
 export type { PrintabilityOptions } from './analysis';
+export { analyzeStability } from './stability';
+export type { StabilityOptions, StabilityReport } from './stability';
 export { MATERIAL_DENSITIES } from './types';
 export type {
   MaterialName,
