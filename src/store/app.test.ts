@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
-import { FeatureTree, createExtrudeFeature } from '../lib/features/tree';
+import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume } from '../lib/geometry';
 import { createSketch, addRectangle } from '../lib/sketch/engine';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures } from '../lib/io';
 
 describe('app store', () => {
   it('should have default theme', () => {
@@ -148,6 +149,34 @@ describe('app store — direct bodies', () => {
     // Pappus: area 4 × 2π × centroidRadius 3 = 24π
     expect(Math.abs(computeVolume(bodies[0]!))).toBeGreaterThan(24 * Math.PI * 0.95);
     expect(useStore.getState().currentSketch).toBeNull();
+  });
+
+  it('loadProject rebuilds geometry from a saved project file', () => {
+    // Author a part, save it, then load it back through the store.
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      {
+        profile: [
+          { x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }, { x: 0, y: 0, z: 10 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 5,
+      },
+      [sf.id],
+    );
+    const json = saveToFile(serializeProject('Loaded', [sf, ef], []));
+
+    useStore.getState().clearScene();
+    const features = deserializeFeatures(loadFromFile(json));
+    useStore.getState().loadProject(features, 'Loaded');
+
+    expect(useStore.getState().projectName).toBe('Loaded');
+    expect(useStore.getState().projectDirty).toBe(false);
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeCloseTo(500, 3);
   });
 
   it('replaceBody edits a direct body in place and survives recompute', () => {

@@ -57,6 +57,7 @@ interface AppState {
   replaceBody: (oldId: string, newBody: SolidBody) => void;
   removeDirectBody: (id: string) => void;
   clearScene: () => void;
+  loadProject: (features: Feature[], name?: string) => void;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -219,6 +220,21 @@ export const useStore = create<AppState>((set, get) => {
       sketchActive: false,
       projectDirty: true,
     });
+  },
+  loadProject: (features, name) => {
+    const tree = new FeatureTree();
+    for (const f of features) tree.addFeature(f);
+    tree.recompute();
+    set({
+      featureTree: tree,
+      directBodies: [],
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
+      projectName: name ?? get().projectName,
+      projectDirty: false,
+    });
+    recombine();
   },
 
   showExtrudeDialog: false,
