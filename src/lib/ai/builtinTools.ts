@@ -789,6 +789,9 @@ export function registerBuiltinTools(): void {
       const supportVol = estimateSupportVolume(body, {
         thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
       });
+      const orient = recommendOrientation(body, {
+        thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
+      });
       return {
         bodyId: body.id,
         overhangs: {
@@ -802,6 +805,10 @@ export function registerBuiltinTools(): void {
           ? { fits: report.buildVolume.fits, overage: report.buildVolume.overage }
           : null,
         stability: { stable: stability.stable, tipOverMarginMm: Number(stability.marginMm.toFixed(2)) },
+        recommendedOrientation: {
+          orientation: orient.best.label,
+          supportArea: Number(orient.best.supportArea.toFixed(2)),
+        },
       };
     },
   });

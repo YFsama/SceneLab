@@ -79,11 +79,13 @@ describe('builtin analysis tools', () => {
       mass: { material: string; grams: number };
       buildVolume: { fits: boolean } | null;
       stability: { stable: boolean };
+      recommendedOrientation: { orientation: string };
     };
     expect(result.mass.material).toBe('PETG');
     expect(result.buildVolume?.fits).toBe(true);
     expect(result.stability.stable).toBe(true);
     expect(typeof result.overhangs.facesNeedingSupport).toBe('number');
+    expect(typeof result.recommendedOrientation.orientation).toBe('string');
   });
 
   it('estimate_print_job returns filament and time figures', async () => {
