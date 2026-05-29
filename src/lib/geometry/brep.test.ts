@@ -316,6 +316,44 @@ describe('createTorus', () => {
   });
 });
 
+describe('createRevolve solid', () => {
+  // Rectangle section x∈[2,4], y∈[0,2] in the XY plane.
+  const rect: Vec3[] = [
+    { x: 2, y: 0, z: 0 },
+    { x: 4, y: 0, z: 0 },
+    { x: 4, y: 2, z: 0 },
+    { x: 2, y: 2, z: 0 },
+  ];
+  const axisY = { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } };
+
+  it('a full revolution is watertight with the Pappus volume', () => {
+    const body = createRevolve({ profile: rect, axis: axisY, angle: Math.PI * 2 });
+    // V = area(4) × 2π × centroidRadius(3) = 24π ≈ 75.4
+    const ideal = 24 * Math.PI;
+    const vol = Math.abs(computeVolume(body));
+    expect(vol).toBeGreaterThan(ideal * 0.96);
+    expect(vol).toBeLessThanOrEqual(ideal * 1.001);
+  });
+
+  it('full-revolution volume is translation invariant', () => {
+    const body = createRevolve({ profile: rect, axis: axisY, angle: Math.PI * 2 });
+    const t = (v: Vec3) => ({ x: v.x + 30, y: v.y + 5, z: v.z - 12 });
+    const moved: SolidBody = {
+      ...body,
+      vertices: body.vertices.map(t),
+      faces: body.faces.map((f) => ({ ...f, vertices: f.vertices.map(t) })),
+      edges: body.edges.map((e) => ({ ...e, start: t(e.start), end: t(e.end) })),
+    };
+    expect(computeVolume(moved)).toBeCloseTo(computeVolume(body), 4);
+  });
+
+  it('a partial revolution produces a capped, non-empty body', () => {
+    const body = createRevolve({ profile: rect, axis: axisY, angle: Math.PI });
+    expect(body.faces.length).toBeGreaterThan(0);
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(0);
+  });
+});
+
 describe('createWedge', () => {
   it('has volume ½·w·h·d', () => {
     const wedge = createWedge(10, 6, 4); // ½·10·6·4 = 120

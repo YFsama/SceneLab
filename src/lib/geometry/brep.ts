@@ -208,40 +208,50 @@ export function createRevolve(params: RevolveParams): SolidBody {
     vertices.push(...ring);
   }
 
-  // Generate faces between adjacent rings
+  // Side faces, wrapping the profile loop (pNext) so the cross-section closes.
   for (let s = 0; s < segments; s++) {
-    for (let p = 0; p < n - 1; p++) {
-      const i0 = s * n + p;
-      const i1 = s * n + p + 1;
-      const i2 = (s + 1) * n + p + 1;
-      const i3 = (s + 1) * n + p;
-
-      const v0 = vertices[i0]!;
-      const v1 = vertices[i1]!;
-      const v2 = vertices[i2]!;
-      const v3 = vertices[i3]!;
-
-      const normal = computeFaceNormal(v0, v1, v2);
-      faces.push({
-        id: genId('face'),
-        vertices: [v0, v1, v2, v3],
-        normal,
-      });
-
+    for (let p = 0; p < n; p++) {
+      const pNext = (p + 1) % n;
+      const v0 = vertices[s * n + p]!;
+      const v1 = vertices[s * n + pNext]!;
+      const v2 = vertices[(s + 1) * n + pNext]!;
+      const v3 = vertices[(s + 1) * n + p]!;
+      faces.push({ id: genId('face'), vertices: [v0, v1, v2, v3], normal: computeFaceNormal(v0, v1, v2) });
       edges.push({ id: genId('edge'), start: v0, end: v1 });
       edges.push({ id: genId('edge'), start: v0, end: v3 });
     }
-    // Close ring edge
-    const lastInRing = s * n + n - 1;
-    const firstInRing = s * n;
-    edges.push({ id: genId('edge'), start: vertices[lastInRing]!, end: vertices[firstInRing]! });
   }
 
-  // End cap edges
-  for (let p = 0; p < n - 1; p++) {
-    edges.push({ id: genId('edge'), start: vertices[p]!, end: vertices[p + 1]! });
-    edges.push({ id: genId('edge'), start: vertices[segments * n + p]!, end: vertices[segments * n + p + 1]! });
+  // For a partial revolution the two ends are open — cap them with the profile
+  // polygon at the start and end rings (a full turn wraps and needs no caps).
+  const fullTurn = Math.abs(Math.abs(angle) - Math.PI * 2) < 1e-9;
+  if (!fullTurn && n >= 3) {
+    const center = { x: 0, y: 0, z: 0 };
+    for (const v of vertices) {
+      center.x += v.x / vertices.length;
+      center.y += v.y / vertices.length;
+      center.z += v.z / vertices.length;
+    }
+    const capFace = (ringOffset: number) => {
+      const loop = vertices.slice(ringOffset, ringOffset + n);
+      const gn = computeFaceNormal(loop[0]!, loop[1]!, loop[2]!);
+      const fc = { x: 0, y: 0, z: 0 };
+      for (const v of loop) {
+        fc.x += v.x / n;
+        fc.y += v.y / n;
+        fc.z += v.z / n;
+      }
+      const outward =
+        gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z) < 0
+          ? { x: -gn.x, y: -gn.y, z: -gn.z }
+          : gn;
+      faces.push({ id: genId('face'), vertices: loop, normal: outward });
+    };
+    capFace(0);
+    capFace(segments * n);
   }
+
+  alignWindingToNormal(faces);
 
   return {
     id: genId('body'),
