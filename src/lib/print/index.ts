@@ -16,6 +16,8 @@ export { estimatePrintJob } from './printJob';
 export type { PrintJobOptions, PrintJobEstimate } from './printJob';
 export { estimatePrintCost } from './printCost';
 export type { PrintCostOptions, PrintCostEstimate } from './printCost';
+export { estimateHollowSavings } from './hollow';
+export type { HollowSavings } from './hollow';
 export { computeFitScale, scaleToFit } from './fit';
 export type { FitScaleResult } from './fit';
 export { estimateSupportVolume } from './support';
