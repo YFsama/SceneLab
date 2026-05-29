@@ -14,6 +14,8 @@ export { orientForPrint } from './orientForPrint';
 export type { OrientForPrintResult } from './orientForPrint';
 export { estimatePrintJob } from './printJob';
 export type { PrintJobOptions, PrintJobEstimate } from './printJob';
+export { estimatePrintCost } from './printCost';
+export type { PrintCostOptions, PrintCostEstimate } from './printCost';
 export { computeFitScale, scaleToFit } from './fit';
 export type { FitScaleResult } from './fit';
 export { estimateSupportVolume } from './support';

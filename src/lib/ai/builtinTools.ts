@@ -15,6 +15,7 @@ import {
   estimateMass,
   estimateMassForMaterial,
   estimatePrintJob,
+  estimatePrintCost,
   estimateSupportVolume,
   recommendOrientation,
   scaleToFit,
@@ -671,6 +672,37 @@ export function registerBuiltinTools(): void {
         printTimeMinutes: Number(est.printTimeMinutes.toFixed(1)),
         materialVolumeCm3: Number((est.materialVolumeMm3 / 1000).toFixed(2)),
         infill: est.infill,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'estimate_print_cost',
+    description: 'Estimate the cost of a print: material (mass × price/kg) plus optional machine time.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        material: { type: 'string', enum: MATERIALS, description: 'Material (defaults to PLA)' },
+        infill: { type: 'number', description: 'Infill fraction 0–1 (default 0.2)' },
+        pricePerKg: { type: 'number', description: 'Filament price per kg (default 25)' },
+        hourlyRate: { type: 'number', description: 'Machine/labour rate per hour (default 0)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const est = estimatePrintCost(body, {
+        material: args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA',
+        infill: args.infill !== undefined ? assertNumber(args.infill, 'infill') : undefined,
+        pricePerKg: args.pricePerKg !== undefined ? assertNumber(args.pricePerKg, 'pricePerKg') : undefined,
+        hourlyRate: args.hourlyRate !== undefined ? assertNumber(args.hourlyRate, 'hourlyRate') : undefined,
+      });
+      return {
+        bodyId: body.id,
+        massG: est.filamentMassG,
+        materialCost: est.materialCost,
+        machineCost: est.machineCost,
+        totalCost: est.totalCost,
       };
     },
   });

@@ -61,6 +61,17 @@ describe('builtin analysis tools', () => {
     expect(result.printTimeMinutes).toBeGreaterThan(0);
   });
 
+  it('estimate_print_cost returns material and total cost', async () => {
+    useStore.setState({ bodies: [createBox(20, 20, 20)], directBodies: [] });
+    const tool = getTool('estimate_print_cost')!;
+    const result = (await tool.execute({ infill: 1, pricePerKg: 25 })) as {
+      materialCost: number;
+      totalCost: number;
+    };
+    expect(result.materialCost).toBeCloseTo(0.25, 2); // 9.92 g PLA @ 25/kg
+    expect(result.totalCost).toBeCloseTo(0.25, 2);
+  });
+
   it('recommend_orientation returns a best orientation and ranking', async () => {
     const tool = getTool('recommend_orientation')!;
     const result = (await tool.execute({})) as {
