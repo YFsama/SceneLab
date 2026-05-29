@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -956,6 +956,37 @@ export function registerBuiltinTools(): void {
     execute: async () => {
       useStore.getState().clearScene();
       return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'measure_distance',
+    description: 'Measure the distance between two bodies: centroid distance and the gap between their bounding boxes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyIdA: { type: 'string', description: 'First body ID' },
+        bodyIdB: { type: 'string', description: 'Second body ID' },
+      },
+      required: ['bodyIdA', 'bodyIdB'],
+    },
+    execute: async (args) => {
+      const a = resolveBody(assertString(args.bodyIdA, 'bodyIdA'));
+      const b = resolveBody(assertString(args.bodyIdB, 'bodyIdB'));
+      const ca = computeCentroid(a);
+      const cb = computeCentroid(b);
+      const centroidDistance = Math.hypot(cb.x - ca.x, cb.y - ca.y, cb.z - ca.z);
+      const bbA = computeBoundingBox(a);
+      const bbB = computeBoundingBox(b);
+      const axisGap = (minA: number, maxA: number, minB: number, maxB: number) =>
+        Math.max(0, minA - maxB, minB - maxA);
+      const gx = axisGap(bbA.min.x, bbA.max.x, bbB.min.x, bbB.max.x);
+      const gy = axisGap(bbA.min.y, bbA.max.y, bbB.min.y, bbB.max.y);
+      const gz = axisGap(bbA.min.z, bbA.max.z, bbB.min.z, bbB.max.z);
+      return {
+        centroidDistance: Number(centroidDistance.toFixed(3)),
+        boundingBoxGap: Number(Math.hypot(gx, gy, gz).toFixed(3)),
+      };
     },
   });
 

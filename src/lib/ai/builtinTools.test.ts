@@ -358,6 +358,21 @@ describe('builtin analysis tools', () => {
     expect(useStore.getState().bodies).toHaveLength(1);
   });
 
+  it('measure_distance reports centroid distance and bbox gap', async () => {
+    const a = createBox(10, 10, 10); // x ∈ [-5,5]
+    const b = createBox(10, 10, 10);
+    // Shift b by +20 in x → x ∈ [15,25].
+    const shifted = { ...b, vertices: b.vertices.map((v) => ({ ...v, x: v.x + 20 })) };
+    useStore.setState({ bodies: [a, shifted], directBodies: [] });
+    const tool = getTool('measure_distance')!;
+    const result = (await tool.execute({ bodyIdA: a.id, bodyIdB: shifted.id })) as {
+      centroidDistance: number;
+      boundingBoxGap: number;
+    };
+    expect(result.centroidDistance).toBeCloseTo(20, 2);
+    expect(result.boundingBoxGap).toBeCloseTo(10, 2); // 15 - 5
+  });
+
   it('describe_scene summarizes count and total volume', async () => {
     useStore.setState({ bodies: [createBox(10, 10, 10), createBox(10, 10, 10)], directBodies: [] });
     const tool = getTool('describe_scene')!;
