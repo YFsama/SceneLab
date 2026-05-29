@@ -1,5 +1,5 @@
 export type { ProjectFile } from './studio3d';
-export { serializeProject, deserializeFeatures, deserializeDirectBodies, saveToFile, loadFromFile, downloadFile, readFileAsText } from './studio3d';
+export { serializeProject, deserializeFeatures, deserializeDirectBodies, saveToFile, loadFromFile, downloadFile, readFileAsText, readFileAsArrayBuffer } from './studio3d';
 export { exportSTLBinary, exportSTLAscii, importSTLAscii, importSTLBinary, importSTL } from './stl';
 export { export3MF } from './threemf';
 export { exportOBJ, importOBJ } from './obj';
