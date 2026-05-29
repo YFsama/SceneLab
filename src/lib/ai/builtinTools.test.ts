@@ -439,6 +439,20 @@ describe('builtin analysis tools', () => {
     expect(useStore.getState().directBodies).toHaveLength(0);
   });
 
+  it('get_body_info returns volume, surface area and dimensions', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [] });
+    const tool = getTool('get_body_info')!;
+    const result = (await tool.execute({ bodyId: box.id })) as {
+      volumeCm3: number;
+      surfaceAreaMm2: number;
+      dimensions: { x: number; y: number; z: number };
+    };
+    expect(result.volumeCm3).toBeCloseTo(1, 2); // 1000 mm³
+    expect(result.surfaceAreaMm2).toBeCloseTo(600, 0); // 6 × 100
+    expect(result.dimensions.x).toBeCloseTo(10, 3);
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');

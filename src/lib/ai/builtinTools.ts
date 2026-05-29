@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -1135,12 +1135,20 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
+      const bb = computeBoundingBox(body);
       return {
         id: body.id,
         name: body.name,
         vertices: body.vertices.length,
         faces: body.faces.length,
         edges: body.edges.length,
+        volumeCm3: Number((Math.abs(computeVolume(body)) / 1000).toFixed(3)),
+        surfaceAreaMm2: Number(computeSurfaceArea(body).toFixed(2)),
+        dimensions: {
+          x: Number((bb.max.x - bb.min.x).toFixed(3)),
+          y: Number((bb.max.y - bb.min.y).toFixed(3)),
+          z: Number((bb.max.z - bb.min.z).toFixed(3)),
+        },
       };
     },
   });
