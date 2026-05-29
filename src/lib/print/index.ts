@@ -20,6 +20,8 @@ export { estimateSupportVolume } from './support';
 export type { SupportOptions, SupportEstimate } from './support';
 export { analyzeBedContact } from './bedContact';
 export type { BedContactOptions, BedContactReport } from './bedContact';
+export { assessPrintReadiness } from './readiness';
+export type { PrintIssue, PrintReadiness, ReadinessOptions } from './readiness';
 export { MATERIAL_DENSITIES } from './types';
 export type {
   MaterialName,

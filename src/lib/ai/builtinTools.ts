@@ -10,6 +10,7 @@ import type { Vec3, SolidBody } from '../geometry/types';
 import {
   analyzePrintability,
   analyzeStability,
+  assessPrintReadiness,
   estimateMass,
   estimateMassForMaterial,
   estimatePrintJob,
@@ -562,6 +563,36 @@ export function registerBuiltinTools(): void {
           orientation: c.label,
           supportArea: Number(c.supportArea.toFixed(2)),
         })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'check_print_readiness',
+    description:
+      'Assess whether a body is ready to 3D print: watertight, fits the build volume, plus support/stability/warp warnings.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        thresholdDeg: { type: 'number', description: 'Overhang support-angle threshold (default 45)' },
+        buildVolume: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Printer build volume in mm (optional)',
+        },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const report = assessPrintReadiness(body, {
+        thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
+        buildVolume: args.buildVolume as Vec3 | undefined,
+      });
+      return {
+        bodyId: body.id,
+        ready: report.ready,
+        issues: report.issues,
       };
     },
   });

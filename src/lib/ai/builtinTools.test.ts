@@ -125,6 +125,28 @@ describe('builtin analysis tools', () => {
     await expect(tool.execute({ toolId: 'nope', material: 'steel' })).rejects.toThrow('not found');
   });
 
+  it('check_print_readiness reports ready for a fitting box', async () => {
+    useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] });
+    const tool = getTool('check_print_readiness')!;
+    const result = (await tool.execute({ buildVolume: { x: 200, y: 200, z: 200 } })) as {
+      ready: boolean;
+      issues: unknown[];
+    };
+    expect(result.ready).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it('check_print_readiness flags an oversized box', async () => {
+    useStore.setState({ bodies: [createBox(300, 300, 300)], directBodies: [] });
+    const tool = getTool('check_print_readiness')!;
+    const result = (await tool.execute({ buildVolume: { x: 200, y: 200, z: 200 } })) as {
+      ready: boolean;
+      issues: Array<{ code: string }>;
+    };
+    expect(result.ready).toBe(false);
+    expect(result.issues.some((i) => i.code === 'too-big')).toBe(true);
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');
