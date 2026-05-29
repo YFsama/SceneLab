@@ -26,6 +26,17 @@ export type FetchFn = (input: string, init: RequestInit) => Promise<{
   json: () => Promise<unknown>;
 }>;
 
+/** System prompt grounding the assistant as SceneLab's CAD/3D-print helper. */
+export const SYSTEM_PROMPT = [
+  'You are the modeling assistant for SceneLab, an AI-first 3D CAD/CAM app.',
+  'Help the user design parts for CAD and 3D printing using the provided tools.',
+  'All dimensions are in millimetres; the build (up) axis is +Y.',
+  'Create solids with the create_* primitive tools, or sketch then extrude/revolve.',
+  'Use the analyze_*, check_print_readiness, recommend_orientation and estimate_* tools',
+  'to answer printing questions instead of guessing. Prefer calling a tool over',
+  'assuming a result, and after acting give a short, concrete confirmation.',
+].join(' ');
+
 function toolDefinitions(): AnthropicToolDef[] {
   return getAllTools().map((t) => ({
     name: t.name,
@@ -108,6 +119,7 @@ export async function sendMessageWithTools(
     const data = await postMessages(fetchFn, apiKey, {
       model,
       max_tokens: maxTokens,
+      system: SYSTEM_PROMPT,
       messages: aMsgs,
       tools: tools.length > 0 ? tools : undefined,
     });
@@ -159,6 +171,7 @@ export async function sendMessage(
   const data = await postMessages(fetch as unknown as FetchFn, apiKey, {
     model,
     max_tokens: maxTokens,
+    system: SYSTEM_PROMPT,
     messages: toAnthropicMessages(messages, viewportScreenshot),
     tools: toolDefs.length > 0 ? toolDefs : undefined,
   });

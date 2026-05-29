@@ -46,8 +46,9 @@ describe('sendMessageWithTools', () => {
 
     // Two API calls; the second carries a tool_result for tu1.
     expect(bodies).toHaveLength(2);
-    const second = bodies[1] as { model: string; messages: Array<{ role: string; content: unknown }> };
+    const second = bodies[1] as { model: string; system?: string; messages: Array<{ role: string; content: unknown }> };
     expect(second.model).toBe(DEFAULT_MODEL);
+    expect(second.system).toMatch(/millimet/i); // system prompt grounds units
     const lastTurn = second.messages[second.messages.length - 1]!;
     expect(lastTurn.role).toBe('user');
     const block = (lastTurn.content as Array<{ type: string; tool_use_id?: string }>)[0]!;
