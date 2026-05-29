@@ -89,4 +89,27 @@ describe('solveConstraints', () => {
     );
     expect(len1).toBeCloseTo(len2, 0);
   });
+
+  it('should apply parallel constraint between two lines', () => {
+    const entities = new Map<string, SketchEntity>();
+    // line1 horizontal; line2 starts skewed.
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 0 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 0, y: 5 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 10, y: 8 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('line2', { id: 'line2', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'parallel', entityIds: ['line1', 'line2'] });
+
+    const result = solveConstraints(entities, constraints);
+
+    // Parallel → the 2D cross product of the two direction vectors is ~0.
+    const d1x = (result.get('p2')!.x) - (result.get('p1')!.x);
+    const d1y = (result.get('p2')!.y) - (result.get('p1')!.y);
+    const d2x = (result.get('p4')!.x) - (result.get('p3')!.x);
+    const d2y = (result.get('p4')!.y) - (result.get('p3')!.y);
+    expect(d1x * d2y - d1y * d2x).toBeCloseTo(0, 3);
+  });
 });

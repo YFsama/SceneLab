@@ -170,10 +170,12 @@ function applyParallel(
     const nx = -dy1 / len1;
     const ny = dx1 / len1;
     const correction = halfCross / len1;
-    b1.x -= nx * correction;
-    b1.y -= ny * correction;
-    b2.x += nx * correction;
-    b2.y += ny * correction;
+    // Move endpoints so line 2's component perpendicular to line 1 is removed
+    // (cancelling the cross product, not amplifying it).
+    b1.x += nx * correction;
+    b1.y += ny * correction;
+    b2.x -= nx * correction;
+    b2.y -= ny * correction;
     maxDelta = Math.abs(correction) * 2;
   } else if (!b1.fixed) {
     // Move only b1
