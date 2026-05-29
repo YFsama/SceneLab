@@ -1,8 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, weldVertices } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, weldVertices, mergeBodies } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume } from './brep';
-import type { SolidBody } from './types';
+import type { SolidBody, Vec3 } from './types';
+
+describe('mergeBodies', () => {
+  const shift = (b: SolidBody, d: Vec3): SolidBody => ({
+    ...b,
+    vertices: b.vertices.map((v) => ({ x: v.x + d.x, y: v.y + d.y, z: v.z + d.z })),
+    faces: b.faces.map((f) => ({ ...f, vertices: f.vertices.map((v) => ({ x: v.x + d.x, y: v.y + d.y, z: v.z + d.z })) })),
+    edges: b.edges.map((e) => ({ ...e, start: { x: e.start.x + d.x, y: e.start.y + d.y, z: e.start.z + d.z }, end: { x: e.end.x + d.x, y: e.end.y + d.y, z: e.end.z + d.z } })),
+  });
+
+  it('concatenates geometry and sums volume for disjoint bodies', () => {
+    const a = createBox(10, 10, 10);
+    const b = shift(createBox(10, 10, 10), { x: 50, y: 0, z: 0 });
+    const merged = mergeBodies([a, b]);
+    expect(merged.faces).toHaveLength(a.faces.length + b.faces.length);
+    expect(merged.vertices).toHaveLength(a.vertices.length + b.vertices.length);
+    expect(Math.abs(computeVolume(merged))).toBeCloseTo(2000, 3); // 1000 + 1000
+  });
+
+  it('a single-body merge keeps the volume', () => {
+    const a = createBox(10, 10, 10);
+    expect(Math.abs(computeVolume(mergeBodies([a])))).toBeCloseTo(1000, 3);
+  });
+
+  it('merging nothing yields an empty body', () => {
+    const merged = mergeBodies([]);
+    expect(merged.faces).toHaveLength(0);
+    expect(merged.vertices).toHaveLength(0);
+  });
+});
 
 describe('weldVertices', () => {
   it('merges near-coincident vertices within tolerance', () => {

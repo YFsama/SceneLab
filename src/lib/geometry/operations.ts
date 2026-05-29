@@ -265,6 +265,27 @@ export function applyCircularArray(
   return results;
 }
 
+/**
+ * Combine several bodies into one mesh by concatenation (fresh face/edge ids).
+ * For disjoint bodies this is a valid union; overlapping bodies are simply
+ * merged as-is (no boolean). Useful to export an array/pattern as a single mesh.
+ */
+export function mergeBodies(bodies: SolidBody[], name = 'Merged'): SolidBody {
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+  for (const b of bodies) {
+    vertices.push(...b.vertices);
+    for (const f of b.faces) {
+      faces.push({ id: genId('face'), vertices: f.vertices, normal: f.normal });
+    }
+    for (const e of b.edges) {
+      edges.push({ id: genId('edge'), start: e.start, end: e.end });
+    }
+  }
+  return { id: genId('body'), name, vertices, faces, edges };
+}
+
 /** Uniform scale of a body about an origin point (default world origin). */
 export function scaleBody(body: SolidBody, factor: number, origin: Vec3 = { x: 0, y: 0, z: 0 }): SolidBody {
   if (factor <= 0) throw new Error('Scale factor must be positive');
