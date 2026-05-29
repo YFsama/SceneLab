@@ -79,8 +79,16 @@ export function ViewportCanvas() {
     const lineMat = sketchLineMatRef.current;
     const pointMat = sketchPointMatRef.current;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      // Ask the OS to pick the discrete GPU on dual-GPU machines.
+      powerPreference: 'high-performance',
+    });
+    // Clamp the device pixel ratio: above 2x the extra fragments cost a lot of
+    // GPU time for no visible gain on a CAD viewport.
+    const pixelRatio = Math.min(window.devicePixelRatio, 2);
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setClearColor(0x1e1e2e);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -142,12 +150,29 @@ export function ViewportCanvas() {
       const h = container.clientHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      // Re-clamp in case the window moved to a monitor with a different DPR.
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w, h);
+      dirtyRef.current = true;
     };
     const ro = new ResizeObserver(onResize);
     ro.observe(container);
 
+    // Stop the render loop entirely while the window is hidden so a
+    // backgrounded app draws nothing and consumes no GPU.
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(frameIdRef2.current);
+        frameIdRef2.current = 0;
+      } else if (frameIdRef2.current === 0) {
+        dirtyRef.current = true;
+        animate();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
       cancelAnimationFrame(frameIdRef2.current);
       ro.disconnect();
       controls.dispose();
