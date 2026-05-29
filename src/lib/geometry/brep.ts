@@ -49,6 +49,18 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
 
   vertices.push(...bottomVerts, ...topVerts);
 
+  // Centroid of the prism, used to orient side normals outward regardless of
+  // the profile's winding direction.
+  const center: Vec3 = { x: 0, y: 0, z: 0 };
+  for (const v of vertices) {
+    center.x += v.x;
+    center.y += v.y;
+    center.z += v.z;
+  }
+  center.x /= vertices.length;
+  center.y /= vertices.length;
+  center.z /= vertices.length;
+
   // Bottom face
   const bottomNormal: Vec3 = {
     x: -direction.x,
@@ -77,6 +89,18 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
     const t2 = topVerts[next]!;
 
     const sideNormal = computeFaceNormal(b1, b2, t2);
+    // Flip to point away from the centroid (outward) if computeFaceNormal
+    // produced an inward normal for this winding.
+    const fc = {
+      x: (b1.x + b2.x + t2.x + t1.x) / 4 - center.x,
+      y: (b1.y + b2.y + t2.y + t1.y) / 4 - center.y,
+      z: (b1.z + b2.z + t2.z + t1.z) / 4 - center.z,
+    };
+    if (sideNormal.x * fc.x + sideNormal.y * fc.y + sideNormal.z * fc.z < 0) {
+      sideNormal.x = -sideNormal.x;
+      sideNormal.y = -sideNormal.y;
+      sideNormal.z = -sideNormal.z;
+    }
     faces.push({
       id: genId('face'),
       vertices: [b1, b2, t2, t1],
