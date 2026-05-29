@@ -1,6 +1,38 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createCylinder, createSphere, createCone, computeBoundingBox, computeVolume, createRevolve } from './brep';
-import type { Vec3 } from './types';
+import type { Vec3, SolidBody } from './types';
+
+/** Translate every position of a body by an offset (helper for invariance tests). */
+function translate(body: SolidBody, d: Vec3): SolidBody {
+  const t = (v: Vec3): Vec3 => ({ x: v.x + d.x, y: v.y + d.y, z: v.z + d.z });
+  return {
+    ...body,
+    vertices: body.vertices.map(t),
+    faces: body.faces.map((f) => ({ ...f, vertices: f.vertices.map(t) })),
+    edges: body.edges.map((e) => ({ ...e, start: t(e.start), end: t(e.end) })),
+  };
+}
+
+describe('computeVolume translation invariance', () => {
+  const offset = { x: 100, y: -50, z: 37 };
+  it('box volume is unchanged after translation', () => {
+    const box = createBox(10, 20, 10);
+    expect(computeVolume(translate(box, offset))).toBeCloseTo(computeVolume(box), 6);
+    expect(computeVolume(box)).toBeCloseTo(2000, 6);
+  });
+  it('cylinder volume is unchanged after translation', () => {
+    const cyl = createCylinder(5, 10, 48);
+    expect(computeVolume(translate(cyl, offset))).toBeCloseTo(computeVolume(cyl), 4);
+  });
+  it('sphere volume is unchanged after translation', () => {
+    const sph = createSphere(5, 24);
+    expect(computeVolume(translate(sph, offset))).toBeCloseTo(computeVolume(sph), 4);
+  });
+  it('cone volume is unchanged after translation', () => {
+    const cone = createCone(5, 2, 10, 48);
+    expect(computeVolume(translate(cone, offset))).toBeCloseTo(computeVolume(cone), 4);
+  });
+});
 
 describe('createExtrude', () => {
   it('should create a box-like extrude from a rectangle profile', () => {

@@ -5,6 +5,27 @@ function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
 }
 
+/**
+ * Reverse each face's vertex order where it disagrees with the (outward) face
+ * normal, so the whole mesh is consistently CCW-outward. This makes the vector
+ * areas sum to zero, which is what keeps computeVolume correct and
+ * translation-invariant.
+ */
+function alignWindingToNormal(faces: Face[]): void {
+  for (const f of faces) {
+    if (f.vertices.length < 3) continue;
+    const a = f.vertices[0]!;
+    const b = f.vertices[1]!;
+    const c = f.vertices[2]!;
+    const gx = (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y);
+    const gy = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
+    const gz = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (gx * f.normal.x + gy * f.normal.y + gz * f.normal.z < 0) {
+      f.vertices.reverse();
+    }
+  }
+}
+
 export function createExtrude(params: ExtrudeParams): SolidBody {
   const { profile, direction, distance, symmetric } = params;
   const n = profile.length;
@@ -114,6 +135,8 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
     // Vertical edge
     edges.push({ id: genId('edge'), start: b1, end: t1 });
   }
+
+  alignWindingToNormal(faces);
 
   return {
     id: genId('body'),
@@ -334,6 +357,7 @@ export function createSphere(radius: number, segments = 16): SolidBody {
     faces.push({ id: genId('face'), vertices: [v(bottom), v(a), v(b)], normal: unit(v(a)) });
   }
 
+  alignWindingToNormal(faces);
   return { id: genId('body'), name: 'Sphere', vertices, faces, edges };
 }
 
@@ -393,6 +417,7 @@ export function createCone(
     edges.push({ id: genId('edge'), start: bottom[j]!, end: bottom[next]! });
   }
 
+  alignWindingToNormal(faces);
   return { id: genId('body'), name: 'Cone', vertices, faces, edges };
 }
 
