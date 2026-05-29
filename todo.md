@@ -147,3 +147,18 @@ See the original design document for full tech stack rationale. Key choices:
     app icons, and the missing `dirs` crate; `cargo check`/`clippy`/`fmt` clean
   - Added `.github/workflows/ci.yml` (lint/typecheck/test/build + Rust checks) and
     `release.yml` (macOS arm64/x64, Windows, Linux desktop clients via tauri-action)
+- `2026-05-30`: Iterative improvement loop (tests 73 → 296, all green):
+  - Modeling: primitives box/cylinder/sphere/cone/torus; feature-tree evaluators
+    for revolve/fillet/chamfer/shell/linear&circular array/mirror; scale, rotate,
+    weld (mesh repair)
+  - New `lib/print` module: overhang/support (bed-excluded), support volume, mass,
+    build-volume fit + scale-to-fit, stability/tip-over, bed contact & warp,
+    recommended orientation + orientForPrint, filament/time estimate, print-readiness
+  - CAM feeds & speeds calculator
+  - IO: STL import (auto-weld) + OBJ import/export
+  - ~30 AI tools covering create/edit/pattern/import/analyze/optimize + CAM
+  - Store: `directBodies` so AI-created bodies survive recompute
+  - Rendering: discrete-GPU request, DPR clamp, pause-when-hidden
+  - Bug fixes: duplicate fn, sketch distance solver, symmetric extrude, outward
+    side normals, consistent winding (translation-invariant volume), bed-face
+    overhang overcount

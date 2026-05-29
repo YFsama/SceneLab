@@ -44,16 +44,49 @@ src/
 │   ├── ui/           # ConfirmDialog, ExtrudeDialog, StatusBar, ToastHost, SkipLink, ProjectMenu
 │   └── viewport/     # ViewportCanvas, ViewCube, DrawingCanvas
 ├── lib/
-│   ├── ai/           # LLM client, tool registry, built-in tools, validation
-│   ├── cam/          # Toolpath generation, G-code output, tool library
-│   ├── features/     # Feature tree, DAG recalculation
-│   ├── geometry/     # B-rep operations, mesh operations (pure functions, zero DOM)
+│   ├── ai/           # LLM client, tool registry, ~30 built-in tools, validation
+│   ├── cam/          # Toolpaths, G-code, tool library, feeds & speeds
+│   ├── features/     # Feature tree + evaluators (extrude/revolve/fillet/chamfer/shell/array/mirror)
+│   ├── geometry/     # B-rep primitives & mesh ops (pure functions, zero DOM)
 │   ├── hooks/        # useEscapeClose, useFocusRestore, useKeyboardShortcuts
-│   ├── io/           # File format import/export (studio3d, STL, DXF, 3MF, screenshot)
+│   ├── io/           # Import/export: studio3d, STL, OBJ, DXF, 3MF, screenshot
+│   ├── print/        # 3D-print analysis & optimization (pure functions, zero DOM)
 │   └── sketch/       # 2D sketch engine + constraint solver (zero DOM)
 ├── store/            # Zustand store (serializable state only)
 └── styles/           # Global CSS + Tailwind
 ```
+
+## Capabilities
+
+### Modeling
+
+- **Primitives**: box, cylinder, sphere, cone/frustum, torus (analytic outward
+  normals, consistent winding → correct, translation-invariant volumes).
+- **Feature tree**: sketch → extrude / revolve, plus fillet, chamfer, shell,
+  linear & circular arrays, and mirror, evaluated as a DAG. Consuming ops
+  replace their parent so the output stays a single solid.
+- **Mesh ops**: uniform scale, rotate (Rodrigues), weld near-coincident
+  vertices (mesh repair).
+
+### 3D-print analysis & optimization (`lib/print`)
+
+Overhang/support detection (bed faces excluded), support-material volume,
+mass for common materials, build-volume fit + scale-to-fit, static stability
+(tip-over margin), first-layer bed contact & warp tallness, recommended build
+orientation + apply (`orientForPrint`), filament length / mass / print-time
+estimate, and a one-call **print-readiness** assessment.
+
+### AI (`lib/ai`)
+
+Every operation above is registered as a Claude tool, so the assistant can
+create primitives, edit and pattern bodies, import meshes (STL/OBJ text),
+repair/scale/orient them, and answer "how much filament?", "will it tip?",
+"is it ready to print?". CAM feeds & speeds are exposed too.
+
+### IO (`lib/io`)
+
+studio3d (JSON project) · STL (import auto-welds vertices / export) ·
+OBJ (import/export, polygon-preserving) · 3MF · DXF · PNG · SVG.
 
 ## Scripts
 
