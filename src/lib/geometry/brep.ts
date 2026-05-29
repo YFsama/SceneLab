@@ -565,6 +565,24 @@ export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   return { min, max };
 }
 
+/** Enclosing sphere centered at the bounding-box center (exact for symmetric shapes). */
+export function computeBoundingSphere(body: SolidBody): { center: Vec3; radius: number } {
+  const bb = computeBoundingBox(body);
+  const center: Vec3 = {
+    x: (bb.min.x + bb.max.x) / 2,
+    y: (bb.min.y + bb.max.y) / 2,
+    z: (bb.min.z + bb.max.z) / 2,
+  };
+  let radius = 0;
+  for (const v of body.vertices) {
+    const dx = v.x - center.x;
+    const dy = v.y - center.y;
+    const dz = v.z - center.z;
+    radius = Math.max(radius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+  }
+  return { center, radius };
+}
+
 export function computeBoundingBoxCenter(body: SolidBody): Vec3 {
   const bb = computeBoundingBox(body);
   return {

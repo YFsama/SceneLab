@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeVolume, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, createRevolve, findBoundaryLoops } from './brep';
 import type { Vec3, SolidBody } from './types';
 
 /** Translate every position of a body by an offset (helper for invariance tests). */
@@ -128,6 +128,19 @@ describe('createBox', () => {
     expect(() => createBox(-1, 1, 1)).toThrow('positive');
     expect(() => createBox(NaN, 1, 1)).toThrow('positive');
     expect(() => createBox(Infinity, 1, 1)).toThrow('positive');
+  });
+});
+
+describe('computeBoundingSphere', () => {
+  it('encloses all vertices; exact half-diagonal for a centered box', () => {
+    const box = createBox(10, 10, 10); // corners at (±5,±5,±5)
+    const { center, radius } = computeBoundingSphere(box);
+    expect(center.x).toBeCloseTo(0, 5);
+    expect(radius).toBeCloseTo(Math.sqrt(75), 5); // √(5²·3)
+    for (const v of box.vertices) {
+      const d = Math.hypot(v.x - center.x, v.y - center.y, v.z - center.z);
+      expect(d).toBeLessThanOrEqual(radius + 1e-9);
+    }
   });
 });
 
