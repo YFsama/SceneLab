@@ -99,6 +99,23 @@ describe('builtin analysis tools', () => {
     expect(bodies[0]?.name).toBe('Sphere');
   });
 
+  it('suggest_feeds_speeds returns RPM and feed for a library tool', async () => {
+    const tool = getTool('suggest_feeds_speeds')!;
+    const result = (await tool.execute({ toolId: 'em-6mm', material: 'aluminum' })) as {
+      spindleRpm: number;
+      feedRate: number;
+      surfaceSpeed: number;
+    };
+    expect(result.surfaceSpeed).toBe(300); // aluminium, carbide
+    expect(result.spindleRpm).toBeGreaterThan(0);
+    expect(result.feedRate).toBeGreaterThan(0);
+  });
+
+  it('suggest_feeds_speeds errors on an unknown tool id', async () => {
+    const tool = getTool('suggest_feeds_speeds')!;
+    await expect(tool.execute({ toolId: 'nope', material: 'steel' })).rejects.toThrow('not found');
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');

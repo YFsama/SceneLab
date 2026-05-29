@@ -3,7 +3,9 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
 import { createBox, createCylinder, createSphere } from '../geometry/brep';
-import { assertNumber, assertBoolean, assertEnum } from './validate';
+import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
+import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
+import type { WorkMaterial } from '../cam';
 import type { Vec3, SolidBody } from '../geometry/types';
 import {
   analyzePrintability,
@@ -18,6 +20,9 @@ import {
 import type { MaterialName } from '../print';
 
 const MATERIALS = Object.keys(MATERIAL_DENSITIES) as MaterialName[];
+const WORK_MATERIALS: WorkMaterial[] = [
+  'aluminum', 'brass', 'softwood', 'hardwood', 'mdf', 'acrylic', 'steel', 'pcb',
+];
 
 /** Resolve a body by id, or fall back to the only/first body in the scene. */
 function resolveBody(bodyId: unknown): SolidBody {
@@ -583,6 +588,35 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       store.setViewDirection(args.direction as 'top' | 'front' | 'right' | 'iso');
       return { success: true };
+    },
+  });
+
+  // CAM tools
+  registerTool({
+    name: 'suggest_feeds_speeds',
+    description: 'Recommend spindle RPM and feed rate for a CAM tool cutting a given workpiece material.',
+    parameters: {
+      type: 'object',
+      properties: {
+        toolId: { type: 'string', description: 'Tool id from the library (e.g. em-6mm, bm-3mm)' },
+        material: { type: 'string', enum: WORK_MATERIALS, description: 'Workpiece material' },
+      },
+      required: ['toolId', 'material'],
+    },
+    execute: async (args) => {
+      const toolId = assertString(args.toolId, 'toolId');
+      const tool = getCamTool(toolId);
+      if (!tool) throw new Error(`Tool "${toolId}" not found in the library`);
+      const fs = computeFeedsAndSpeeds(tool, assertEnum(args.material, WORK_MATERIALS, 'material'));
+      return {
+        tool: tool.name,
+        material: args.material,
+        spindleRpm: fs.spindleRpm,
+        feedRate: fs.feedRate,
+        plungeRate: fs.plungeRate,
+        surfaceSpeed: fs.surfaceSpeed,
+        chipLoad: fs.chipLoad,
+      };
     },
   });
 }
