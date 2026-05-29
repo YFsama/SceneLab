@@ -70,3 +70,91 @@ export function exportSTLAscii(body: SolidBody): string {
   output += `endsolid ${body.name}\n`;
   return output;
 }
+
+let importId = 1;
+
+function buildBody(
+  name: string,
+  tris: Array<{ normal: Vec3; verts: [Vec3, Vec3, Vec3] }>,
+): SolidBody {
+  const vertices: Vec3[] = [];
+  const seen = new Map<string, Vec3>();
+  const faces = [];
+  const edges = [];
+  const key = (v: Vec3) => `${v.x},${v.y},${v.z}`;
+  const intern = (v: Vec3): Vec3 => {
+    const k = key(v);
+    let existing = seen.get(k);
+    if (!existing) {
+      existing = v;
+      seen.set(k, v);
+      vertices.push(v);
+    }
+    return existing;
+  };
+
+  for (const tri of tris) {
+    const a = intern(tri.verts[0]);
+    const b = intern(tri.verts[1]);
+    const c = intern(tri.verts[2]);
+    faces.push({ id: `face_${importId++}`, vertices: [a, b, c], normal: tri.normal });
+    edges.push(
+      { id: `edge_${importId++}`, start: a, end: b },
+      { id: `edge_${importId++}`, start: b, end: c },
+      { id: `edge_${importId++}`, start: c, end: a },
+    );
+  }
+
+  return { id: `body_${importId++}`, name, vertices, faces, edges };
+}
+
+/** Parse an ASCII STL string into a SolidBody (one face per triangle). */
+export function importSTLAscii(text: string): SolidBody {
+  const tris: Array<{ normal: Vec3; verts: [Vec3, Vec3, Vec3] }> = [];
+  const nameMatch = text.match(/^\s*solid\s+(.*)$/m);
+  const name = nameMatch?.[1]?.trim() || 'Imported';
+
+  const num = (s: string) => Number.parseFloat(s);
+  let normal: Vec3 = { x: 0, y: 0, z: 0 };
+  let loop: Vec3[] = [];
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('facet normal')) {
+      const p = line.split(/\s+/);
+      normal = { x: num(p[2]!), y: num(p[3]!), z: num(p[4]!) };
+      loop = [];
+    } else if (line.startsWith('vertex')) {
+      const p = line.split(/\s+/);
+      loop.push({ x: num(p[1]!), y: num(p[2]!), z: num(p[3]!) });
+    } else if (line.startsWith('endfacet')) {
+      if (loop.length >= 3) tris.push({ normal, verts: [loop[0]!, loop[1]!, loop[2]!] });
+    }
+  }
+
+  return buildBody(name, tris);
+}
+
+/** Parse a binary STL buffer into a SolidBody (one face per triangle). */
+export function importSTLBinary(buffer: ArrayBuffer): SolidBody {
+  const view = new DataView(buffer);
+  if (buffer.byteLength < 84) throw new Error('Invalid binary STL: too short');
+  const count = view.getUint32(80, true);
+  if (buffer.byteLength < 84 + count * 50) throw new Error('Invalid binary STL: truncated');
+
+  const tris: Array<{ normal: Vec3; verts: [Vec3, Vec3, Vec3] }> = [];
+  let offset = 84;
+  const readVec = (): Vec3 => {
+    const v = { x: view.getFloat32(offset, true), y: view.getFloat32(offset + 4, true), z: view.getFloat32(offset + 8, true) };
+    offset += 12;
+    return v;
+  };
+  for (let i = 0; i < count; i++) {
+    const normal = readVec();
+    const verts: [Vec3, Vec3, Vec3] = [readVec(), readVec(), readVec()];
+    offset += 2; // attribute byte count
+    tris.push({ normal, verts });
+  }
+
+  return buildBody('Imported', tris);
+}
