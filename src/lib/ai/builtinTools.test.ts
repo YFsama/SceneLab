@@ -289,6 +289,19 @@ describe('builtin analysis tools', () => {
     expect(result.vertices).toBe(8);
   });
 
+  it('export_body emits STL by default and OBJ on request', async () => {
+    useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] });
+    const tool = getTool('export_body')!;
+    const stl = (await tool.execute({})) as { format: string; content: string; bytes: number };
+    expect(stl.format).toBe('stl');
+    expect(stl.content).toMatch(/^solid /);
+    expect(stl.bytes).toBeGreaterThan(0);
+
+    const obj = (await tool.execute({ format: 'obj' })) as { content: string };
+    expect(obj.content).toContain('v ');
+    expect(obj.content).toMatch(/^f /m);
+  });
+
   it('import_mesh loads an OBJ string into the scene', async () => {
     useStore.setState({ bodies: [], directBodies: [] });
     const obj = ['o tri', 'v 0 0 0', 'v 1 0 0', 'v 0 1 0', 'f 1 2 3'].join('\n');

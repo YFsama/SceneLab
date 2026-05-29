@@ -3,7 +3,7 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody } from '../geometry/operations';
 import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume } from '../geometry/brep';
-import { importSTLAscii, importOBJ } from '../io';
+import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
@@ -473,6 +473,24 @@ export function registerBuiltinTools(): void {
       const result = applyMirror(body, plane);
       store.addDirectBody(result);
       return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'export_body',
+    description: 'Export a body as STL (ASCII) or OBJ text — the printable/downloadable mesh.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        format: { type: 'string', enum: ['stl', 'obj'], description: 'Output format (default stl)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj'] as const, 'format') : 'stl';
+      const content = format === 'obj' ? exportOBJ(body) : exportSTLAscii(body);
+      return { bodyId: body.id, format, bytes: content.length, content };
     },
   });
 
