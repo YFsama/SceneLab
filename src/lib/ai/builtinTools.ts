@@ -4,7 +4,7 @@ import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody } from '../geometry/operations';
 import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
-import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
+import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
 import type { Vec3, SolidBody } from '../geometry/types';
@@ -409,7 +409,7 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const results = applyLinearArray(body, args.direction as Vec3, args.count as number, args.spacing as number);
+      const results = applyLinearArray(body, assertVec3(args.direction, 'direction'), assertNumber(args.count, 'count'), assertNumber(args.spacing, 'spacing'));
       store.addDirectBodies(results);
       return { success: true, count: results.length };
     },
@@ -438,8 +438,9 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const axis = args.axis as { origin: Vec3; direction: Vec3 };
-      const results = applyCircularArray(body, axis, args.count as number);
+      const axisArg = (args.axis ?? {}) as { origin?: unknown; direction?: unknown };
+      const axis = { origin: assertVec3(axisArg.origin, 'axis.origin'), direction: assertVec3(axisArg.direction, 'axis.direction') };
+      const results = applyCircularArray(body, axis, assertNumber(args.count, 'count'));
       store.addDirectBodies(results);
       return { success: true, count: results.length };
     },
@@ -467,7 +468,8 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const plane = args.plane as { origin: Vec3; normal: Vec3 };
+      const planeArg = (args.plane ?? {}) as { origin?: unknown; normal?: unknown };
+      const plane = { origin: assertVec3(planeArg.origin, 'plane.origin'), normal: assertVec3(planeArg.normal, 'plane.normal') };
       const result = applyMirror(body, plane);
       store.addDirectBody(result);
       return { success: true, bodyId: result.id };
@@ -560,7 +562,7 @@ export function registerBuiltinTools(): void {
     },
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
-      const result = translateBody(body, args.offset as Vec3);
+      const result = translateBody(body, assertVec3(args.offset, 'offset'));
       useStore.getState().replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
@@ -591,7 +593,7 @@ export function registerBuiltinTools(): void {
         z: (bb.min.z + bb.max.z) / 2,
       };
       const angle = (assertNumber(args.angleDeg, 'angleDeg') * Math.PI) / 180;
-      const result = rotateBody(body, { origin, direction: args.axis as Vec3 }, angle);
+      const result = rotateBody(body, { origin, direction: assertVec3(args.axis, 'axis') }, angle);
       useStore.getState().replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
@@ -635,7 +637,7 @@ export function registerBuiltinTools(): void {
     },
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
-      const build = args.buildVolume as Vec3;
+      const build = assertVec3(args.buildVolume, 'buildVolume');
       const margin = args.margin !== undefined ? assertNumber(args.margin, 'margin') : 0;
       const result = scaleToFit(body, build, margin);
       useStore.getState().replaceBody(body.id, result);
@@ -736,7 +738,7 @@ export function registerBuiltinTools(): void {
       const report = analyzePrintability(body, {
         material,
         thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
-        buildVolume: args.buildVolume as Vec3 | undefined,
+        buildVolume: args.buildVolume !== undefined ? assertVec3(args.buildVolume, 'buildVolume') : undefined,
       });
       const stability = analyzeStability(body);
       const support = report.overhangs.faces.filter((f) => f.needsSupport);
@@ -874,7 +876,7 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const report = assessPrintReadiness(body, {
         thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
-        buildVolume: args.buildVolume as Vec3 | undefined,
+        buildVolume: args.buildVolume !== undefined ? assertVec3(args.buildVolume, 'buildVolume') : undefined,
       });
       return {
         bodyId: body.id,

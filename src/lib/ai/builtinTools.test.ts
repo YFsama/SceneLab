@@ -233,6 +233,14 @@ describe('builtin analysis tools', () => {
     expect(useStore.getState().bodies).toHaveLength(4);
   });
 
+  it('move_body rejects a malformed offset vector', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('move_body')!;
+    await expect(tool.execute({ bodyId: box.id, offset: { x: 1, y: 2 } })).rejects.toThrow('Vec3');
+    await expect(tool.execute({ bodyId: box.id, offset: { x: 1, y: 2, z: Infinity } })).rejects.toThrow('Vec3');
+  });
+
   it('move_body translates a direct body in place', async () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });
