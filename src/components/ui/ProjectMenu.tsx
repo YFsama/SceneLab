@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, export3MF } from '../../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { Save, FolderOpen, Download, FileBox, Image, Upload } from 'lucide-react';
 
@@ -80,6 +80,21 @@ export function ProjectMenu() {
         URL.revokeObjectURL(url);
       }
       showToast(t('toast.stlExported'), 'success');
+    } catch (e) {
+      showToast(`${t('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  };
+
+  const handleExportOBJ = () => {
+    if (bodies.length === 0) {
+      showToast(t('toast.noBodies'), 'warning');
+      return;
+    }
+    try {
+      for (const body of bodies) {
+        downloadFile(exportOBJ(body), `${body.name}.obj`);
+      }
+      showToast(t('toast.objExported'), 'success');
     } catch (e) {
       showToast(`${t('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
     }
@@ -165,6 +180,16 @@ export function ProjectMenu() {
       >
         <Download size={14} />
         <span className="hidden md:inline">STL</span>
+      </button>
+
+      <button
+        onClick={handleExportOBJ}
+        className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+        aria-label={t('export.obj')}
+        title={t('export.obj')}
+      >
+        <Download size={14} />
+        <span className="hidden md:inline">OBJ</span>
       </button>
 
       <button
