@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody } from '../geometry/operations';
 import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -594,6 +594,32 @@ export function registerBuiltinTools(): void {
       };
       const angle = (assertNumber(args.angleDeg, 'angleDeg') * Math.PI) / 180;
       const result = rotateBody(body, { origin, direction: assertVec3(args.axis, 'axis') }, angle);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'scale_body',
+    description: 'Uniformly scale a body by a factor, about its center (e.g. 2 = twice as big, 0.5 = half).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        factor: { type: 'number', description: 'Scale factor (> 0)' },
+      },
+      required: ['factor'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const factor = assertNumber(args.factor, 'factor');
+      const bb = computeBoundingBox(body);
+      const center: Vec3 = {
+        x: (bb.min.x + bb.max.x) / 2,
+        y: (bb.min.y + bb.max.y) / 2,
+        z: (bb.min.z + bb.max.z) / 2,
+      };
+      const result = scaleBody(body, factor, center);
       useStore.getState().replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },

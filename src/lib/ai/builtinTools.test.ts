@@ -241,6 +241,23 @@ describe('builtin analysis tools', () => {
     await expect(tool.execute({ bodyId: box.id, offset: { x: 1, y: 2, z: Infinity } })).rejects.toThrow('Vec3');
   });
 
+  it('scale_body scales volume by factor³ about the center', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('scale_body')!;
+    await tool.execute({ bodyId: box.id, factor: 2 });
+    const scaled = useStore.getState().bodies[0]!;
+    const xs = scaled.vertices.map((v) => v.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 5); // 10 → 20
+  });
+
+  it('scale_body rejects a non-finite factor', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('scale_body')!;
+    await expect(tool.execute({ bodyId: box.id, factor: Infinity })).rejects.toThrow('number');
+  });
+
   it('move_body translates a direct body in place', async () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });
