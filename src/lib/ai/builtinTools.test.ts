@@ -370,6 +370,16 @@ describe('builtin analysis tools', () => {
     expect(useStore.getState().bodies).toHaveLength(1);
   });
 
+  it('get_dimensions returns the X/Y/Z extents', async () => {
+    useStore.setState({ bodies: [createBox(10, 20, 30)], directBodies: [] });
+    const tool = getTool('get_dimensions')!;
+    const result = (await tool.execute({})) as { x: number; y: number; z: number; diagonal: number };
+    expect(result.x).toBeCloseTo(10, 3);
+    expect(result.y).toBeCloseTo(20, 3);
+    expect(result.z).toBeCloseTo(30, 3);
+    expect(result.diagonal).toBeCloseTo(Math.hypot(10, 20, 30), 2);
+  });
+
   it('measure_distance reports centroid distance and bbox gap', async () => {
     const a = createBox(10, 10, 10); // x ∈ [-5,5]
     const b = createBox(10, 10, 10);

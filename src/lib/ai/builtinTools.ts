@@ -960,6 +960,29 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'get_dimensions',
+    description: 'Get a body\'s overall size: X/Y/Z bounding-box extents and the diagonal (mm).',
+    parameters: {
+      type: 'object',
+      properties: { bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' } },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const bb = computeBoundingBox(body);
+      const x = bb.max.x - bb.min.x;
+      const y = bb.max.y - bb.min.y;
+      const z = bb.max.z - bb.min.z;
+      return {
+        bodyId: body.id,
+        x: Number(x.toFixed(3)),
+        y: Number(y.toFixed(3)),
+        z: Number(z.toFixed(3)),
+        diagonal: Number(Math.hypot(x, y, z).toFixed(3)),
+      };
+    },
+  });
+
+  registerTool({
     name: 'measure_distance',
     description: 'Measure the distance between two bodies: centroid distance and the gap between their bounding boxes.',
     parameters: {
