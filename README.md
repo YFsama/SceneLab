@@ -107,7 +107,6 @@ npm run build        # tsc + vite build
 npm run lint         # ESLint
 npm run test         # vitest (watch)
 npm run test:run     # vitest (single run, CI)
-npm run test:e2e     # Playwright
 npm run preview      # Preview production build
 npm run tauri dev    # Run the desktop app (Tauri shell)
 npm run tauri build  # Build a desktop installer for the current OS
@@ -160,11 +159,14 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests
-- Workspace switch paths covered by Playwright E2E
+- Every `lib/*` module has vitest tests (300+ tests)
 - AI tool calls have contract tests (input → expected output)
-- Geometry operations have golden file comparisons
+- Geometry verified with analytic checks: volumes vs closed-form formulas,
+  translation invariance, and watertightness (no boundary loops)
 - ESLint + tsc strict + zero warnings required for merge
+- CI runs lint + typecheck + tests + build, plus Rust fmt/clippy/check
+
+> Playwright E2E for workspace flows is planned but not yet set up.
 
 ## License
 

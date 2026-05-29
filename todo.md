@@ -114,9 +114,9 @@ See the original design document for full tech stack rationale. Key choices:
 ### Quality Rules
 
 - Every `lib/*` module has vitest tests
-- Workspace switch paths covered by Playwright E2E
 - AI tool calls have contract tests (input → expected output)
 - ESLint + tsc strict + zero warnings for merge
+- Workspace switch paths covered by Playwright E2E _(planned — not yet set up)_
 
 ---
 
