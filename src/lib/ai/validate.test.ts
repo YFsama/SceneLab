@@ -16,6 +16,8 @@ describe('type guards', () => {
     expect(isNumber(42)).toBe(true);
     expect(isNumber(0)).toBe(true);
     expect(isNumber(NaN)).toBe(false);
+    expect(isNumber(Infinity)).toBe(false);
+    expect(isNumber(-Infinity)).toBe(false);
     expect(isNumber('42')).toBe(false);
     expect(isNumber(null)).toBe(false);
   });
@@ -53,6 +55,7 @@ describe('assert functions', () => {
     expect(assertNumber(42, 'test')).toBe(42);
     expect(() => assertNumber('42', 'test')).toThrow('Expected test to be a number');
     expect(() => assertNumber(NaN, 'test')).toThrow('Expected test to be a number');
+    expect(() => assertNumber(Infinity, 'test')).toThrow('Expected test to be a number');
   });
 
   it('assertBoolean', () => {
