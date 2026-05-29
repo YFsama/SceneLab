@@ -223,6 +223,16 @@ describe('builtin analysis tools', () => {
     expect(result.rotated).toBe(true);
   });
 
+  it('arrange_on_plate lays out all bodies without dropping any', async () => {
+    const boxes = [createBox(10, 10, 10), createBox(10, 10, 10), createBox(10, 10, 10), createBox(10, 10, 10)];
+    useStore.setState({ bodies: boxes, directBodies: boxes });
+    const tool = getTool('arrange_on_plate')!;
+    const result = (await tool.execute({ bedX: 25, bedZ: 25 })) as { count: number; fits: boolean };
+    expect(result.count).toBe(4);
+    expect(result.fits).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(4);
+  });
+
   it('move_body translates a direct body in place', async () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });

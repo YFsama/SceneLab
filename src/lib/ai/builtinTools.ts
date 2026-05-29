@@ -20,6 +20,7 @@ import {
   recommendOrientation,
   scaleToFit,
   orientForPrint,
+  arrangeOnPlate,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -511,6 +512,34 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const r = findBoundaryLoops(body);
       return { bodyId: body.id, holeCount: r.holeCount, boundaryEdges: r.boundaryEdgeCount };
+    },
+  });
+
+  registerTool({
+    name: 'arrange_on_plate',
+    description: 'Lay out all scene bodies on the build plate without overlap, seated on the bed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bedX: { type: 'number', description: 'Build plate width (X) in mm' },
+        bedZ: { type: 'number', description: 'Build plate depth (Z) in mm' },
+        spacing: { type: 'number', description: 'Gap between parts in mm (default 5)' },
+      },
+      required: ['bedX', 'bedZ'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const bodies = store.bodies;
+      if (bodies.length === 0) throw new Error('No bodies to arrange');
+      const r = arrangeOnPlate(
+        bodies,
+        assertNumber(args.bedX, 'bedX'),
+        assertNumber(args.bedZ, 'bedZ'),
+        args.spacing !== undefined ? assertNumber(args.spacing, 'spacing') : undefined,
+      );
+      store.clearScene();
+      useStore.getState().addDirectBodies(r.bodies);
+      return { success: true, count: r.bodies.length, fits: r.fits, usedX: Number(r.usedX.toFixed(1)), usedZ: Number(r.usedZ.toFixed(1)) };
     },
   });
 
