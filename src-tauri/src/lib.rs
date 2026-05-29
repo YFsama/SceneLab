@@ -71,3 +71,46 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_serde_round_trip() {
+        let project = ProjectFile {
+            version: "1".into(),
+            name: "Test Part".into(),
+            feature_tree: serde_json::json!({ "features": [{ "id": "f1" }] }),
+            created: "2026-01-01".into(),
+            modified: "2026-01-02".into(),
+        };
+        let json = serde_json::to_string(&project).unwrap();
+        let back: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "Test Part");
+        assert_eq!(back.feature_tree["features"][0]["id"], "f1");
+    }
+
+    #[test]
+    fn write_then_read_project() {
+        let path = std::env::temp_dir().join("scenelab_test_project.json");
+        let p = path.to_string_lossy().to_string();
+        let project = ProjectFile {
+            version: "1".into(),
+            name: "Saved".into(),
+            feature_tree: serde_json::json!({ "a": 42 }),
+            created: "c".into(),
+            modified: "m".into(),
+        };
+        write_project(p.clone(), project).unwrap();
+        let loaded = read_project(p).unwrap();
+        assert_eq!(loaded.name, "Saved");
+        assert_eq!(loaded.feature_tree["a"], 42);
+    }
+
+    #[test]
+    fn read_missing_file_errors() {
+        let result = read_project("/no/such/scenelab/file.json".into());
+        assert!(result.is_err());
+    }
+}
