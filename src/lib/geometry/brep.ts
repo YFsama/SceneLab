@@ -337,6 +337,65 @@ export function createSphere(radius: number, segments = 16): SolidBody {
   return { id: genId('body'), name: 'Sphere', vertices, faces, edges };
 }
 
+/** Cone / frustum along +Y. radiusTop = 0 gives a pointed cone. */
+export function createCone(
+  radiusBottom: number,
+  radiusTop: number,
+  height: number,
+  segments = 32,
+): SolidBody {
+  if (radiusBottom < 0 || radiusTop < 0) throw new Error('Radius cannot be negative');
+  if (radiusBottom < 1e-9 && radiusTop < 1e-9) throw new Error('At least one radius must be positive');
+  if (height <= 0) throw new Error('Height must be positive');
+  if (segments < 3) throw new Error('Cone needs at least 3 segments');
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+  const pointed = radiusTop < 1e-9;
+
+  const bottom: Vec3[] = [];
+  const top: Vec3[] = [];
+  for (let j = 0; j < segments; j++) {
+    const a = (j / segments) * Math.PI * 2;
+    bottom.push({ x: radiusBottom * Math.cos(a), y: 0, z: radiusBottom * Math.sin(a) });
+    if (!pointed) top.push({ x: radiusTop * Math.cos(a), y: height, z: radiusTop * Math.sin(a) });
+  }
+  const apex: Vec3 = { x: 0, y: height, z: 0 };
+  vertices.push(...bottom, ...top, apex);
+
+  // Bottom cap (faces down).
+  faces.push({ id: genId('face'), vertices: [...bottom].reverse(), normal: { x: 0, y: -1, z: 0 } });
+  // Top cap (frustum only).
+  if (!pointed) faces.push({ id: genId('face'), vertices: [...top], normal: { x: 0, y: 1, z: 0 } });
+
+  // Side faces, normals oriented radially outward.
+  const orientOut = (verts: Vec3[]): Vec3 => {
+    const n = computeFaceNormal(verts[0]!, verts[1]!, verts[2]!);
+    const c = verts.reduce((s, v) => ({ x: s.x + v.x, y: s.y + v.y, z: s.z + v.z }), { x: 0, y: 0, z: 0 });
+    const cx = c.x / verts.length;
+    const cz = c.z / verts.length;
+    // Radial direction in XZ from the axis to the face centroid.
+    if (n.x * cx + n.z * cz < 0) return { x: -n.x, y: -n.y, z: -n.z };
+    return n;
+  };
+
+  for (let j = 0; j < segments; j++) {
+    const next = (j + 1) % segments;
+    if (pointed) {
+      const verts = [bottom[j]!, bottom[next]!, apex];
+      faces.push({ id: genId('face'), vertices: verts, normal: orientOut(verts) });
+    } else {
+      const verts = [bottom[j]!, bottom[next]!, top[next]!, top[j]!];
+      faces.push({ id: genId('face'), vertices: verts, normal: orientOut(verts) });
+      edges.push({ id: genId('edge'), start: top[j]!, end: top[next]! });
+    }
+    edges.push({ id: genId('edge'), start: bottom[j]!, end: bottom[next]! });
+  }
+
+  return { id: genId('body'), name: 'Cone', vertices, faces, edges };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };

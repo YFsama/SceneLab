@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, computeBoundingBox, computeVolume, createRevolve } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, computeBoundingBox, computeVolume, createRevolve } from './brep';
 import type { Vec3 } from './types';
 
 describe('createExtrude', () => {
@@ -222,5 +222,39 @@ describe('createSphere', () => {
   it('rejects invalid parameters', () => {
     expect(() => createSphere(0)).toThrow('Radius');
     expect(() => createSphere(5, 2)).toThrow('segments');
+  });
+});
+
+describe('createCone', () => {
+  it('matches the frustum volume formula', () => {
+    const Rb = 5, Rt = 2, h = 10;
+    const cone = createCone(Rb, Rt, h, 64);
+    const ideal = (Math.PI * h / 3) * (Rb * Rb + Rb * Rt + Rt * Rt);
+    const vol = Math.abs(computeVolume(cone));
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+    expect(vol).toBeGreaterThan(ideal * 0.98);
+  });
+
+  it('matches the cone volume when the top radius is zero', () => {
+    const Rb = 4, h = 9;
+    const cone = createCone(Rb, 0, h, 64);
+    const ideal = (Math.PI * h / 3) * Rb * Rb;
+    const vol = Math.abs(computeVolume(cone));
+    expect(vol).toBeGreaterThan(ideal * 0.98);
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+  });
+
+  it('has the right bounding box and name', () => {
+    const cone = createCone(5, 0, 10, 32);
+    const bb = computeBoundingBox(cone);
+    expect(cone.name).toBe('Cone');
+    expect(bb.max.y - bb.min.y).toBeCloseTo(10, 5);
+    expect(bb.max.x).toBeCloseTo(5, 1);
+  });
+
+  it('rejects invalid parameters', () => {
+    expect(() => createCone(0, 0, 10)).toThrow('radius must be positive');
+    expect(() => createCone(5, 2, 0)).toThrow('Height');
+    expect(() => createCone(5, 2, 10, 2)).toThrow('segments');
   });
 });

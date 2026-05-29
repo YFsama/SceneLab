@@ -99,6 +99,15 @@ describe('builtin analysis tools', () => {
     expect(bodies[0]?.name).toBe('Sphere');
   });
 
+  it('create_cone adds a cone body to the scene', async () => {
+    useStore.setState({ bodies: [], objectIds: [], directBodies: [] });
+    const tool = getTool('create_cone')!;
+    await tool.execute({ radiusBottom: 5, radiusTop: 0, height: 12 });
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.name).toBe('Cone');
+  });
+
   it('suggest_feeds_speeds returns RPM and feed for a library tool', async () => {
     const tool = getTool('suggest_feeds_speeds')!;
     const result = (await tool.execute({ toolId: 'em-6mm', material: 'aluminum' })) as {

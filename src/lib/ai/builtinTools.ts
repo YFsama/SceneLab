@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
-import { createBox, createCylinder, createSphere } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, createCone } from '../geometry/brep';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
@@ -195,6 +195,31 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = createSphere(
         assertNumber(args.radius, 'radius'),
+        args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_cone',
+    description: 'Create a cone or frustum solid along +Y (top radius 0 = pointed cone) and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        radiusBottom: { type: 'number', description: 'Bottom radius in mm' },
+        radiusTop: { type: 'number', description: 'Top radius in mm (0 for a pointed cone)' },
+        height: { type: 'number', description: 'Height in mm' },
+        segments: { type: 'number', description: 'Facet count (default 32)' },
+      },
+      required: ['radiusBottom', 'radiusTop', 'height'],
+    },
+    execute: async (args) => {
+      const body = createCone(
+        assertNumber(args.radiusBottom, 'radiusBottom'),
+        assertNumber(args.radiusTop, 'radiusTop'),
+        assertNumber(args.height, 'height'),
         args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
       );
       useStore.getState().addDirectBody(body);
