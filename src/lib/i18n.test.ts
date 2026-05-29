@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { useStore } from '../store/app';
+import { translations } from './i18n';
+
+describe('i18n key parity', () => {
+  it('en and zh define exactly the same keys', () => {
+    const en = Object.keys(translations.en!).sort();
+    const zh = Object.keys(translations.zh!).sort();
+    const missingInZh = en.filter((k) => !(k in translations.zh!));
+    const missingInEn = zh.filter((k) => !(k in translations.en!));
+    expect(missingInZh).toEqual([]);
+    expect(missingInEn).toEqual([]);
+    expect(zh).toEqual(en);
+  });
+});
 
 // Test i18n translations by directly accessing the store
 describe('i18n translations', () => {

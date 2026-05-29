@@ -6,7 +6,7 @@ import { useStore } from '../store/app';
 
 type TranslationMap = Record<string, string>;
 
-const translations: Record<string, TranslationMap> = {
+export const translations: Record<string, TranslationMap> = {
   en: {
     'app.title': 'SceneLab',
     'viewport.top': 'Top',
