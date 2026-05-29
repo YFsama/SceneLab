@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, createCone, createTorus } from '../geometry/brep';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
@@ -222,6 +222,31 @@ export function registerBuiltinTools(): void {
         assertNumber(args.radiusTop, 'radiusTop'),
         assertNumber(args.height, 'height'),
         args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_torus',
+    description: 'Create a torus (ring) solid around +Y and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        majorRadius: { type: 'number', description: 'Ring radius (center to tube center) in mm' },
+        minorRadius: { type: 'number', description: 'Tube radius in mm' },
+        segments: { type: 'number', description: 'Divisions around the ring (default 32)' },
+        sides: { type: 'number', description: 'Divisions around the tube (default 16)' },
+      },
+      required: ['majorRadius', 'minorRadius'],
+    },
+    execute: async (args) => {
+      const body = createTorus(
+        assertNumber(args.majorRadius, 'majorRadius'),
+        assertNumber(args.minorRadius, 'minorRadius'),
+        args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
+        args.sides !== undefined ? assertNumber(args.sides, 'sides') : undefined,
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };

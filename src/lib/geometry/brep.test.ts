@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, computeBoundingBox, computeVolume, createRevolve } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, computeBoundingBox, computeVolume, createRevolve } from './brep';
 import type { Vec3, SolidBody } from './types';
 
 /** Translate every position of a body by an offset (helper for invariance tests). */
@@ -288,5 +288,30 @@ describe('createCone', () => {
     expect(() => createCone(0, 0, 10)).toThrow('radius must be positive');
     expect(() => createCone(5, 2, 0)).toThrow('Height');
     expect(() => createCone(5, 2, 10, 2)).toThrow('segments');
+  });
+});
+
+describe('createTorus', () => {
+  it('matches the analytic volume 2π²·R·r²', () => {
+    const R = 10, r = 3;
+    const torus = createTorus(R, r, 64, 32);
+    const ideal = 2 * Math.PI ** 2 * R * r * r;
+    const vol = Math.abs(computeVolume(torus));
+    expect(vol).toBeGreaterThan(ideal * 0.97);
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+  });
+
+  it('has the expected bounding box and name', () => {
+    const torus = createTorus(10, 3, 32, 16);
+    const bb = computeBoundingBox(torus);
+    expect(torus.name).toBe('Torus');
+    expect(bb.max.x).toBeCloseTo(13, 1); // R + r
+    expect(bb.max.y - bb.min.y).toBeCloseTo(6, 1); // 2r
+  });
+
+  it('rejects invalid parameters', () => {
+    expect(() => createTorus(0, 3)).toThrow('Radius');
+    expect(() => createTorus(5, 8)).toThrow('minorRadius');
+    expect(() => createTorus(10, 3, 2)).toThrow('segments and sides');
   });
 });

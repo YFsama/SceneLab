@@ -421,6 +421,67 @@ export function createCone(
   return { id: genId('body'), name: 'Cone', vertices, faces, edges };
 }
 
+/** Ring torus around the +Y axis, lying in the XZ plane. */
+export function createTorus(
+  majorRadius: number,
+  minorRadius: number,
+  segments = 32,
+  sides = 16,
+): SolidBody {
+  if (majorRadius <= 0 || minorRadius <= 0) throw new Error('Radius must be positive');
+  if (minorRadius > majorRadius) throw new Error('minorRadius must not exceed majorRadius');
+  if (segments < 3 || sides < 3) throw new Error('Torus needs at least 3 segments and sides');
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+
+  // Grid of segments × sides vertices, plus their normals.
+  const grid: Vec3[][] = [];
+  for (let i = 0; i < segments; i++) {
+    const u = (i / segments) * Math.PI * 2;
+    const cu = Math.cos(u);
+    const su = Math.sin(u);
+    const ring: Vec3[] = [];
+    for (let j = 0; j < sides; j++) {
+      const v = (j / sides) * Math.PI * 2;
+      const cv = Math.cos(v);
+      const sv = Math.sin(v);
+      const p = {
+        x: (majorRadius + minorRadius * cv) * cu,
+        y: minorRadius * sv,
+        z: (majorRadius + minorRadius * cv) * su,
+      };
+      ring.push(p);
+      vertices.push(p);
+    }
+    grid.push(ring);
+  }
+
+  const normalAt = (i: number, j: number): Vec3 => {
+    const u = (i / segments) * Math.PI * 2;
+    const v = (j / sides) * Math.PI * 2;
+    return { x: Math.cos(v) * Math.cos(u), y: Math.sin(v), z: Math.cos(v) * Math.sin(u) };
+  };
+
+  for (let i = 0; i < segments; i++) {
+    const ni = (i + 1) % segments;
+    for (let j = 0; j < sides; j++) {
+      const nj = (j + 1) % sides;
+      faces.push({
+        id: genId('face'),
+        vertices: [grid[i]![j]!, grid[ni]![j]!, grid[ni]![nj]!, grid[i]![nj]!],
+        normal: normalAt(i, j),
+      });
+      edges.push({ id: genId('edge'), start: grid[i]![j]!, end: grid[ni]![j]! });
+      edges.push({ id: genId('edge'), start: grid[i]![j]!, end: grid[i]![nj]! });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Torus', vertices, faces, edges };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };
