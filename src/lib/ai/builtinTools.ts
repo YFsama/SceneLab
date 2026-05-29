@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices } from '../geometry/operations';
 import { createBox, createCylinder, createSphere, createCone, createTorus } from '../geometry/brep';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -16,6 +16,8 @@ import {
   estimatePrintJob,
   estimateSupportVolume,
   recommendOrientation,
+  scaleToFit,
+  orientForPrint,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -427,6 +429,69 @@ export function registerBuiltinTools(): void {
       const result = applyMirror(body, plane);
       store.addDirectBody(result);
       return { success: true, bodyId: result.id };
+    },
+  });
+
+  // Mesh / print editing tools
+  registerTool({
+    name: 'repair_mesh',
+    description: 'Weld near-coincident vertices of a body to make it watertight-friendly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        tolerance: { type: 'number', description: 'Weld tolerance in mm (default 0.0001)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const tol = args.tolerance !== undefined ? assertNumber(args.tolerance, 'tolerance') : undefined;
+      const result = weldVertices(body, tol);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id, vertices: result.vertices.length };
+    },
+  });
+
+  registerTool({
+    name: 'scale_to_fit',
+    description: 'Uniformly scale a body to fit inside a printer build volume (shrinks oversized parts).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        buildVolume: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Printer build volume in mm',
+        },
+        margin: { type: 'number', description: 'Margin per side in mm (default 0)' },
+      },
+      required: ['buildVolume'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const build = args.buildVolume as Vec3;
+      const margin = args.margin !== undefined ? assertNumber(args.margin, 'margin') : 0;
+      const result = scaleToFit(body, build, margin);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'orient_for_print',
+    description: 'Rotate a body into the build orientation that minimizes support material.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const result = orientForPrint(body);
+      useStore.getState().replaceBody(body.id, result.body);
+      return { success: true, bodyId: result.body.id, orientation: result.orientation, rotated: result.rotated };
     },
   });
 

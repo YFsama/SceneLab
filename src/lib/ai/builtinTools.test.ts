@@ -156,6 +156,35 @@ describe('builtin analysis tools', () => {
     expect(result.issues.some((i) => i.code === 'too-big')).toBe(true);
   });
 
+  it('scale_to_fit shrinks an oversized direct body in place', async () => {
+    const big = createBox(300, 300, 300);
+    useStore.setState({ bodies: [big], directBodies: [big] });
+    const tool = getTool('scale_to_fit')!;
+    await tool.execute({ bodyId: big.id, buildVolume: { x: 200, y: 200, z: 200 } });
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    // The (rescaled) body now fits within 200mm.
+    const xs = bodies[0]!.vertices.map((v) => v.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(200 + 1e-6);
+  });
+
+  it('orient_for_print reports the applied orientation', async () => {
+    const box = createBox(10, 20, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('orient_for_print')!;
+    const result = (await tool.execute({ bodyId: box.id })) as { rotated: boolean; orientation: string };
+    expect(typeof result.orientation).toBe('string');
+    expect(result.rotated).toBe(true);
+  });
+
+  it('repair_mesh welds and replaces a direct body', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('repair_mesh')!;
+    const result = (await tool.execute({ bodyId: box.id })) as { vertices: number };
+    expect(result.vertices).toBe(8);
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');
