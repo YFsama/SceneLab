@@ -257,6 +257,25 @@ function extractProfileFromSketch(
         const p = solved.get(pid);
         if (p) points.push(p);
       }
+    } else if (entity.type === 'circle') {
+      const c = solved.get(entity.centerId);
+      if (c) {
+        const segments = 32;
+        for (let i = 0; i < segments; i++) {
+          const a = (i / segments) * Math.PI * 2;
+          points.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
+        }
+      }
+    } else if (entity.type === 'arc') {
+      const c = solved.get(entity.centerId);
+      if (c) {
+        const sweep = entity.endAngle - entity.startAngle;
+        const steps = Math.max(2, Math.ceil((Math.abs(sweep) / (Math.PI * 2)) * 32));
+        for (let i = 0; i <= steps; i++) {
+          const a = entity.startAngle + (sweep * i) / steps;
+          points.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
+        }
+      }
     }
   }
 

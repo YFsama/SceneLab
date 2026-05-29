@@ -10,7 +10,8 @@ import {
   createCircularArrayFeature,
   createMirrorFeature,
 } from './tree';
-import { createSketch, addRectangle } from '../sketch/engine';
+import { createSketch, addRectangle, addCircle } from '../sketch/engine';
+import { computeVolume } from '../geometry/brep';
 
 /** A standalone extrude feature that produces a box-like body (no parent sketch). */
 function boxExtrude() {
@@ -149,6 +150,27 @@ describe('FeatureTree', () => {
     expect(tree.getResult(shell.id)?.error).toBeUndefined();
     // chamfer→shell chain still yields a single output solid.
     expect(tree.getLatestBodies().length).toBe(1);
+  });
+
+  it('extrudes a sketched circle into a cylinder', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    addCircle(sketch, 0, 0, 5); // radius 5
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 10 },
+      [sf.id],
+    );
+    tree.addFeature(sf);
+    tree.addFeature(ef);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    expect(bodies).toHaveLength(1);
+    const ideal = Math.PI * 25 * 10; // πr²·h ≈ 785.4
+    const vol = Math.abs(computeVolume(bodies[0]!));
+    expect(vol).toBeGreaterThan(ideal * 0.97);
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
   });
 
   it('records an error when a fillet has no parent body', () => {
