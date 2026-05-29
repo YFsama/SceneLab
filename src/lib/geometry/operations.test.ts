@@ -1,7 +1,61 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, weldVertices } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume } from './brep';
+import type { SolidBody } from './types';
+
+describe('weldVertices', () => {
+  it('merges near-coincident vertices within tolerance', () => {
+    // Two triangles whose first vertex differs by 1e-6 (sub-tolerance).
+    const body: SolidBody = {
+      id: 'b',
+      name: 'b',
+      vertices: [],
+      faces: [
+        {
+          id: 'f1',
+          vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+          normal: { x: 0, y: 0, z: 1 },
+        },
+        {
+          id: 'f2',
+          vertices: [{ x: 1e-6, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+          normal: { x: 0, y: 0, z: 1 },
+        },
+      ],
+      edges: [],
+    };
+    const welded = weldVertices(body, 1e-4);
+    expect(welded.vertices).toHaveLength(3); // the two near-dup corners merged
+    expect(welded.faces).toHaveLength(2); // both triangles remain valid
+  });
+
+  it('leaves a clean box unchanged in vertex count and volume', () => {
+    const box = createBox(10, 10, 10);
+    const welded = weldVertices(box);
+    expect(welded.vertices).toHaveLength(8);
+    expect(Math.abs(computeVolume(welded))).toBeCloseTo(Math.abs(computeVolume(box)), 6);
+  });
+
+  it('drops faces that collapse below 3 vertices', () => {
+    // A "triangle" with two coincident vertices collapses away.
+    const body: SolidBody = {
+      id: 'b',
+      name: 'b',
+      vertices: [],
+      faces: [
+        {
+          id: 'f',
+          vertices: [{ x: 0, y: 0, z: 0 }, { x: 1e-7, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }],
+          normal: { x: 0, y: 0, z: 1 },
+        },
+      ],
+      edges: [],
+    };
+    const welded = weldVertices(body, 1e-4);
+    expect(welded.faces).toHaveLength(0);
+  });
+});
 
 describe('scaleBody', () => {
   it('scales dimensions by the factor and volume by factor³', () => {

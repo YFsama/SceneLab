@@ -404,6 +404,46 @@ export function rotateBody(
   };
 }
 
+/**
+ * Weld near-coincident vertices: snap to a tolerance grid and replace every
+ * reference (in faces and edges) with a single representative. Collapses the
+ * degenerate faces/edges that result, so an imported STL (per-triangle, float-
+ * jittered vertices) becomes a shared-vertex, watertight-friendly mesh.
+ */
+export function weldVertices(body: SolidBody, tolerance = 1e-4): SolidBody {
+  const inv = 1 / Math.max(tolerance, 1e-12);
+  const key = (v: Vec3) => `${Math.round(v.x * inv)},${Math.round(v.y * inv)},${Math.round(v.z * inv)}`;
+  const rep = new Map<string, Vec3>();
+  const weld = (v: Vec3): Vec3 => {
+    const k = key(v);
+    let r = rep.get(k);
+    if (!r) {
+      r = v;
+      rep.set(k, r);
+    }
+    return r;
+  };
+
+  const faces: Face[] = [];
+  for (const f of body.faces) {
+    const welded = f.vertices.map(weld);
+    // Drop vertices equal to their predecessor (collapsed edges).
+    const cleaned = welded.filter((v, i) => v !== welded[(i - 1 + welded.length) % welded.length]);
+    if (cleaned.length >= 3) {
+      faces.push({ id: f.id, vertices: cleaned, normal: f.normal });
+    }
+  }
+
+  const edges: Edge[] = [];
+  for (const e of body.edges) {
+    const s = weld(e.start);
+    const t = weld(e.end);
+    if (s !== t) edges.push({ id: e.id, start: s, end: t });
+  }
+
+  return { id: body.id, name: body.name, vertices: Array.from(rep.values()), faces, edges };
+}
+
 /** Deduplicate vertices using spatial hashing (O(n) instead of O(n^2)) */
 function dedupVertices(faces: Face[]): Vec3[] {
   const map = new Map<string, Vec3>();
