@@ -60,28 +60,39 @@ src/
 
 ### Modeling
 
-- **Primitives**: box, cylinder, sphere, cone/frustum, torus (analytic outward
-  normals, consistent winding → correct, translation-invariant volumes).
+- **Primitives**: box, cylinder, sphere, cone/frustum, torus, wedge — all with
+  analytic outward normals and consistent winding (correct, translation-invariant
+  volumes; watertightness is asserted in tests).
 - **Feature tree**: sketch → extrude / revolve, plus fillet, chamfer, shell,
-  linear & circular arrays, and mirror, evaluated as a DAG. Consuming ops
-  replace their parent so the output stays a single solid.
-- **Mesh ops**: uniform scale, rotate (Rodrigues), weld near-coincident
-  vertices (mesh repair).
+  linear & circular arrays, and mirror, evaluated as a DAG. Consuming ops replace
+  their parent so the output stays a single solid. Sketch profiles support lines
+  (chained into an ordered loop), rectangles, circles and arcs.
+- **Body ops**: translate, rotate (Rodrigues), uniform scale, mirror, merge
+  bodies, and weld near-coincident vertices (mesh repair).
 
 ### 3D-print analysis & optimization (`lib/print`)
 
-Overhang/support detection (bed faces excluded), support-material volume,
-mass for common materials, build-volume fit + scale-to-fit, static stability
+Overhang/support detection (bed faces excluded), support-material volume, mass
+for common materials, build-volume fit + scale-to-fit, static stability
 (tip-over margin), first-layer bed contact & warp tallness, recommended build
-orientation + apply (`orientForPrint`), filament length / mass / print-time
-estimate, and a one-call **print-readiness** assessment.
+orientation + apply (`orientForPrint`), filament length / mass / time / layer
+count, print **cost** (material + machine time), boundary-loop (hole) detection,
+and a one-call **print-readiness** assessment.
 
 ### AI (`lib/ai`)
 
-Every operation above is registered as a Claude tool, so the assistant can
-create primitives, edit and pattern bodies, import meshes (STL/OBJ text),
-repair/scale/orient them, and answer "how much filament?", "will it tip?",
-"is it ready to print?". CAM feeds & speeds are exposed too.
+~40 operations are registered as Claude tools and run through a proper tool-use
+loop (the model sees each tool's result and can chain steps). The assistant can
+create primitives, sketch/extrude/revolve, edit & pattern bodies, move/rotate/
+scale/orient them, import meshes (STL/OBJ text), repair & inspect them, manage
+the scene (delete/clear/describe), and answer print questions ("how much
+filament?", "will it tip?", "is it ready to print?", "best orientation?",
+"feeds & speeds for this tool?").
+
+### CAM (`lib/cam`)
+
+3-axis pocket/contour/drill/face toolpaths, ISO G-code, a tool library, and a
+feeds & speeds calculator (surfaced in the CAM panel and as an AI tool).
 
 ### IO (`lib/io`)
 

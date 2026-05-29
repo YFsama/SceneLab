@@ -162,3 +162,10 @@ See the original design document for full tech stack rationale. Key choices:
   - Bug fixes: duplicate fn, sketch distance solver, symmetric extrude, outward
     side normals, consistent winding (translation-invariant volume), bed-face
     overhang overcount
+  - Continued (tests → 339): primitives torus/wedge; createRevolve watertight
+    (cross-section closure + caps); sketch line/circle/arc profiles (line chaining);
+    OBJ import/export, STL import auto-weld, mergeBodies, translate/rotate body ops;
+    print cost, layer count, bed contact, hole detection, print-readiness;
+    CAM feeds & speeds (lib + AI + panel UI); ~40 AI tools through a proper
+    tool-use loop (fixed: tool results now fed back to the model); store
+    directBodies + scene management (delete/clear/describe); current default model
