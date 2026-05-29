@@ -1,5 +1,5 @@
 import type { SolidBody } from '../geometry/types';
-import { computeVolume, computeSurfaceArea } from '../geometry';
+import { computeVolume, computeSurfaceArea, computeBoundingBox } from '../geometry';
 import { MATERIAL_DENSITIES } from './types';
 import type { MaterialName } from './types';
 
@@ -16,6 +16,8 @@ export interface PrintJobOptions {
   density?: number;
   /** Volumetric throughput in mm³/s for the time estimate. Default 8. */
   volumetricSpeed?: number;
+  /** Layer height in mm, for the layer count. Default 0.2. */
+  layerHeight?: number;
 }
 
 export interface PrintJobEstimate {
@@ -27,6 +29,11 @@ export interface PrintJobEstimate {
   printTimeMinutes: number;
   infill: number;
   wallThickness: number;
+  /** Part height along the build axis (+Y), mm. */
+  heightMm: number;
+  layerHeight: number;
+  /** Number of layers = ceil(height / layerHeight). */
+  layerCount: number;
 }
 
 /**
@@ -43,9 +50,13 @@ export function estimatePrintJob(body: SolidBody, options: PrintJobOptions = {})
   const filamentDiameter = options.filamentDiameter ?? 1.75;
   const density = options.density ?? MATERIAL_DENSITIES[options.material ?? 'PLA'];
   const volumetricSpeed = options.volumetricSpeed ?? 8;
+  const layerHeight = options.layerHeight ?? 0.2;
 
   const solidVolumeMm3 = Math.abs(computeVolume(body));
   const surfaceArea = computeSurfaceArea(body);
+  const bb = computeBoundingBox(body);
+  const heightMm = Number.isFinite(bb.max.y - bb.min.y) ? Math.max(0, bb.max.y - bb.min.y) : 0;
+  const layerCount = layerHeight > 0 ? Math.ceil(heightMm / layerHeight) : 0;
 
   const wallVolume = Math.min(solidVolumeMm3, surfaceArea * wallThickness);
   const interiorVolume = Math.max(0, solidVolumeMm3 - wallVolume);
@@ -64,5 +75,8 @@ export function estimatePrintJob(body: SolidBody, options: PrintJobOptions = {})
     printTimeMinutes,
     infill,
     wallThickness,
+    heightMm,
+    layerHeight,
+    layerCount,
   };
 }

@@ -703,6 +703,7 @@ export function registerBuiltinTools(): void {
         filamentMassG: Number(est.filamentMassG.toFixed(2)),
         printTimeMinutes: Number(est.printTimeMinutes.toFixed(1)),
         materialVolumeCm3: Number((est.materialVolumeMm3 / 1000).toFixed(2)),
+        layerCount: est.layerCount,
         infill: est.infill,
       };
     },

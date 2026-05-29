@@ -34,6 +34,16 @@ describe('estimatePrintJob', () => {
     expect(est.printTimeMinutes).toBeCloseTo(8.13, 1);
   });
 
+  it('reports layer count from the build-axis height and layer height', () => {
+    const est = estimatePrintJob(box, { layerHeight: 0.2 }); // 20mm tall / 0.2
+    expect(est.heightMm).toBeCloseTo(20, 5);
+    expect(est.layerHeight).toBe(0.2);
+    expect(est.layerCount).toBe(100);
+
+    const coarse = estimatePrintJob(box, { layerHeight: 0.3 }); // ceil(20/0.3)=67
+    expect(coarse.layerCount).toBe(67);
+  });
+
   it('clamps infill to [0,1] and honors material', () => {
     const over = estimatePrintJob(box, { infill: 5 });
     expect(over.infill).toBe(1);
