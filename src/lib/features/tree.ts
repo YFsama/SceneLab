@@ -238,32 +238,52 @@ export class FeatureTree {
   }
 }
 
-function extractProfileFromSketch(
-  sketch: Sketch,
-  solved: Map<string, { x: number; y: number }>,
-): { x: number; y: number }[] {
-  // Collect all line endpoints in order to form a profile
-  const points: { x: number; y: number }[] = [];
+type Pt = { x: number; y: number };
+const ptKey = (p: Pt) => `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
+
+/** Order a set of line segments into a connected loop by shared endpoints. */
+function chainLineLoop(segments: [Pt, Pt][]): Pt[] {
+  const adj = new Map<string, { seg: number; other: Pt }[]>();
+  segments.forEach(([a, b], i) => {
+    (adj.get(ptKey(a)) ?? adj.set(ptKey(a), []).get(ptKey(a))!).push({ seg: i, other: b });
+    (adj.get(ptKey(b)) ?? adj.set(ptKey(b), []).get(ptKey(b))!).push({ seg: i, other: a });
+  });
+
+  const start = segments[0]![0];
+  const ordered: Pt[] = [start];
+  const used = new Set<number>();
+  let cur = start;
+  for (let guard = 0; guard <= segments.length; guard++) {
+    const next = (adj.get(ptKey(cur)) ?? []).find((c) => !used.has(c.seg));
+    if (!next) break;
+    used.add(next.seg);
+    cur = next.other;
+    if (ptKey(cur) === ptKey(start)) break; // loop closed
+    ordered.push(cur);
+  }
+  return ordered;
+}
+
+function extractProfileFromSketch(sketch: Sketch, solved: Map<string, Pt>): Pt[] {
+  const lineSegments: [Pt, Pt][] = [];
+  const other: Pt[] = [];
 
   for (const entity of sketch.entities.values()) {
     if (entity.type === 'line') {
       const p1 = solved.get(entity.p1Id);
       const p2 = solved.get(entity.p2Id);
-      if (p1) points.push(p1);
-      if (p2) points.push(p2);
+      if (p1 && p2) lineSegments.push([p1, p2]);
     } else if (entity.type === 'rectangle') {
-      const ids = [entity.p1Id, entity.p2Id, entity.p3Id, entity.p4Id];
-      for (const pid of ids) {
+      for (const pid of [entity.p1Id, entity.p2Id, entity.p3Id, entity.p4Id]) {
         const p = solved.get(pid);
-        if (p) points.push(p);
+        if (p) other.push(p);
       }
     } else if (entity.type === 'circle') {
       const c = solved.get(entity.centerId);
       if (c) {
-        const segments = 32;
-        for (let i = 0; i < segments; i++) {
-          const a = (i / segments) * Math.PI * 2;
-          points.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
+        for (let i = 0; i < 32; i++) {
+          const a = (i / 32) * Math.PI * 2;
+          other.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
         }
       }
     } else if (entity.type === 'arc') {
@@ -273,23 +293,29 @@ function extractProfileFromSketch(
         const steps = Math.max(2, Math.ceil((Math.abs(sweep) / (Math.PI * 2)) * 32));
         for (let i = 0; i <= steps; i++) {
           const a = entity.startAngle + (sweep * i) / steps;
-          points.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
+          other.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
         }
       }
     }
   }
 
-  // Deduplicate
+  // Lines form the profile: chain them into a proper ordered loop (robust to
+  // the order they were drawn in, avoiding self-intersecting "bowtie" profiles).
+  if (lineSegments.length > 0) {
+    const loop = chainLineLoop(lineSegments);
+    if (loop.length >= 3) return loop;
+  }
+
+  // Otherwise use the rectangle/circle/arc points, deduplicated.
   const seen = new Set<string>();
-  const unique: { x: number; y: number }[] = [];
-  for (const p of points) {
-    const key = `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
-    if (!seen.has(key)) {
-      seen.add(key);
+  const unique: Pt[] = [];
+  for (const p of other) {
+    const k = ptKey(p);
+    if (!seen.has(k)) {
+      seen.add(k);
       unique.push(p);
     }
   }
-
   return unique;
 }
 

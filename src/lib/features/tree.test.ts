@@ -10,7 +10,7 @@ import {
   createCircularArrayFeature,
   createMirrorFeature,
 } from './tree';
-import { createSketch, addRectangle, addCircle } from '../sketch/engine';
+import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
 import { computeVolume } from '../geometry/brep';
 
 /** A standalone extrude feature that produces a box-like body (no parent sketch). */
@@ -171,6 +171,30 @@ describe('FeatureTree', () => {
     const vol = Math.abs(computeVolume(bodies[0]!));
     expect(vol).toBeGreaterThan(ideal * 0.97);
     expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+  });
+
+  it('extrudes a square drawn as four lines added out of order', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    // Add the four edges of a 10×10 square in a shuffled order. Naive endpoint
+    // concatenation would produce a self-intersecting profile; chaining fixes it.
+    addLine(sketch, 0, 0, 10, 0); // bottom
+    addLine(sketch, 0, 10, 0, 0); // left (reversed)
+    addLine(sketch, 10, 0, 10, 10); // right
+    addLine(sketch, 10, 10, 0, 10); // top
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 5 },
+      [sf.id],
+    );
+    tree.addFeature(sf);
+    tree.addFeature(ef);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    expect(bodies).toHaveLength(1);
+    // A correct (non-bowtie) square profile → 10·10·5 = 500.
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeCloseTo(500, 3);
   });
 
   it('records an error when a fillet has no parent body', () => {
