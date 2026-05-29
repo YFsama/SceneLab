@@ -48,7 +48,14 @@ interface AppState {
   removeFeature: (id: string) => void;
   updateFeature: (id: string, mutator: (f: Feature) => Feature) => void;
   recomputeTree: () => void;
+  /** Combined render list: feature-tree bodies + direct bodies. */
   bodies: SolidBody[];
+  /** Bodies created/edited outside the feature tree (AI primitives, arrays, …). */
+  directBodies: SolidBody[];
+  addDirectBody: (body: SolidBody) => void;
+  addDirectBodies: (bodies: SolidBody[]) => void;
+  replaceBody: (oldId: string, newBody: SolidBody) => void;
+  removeDirectBody: (id: string) => void;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -79,7 +86,17 @@ interface AppState {
   setProjectDirty: (d: boolean) => void;
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>((set, get) => {
+  // Rebuild the render list from the feature tree (minus hidden bodies) plus
+  // any direct bodies, keeping objectIds in sync. Called after every change
+  // that affects geometry.
+  const recombine = () => {
+    const { featureTree, directBodies } = get();
+    const bodies = [...featureTree.getLatestBodies(), ...directBodies];
+    set({ bodies, objectIds: bodies.map((b) => b.id) });
+  };
+
+  return {
   theme: 'dark',
   locale: 'en',
   setTheme: (theme) => set({ theme }),
@@ -137,49 +154,57 @@ export const useStore = create<AppState>((set, get) => ({
 
   featureTree: new FeatureTree(),
   bodies: [],
+  directBodies: [],
   addFeature: (feature) => {
     const tree = get().featureTree;
     tree.addFeature(feature);
     tree.recompute();
-    set({
-      featureTree: tree,
-      bodies: tree.getLatestBodies(),
-      objectIds: tree.getLatestBodies().map((b) => b.id),
-      projectDirty: true,
-    });
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
   },
   removeFeature: (id) => {
     const tree = get().featureTree;
     tree.removeFeature(id);
     tree.recompute();
-    const latestBodies = tree.getLatestBodies();
-    set({
-      featureTree: tree,
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
-      projectDirty: true,
-    });
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
   },
   updateFeature: (id, mutator) => {
     const tree = get().featureTree;
     tree.updateFeature(id, mutator);
     tree.recompute();
-    const latestBodies = tree.getLatestBodies();
-    set({
-      featureTree: tree,
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
-      projectDirty: true,
-    });
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
   },
   recomputeTree: () => {
-    const tree = get().featureTree;
-    tree.recompute();
-    const latestBodies = tree.getLatestBodies();
-    set({
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
-    });
+    get().featureTree.recompute();
+    recombine();
+  },
+
+  addDirectBody: (body) => {
+    set((s) => ({ directBodies: [...s.directBodies, body], projectDirty: true }));
+    recombine();
+  },
+  addDirectBodies: (newBodies) => {
+    set((s) => ({ directBodies: [...s.directBodies, ...newBodies], projectDirty: true }));
+    recombine();
+  },
+  replaceBody: (oldId, newBody) => {
+    const { directBodies } = get();
+    if (directBodies.some((b) => b.id === oldId)) {
+      // Stable case: editing a direct body replaces it in place.
+      set({ directBodies: directBodies.map((b) => (b.id === oldId ? newBody : b)), projectDirty: true });
+    } else {
+      // Editing a (transient) feature-tree body: keep the edit as a direct body.
+      // A recompute regenerates tree bodies with fresh ids, so we cannot stably
+      // hide the original here — the proper path for tree bodies is a feature.
+      set({ directBodies: [...directBodies, newBody], projectDirty: true });
+    }
+    recombine();
+  },
+  removeDirectBody: (id) => {
+    set((s) => ({ directBodies: s.directBodies.filter((b) => b.id !== id) }));
+    recombine();
   },
 
   showExtrudeDialog: false,
@@ -202,17 +227,15 @@ export const useStore = create<AppState>((set, get) => ({
     tree.addFeature(extrudeFeat);
     tree.recompute();
 
-    const latestBodies = tree.getLatestBodies();
     set({
       featureTree: tree,
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
       sketchActive: false,
       currentSketch: null,
       workspace: 'model',
       showExtrudeDialog: false,
       projectDirty: true,
     });
+    recombine();
   },
 
   viewDirection: 'iso',
@@ -233,4 +256,5 @@ export const useStore = create<AppState>((set, get) => ({
   setProjectName: (projectName) => set({ projectName }),
   projectDirty: false,
   setProjectDirty: (projectDirty) => set({ projectDirty }),
-}));
+  };
+});

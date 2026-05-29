@@ -8,7 +8,7 @@ describe('builtin analysis tools', () => {
   beforeEach(() => {
     clearTools();
     registerBuiltinTools();
-    useStore.setState({ bodies: [createBox(10, 10, 10)] }); // 1 cm³
+    useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] }); // 1 cm³
   });
 
   it('estimate_mass returns PLA mass by default', async () => {

@@ -147,8 +147,7 @@ export function registerBuiltinTools(): void {
         assertNumber(args.height, 'height'),
         assertNumber(args.depth, 'depth'),
       );
-      const store = useStore.getState();
-      useStore.setState({ bodies: [...store.bodies, body], objectIds: [...store.objectIds, body.id] });
+      useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };
     },
   });
@@ -171,8 +170,7 @@ export function registerBuiltinTools(): void {
         assertNumber(args.height, 'height'),
         args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
       );
-      const store = useStore.getState();
-      useStore.setState({ bodies: [...store.bodies, body], objectIds: [...store.objectIds, body.id] });
+      useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };
     },
   });
@@ -217,13 +215,7 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const edgeIds = (args.edgeIds as string[]) ?? body.edges.map((e) => e.id);
       const result = applyFillet(body, edgeIds, args.radius as number);
-      // Replace body in store
-      const idx = store.bodies.indexOf(body);
-      if (idx >= 0) {
-        const newBodies = [...store.bodies];
-        newBodies[idx] = result;
-        useStore.setState({ bodies: newBodies });
-      }
+      store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
   });
@@ -246,12 +238,7 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const edgeIds = (args.edgeIds as string[]) ?? body.edges.map((e) => e.id);
       const result = applyChamfer(body, edgeIds, args.distance as number);
-      const idx = store.bodies.indexOf(body);
-      if (idx >= 0) {
-        const newBodies = [...store.bodies];
-        newBodies[idx] = result;
-        useStore.setState({ bodies: newBodies });
-      }
+      store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
   });
@@ -274,12 +261,7 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const faceIds = (args.faceIds as string[]) ?? [body.faces[0]?.id ?? ''];
       const result = applyShell(body, faceIds, args.thickness as number);
-      const idx = store.bodies.indexOf(body);
-      if (idx >= 0) {
-        const newBodies = [...store.bodies];
-        newBodies[idx] = result;
-        useStore.setState({ bodies: newBodies });
-      }
+      store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
   });
@@ -306,7 +288,7 @@ export function registerBuiltinTools(): void {
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const results = applyLinearArray(body, args.direction as Vec3, args.count as number, args.spacing as number);
-      useStore.setState({ bodies: [...store.bodies, ...results] });
+      store.addDirectBodies(results);
       return { success: true, count: results.length };
     },
   });
@@ -336,7 +318,7 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const axis = args.axis as { origin: Vec3; direction: Vec3 };
       const results = applyCircularArray(body, axis, args.count as number);
-      useStore.setState({ bodies: [...store.bodies, ...results] });
+      store.addDirectBodies(results);
       return { success: true, count: results.length };
     },
   });
@@ -365,7 +347,7 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const plane = args.plane as { origin: Vec3; normal: Vec3 };
       const result = applyMirror(body, plane);
-      useStore.setState({ bodies: [...store.bodies, result] });
+      store.addDirectBody(result);
       return { success: true, bodyId: result.id };
     },
   });

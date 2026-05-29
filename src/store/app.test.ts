@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
+import { FeatureTree, createExtrudeFeature } from '../lib/features/tree';
+import { createBox } from '../lib/geometry';
 
 describe('app store', () => {
   it('should have default theme', () => {
@@ -88,5 +90,66 @@ describe('app store', () => {
     useStore.getState().setProjectDirty(true);
     expect(useStore.getState().projectDirty).toBe(true);
     useStore.getState().setProjectDirty(false);
+  });
+});
+
+describe('app store — direct bodies', () => {
+  beforeEach(() => {
+    // Reset geometry-related state to a clean tree.
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      bodies: [],
+      directBodies: [],
+      objectIds: [],
+    });
+  });
+
+  it('direct bodies survive a tree recompute', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().bodies).toHaveLength(1);
+
+    // Recomputing the (empty) tree must not wipe the direct body.
+    useStore.getState().recomputeTree();
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(useStore.getState().bodies[0]?.id).toBe(box.id);
+  });
+
+  it('combined render list = tree bodies + direct bodies', () => {
+    const ext = createExtrudeFeature(
+      {
+        profile: [
+          { x: -5, y: 0, z: -5 },
+          { x: 5, y: 0, z: -5 },
+          { x: 5, y: 0, z: 5 },
+          { x: -5, y: 0, z: 5 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 10,
+      },
+      [],
+    );
+    useStore.getState().addFeature(ext);
+    expect(useStore.getState().bodies).toHaveLength(1); // tree body
+
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    expect(useStore.getState().bodies).toHaveLength(2); // tree + direct
+  });
+
+  it('replaceBody edits a direct body in place and survives recompute', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+
+    const edited = createBox(3, 3, 3);
+    useStore.getState().replaceBody(box.id, edited);
+
+    let bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.id).toBe(edited.id);
+
+    useStore.getState().recomputeTree();
+    bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.id).toBe(edited.id);
   });
 });
