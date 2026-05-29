@@ -265,6 +265,15 @@ describe('builtin analysis tools', () => {
     await expect(tool.execute({ bodyId: box.id, offset: { x: 1, y: 2, z: Infinity } })).rejects.toThrow('Vec3');
   });
 
+  it('resize_to_target scales a body to a target axis size', async () => {
+    const box = createBox(10, 20, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('resize_to_target')!;
+    await tool.execute({ bodyId: box.id, axis: 'y', target: 40 });
+    const ys = useStore.getState().bodies[0]!.vertices.map((v) => v.y);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(40, 3);
+  });
+
   it('scale_body scales volume by factor³ about the center', async () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });

@@ -286,6 +286,38 @@ export function mergeBodies(bodies: SolidBody[], name = 'Merged'): SolidBody {
   return { id: genId('body'), name, vertices, faces, edges };
 }
 
+/**
+ * Uniformly scale a body so its extent along `axis` equals `target` mm,
+ * scaled about its bounding-box center (preserves aspect ratio).
+ */
+export function scaleBodyToTarget(body: SolidBody, axis: 'x' | 'y' | 'z', target: number): SolidBody {
+  if (!Number.isFinite(target) || target <= 0) throw new Error('Target size must be positive');
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of body.vertices) {
+    min = Math.min(min, v[axis]);
+    max = Math.max(max, v[axis]);
+  }
+  const extent = max - min;
+  if (!(extent > 1e-9)) throw new Error('Body has zero extent along the axis');
+  const bb = computeBoundingBoxLocal(body);
+  return scaleBody(body, target / extent, {
+    x: (bb.min.x + bb.max.x) / 2,
+    y: (bb.min.y + bb.max.y) / 2,
+    z: (bb.min.z + bb.max.z) / 2,
+  });
+}
+
+function computeBoundingBoxLocal(body: SolidBody): { min: Vec3; max: Vec3 } {
+  const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
+  const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const v of body.vertices) {
+    min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+    max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+  }
+  return { min, max };
+}
+
 /** Uniform scale of a body about an origin point (default world origin). */
 export function scaleBody(body: SolidBody, factor: number, origin: Vec3 = { x: 0, y: 0, z: 0 }): SolidBody {
   if (factor <= 0) throw new Error('Scale factor must be positive');

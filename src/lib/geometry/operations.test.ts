@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, weldVertices, mergeBodies, translateBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, weldVertices, mergeBodies, translateBody } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume } from './brep';
 import type { SolidBody, Vec3 } from './types';
@@ -13,6 +13,20 @@ describe('translateBody', () => {
     expect(bb.max.y).toBeCloseTo(10 - 20, 5);
     expect(bb.min.z).toBeCloseTo(-5 + 7, 5);
     expect(Math.abs(computeVolume(moved))).toBeCloseTo(Math.abs(computeVolume(box)), 5);
+  });
+});
+
+describe('scaleBodyToTarget', () => {
+  it('scales uniformly so the chosen axis hits the target size', () => {
+    const box = createBox(10, 20, 10); // y extent 20
+    const tall = scaleBodyToTarget(box, 'y', 40); // factor 2
+    const bb = computeBoundingBox(tall);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(40, 4);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(20, 4); // aspect preserved (10×2)
+  });
+
+  it('rejects a non-positive target', () => {
+    expect(() => scaleBodyToTarget(createBox(1, 1, 1), 'x', 0)).toThrow('positive');
   });
 });
 

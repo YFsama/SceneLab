@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -657,6 +657,27 @@ export function registerBuiltinTools(): void {
         z: (bb.min.z + bb.max.z) / 2,
       };
       const result = scaleBody(body, factor, center);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'resize_to_target',
+    description: 'Uniformly scale a body so its size along an axis equals a target (mm), preserving aspect.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'Axis to size' },
+        target: { type: 'number', description: 'Desired extent along that axis in mm' },
+      },
+      required: ['axis', 'target'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const axis = assertEnum(args.axis, ['x', 'y', 'z'] as const, 'axis');
+      const result = scaleBodyToTarget(body, axis, assertNumber(args.target, 'target'));
       useStore.getState().replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
