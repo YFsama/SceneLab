@@ -3,7 +3,30 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror } from '../geometry/operations';
 import { assertNumber, assertBoolean, assertEnum } from './validate';
-import type { Vec3 } from '../geometry/types';
+import type { Vec3, SolidBody } from '../geometry/types';
+import {
+  analyzePrintability,
+  analyzeStability,
+  estimateMass,
+  estimateMassForMaterial,
+  MATERIAL_DENSITIES,
+} from '../print';
+import type { MaterialName } from '../print';
+
+const MATERIALS = Object.keys(MATERIAL_DENSITIES) as MaterialName[];
+
+/** Resolve a body by id, or fall back to the only/first body in the scene. */
+function resolveBody(bodyId: unknown): SolidBody {
+  const { bodies } = useStore.getState();
+  if (bodyId !== undefined) {
+    const body = bodies.find((b) => b.id === bodyId);
+    if (!body) throw new Error(`Body "${String(bodyId)}" not found`);
+    return body;
+  }
+  const first = bodies[0];
+  if (!first) throw new Error('No body in the scene');
+  return first;
+}
 
 export function registerBuiltinTools(): void {
   // Sketch tools
@@ -292,6 +315,102 @@ export function registerBuiltinTools(): void {
       const result = applyMirror(body, plane);
       useStore.setState({ bodies: [...store.bodies, result] });
       return { success: true, bodyId: result.id };
+    },
+  });
+
+  // Analysis tools (3D-print oriented)
+  registerTool({
+    name: 'estimate_mass',
+    description: 'Estimate the printed mass of a body for a given material (defaults to PLA).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        material: { type: 'string', enum: MATERIALS, description: 'Filament/resin material' },
+        density: { type: 'number', description: 'Custom density in g/cm³ (overrides material)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const est =
+        args.density !== undefined
+          ? estimateMass(body, assertNumber(args.density, 'density'))
+          : estimateMassForMaterial(
+              body,
+              args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA',
+            );
+      return {
+        bodyId: body.id,
+        volumeCm3: Number(est.volumeCm3.toFixed(3)),
+        massGrams: Number(est.massGrams.toFixed(3)),
+        density: est.density,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'analyze_stability',
+    description: 'Check whether a body is statically stable on its base (will it tip over?).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const r = analyzeStability(body);
+      return {
+        bodyId: body.id,
+        stable: r.stable,
+        comInsideBase: r.comInsideBase,
+        footprintArea: Number(r.footprintArea.toFixed(2)),
+        tipOverMarginMm: Number(r.marginMm.toFixed(2)),
+        centerOfMass: r.centerOfMass,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'analyze_printability',
+    description:
+      'Full 3D-print check for a body: overhangs needing support, estimated mass, build-volume fit, and tip-over stability.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        material: { type: 'string', enum: MATERIALS, description: 'Material (defaults to PLA)' },
+        thresholdDeg: { type: 'number', description: 'Overhang support-angle threshold (default 45)' },
+        buildVolume: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Printer build volume in mm (optional)',
+        },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const material = args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA';
+      const report = analyzePrintability(body, {
+        material,
+        thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
+        buildVolume: args.buildVolume as Vec3 | undefined,
+      });
+      const stability = analyzeStability(body);
+      const support = report.overhangs.faces.filter((f) => f.needsSupport);
+      return {
+        bodyId: body.id,
+        overhangs: {
+          thresholdDeg: report.overhangs.thresholdDeg,
+          facesNeedingSupport: support.length,
+          overhangArea: Number(report.overhangs.overhangArea.toFixed(2)),
+        },
+        mass: { material, grams: Number(report.mass.massGrams.toFixed(3)) },
+        buildVolume: report.buildVolume
+          ? { fits: report.buildVolume.fits, overage: report.buildVolume.overage }
+          : null,
+        stability: { stable: stability.stable, tipOverMarginMm: Number(stability.marginMm.toFixed(2)) },
+      };
     },
   });
 
