@@ -20,6 +20,13 @@ export interface OverhangOptions {
    * support. 45° is the common FDM rule of thumb.
    */
   thresholdDeg?: number;
+  /**
+   * Count faces resting on the build plate as overhangs. Default false — the
+   * bottom surface needs no support.
+   */
+  includeBaseFaces?: boolean;
+  /** Height band (mm) from the lowest point that counts as "on the bed". */
+  baseTolerance?: number;
 }
 
 export interface FaceOverhang {

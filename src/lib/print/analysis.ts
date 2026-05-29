@@ -38,11 +38,19 @@ function clamp(x: number, lo: number, hi: number): number {
 export function analyzeOverhangs(body: SolidBody, options: OverhangOptions = {}): OverhangReport {
   const buildDirection = normalize(options.buildDirection ?? { x: 0, y: 1, z: 0 });
   const thresholdDeg = options.thresholdDeg ?? 45;
+  const includeBaseFaces = options.includeBaseFaces ?? false;
 
   const areaById = new Map<string, number>();
   for (const { faceId, area } of computeFaceAreas(body)) {
     areaById.set(faceId, area);
   }
+
+  // Faces resting on the build plate (lowest along the build axis) need no
+  // support; identify them so they are not counted as overhangs.
+  const heights = body.vertices.map((v) => dot(v, buildDirection));
+  const minH = heights.length ? Math.min(...heights) : 0;
+  const maxH = heights.length ? Math.max(...heights) : 0;
+  const baseTol = options.baseTolerance ?? Math.max(1e-6, (maxH - minH) * 0.01);
 
   const faces: FaceOverhang[] = [];
   let overhangArea = 0;
@@ -53,9 +61,14 @@ export function analyzeOverhangs(body: SolidBody, options: OverhangOptions = {})
     const d = dot(n, buildDirection);
     const area = areaById.get(face.id) ?? 0;
 
-    // Only downward-facing surfaces can be unsupported overhangs.
-    if (d >= 0) {
-      faces.push({ faceId: face.id, angleDeg: 90, area, needsSupport: false });
+    const onBed =
+      !includeBaseFaces &&
+      face.vertices.length > 0 &&
+      face.vertices.reduce((s, v) => s + dot(v, buildDirection), 0) / face.vertices.length <= minH + baseTol;
+
+    // Only downward-facing surfaces away from the bed can be unsupported.
+    if (d >= 0 || onBed) {
+      faces.push({ faceId: face.id, angleDeg: d >= 0 ? 90 : 0, area, needsSupport: false });
       continue;
     }
 

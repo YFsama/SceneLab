@@ -66,6 +66,15 @@ describe('analyzeOverhangs', () => {
     expect(f60.needsSupport).toBe(true); // 45 < 60
     expect(at30.faces.find((x) => x.faceId === 'ramp')!.needsSupport).toBe(false); // 45 > 30
   });
+
+  it('does not count the bed-resting bottom face of a box', () => {
+    const box = createBox(10, 10, 10); // bottom face is flat & downward, on the plate
+    const excluded = analyzeOverhangs(box);
+    expect(excluded.overhangArea).toBeCloseTo(0, 5); // bottom is on the bed → no support
+
+    const included = analyzeOverhangs(box, { includeBaseFaces: true });
+    expect(included.overhangArea).toBeCloseTo(100, 0); // now the 10×10 bottom counts
+  });
 });
 
 describe('estimateMass', () => {
