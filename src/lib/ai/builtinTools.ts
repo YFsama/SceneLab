@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices } from '../geometry/operations';
-import { createBox, createCylinder, createSphere, createCone, createTorus } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -250,6 +250,29 @@ export function registerBuiltinTools(): void {
         assertNumber(args.minorRadius, 'minorRadius'),
         args.segments !== undefined ? assertNumber(args.segments, 'segments') : undefined,
         args.sides !== undefined ? assertNumber(args.sides, 'sides') : undefined,
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_wedge',
+    description: 'Create a wedge (right-triangular prism ramp) solid and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: 'Width along X (the ramp run) in mm' },
+        height: { type: 'number', description: 'Height along Y (the ramp rise) in mm' },
+        depth: { type: 'number', description: 'Depth along Z in mm' },
+      },
+      required: ['width', 'height', 'depth'],
+    },
+    execute: async (args) => {
+      const body = createWedge(
+        assertNumber(args.width, 'width'),
+        assertNumber(args.height, 'height'),
+        assertNumber(args.depth, 'depth'),
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };

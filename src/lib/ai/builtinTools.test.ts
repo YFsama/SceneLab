@@ -117,6 +117,15 @@ describe('builtin analysis tools', () => {
     expect(bodies[0]?.name).toBe('Torus');
   });
 
+  it('create_wedge adds a wedge body to the scene', async () => {
+    useStore.setState({ bodies: [], objectIds: [], directBodies: [] });
+    const tool = getTool('create_wedge')!;
+    await tool.execute({ width: 10, height: 6, depth: 4 });
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.name).toBe('Wedge');
+  });
+
   it('suggest_feeds_speeds returns RPM and feed for a library tool', async () => {
     const tool = getTool('suggest_feeds_speeds')!;
     const result = (await tool.execute({ toolId: 'em-6mm', material: 'aluminum' })) as {

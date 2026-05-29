@@ -482,6 +482,60 @@ export function createTorus(
   return { id: genId('body'), name: 'Torus', vertices, faces, edges };
 }
 
+/** Right-triangular-prism wedge: full height at -x, sloping to 0 at +x. */
+export function createWedge(width: number, height: number, depth: number): SolidBody {
+  if (width <= 0 || height <= 0 || depth <= 0) throw new Error('Dimensions must be positive');
+  const hw = width / 2;
+  const hd = depth / 2;
+  // Front triangle (z = -hd) and back triangle (z = +hd).
+  const A = { x: -hw, y: 0, z: -hd };
+  const B = { x: hw, y: 0, z: -hd };
+  const C = { x: -hw, y: height, z: -hd };
+  const D = { x: -hw, y: 0, z: hd };
+  const E = { x: hw, y: 0, z: hd };
+  const F = { x: -hw, y: height, z: hd };
+  const vertices: Vec3[] = [A, B, C, D, E, F];
+
+  const center = { x: 0, y: 0, z: 0 };
+  for (const v of vertices) {
+    center.x += v.x / 6;
+    center.y += v.y / 6;
+    center.z += v.z / 6;
+  }
+
+  const faceLoops: Vec3[][] = [
+    [A, B, E, D], // bottom (y = 0)
+    [C, A, D, F], // vertical back (x = -hw)
+    [B, E, F, C], // slope (hypotenuse)
+    [A, C, B], // front triangle (z = -hd)
+    [D, E, F], // back triangle (z = +hd)
+  ];
+
+  const faces: Face[] = faceLoops.map((loop) => {
+    const gn = computeFaceNormal(loop[0]!, loop[1]!, loop[2]!);
+    const fc = { x: 0, y: 0, z: 0 };
+    for (const v of loop) {
+      fc.x += v.x / loop.length;
+      fc.y += v.y / loop.length;
+      fc.z += v.z / loop.length;
+    }
+    const outward = gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z) < 0
+      ? { x: -gn.x, y: -gn.y, z: -gn.z }
+      : gn;
+    return { id: genId('face'), vertices: loop, normal: outward };
+  });
+
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    for (let i = 0; i < f.vertices.length; i++) {
+      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Wedge', vertices, faces, edges };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };

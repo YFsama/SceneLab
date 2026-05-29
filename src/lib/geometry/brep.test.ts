@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, computeBoundingBox, computeVolume, createRevolve } from './brep';
+import { createExtrude, createBox, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeVolume, createRevolve } from './brep';
 import type { Vec3, SolidBody } from './types';
 
 /** Translate every position of a body by an offset (helper for invariance tests). */
@@ -313,5 +313,37 @@ describe('createTorus', () => {
     expect(() => createTorus(0, 3)).toThrow('Radius');
     expect(() => createTorus(5, 8)).toThrow('minorRadius');
     expect(() => createTorus(10, 3, 2)).toThrow('segments and sides');
+  });
+});
+
+describe('createWedge', () => {
+  it('has volume ½·w·h·d', () => {
+    const wedge = createWedge(10, 6, 4); // ½·10·6·4 = 120
+    expect(Math.abs(computeVolume(wedge))).toBeCloseTo(120, 6);
+  });
+
+  it('is translation invariant in volume', () => {
+    const w = createWedge(10, 6, 4);
+    const t = (v: Vec3) => ({ x: v.x + 50, y: v.y - 20, z: v.z + 7 });
+    const moved: SolidBody = {
+      ...w,
+      vertices: w.vertices.map(t),
+      faces: w.faces.map((f) => ({ ...f, vertices: f.vertices.map(t) })),
+      edges: w.edges.map((e) => ({ ...e, start: t(e.start), end: t(e.end) })),
+    };
+    expect(computeVolume(moved)).toBeCloseTo(computeVolume(w), 6);
+  });
+
+  it('has the right bounding box and name', () => {
+    const wedge = createWedge(10, 6, 4);
+    const bb = computeBoundingBox(wedge);
+    expect(wedge.name).toBe('Wedge');
+    expect(bb.max.x - bb.min.x).toBeCloseTo(10, 6);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(6, 6);
+    expect(bb.max.z - bb.min.z).toBeCloseTo(4, 6);
+  });
+
+  it('rejects invalid parameters', () => {
+    expect(() => createWedge(0, 6, 4)).toThrow('positive');
   });
 });
