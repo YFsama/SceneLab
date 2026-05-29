@@ -10,6 +10,8 @@ export { analyzeStability } from './stability';
 export type { StabilityOptions, StabilityReport } from './stability';
 export { recommendOrientation } from './orientation';
 export type { OrientationOptions, OrientationCandidate, OrientationReport } from './orientation';
+export { estimatePrintJob } from './printJob';
+export type { PrintJobOptions, PrintJobEstimate } from './printJob';
 export { MATERIAL_DENSITIES } from './types';
 export type {
   MaterialName,

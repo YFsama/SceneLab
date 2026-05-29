@@ -48,6 +48,29 @@ describe('builtin analysis tools', () => {
     expect(typeof result.overhangs.facesNeedingSupport).toBe('number');
   });
 
+  it('estimate_print_job returns filament and time figures', async () => {
+    useStore.setState({ bodies: [createBox(20, 20, 20)] });
+    const tool = getTool('estimate_print_job')!;
+    const result = (await tool.execute({ infill: 1, material: 'PLA' })) as {
+      filamentMassG: number;
+      printTimeMinutes: number;
+      infill: number;
+    };
+    expect(result.infill).toBe(1);
+    expect(result.filamentMassG).toBeCloseTo(8 * 1.24, 0); // solid 8 cm³ PLA
+    expect(result.printTimeMinutes).toBeGreaterThan(0);
+  });
+
+  it('recommend_orientation returns a best orientation and ranking', async () => {
+    const tool = getTool('recommend_orientation')!;
+    const result = (await tool.execute({})) as {
+      best: { orientation: string; supportArea: number };
+      ranked: Array<{ orientation: string }>;
+    };
+    expect(result.ranked).toHaveLength(6);
+    expect(result.best.supportArea).toBe(0); // a box needs no support
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');

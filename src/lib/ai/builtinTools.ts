@@ -9,6 +9,8 @@ import {
   analyzeStability,
   estimateMass,
   estimateMassForMaterial,
+  estimatePrintJob,
+  recommendOrientation,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -410,6 +412,68 @@ export function registerBuiltinTools(): void {
           ? { fits: report.buildVolume.fits, overage: report.buildVolume.overage }
           : null,
         stability: { stable: stability.stable, tipOverMarginMm: Number(stability.marginMm.toFixed(2)) },
+      };
+    },
+  });
+
+  registerTool({
+    name: 'estimate_print_job',
+    description:
+      'Estimate FDM print material and time for a body: filament length, mass, and rough print time given infill and wall thickness.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        material: { type: 'string', enum: MATERIALS, description: 'Material (defaults to PLA)' },
+        infill: { type: 'number', description: 'Infill fraction 0–1 (default 0.2)' },
+        wallThickness: { type: 'number', description: 'Wall thickness in mm (default 1.2)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const est = estimatePrintJob(body, {
+        material: args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA',
+        infill: args.infill !== undefined ? assertNumber(args.infill, 'infill') : undefined,
+        wallThickness: args.wallThickness !== undefined ? assertNumber(args.wallThickness, 'wallThickness') : undefined,
+      });
+      return {
+        bodyId: body.id,
+        filamentLengthM: Number(est.filamentLengthM.toFixed(2)),
+        filamentMassG: Number(est.filamentMassG.toFixed(2)),
+        printTimeMinutes: Number(est.printTimeMinutes.toFixed(1)),
+        materialVolumeCm3: Number((est.materialVolumeMm3 / 1000).toFixed(2)),
+        infill: est.infill,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'recommend_orientation',
+    description: 'Recommend a build orientation that minimizes support material for a body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        thresholdDeg: { type: 'number', description: 'Overhang support-angle threshold (default 45)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const report = recommendOrientation(body, {
+        thresholdDeg: args.thresholdDeg !== undefined ? assertNumber(args.thresholdDeg, 'thresholdDeg') : undefined,
+      });
+      return {
+        bodyId: body.id,
+        best: {
+          orientation: report.best.label,
+          supportArea: Number(report.best.supportArea.toFixed(2)),
+          supportFaces: report.best.supportFaces,
+          buildHeight: Number(report.best.buildHeight.toFixed(2)),
+        },
+        ranked: report.candidates.map((c) => ({
+          orientation: c.label,
+          supportArea: Number(c.supportArea.toFixed(2)),
+        })),
       };
     },
   });
