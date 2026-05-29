@@ -185,6 +185,34 @@ describe('builtin analysis tools', () => {
     expect(result.vertices).toBe(8);
   });
 
+  it('import_mesh loads an OBJ string into the scene', async () => {
+    useStore.setState({ bodies: [], directBodies: [] });
+    const obj = ['o tri', 'v 0 0 0', 'v 1 0 0', 'v 0 1 0', 'f 1 2 3'].join('\n');
+    const tool = getTool('import_mesh')!;
+    const result = (await tool.execute({ content: obj })) as { faces: number; vertices: number };
+    expect(result.faces).toBe(1);
+    expect(result.vertices).toBe(3);
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
+  it('import_mesh auto-detects ASCII STL', async () => {
+    useStore.setState({ bodies: [], directBodies: [] });
+    const stl = [
+      'solid s',
+      ' facet normal 0 0 1',
+      '  outer loop',
+      '   vertex 0 0 0',
+      '   vertex 1 0 0',
+      '   vertex 0 1 0',
+      '  endloop',
+      ' endfacet',
+      'endsolid s',
+    ].join('\n');
+    const tool = getTool('import_mesh')!;
+    const result = (await tool.execute({ content: stl })) as { faces: number };
+    expect(result.faces).toBe(1);
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');

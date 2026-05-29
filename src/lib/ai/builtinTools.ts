@@ -3,6 +3,7 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices } from '../geometry/operations';
 import { createBox, createCylinder, createSphere, createCone, createTorus } from '../geometry/brep';
+import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
@@ -429,6 +430,31 @@ export function registerBuiltinTools(): void {
       const result = applyMirror(body, plane);
       store.addDirectBody(result);
       return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'import_mesh',
+    description: 'Import an ASCII STL or OBJ mesh from text and add it to the scene (format auto-detected).',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'The STL (ASCII) or OBJ file contents' },
+        format: { type: 'string', enum: ['stl', 'obj'], description: 'Override format detection' },
+      },
+      required: ['content'],
+    },
+    execute: async (args) => {
+      const content = assertString(args.content, 'content');
+      let format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj'] as const, 'format') : undefined;
+      if (!format) {
+        const head = content.trimStart().slice(0, 200).toLowerCase();
+        format = head.startsWith('solid') && content.includes('facet') ? 'stl' : 'obj';
+      }
+      const body = format === 'stl' ? importSTLAscii(content) : importOBJ(content);
+      if (body.faces.length === 0) throw new Error('No faces parsed from the mesh');
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id, faces: body.faces.length, vertices: body.vertices.length };
     },
   });
 
