@@ -136,3 +136,14 @@ See the original design document for full tech stack rationale. Key choices:
 ## Changelog
 
 - `2026-05-29`: Initial scaffold — Tauri 2 + React 19 + Vite 8 + Three.js + Zustand + TailwindCSS
+- `2026-05-29`: Hardening pass — fixed compile/test blockers and added build automation:
+  - Removed duplicate `computeVertexDistancePercentiles` in `brep.ts` (was breaking `tsc`/esbuild)
+  - Fixed sketch solver `applyDistance` (aliasing + wrong sign) and symmetric extrude offset
+  - `createBox` now names its body `Box`; fillet retains original faces; feature tree falls
+    back to an explicit profile when the parent sketch is empty
+  - `FeatureEditor` no longer mutates store state — added `updateFeature` store/tree action
+  - Added jsdom test environment (`vitest.config.ts`); all 192 unit tests pass
+  - Added `@tauri-apps/api` + plugin packages + CLI; created `capabilities/default.json`,
+    app icons, and the missing `dirs` crate; `cargo check`/`clippy`/`fmt` clean
+  - Added `.github/workflows/ci.yml` (lint/typecheck/test/build + Rust checks) and
+    `release.yml` (macOS arm64/x64, Windows, Linux desktop clients via tauri-action)

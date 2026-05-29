@@ -52,27 +52,32 @@ export function ViewportCanvas() {
   const dirtyRef = useRef(true);
   const frameIdRef2 = useRef<number>(0);
 
-  const animate = useCallback(() => {
-    frameIdRef2.current = requestAnimationFrame(animate);
-    const controls = controlsRef.current;
-    if (controls) {
-      const moved = controls.update();
-      if (moved) dirtyRef.current = true;
-    }
-    if (dirtyRef.current) {
-      const renderer = rendererRef.current;
-      const scene = sceneRef.current;
-      const camera = cameraRef.current;
-      if (renderer && scene && camera) {
-        renderer.render(scene, camera);
-      }
-      dirtyRef.current = false;
-    }
-  }, []);
-
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    const animate = () => {
+      frameIdRef2.current = requestAnimationFrame(animate);
+      const controls = controlsRef.current;
+      if (controls) {
+        const moved = controls.update();
+        if (moved) dirtyRef.current = true;
+      }
+      if (dirtyRef.current) {
+        const renderer = rendererRef.current;
+        const scene = sceneRef.current;
+        const camera = cameraRef.current;
+        if (renderer && scene && camera) {
+          renderer.render(scene, camera);
+        }
+        dirtyRef.current = false;
+      }
+    };
+
+    // Capture the shared sketch materials so the cleanup disposes the exact
+    // instances this effect set up (refs are stable across the component life).
+    const lineMat = sketchLineMatRef.current;
+    const pointMat = sketchPointMatRef.current;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -147,14 +152,14 @@ export function ViewportCanvas() {
       ro.disconnect();
       controls.dispose();
       // Dispose shared sketch materials
-      sketchLineMatRef.current.dispose();
-      sketchPointMatRef.current.dispose();
+      lineMat.dispose();
+      pointMat.dispose();
       renderer.dispose();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [animate]);
+  }, []);
 
   useEffect(() => {
     const camera = cameraRef.current;

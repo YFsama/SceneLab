@@ -18,7 +18,7 @@ export async function callNative(
   if (!isTauri()) {
     throw new Error(`Cannot call native command "${cmd}" outside Tauri`);
   }
-  // Dynamic import only available inside Tauri
-  const mod = await import(/* @vite-ignore */ '@tauri-apps/api/core' as string);
-  return mod.invoke(cmd, args);
+  // Imported lazily so browser-only builds never pull in the Tauri runtime.
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke(cmd, args);
 }

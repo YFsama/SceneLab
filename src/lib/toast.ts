@@ -27,6 +27,11 @@ export function getToasts() {
   return [...toasts];
 }
 
+export function clearToasts() {
+  toasts = [];
+  notify();
+}
+
 export function showToast(message: string, type: ToastType = 'info', duration = 3000) {
   const id = nextId++;
   toasts = [...toasts, { id, type, message, duration }];

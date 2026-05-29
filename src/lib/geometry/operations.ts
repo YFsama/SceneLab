@@ -63,19 +63,11 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
     );
   }
 
-  // Rebuild faces, skipping faces that were filleted
+  // A fillet rounds an edge: the adjacent faces are retained (a real kernel
+  // would trim them back), and a blend face is inserted along each edge. Keep
+  // every original face and add the fillet faces on top.
   for (const face of body.faces) {
-    const hasFilletedEdge = face.vertices.some((_, i) => {
-      const next = (i + 1) % face.vertices.length;
-      const v1 = face.vertices[i]!;
-      const v2 = face.vertices[next]!;
-      return body.edges.some(
-        (e) => edgeSet.has(e.id) && edgeMatchesPoints(e, v1, v2),
-      );
-    });
-    if (!hasFilletedEdge) {
-      newFaces.push(face);
-    }
+    newFaces.push(face);
   }
 
   newFaces.push(...filletFaces);

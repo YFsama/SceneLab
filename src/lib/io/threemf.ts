@@ -26,14 +26,12 @@ export function export3MF(bodies: SolidBody[]): string {
     xml += '        </vertices>\n';
     xml += '        <triangles>\n';
 
-    let triId = 0;
     for (const face of body.faces) {
       for (let i = 1; i < face.vertices.length - 1; i++) {
         const v0 = body.vertices.indexOf(face.vertices[0]!);
         const v1 = body.vertices.indexOf(face.vertices[i]!);
         const v2 = body.vertices.indexOf(face.vertices[i + 1]!);
         xml += `          <triangle v1="${v0}" v2="${v1}" v3="${v2}" />\n`;
-        triId++;
       }
     }
 

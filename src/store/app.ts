@@ -46,6 +46,7 @@ interface AppState {
   featureTree: FeatureTree;
   addFeature: (feature: Feature) => void;
   removeFeature: (id: string) => void;
+  updateFeature: (id: string, mutator: (f: Feature) => Feature) => void;
   recomputeTree: () => void;
   bodies: SolidBody[];
 
@@ -150,6 +151,18 @@ export const useStore = create<AppState>((set, get) => ({
   removeFeature: (id) => {
     const tree = get().featureTree;
     tree.removeFeature(id);
+    tree.recompute();
+    const latestBodies = tree.getLatestBodies();
+    set({
+      featureTree: tree,
+      bodies: latestBodies,
+      objectIds: latestBodies.map((b) => b.id),
+      projectDirty: true,
+    });
+  },
+  updateFeature: (id, mutator) => {
+    const tree = get().featureTree;
+    tree.updateFeature(id, mutator);
     tree.recompute();
     const latestBodies = tree.getLatestBodies();
     set({

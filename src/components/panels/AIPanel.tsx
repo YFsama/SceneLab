@@ -100,7 +100,7 @@ export function AIPanel() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, apiKey]);
+  }, [input, loading, apiKey, visionEnabled, t]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

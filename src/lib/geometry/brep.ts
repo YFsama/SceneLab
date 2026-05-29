@@ -15,8 +15,11 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
   const dirLen = Math.sqrt(direction.x ** 2 + direction.y ** 2 + direction.z ** 2);
   if (dirLen < 1e-10) throw new Error('Direction vector cannot be zero');
 
-  const halfDist = symmetric ? distance / 2 : distance;
-  const offset = symmetric ? halfDist : distance;
+  // The top face is always the full `distance` away from the bottom along the
+  // direction. For a symmetric extrude both faces are then shifted back by half
+  // the distance so the profile plane ends up centered between them.
+  const halfDist = distance / 2;
+  const offset = distance;
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
@@ -213,12 +216,15 @@ export function createBox(width: number, height: number, depth: number): SolidBo
     { x: -hw, y: 0, z: hd },
   ];
 
-  return createExtrude({
-    profile,
-    direction: { x: 0, y: 1, z: 0 },
-    distance: height,
-    symmetric: false,
-  });
+  return {
+    ...createExtrude({
+      profile,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: height,
+      symmetric: false,
+    }),
+    name: 'Box',
+  };
 }
 
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
@@ -2972,60 +2978,5 @@ export function computeVertexValencePercentiles(body: SolidBody): VertexValenceP
     iqr,
     whiskerLow: Math.max(whiskerLow, valences[0]!),
     whiskerHigh: Math.min(whiskerHigh, valences[valences.length - 1]!),
-  };
-}
-
-export interface VertexDistancePercentiles {
-  p5: number;
-  p10: number;
-  p25: number;
-  p50: number;
-  p75: number;
-  p90: number;
-  p95: number;
-  iqr: number;
-  whiskerLow: number;
-  whiskerHigh: number;
-}
-
-export function computeVertexDistancePercentiles(body: SolidBody): VertexDistancePercentiles {
-  const centroid = computeCentroid(body);
-  const distances: number[] = [];
-
-  for (const v of body.vertices) {
-    const dx = v.x - centroid.x;
-    const dy = v.y - centroid.y;
-    const dz = v.z - centroid.z;
-    distances.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
-  }
-
-  distances.sort((a, b) => a - b);
-
-  if (distances.length === 0) {
-    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
-  }
-
-  const getPercentile = (p: number) => {
-    const idx = Math.floor(distances.length * p / 100);
-    return distances[Math.min(idx, distances.length - 1)]!;
-  };
-
-  const p5 = getPercentile(5);
-  const p10 = getPercentile(10);
-  const p25 = getPercentile(25);
-  const p50 = getPercentile(50);
-  const p75 = getPercentile(75);
-  const p90 = getPercentile(90);
-  const p95 = getPercentile(95);
-
-  const iqr = p75 - p25;
-  const whiskerLow = p25 - 1.5 * iqr;
-  const whiskerHigh = p75 + 1.5 * iqr;
-
-  return {
-    p5, p10, p25, p50, p75, p90, p95,
-    iqr,
-    whiskerLow: Math.max(whiskerLow, distances[0]!),
-    whiskerHigh: Math.min(whiskerHigh, distances[distances.length - 1]!),
   };
 }

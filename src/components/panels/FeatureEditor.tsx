@@ -10,7 +10,7 @@ export function FeatureEditor() {
   const { t } = useT();
   const featureTree = useStore((s) => s.featureTree);
   const removeFeature = useStore((s) => s.removeFeature);
-  const recomputeTree = useStore((s) => s.recomputeTree);
+  const updateFeature = useStore((s) => s.updateFeature);
 
   const [editingFeature, setEditingFeature] = useState<Feature | null>(null);
 
@@ -18,12 +18,7 @@ export function FeatureEditor() {
   useFocusRestore();
 
   const handleToggleSuppress = (feature: Feature) => {
-    const updated = { ...feature, suppressed: !feature.suppressed };
-    const idx = featureTree.features.findIndex((f) => f.id === feature.id);
-    if (idx >= 0) {
-      featureTree.features[idx] = updated;
-      recomputeTree();
-    }
+    updateFeature(feature.id, (f) => ({ ...f, suppressed: !f.suppressed }));
   };
 
   return (
@@ -90,16 +85,13 @@ function FeatureEditDialog({
   feature: Feature;
   onClose: () => void;
 }) {
-  const recomputeTree = useStore((s) => s.recomputeTree);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEscapeClose(onClose, true);
   useFocusRestore();
 
   if (feature.type === 'extrude') {
-    return (
-      <ExtrudeEditDialog feature={feature} onClose={onClose} recompute={recomputeTree} />
-    );
+    return <ExtrudeEditDialog feature={feature} onClose={onClose} />;
   }
 
   return (
@@ -130,12 +122,11 @@ function FeatureEditDialog({
 function ExtrudeEditDialog({
   feature,
   onClose,
-  recompute,
 }: {
   feature: ExtrudeFeature;
   onClose: () => void;
-  recompute: () => void;
 }) {
+  const updateFeature = useStore((s) => s.updateFeature);
   const [distance, setDistance] = useState(feature.params.distance);
   const [symmetric, setSymmetric] = useState(feature.params.symmetric ?? false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -144,10 +135,11 @@ function ExtrudeEditDialog({
   useFocusRestore();
 
   const handleApply = () => {
-    // Create new params object to avoid direct mutation
-    const newParams = { ...feature.params, distance, symmetric };
-    Object.assign(feature.params, newParams);
-    recompute();
+    updateFeature(feature.id, (f) =>
+      f.type === 'extrude'
+        ? { ...f, params: { ...f.params, distance, symmetric } }
+        : f,
+    );
     onClose();
   };
 

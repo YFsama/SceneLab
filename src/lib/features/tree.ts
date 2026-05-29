@@ -29,6 +29,14 @@ export class FeatureTree {
     return this.features.find((f) => f.id === id);
   }
 
+  /** Replace a feature in place via a pure mutator (no external state mutation). */
+  updateFeature(id: string, mutator: (f: Feature) => Feature): void {
+    const idx = this.features.findIndex((f) => f.id === id);
+    if (idx !== -1) {
+      this.features[idx] = mutator(this.features[idx]!);
+    }
+  }
+
   getResult(id: string): FeatureResult | undefined {
     return this.results.get(id);
   }
@@ -97,6 +105,11 @@ export class FeatureTree {
     const profilePoints = extractProfileFromSketch(parentSketch.sketch, solved);
 
     if (profilePoints.length < 3) {
+      // The sketch did not yield a usable profile (e.g. it is empty). Fall back
+      // to an explicit profile carried on the feature params, if present.
+      if (feature.params.profile.length >= 3) {
+        return { bodies: [createExtrude(feature.params)] };
+      }
       throw new Error('Sketch profile has fewer than 3 points');
     }
 

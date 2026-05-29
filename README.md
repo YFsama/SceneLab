@@ -58,13 +58,41 @@ src/
 ## Scripts
 
 ```bash
-npm run dev          # Start dev server
+npm run dev          # Start dev server (web)
 npm run build        # tsc + vite build
 npm run lint         # ESLint
-npm run test         # vitest
+npm run test         # vitest (watch)
+npm run test:run     # vitest (single run, CI)
 npm run test:e2e     # Playwright
 npm run preview      # Preview production build
+npm run tauri dev    # Run the desktop app (Tauri shell)
+npm run tauri build  # Build a desktop installer for the current OS
 ```
+
+## Desktop builds & CI
+
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `ci.yml` | push to `main`, every PR | Frontend lint + typecheck + vitest + build, and Tauri `fmt`/`clippy`/`check` |
+| `release.yml` | push tag `v*`, or manual dispatch | Builds desktop clients for **macOS (arm64 + x64), Windows, and Linux** |
+
+`release.yml` uses [`tauri-action`](https://github.com/tauri-apps/tauri-action):
+
+- **Tag push** (`git tag v0.1.0 && git push --tags`) → installers are attached to a
+  draft GitHub Release for that tag.
+- **Manual run** (Actions tab → *Release* → *Run workflow*) → installers are uploaded
+  as downloadable workflow artifacts (no release is created).
+
+Output bundles per platform: `.dmg`/`.app` (macOS), `.msi`/`.exe` (Windows),
+`.AppImage`/`.deb`/`.rpm` (Linux).
+
+> Code signing is not configured. To sign/notarize, add the relevant secrets
+> (`APPLE_*`, `TAURI_SIGNING_*`, Windows cert) and pass them to `tauri-action`.
+
+Desktop icons are generated from `src-tauri/icon-source.svg` via
+`npm run tauri icon src-tauri/icon-source.svg`.
 
 ## Architecture Principles
 

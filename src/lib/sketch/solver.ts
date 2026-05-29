@@ -55,7 +55,7 @@ function applyConstraint(
     case 'equal':
       return applyEqual(constraint, points, entities);
     case 'distance':
-      return applyDistance(constraint, points, entities);
+      return applyDistance(constraint, points);
   }
 }
 
@@ -266,7 +266,6 @@ function applyEqual(
 function applyDistance(
   constraint: SketchConstraint,
   points: Map<string, SolverPoint>,
-  _entities: Map<string, SketchEntity>,
 ): number {
   const targetDist = constraint.value;
   if (targetDist === undefined) return 0;
@@ -285,20 +284,26 @@ function applyDistance(
   const diff = currentDist - targetDist;
   const ratio = diff / currentDist / 2;
 
+  // Capture the separation vector before mutating either point — reading the
+  // live coordinates mid-update would feed an already-moved p1 back into p2.
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+
   let maxDelta = 0;
   if (!p1.fixed && !p2.fixed) {
-    p1.x += (p1.x - p2.x) * ratio;
-    p1.y += (p1.y - p2.y) * ratio;
-    p2.x -= (p1.x - p2.x) * ratio;
-    p2.y -= (p1.y - p2.y) * ratio;
+    // Move both endpoints toward each other (or apart) by half the error.
+    p1.x -= dx * ratio;
+    p1.y -= dy * ratio;
+    p2.x += dx * ratio;
+    p2.y += dy * ratio;
     maxDelta = Math.abs(diff) / 2;
   } else if (!p1.fixed) {
-    p1.x += (p1.x - p2.x) * ratio * 2;
-    p1.y += (p1.y - p2.y) * ratio * 2;
+    p1.x -= dx * ratio * 2;
+    p1.y -= dy * ratio * 2;
     maxDelta = Math.abs(diff);
   } else if (!p2.fixed) {
-    p2.x -= (p2.x - p1.x) * ratio * 2;
-    p2.y -= (p2.y - p1.y) * ratio * 2;
+    p2.x += dx * ratio * 2;
+    p2.y += dy * ratio * 2;
     maxDelta = Math.abs(diff);
   }
 

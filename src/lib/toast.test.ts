@@ -1,7 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { showToast, subscribe, getToasts } from './toast';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { showToast, subscribe, getToasts, clearToasts } from './toast';
 
 describe('toast', () => {
+  beforeEach(() => {
+    clearToasts();
+  });
+
   it('should start with empty toasts', () => {
     expect(getToasts()).toEqual([]);
   });
