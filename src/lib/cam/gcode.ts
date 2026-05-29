@@ -67,25 +67,24 @@ export function generateMultiToolGCode(toolpaths: Toolpath[]): string {
   return sections.join('\n');
 }
 
-/** Estimate machining time in minutes */
+const RAPID_RATE = 5000; // mm/min
+
+/** Estimate machining time in minutes. Returns 0 for non-positive feed rates. */
 export function estimateMachiningTime(toolpath: Toolpath): number {
   let totalTime = 0;
 
-  // Rapid moves at ~5000 mm/min
+  // Rapid moves at the rapid rate.
   for (let i = 1; i < toolpath.rapidMoves.length; i++) {
-    const prev = toolpath.rapidMoves[i - 1]!;
-    const curr = toolpath.rapidMoves[i]!;
-    const dist = distance(prev, curr);
-    totalTime += dist / 5000;
+    totalTime += distance(toolpath.rapidMoves[i - 1]!, toolpath.rapidMoves[i]!) / RAPID_RATE;
   }
 
-  // Cutting moves at feed rate
+  // Cutting moves at the (per-move or default) feed rate, guarding feed > 0.
   for (let i = 1; i < toolpath.cuttingMoves.length; i++) {
-    const prev = toolpath.cuttingMoves[i - 1]!;
     const curr = toolpath.cuttingMoves[i]!;
-    const dist = distance(prev, curr);
     const feed = curr.feedRate ?? toolpath.params.feedRate;
-    totalTime += dist / feed;
+    if (feed > 0) {
+      totalTime += distance(toolpath.cuttingMoves[i - 1]!, curr) / feed;
+    }
   }
 
   return totalTime;

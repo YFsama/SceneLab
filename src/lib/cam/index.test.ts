@@ -81,4 +81,16 @@ describe('CAM module exports', () => {
     const time = estimateMachiningTime(tp);
     expect(time).toBeGreaterThan(0);
   });
+
+  it('estimateMachiningTime stays finite when the feed rate is zero', () => {
+    const tool = getTool('em-6mm')!;
+    const tp = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } },
+      tool,
+      { feedRate: 0, plungeRate: 0, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -5 },
+    );
+    const time = estimateMachiningTime(tp);
+    expect(Number.isFinite(time)).toBe(true);
+    expect(time).toBeGreaterThanOrEqual(0);
+  });
 });
