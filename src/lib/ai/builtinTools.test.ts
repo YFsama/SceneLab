@@ -129,6 +129,16 @@ describe('builtin analysis tools', () => {
     expect(result.best.supportArea).toBe(0); // a box needs no support
   });
 
+  it('draw_line returns an entity id, then add_constraint uses it', async () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    const line = getTool('draw_line')!;
+    const a = (await line.execute({ x1: 0, y1: 0, x2: 10, y2: 0 })) as { entityId: string };
+    const b = (await line.execute({ x1: 0, y1: 5, x2: 10, y2: 5 })) as { entityId: string };
+    expect(a.entityId).toBeTruthy();
+    await getTool('add_constraint')!.execute({ type: 'horizontal', entityIds: [a.entityId, b.entityId] });
+    expect(useStore.getState().currentSketch!.constraints.size).toBe(1);
+  });
+
   it('draw_arc adds an arc entity to the current sketch', async () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     const tool = getTool('draw_arc')!;

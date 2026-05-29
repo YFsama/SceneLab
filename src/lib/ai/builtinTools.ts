@@ -82,14 +82,13 @@ export function registerBuiltinTools(): void {
       required: ['x1', 'y1', 'x2', 'y2'],
     },
     execute: async (args) => {
-      const store = useStore.getState();
-      store.addSketchLine(
+      const id = useStore.getState().addSketchLine(
         assertNumber(args.x1, 'x1'),
         assertNumber(args.y1, 'y1'),
         assertNumber(args.x2, 'x2'),
         assertNumber(args.y2, 'y2'),
       );
-      return { success: true };
+      return { success: true, entityId: id };
     },
   });
 
@@ -107,14 +106,13 @@ export function registerBuiltinTools(): void {
       required: ['x1', 'y1', 'x2', 'y2'],
     },
     execute: async (args) => {
-      const store = useStore.getState();
-      store.addSketchRect(
+      const id = useStore.getState().addSketchRect(
         assertNumber(args.x1, 'x1'),
         assertNumber(args.y1, 'y1'),
         assertNumber(args.x2, 'x2'),
         assertNumber(args.y2, 'y2'),
       );
-      return { success: true };
+      return { success: true, entityId: id };
     },
   });
 
@@ -131,13 +129,12 @@ export function registerBuiltinTools(): void {
       required: ['cx', 'cy', 'radius'],
     },
     execute: async (args) => {
-      const store = useStore.getState();
-      store.addSketchCircle(
+      const id = useStore.getState().addSketchCircle(
         assertNumber(args.cx, 'cx'),
         assertNumber(args.cy, 'cy'),
         assertNumber(args.radius, 'radius'),
       );
-      return { success: true };
+      return { success: true, entityId: id };
     },
   });
 
@@ -157,12 +154,43 @@ export function registerBuiltinTools(): void {
     },
     execute: async (args) => {
       const deg = Math.PI / 180;
-      useStore.getState().addSketchArc(
+      const id = useStore.getState().addSketchArc(
         assertNumber(args.cx, 'cx'),
         assertNumber(args.cy, 'cy'),
         assertNumber(args.radius, 'radius'),
         assertNumber(args.startAngle, 'startAngle') * deg,
         assertNumber(args.endAngle, 'endAngle') * deg,
+      );
+      return { success: true, entityId: id };
+    },
+  });
+
+  registerTool({
+    name: 'add_constraint',
+    description: 'Add a sketch constraint between entities (use the entityIds returned by draw_* tools).',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['horizontal', 'vertical', 'parallel', 'equal', 'distance'],
+          description: 'Constraint type',
+        },
+        entityIds: { type: 'array', items: { type: 'string' }, description: 'Entity IDs the constraint applies to' },
+        value: { type: 'number', description: 'Target value (for distance constraints)' },
+      },
+      required: ['type', 'entityIds'],
+    },
+    execute: async (args) => {
+      const type = assertEnum(args.type, ['horizontal', 'vertical', 'parallel', 'equal', 'distance'] as const, 'type');
+      const entityIds = args.entityIds;
+      if (!Array.isArray(entityIds) || !entityIds.every((e) => typeof e === 'string')) {
+        throw new Error('Expected entityIds to be a string array');
+      }
+      useStore.getState().addSketchConstraint(
+        type,
+        entityIds as string[],
+        args.value !== undefined ? assertNumber(args.value, 'value') : undefined,
       );
       return { success: true };
     },

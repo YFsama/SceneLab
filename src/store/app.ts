@@ -36,10 +36,10 @@ interface AppState {
   // Sketch drawing
   drawStart: { x: number; y: number } | null;
   setDrawStart: (p: { x: number; y: number } | null) => void;
-  addSketchLine: (x1: number, y1: number, x2: number, y2: number) => void;
-  addSketchRect: (x1: number, y1: number, x2: number, y2: number) => void;
-  addSketchCircle: (cx: number, cy: number, radius: number) => void;
-  addSketchArc: (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => void;
+  addSketchLine: (x1: number, y1: number, x2: number, y2: number) => string;
+  addSketchRect: (x1: number, y1: number, x2: number, y2: number) => string;
+  addSketchCircle: (cx: number, cy: number, radius: number) => string;
+  addSketchArc: (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => string;
   addSketchConstraint: (type: import('../lib/sketch/types').ConstraintType, entityIds: string[], value?: number) => void;
 
   // Feature tree
@@ -134,30 +134,35 @@ export const useStore = create<AppState>((set, get) => {
 
   addSketchLine: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addLine(sketch, x1, y1, x2, y2);
+    if (!sketch) return '';
+    const e = addLine(sketch, x1, y1, x2, y2);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    return e.id;
   },
 
   addSketchRect: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addRectangle(sketch, x1, y1, x2, y2);
+    if (!sketch) return '';
+    const e = addRectangle(sketch, x1, y1, x2, y2);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    // A rectangle is decomposed into lines; return the first edge's id.
+    return e.lines[0]?.id ?? '';
   },
 
   addSketchCircle: (cx, cy, radius) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addCircle(sketch, cx, cy, radius);
+    if (!sketch) return '';
+    const e = addCircle(sketch, cx, cy, radius);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    return e.id;
   },
 
   addSketchArc: (cx, cy, radius, startAngle, endAngle) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addArc(sketch, cx, cy, radius, startAngle, endAngle);
+    if (!sketch) return '';
+    const e = addArc(sketch, cx, cy, radius, startAngle, endAngle);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    return e.id;
   },
 
   addSketchConstraint: (type, entityIds, value) => {
