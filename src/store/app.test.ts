@@ -27,6 +27,15 @@ describe('app store', () => {
     useStore.getState().setTheme('dark');
   });
 
+  it('should persist theme and locale to localStorage', () => {
+    useStore.getState().setTheme('high-contrast');
+    expect(localStorage.getItem('scenelab.theme')).toBe('high-contrast');
+    useStore.getState().setLocale('zh');
+    expect(localStorage.getItem('scenelab.locale')).toBe('zh');
+    useStore.getState().setTheme('dark');
+    useStore.getState().setLocale('en');
+  });
+
   it('should set locale', () => {
     useStore.getState().setLocale('zh');
     expect(useStore.getState().locale).toBe('zh');

@@ -93,6 +93,12 @@ export const useStore = create<AppState>((set, get) => {
   // Rebuild the render list from the feature tree (minus hidden bodies) plus
   // any direct bodies, keeping objectIds in sync. Called after every change
   // that affects geometry.
+  const persist = (key: string, value: string) => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+  };
+  const stored = (key: string): string | null =>
+    typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+
   const recombine = () => {
     const { featureTree, directBodies } = get();
     const bodies = [...featureTree.getLatestBodies(), ...directBodies];
@@ -100,10 +106,16 @@ export const useStore = create<AppState>((set, get) => {
   };
 
   return {
-  theme: 'dark',
-  locale: 'en',
-  setTheme: (theme) => set({ theme }),
-  setLocale: (locale) => set({ locale }),
+  theme: (stored('scenelab.theme') as ThemeMode) ?? 'dark',
+  locale: (stored('scenelab.locale') as Locale) ?? 'en',
+  setTheme: (theme) => {
+    set({ theme });
+    persist('scenelab.theme', theme);
+  },
+  setLocale: (locale) => {
+    set({ locale });
+    persist('scenelab.locale', locale);
+  },
 
   workspace: 'model',
   setWorkspace: (workspace) => set({ workspace }),
