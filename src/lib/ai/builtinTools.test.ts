@@ -3,6 +3,7 @@ import { registerBuiltinTools } from './builtinTools';
 import { getTool, getAllTools, clearTools } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createBox } from '../geometry';
+import { createSketch, addRectangle } from '../sketch/engine';
 
 describe('registerBuiltinTools registration', () => {
   it('registers the full tool set with no name collisions', () => {
@@ -261,6 +262,16 @@ describe('builtin analysis tools', () => {
     const result = (await tool.execute({})) as { holeCount: number; boundaryEdges: number };
     expect(result.holeCount).toBe(0);
     expect(result.boundaryEdges).toBe(0);
+  });
+
+  it('revolve turns the current sketch into a body', async () => {
+    useStore.setState({ bodies: [], directBodies: [] });
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 2, 0, 4, 2);
+    useStore.getState().setCurrentSketch(sketch);
+    const tool = getTool('revolve')!;
+    await tool.execute({ angleDeg: 360 });
+    expect(useStore.getState().bodies).toHaveLength(1);
   });
 
   it('throws a clear error when the body is missing', async () => {

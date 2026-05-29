@@ -303,6 +303,22 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'revolve',
+    description: 'Revolve the current sketch around the Y axis to create a solid. Call after creating a sketch profile.',
+    parameters: {
+      type: 'object',
+      properties: {
+        angleDeg: { type: 'number', description: 'Revolution angle in degrees (default 360)' },
+      },
+    },
+    execute: async (args) => {
+      const angleDeg = args.angleDeg !== undefined ? assertNumber(args.angleDeg, 'angleDeg') : 360;
+      useStore.getState().performRevolve((angleDeg * Math.PI) / 180);
+      return { success: true };
+    },
+  });
+
+  registerTool({
     name: 'fillet',
     description: 'Apply fillet (rounded edges) to selected edges of a body',
     parameters: {

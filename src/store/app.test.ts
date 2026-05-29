@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature } from '../lib/features/tree';
-import { createBox } from '../lib/geometry';
+import { createBox, computeVolume } from '../lib/geometry';
+import { createSketch, addRectangle } from '../lib/sketch/engine';
 
 describe('app store', () => {
   it('should have default theme', () => {
@@ -134,6 +135,19 @@ describe('app store — direct bodies', () => {
 
     useStore.getState().addDirectBody(createBox(2, 2, 2));
     expect(useStore.getState().bodies).toHaveLength(2); // tree + direct
+  });
+
+  it('performRevolve turns the current sketch into a solid of revolution', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 2, 0, 4, 2); // section offset from the Y axis
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performRevolve(Math.PI * 2);
+
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    // Pappus: area 4 × 2π × centroidRadius 3 = 24π
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeGreaterThan(24 * Math.PI * 0.95);
+    expect(useStore.getState().currentSketch).toBeNull();
   });
 
   it('replaceBody edits a direct body in place and survives recompute', () => {

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
-import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../lib/features/tree';
+import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import type { SolidBody } from '../lib/geometry/types';
 
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
@@ -61,6 +61,7 @@ interface AppState {
   showExtrudeDialog: boolean;
   setShowExtrudeDialog: (v: boolean) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
+  performRevolve: (angle: number) => void;
 
   // Viewport
   viewDirection: ViewDirection;
@@ -233,6 +234,28 @@ export const useStore = create<AppState>((set, get) => {
       currentSketch: null,
       workspace: 'model',
       showExtrudeDialog: false,
+      projectDirty: true,
+    });
+    recombine();
+  },
+
+  performRevolve: (angle) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return;
+
+    const sketchFeat = createSketchFeature(sketch);
+    const revolveFeat = createRevolveFeature(angle, [sketchFeat.id]);
+
+    const tree = get().featureTree;
+    tree.addFeature(sketchFeat);
+    tree.addFeature(revolveFeat);
+    tree.recompute();
+
+    set({
+      featureTree: tree,
+      sketchActive: false,
+      currentSketch: null,
+      workspace: 'model',
       projectDirty: true,
     });
     recombine();
