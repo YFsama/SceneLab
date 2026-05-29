@@ -30,7 +30,7 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
   const { profile, direction, distance, symmetric } = params;
   const n = profile.length;
   if (n < 3) throw new Error('Profile must have at least 3 points');
-  if (distance <= 0) throw new Error('Distance must be positive');
+  if (!Number.isFinite(distance) || distance <= 0) throw new Error('Distance must be positive');
 
   // Validate direction vector is not zero
   const dirLen = Math.sqrt(direction.x ** 2 + direction.y ** 2 + direction.z ** 2);
@@ -263,6 +263,9 @@ export function createRevolve(params: RevolveParams): SolidBody {
 }
 
 export function createBox(width: number, height: number, depth: number): SolidBody {
+  if (![width, height, depth].every((d) => Number.isFinite(d) && d > 0)) {
+    throw new Error('Box dimensions must be positive');
+  }
   const hw = width / 2;
   const hd = depth / 2;
 

@@ -122,6 +122,13 @@ describe('createBox', () => {
     expect(bb.max.y - bb.min.y).toBeCloseTo(3);
     expect(bb.max.z - bb.min.z).toBeCloseTo(4);
   });
+
+  it('rejects non-positive or non-finite dimensions', () => {
+    expect(() => createBox(0, 1, 1)).toThrow('positive');
+    expect(() => createBox(-1, 1, 1)).toThrow('positive');
+    expect(() => createBox(NaN, 1, 1)).toThrow('positive');
+    expect(() => createBox(Infinity, 1, 1)).toThrow('positive');
+  });
 });
 
 describe('computeBoundingBox', () => {
