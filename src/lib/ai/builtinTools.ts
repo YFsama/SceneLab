@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody } from '../geometry/operations';
 import { createBox, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops } from '../geometry/brep';
 import { importSTLAscii, importOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString } from './validate';
@@ -511,6 +511,29 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const r = findBoundaryLoops(body);
       return { bodyId: body.id, holeCount: r.holeCount, boundaryEdges: r.boundaryEdgeCount };
+    },
+  });
+
+  registerTool({
+    name: 'move_body',
+    description: 'Translate a body by an offset (mm) — e.g. to arrange parts on the build plate.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        offset: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Translation offset in mm',
+        },
+      },
+      required: ['offset'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const result = translateBody(body, args.offset as Vec3);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
     },
   });
 

@@ -1,8 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, weldVertices, mergeBodies } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, weldVertices, mergeBodies, translateBody } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume } from './brep';
 import type { SolidBody, Vec3 } from './types';
+
+describe('translateBody', () => {
+  it('shifts the bounding box by the offset and preserves volume', () => {
+    const box = createBox(10, 10, 10);
+    const moved = translateBody(box, { x: 50, y: -20, z: 7 });
+    const bb = computeBoundingBox(moved);
+    expect(bb.min.x).toBeCloseTo(-5 + 50, 5);
+    expect(bb.max.y).toBeCloseTo(10 - 20, 5);
+    expect(bb.min.z).toBeCloseTo(-5 + 7, 5);
+    expect(Math.abs(computeVolume(moved))).toBeCloseTo(Math.abs(computeVolume(box)), 5);
+  });
+});
 
 describe('mergeBodies', () => {
   const shift = (b: SolidBody, d: Vec3): SolidBody => ({

@@ -352,7 +352,8 @@ export function applyMirror(
 
 // --- Helpers ---
 
-function translateBody(body: SolidBody, offset: Vec3, name: string): SolidBody {
+/** Translate a body by an offset vector. */
+export function translateBody(body: SolidBody, offset: Vec3, name: string = body.name): SolidBody {
   const translate = (v: Vec3): Vec3 => ({
     x: v.x + offset.x,
     y: v.y + offset.y,

@@ -220,6 +220,16 @@ describe('builtin analysis tools', () => {
     expect(result.rotated).toBe(true);
   });
 
+  it('move_body translates a direct body in place', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const tool = getTool('move_body')!;
+    await tool.execute({ bodyId: box.id, offset: { x: 100, y: 0, z: 0 } });
+    const moved = useStore.getState().bodies[0]!;
+    const xs = moved.vertices.map((v) => v.x);
+    expect(Math.min(...xs)).toBeCloseTo(95, 5); // -5 + 100
+  });
+
   it('repair_mesh welds and replaces a direct body', async () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });
