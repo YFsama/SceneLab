@@ -157,6 +157,14 @@ describe('applyChamfer', () => {
     const result = applyChamfer(body, [], 0);
     expect(result.id).toBe(body.id);
   });
+
+  it('produces geometry when a chamfer is applied to edges', () => {
+    const body = createBox(10, 10, 10);
+    const edgeIds = body.edges.slice(0, 4).map((e) => e.id);
+    const result = applyChamfer(body, edgeIds, 0.5);
+    expect(result.faces.length).toBeGreaterThan(0);
+    expect(result.vertices.length).toBeGreaterThan(0);
+  });
 });
 
 describe('applyShell', () => {
