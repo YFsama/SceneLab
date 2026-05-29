@@ -1,5 +1,17 @@
-import type { Feature } from '../features/types';
+import type {
+  Feature,
+  SketchFeature,
+  ExtrudeFeature,
+  RevolveFeature,
+  FilletFeature,
+  ChamferFeature,
+  ShellFeature,
+  LinearArrayFeature,
+  CircularArrayFeature,
+  MirrorFeature,
+} from '../features/types';
 import type { SolidBody } from '../geometry/types';
+import type { SketchEntity, SketchConstraint } from '../sketch/types';
 
 export interface ProjectFile {
   version: number;
@@ -73,16 +85,59 @@ function serializeFeatureData(feature: Feature): unknown {
         constraints: Array.from(feature.sketch.constraints.entries()),
       };
     case 'extrude':
-      return feature.params;
     case 'revolve':
-      return feature.params;
     case 'fillet':
-      return feature.params;
     case 'chamfer':
-      return feature.params;
     case 'shell':
+    case 'linearArray':
+    case 'circularArray':
+    case 'mirror':
       return feature.params;
   }
+}
+
+/** Reconstruct Feature objects (incl. sketch Maps) from a loaded project. */
+export function deserializeFeatures(project: ProjectFile): Feature[] {
+  return project.features.map((sf): Feature => {
+    const base = { id: sf.id, name: sf.name, suppressed: sf.suppressed, parentIds: sf.parentIds };
+    switch (sf.type) {
+      case 'sketch': {
+        const d = sf.data as {
+          planeId: string;
+          entities: [string, SketchEntity][];
+          constraints: [string, SketchConstraint][];
+        };
+        return {
+          ...base,
+          type: 'sketch',
+          sketch: {
+            id: `${sf.id}_sketch`,
+            planeId: d.planeId,
+            entities: new Map(d.entities),
+            constraints: new Map(d.constraints),
+          },
+        } as SketchFeature;
+      }
+      case 'extrude':
+        return { ...base, type: 'extrude', params: sf.data } as ExtrudeFeature;
+      case 'revolve':
+        return { ...base, type: 'revolve', params: sf.data } as RevolveFeature;
+      case 'fillet':
+        return { ...base, type: 'fillet', params: sf.data } as FilletFeature;
+      case 'chamfer':
+        return { ...base, type: 'chamfer', params: sf.data } as ChamferFeature;
+      case 'shell':
+        return { ...base, type: 'shell', params: sf.data } as ShellFeature;
+      case 'linearArray':
+        return { ...base, type: 'linearArray', params: sf.data } as LinearArrayFeature;
+      case 'circularArray':
+        return { ...base, type: 'circularArray', params: sf.data } as CircularArrayFeature;
+      case 'mirror':
+        return { ...base, type: 'mirror', params: sf.data } as MirrorFeature;
+      default:
+        throw new Error(`Unknown feature type: ${sf.type}`);
+    }
+  });
 }
 
 export function saveToFile(project: ProjectFile): string {
