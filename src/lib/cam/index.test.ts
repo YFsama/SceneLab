@@ -4,6 +4,35 @@ import {
   generatePocketToolpath, generateContourToolpath, generateDrillToolpath, generateFaceToolpath,
   generateGCode, generateMultiToolGCode, estimateMachiningTime,
 } from './index';
+import { createBox } from '../geometry';
+
+const PARAMS = { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -5 };
+
+describe('CAM toolpath generators (contour/drill/face)', () => {
+  it('generateContourToolpath traces a body outline', () => {
+    const tp = generateContourToolpath(createBox(20, 10, 20), getTool('em-6mm')!, PARAMS);
+    expect(tp.operation).toBe('contour');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+    expect(generateGCode(tp)).toContain('G1');
+  });
+
+  it('generateDrillToolpath visits each hole', () => {
+    const holes = [{ x: 0, y: 0, depth: 5 }, { x: 10, y: 5, depth: 5 }];
+    const tp = generateDrillToolpath(holes, getTool('em-3mm')!, PARAMS);
+    expect(tp.operation).toBe('drill');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+  });
+
+  it('generateFaceToolpath covers the stock top', () => {
+    const tp = generateFaceToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 20, y: 0, z: 20 } },
+      getTool('em-6mm')!,
+      PARAMS,
+    );
+    expect(tp.operation).toBe('face');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+  });
+});
 
 describe('CAM module exports', () => {
   it('should export tool library functions', () => {
