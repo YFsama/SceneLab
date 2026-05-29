@@ -12,7 +12,9 @@ export function AIPanel() {
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState('');
+  const [apiKey, setApiKey] = useState(
+    () => (typeof localStorage !== 'undefined' ? localStorage.getItem('scenelab.apiKey') ?? '' : ''),
+  );
   const [showSettings, setShowSettings] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [visionEnabled, setVisionEnabled] = useState(false);
@@ -29,6 +31,13 @@ export function AIPanel() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Persist the API key locally so it survives reloads.
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    if (apiKey) localStorage.setItem('scenelab.apiKey', apiKey);
+    else localStorage.removeItem('scenelab.apiKey');
+  }, [apiKey]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || loading) return;
