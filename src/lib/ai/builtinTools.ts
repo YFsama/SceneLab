@@ -22,6 +22,7 @@ import {
   scaleToFit,
   orientForPrint,
   arrangeOnPlate,
+  sliceCrossSection,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -828,6 +829,31 @@ export function registerBuiltinTools(): void {
         volumeCm3: Number(est.volumeCm3.toFixed(3)),
         massGrams: Number(est.massGrams.toFixed(3)),
         density: est.density,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'slice_cross_section',
+    description:
+      'Cross-section of a body at a height along the build axis (+Y): filled area (mm²) and contour/perimeter length (mm). Useful for layer preview, finding the thinnest section, or per-layer estimates.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        height: { type: 'number', description: 'Cut height in mm along +Y' },
+      },
+      required: ['height'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const r = sliceCrossSection(body, assertNumber(args.height, 'height'));
+      return {
+        bodyId: body.id,
+        height: r.height,
+        areaMm2: Number(r.area.toFixed(3)),
+        perimeterMm: Number(r.perimeter.toFixed(3)),
+        segments: r.segments,
       };
     },
   });
