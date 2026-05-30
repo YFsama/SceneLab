@@ -1,7 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity } from './brep';
+
+describe('computeMassProperties', () => {
+  it('matches the closed-form inertia tensor of a solid box', () => {
+    const dx = 20;
+    const dy = 10;
+    const dz = 20;
+    const mp = computeMassProperties(createBox(dx, dy, dz), 1);
+    const m = dx * dy * dz; // density 1
+    expect(mp.volume).toBeCloseTo(m, 4);
+    expect(mp.mass).toBeCloseTo(m, 4);
+    // Closed form for a centered box: Ixx = m(dy²+dz²)/12, etc.
+    expect(mp.inertia.ixx).toBeCloseTo((m * (dy * dy + dz * dz)) / 12, 2);
+    expect(mp.inertia.iyy).toBeCloseTo((m * (dx * dx + dz * dz)) / 12, 2);
+    expect(mp.inertia.izz).toBeCloseTo((m * (dx * dx + dy * dy)) / 12, 2);
+    // Symmetric box → no products of inertia.
+    expect(mp.inertia.ixy).toBeCloseTo(0, 4);
+    expect(mp.inertia.iyz).toBeCloseTo(0, 4);
+    expect(mp.inertia.ixz).toBeCloseTo(0, 4);
+  });
+
+  it('scales mass and inertia linearly with density', () => {
+    const box = createBox(10, 10, 10);
+    const a = computeMassProperties(box, 1);
+    const b = computeMassProperties(box, 2.5);
+    expect(b.mass).toBeCloseTo(a.mass * 2.5, 4);
+    expect(b.inertia.ixx).toBeCloseTo(a.inertia.ixx * 2.5, 2);
+  });
+
+  it('inertia about the CoM is invariant under translation', () => {
+    const box = createBox(8, 12, 6);
+    const at0 = computeMassProperties(box, 1);
+    const moved = {
+      ...box,
+      vertices: box.vertices.map((v) => ({ x: v.x + 100, y: v.y - 50, z: v.z + 7 })),
+      faces: box.faces.map((f) => ({ ...f, vertices: f.vertices.map((v) => ({ x: v.x + 100, y: v.y - 50, z: v.z + 7 })) })),
+    };
+    const shifted = computeMassProperties(moved, 1);
+    expect(shifted.inertia.ixx).toBeCloseTo(at0.inertia.ixx, 2);
+    expect(shifted.inertia.izz).toBeCloseTo(at0.inertia.izz, 2);
+  });
+});
 
 describe('computeConvexity', () => {
   it('convex primitives are convex, the torus is not', () => {

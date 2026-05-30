@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -828,6 +828,40 @@ export function registerBuiltinTools(): void {
         volumeCm3: Number(est.volumeCm3.toFixed(3)),
         massGrams: Number(est.massGrams.toFixed(3)),
         density: est.density,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'compute_mass_properties',
+    description:
+      'Compute rigid-body mass properties: volume, mass, center of mass, and the inertia tensor about the center of mass (for simulation). Density defaults to PLA; pass a material or a custom density in g/cm³.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        material: { type: 'string', enum: MATERIALS, description: 'Material whose density to use' },
+        density: { type: 'number', description: 'Custom density in g/cm³ (overrides material)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      // Geometry is in mm; convert g/cm³ → g/mm³ so mass comes out in grams.
+      const densityGramsPerCm3 =
+        args.density !== undefined
+          ? assertNumber(args.density, 'density')
+          : MATERIAL_DENSITIES[args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA'];
+      const mp = computeMassProperties(body, densityGramsPerCm3 / 1000);
+      const r3 = (n: number) => Number(n.toFixed(3));
+      const i = mp.inertia;
+      return {
+        bodyId: body.id,
+        volumeMm3: r3(mp.volume),
+        massGrams: r3(mp.mass),
+        densityGramsPerCm3,
+        centerOfMass: { x: r3(mp.centerOfMass.x), y: r3(mp.centerOfMass.y), z: r3(mp.centerOfMass.z) },
+        // Inertia tensor (g·mm²) about the center of mass.
+        inertia: { ixx: r3(i.ixx), iyy: r3(i.iyy), izz: r3(i.izz), ixy: r3(i.ixy), iyz: r3(i.iyz), ixz: r3(i.ixz) },
       };
     },
   });

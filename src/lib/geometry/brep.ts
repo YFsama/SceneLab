@@ -681,6 +681,135 @@ function signedTriangleVolume(a: Vec3, b: Vec3, c: Vec3): number {
   );
 }
 
+export interface MassProperties {
+  density: number;
+  volume: number;
+  mass: number;
+  centerOfMass: Vec3;
+  /**
+   * Mass-weighted inertia tensor about the center of mass (symmetric):
+   * ixx = ∫ρ(y²+z²)dV, etc.; products of inertia ixy = -∫ρ·xy·dV, etc.
+   */
+  inertia: { ixx: number; iyy: number; izz: number; ixy: number; iyz: number; ixz: number };
+}
+
+/**
+ * Rigid-body mass properties of a closed mesh: volume, mass, center of mass,
+ * and the inertia tensor about the center of mass (for the given uniform
+ * density). Uses the canonical-tetrahedron covariance method — each triangle
+ * forms a tetrahedron with the origin, and the covariance of the canonical
+ * simplex C = (1/120)[[2,1,1],[1,2,1],[1,1,2]] is mapped through the tet's
+ * vertex matrix; signed contributions cancel the interior automatically.
+ */
+export function computeMassProperties(body: SolidBody, density = 1): MassProperties {
+  // Canonical simplex second-moment matrix (times 120).
+  const M = [
+    [2, 1, 1],
+    [1, 2, 1],
+    [1, 1, 2],
+  ];
+
+  let det6 = 0; // Σ det = 6·volume
+  let comX = 0;
+  let comY = 0;
+  let comZ = 0;
+  // Covariance about the origin (unit density), accumulated ×120.
+  const c = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 1; i < verts.length - 1; i++) {
+      const a = verts[0]!;
+      const b = verts[i]!;
+      const cc = verts[i + 1]!;
+      const det = signedTriangleVolume(a, b, cc); // det[a b c] = 6·V_tet
+      det6 += det;
+      comX += det * (a.x + b.x + cc.x);
+      comY += det * (a.y + b.y + cc.y);
+      comZ += det * (a.z + b.z + cc.z);
+
+      // A has columns a, b, cc. Accumulate det · (A · M · Aᵀ).
+      const A = [
+        [a.x, b.x, cc.x],
+        [a.y, b.y, cc.y],
+        [a.z, b.z, cc.z],
+      ];
+      // AM = A · M
+      const AM = [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+      ];
+      for (let r = 0; r < 3; r++) {
+        for (let k = 0; k < 3; k++) {
+          AM[r]![k] = A[r]![0]! * M[0]![k]! + A[r]![1]! * M[1]![k]! + A[r]![2]! * M[2]![k]!;
+        }
+      }
+      // C += det · (AM · Aᵀ)
+      for (let r = 0; r < 3; r++) {
+        for (let s = 0; s < 3; s++) {
+          const amat = AM[r]![0]! * A[s]![0]! + AM[r]![1]! * A[s]![1]! + AM[r]![2]! * A[s]![2]!;
+          c[r]![s]! += det * amat;
+        }
+      }
+    }
+  }
+
+  const volume = Math.abs(det6) / 6;
+  if (volume < 1e-12) {
+    const centroid = computeCentroid(body);
+    return {
+      density,
+      volume: 0,
+      mass: 0,
+      centerOfMass: centroid,
+      inertia: { ixx: 0, iyy: 0, izz: 0, ixy: 0, iyz: 0, ixz: 0 },
+    };
+  }
+
+  // Center of mass: Σ(V_tet · tetCentroid) / V, tetCentroid = (a+b+cc+0)/4.
+  const com: Vec3 = { x: comX / (4 * det6), y: comY / (4 * det6), z: comZ / (4 * det6) };
+
+  // Covariance about origin, mass-weighted. Sign tracks winding so the
+  // diagonal stays positive regardless of inward/outward orientation.
+  const sign = det6 >= 0 ? 1 : -1;
+  const k = (sign * density) / 120;
+  const cxx = c[0]![0]! * k;
+  const cyy = c[1]![1]! * k;
+  const czz = c[2]![2]! * k;
+  const cxy = c[0]![1]! * k;
+  const cyz = c[1]![2]! * k;
+  const cxz = c[0]![2]! * k;
+
+  const mass = volume * density;
+  // Shift covariance to the center of mass (parallel-axis theorem).
+  const dxx = cxx - mass * com.x * com.x;
+  const dyy = cyy - mass * com.y * com.y;
+  const dzz = czz - mass * com.z * com.z;
+  const dxy = cxy - mass * com.x * com.y;
+  const dyz = cyz - mass * com.y * com.z;
+  const dxz = cxz - mass * com.x * com.z;
+
+  return {
+    density,
+    volume,
+    mass,
+    centerOfMass: com,
+    inertia: {
+      ixx: dyy + dzz,
+      iyy: dxx + dzz,
+      izz: dxx + dyy,
+      ixy: -dxy,
+      iyz: -dyz,
+      ixz: -dxz,
+    },
+  };
+}
+
 function normalize(v: Vec3): Vec3 {
   const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
   if (len < 1e-10) return { x: 0, y: 0, z: 1 };
