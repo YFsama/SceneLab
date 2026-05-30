@@ -176,7 +176,7 @@ export function registerBuiltinTools(): void {
       properties: {
         type: {
           type: 'string',
-          enum: ['horizontal', 'vertical', 'parallel', 'perpendicular', 'coincident', 'fixed', 'equal', 'distance', 'radius'],
+          enum: ['horizontal', 'vertical', 'parallel', 'perpendicular', 'coincident', 'fixed', 'equal', 'distance', 'radius', 'concentric'],
           description: 'Constraint type',
         },
         entityIds: { type: 'array', items: { type: 'string' }, description: 'Entity IDs the constraint applies to' },
@@ -185,7 +185,7 @@ export function registerBuiltinTools(): void {
       required: ['type', 'entityIds'],
     },
     execute: async (args) => {
-      const type = assertEnum(args.type, ['horizontal', 'vertical', 'parallel', 'perpendicular', 'coincident', 'fixed', 'equal', 'distance', 'radius'] as const, 'type');
+      const type = assertEnum(args.type, ['horizontal', 'vertical', 'parallel', 'perpendicular', 'coincident', 'fixed', 'equal', 'distance', 'radius', 'concentric'] as const, 'type');
       const entityIds = args.entityIds;
       if (!Array.isArray(entityIds) || !entityIds.every((e) => typeof e === 'string')) {
         throw new Error('Expected entityIds to be a string array');

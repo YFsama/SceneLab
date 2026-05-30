@@ -248,6 +248,25 @@ describe('solveConstraints', () => {
     expect(circle.type === 'circle' && circle.radius).toBe(9);
   });
 
+  it('should make two circles concentric (shared center)', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c1', { id: 'c1', type: 'circle', centerId: 'p1', radius: 5 });
+    entities.set('c2', { id: 'c2', type: 'circle', centerId: 'p2', radius: 8 });
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 4 });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('cc', { id: 'cc', type: 'concentric', entityIds: ['c1', 'c2'] });
+
+    const result = solveConstraints(entities, constraints);
+    const a = result.get('p1')!;
+    const b = result.get('p2')!;
+    expect(a.x).toBeCloseTo(b.x, 6);
+    expect(a.y).toBeCloseTo(b.y, 6);
+    expect(a.x).toBeCloseTo(5, 6); // midpoint of the two centers
+    expect(a.y).toBeCloseTo(2, 6);
+  });
+
   it('should apply coincident constraint between two points', () => {
     const entities = new Map<string, SketchEntity>();
     entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });

@@ -73,9 +73,30 @@ function applyConstraint(
       return applyDistance(constraint, points);
     case 'radius':
       return applyRadius(constraint, entities);
+    case 'concentric':
+      return applyConcentric(constraint, points, entities);
     case 'fixed':
       return 0; // Handled by anchoring points before the solve loop.
   }
+}
+
+/** Make two circles/arcs share a center by snapping their center points together. */
+function applyConcentric(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+  entities: Map<string, SketchEntity>,
+): number {
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+  const e1 = entities.get(id1);
+  const e2 = entities.get(id2);
+  const centerId = (e?: SketchEntity): string | undefined =>
+    e && (e.type === 'circle' || e.type === 'arc') ? e.centerId : undefined;
+  const c1 = centerId(e1);
+  const c2 = centerId(e2);
+  if (!c1 || !c2) return 0;
+  // Reuse the coincident point-snap on the two center points.
+  return applyCoincident({ ...constraint, entityIds: [c1, c2] }, points);
 }
 
 /** Set a circle/arc's radius to the constraint value (an absolute dimension). */
