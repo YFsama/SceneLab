@@ -1,7 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency } from './brep';
+
+describe('convex primitives have consistent outward normals', () => {
+  // checkNormalConsistency uses a centroid-based heuristic, which is only valid
+  // for convex shapes — the torus (centroid in its hole) is excluded; its normal
+  // correctness is covered by the watertightness + analytic-volume tests instead.
+  const cases: [string, () => import('./types').SolidBody][] = [
+    ['box', () => createBox(10, 10, 10)],
+    ['cylinder', () => createCylinder(5, 10, 32)],
+    ['sphere', () => createSphere(5, 16)],
+    ['cone', () => createCone(5, 0, 10, 32)],
+    ['wedge', () => createWedge(10, 6, 4)],
+  ];
+  for (const [name, make] of cases) {
+    it(`${name} normals all point outward`, () => {
+      const nc = checkNormalConsistency(make());
+      expect(nc.consistent).toBe(true);
+      expect(nc.inwardFaces).toBe(0);
+    });
+  }
+});
 
 describe('topology', () => {
   it('a box is genus 0 and sphere-like (Euler χ = 2)', () => {
