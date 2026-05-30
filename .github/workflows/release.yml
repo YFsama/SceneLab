@@ -98,6 +98,19 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      # Portable Windows build: the raw app .exe (no installer). It is
+      # self-contained except for the WebView2 runtime, which ships with
+      # Windows 10/11. Zipped so it can be downloaded and run directly.
+      - name: Package portable Windows build
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          set -e
+          exe=$(find src-tauri/target/release -maxdepth 1 -type f -name '*.exe' | head -1)
+          echo "raw app exe: $exe"
+          mkdir -p portable && cp "$exe" "portable/SceneLab.exe"
+          7z a -tzip "SceneLab_0.1.0_windows_portable.zip" ./portable/SceneLab.exe
+
       # Verifiable, cost-free supply-chain trust (no signing certificate):
       # attach a build-provenance attestation to each installer, proving it was
       # built by this workflow from this repo. Verify with `gh attestation verify`.
@@ -111,6 +124,7 @@ jobs:
             src-tauri/target/**/release/bundle/**/*.dmg
             src-tauri/target/**/release/bundle/**/*.msi
             src-tauri/target/**/release/bundle/**/*.exe
+            SceneLab_*_windows_portable.zip
 
       # SHA256 checksums so users can verify download integrity (no cert needed).
       - name: Generate SHA256SUMS
@@ -125,6 +139,10 @@ jobs:
           done < <(find src-tauri/target -type f -path '*/release/bundle/*' \
             \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
                -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \))
+          # Include the portable Windows zip (lives at the workspace root).
+          for z in SceneLab_*_windows_portable.zip; do
+            [ -f "$z" ] && sha "$z" | awk -v b="$z" '{print $1"  "b}' >> "$out"
+          done
           echo "--- $out ---"; cat "$out"
 
       - name: Upload checksums artifact
@@ -135,11 +153,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # On a tag build, attach the checksums to the draft Release too.
+      # On a tag build, attach the checksums to the Release too.
       - name: Attach checksums to release
         if: github.ref_type == 'tag'
         shell: bash
         run: gh release upload "${{ github.ref_name }}" "SHA256SUMS-${{ matrix.label }}.txt" --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attach the portable Windows zip to the Release (Windows tag builds).
+      - name: Attach portable Windows build to release
+        if: matrix.platform == 'windows-latest' && github.ref_type == 'tag'
+        shell: bash
+        run: gh release upload "${{ github.ref_name }}" "SceneLab_0.1.0_windows_portable.zip" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -152,5 +178,19 @@ jobs:
           path: |
             src-tauri/target/**/release/bundle/**/*
             src-tauri/target/**/release/*.exe
+            SceneLab_*_windows_portable.zip
           if-no-files-found: warn
           retention-days: 14
+
+  # Auto-publish: once every platform has built and uploaded its assets to the
+  # draft Release, flip it to published. Only on tag builds.
+  publish:
+    name: Publish release
+    needs: build-desktop
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark release as published
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false --latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
