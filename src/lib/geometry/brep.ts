@@ -1355,52 +1355,48 @@ export interface NormalConsistency {
 }
 
 export function checkNormalConsistency(body: SolidBody): NormalConsistency {
-  // Check if normals consistently point outward by comparing with face centroid direction
-  const bodyCentroid = computeCentroid(body);
-  let outward = 0;
-  let inward = 0;
-  let flipped = 0;
+  // Orientation is consistent iff no directed edge is traversed the same way by
+  // two faces (a properly oriented closed mesh shares each edge in opposite
+  // directions). This is correct for non-convex shapes too — unlike a
+  // centroid-based heuristic, which mislabels e.g. a torus's inner walls.
+  const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
+  const key = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
+  const directed = new Map<string, number>();
+  let degenerate = 0;
 
   for (const face of body.faces) {
-    const verts = face.vertices;
-    if (verts.length < 3) {
-      flipped++;
+    const vs = face.vertices;
+    if (vs.length < 3) {
+      degenerate++;
       continue;
     }
-
-    // Compute face centroid
-    let fx = 0, fy = 0, fz = 0;
-    for (const v of verts) {
-      fx += v.x;
-      fy += v.y;
-      fz += v.z;
-    }
-    fx /= verts.length;
-    fy /= verts.length;
-    fz /= verts.length;
-
-    // Direction from body centroid to face centroid
-    const dx = fx - bodyCentroid.x;
-    const dy = fy - bodyCentroid.y;
-    const dz = fz - bodyCentroid.z;
-
-    // Dot product with face normal
-    const dot = dx * face.normal.x + dy * face.normal.y + dz * face.normal.z;
-
-    if (Math.abs(dot) < 1e-10) {
-      flipped++;
-    } else if (dot > 0) {
-      outward++;
-    } else {
-      inward++;
+    for (let i = 0; i < vs.length; i++) {
+      const dk = `${key(vs[i]!)}>${key(vs[(i + 1) % vs.length]!)}`;
+      directed.set(dk, (directed.get(dk) ?? 0) + 1);
     }
   }
 
+  let sameDirectionEdges = 0;
+  for (const count of directed.values()) if (count > 1) sameDirectionEdges += count - 1;
+  const consistent = sameDirectionEdges === 0;
+
+  // Signed volume sign tells whether the consistent winding faces outward.
+  let signed = 0;
+  for (const face of body.faces) {
+    const vs = face.vertices;
+    for (let i = 1; i < vs.length - 1; i++) {
+      signed += signedTriangleVolume(vs[0]!, vs[i]!, vs[i + 1]!);
+    }
+  }
+  const faceCount = body.faces.length - degenerate;
+  const outward = signed >= 0 ? faceCount : 0;
+  const inward = signed >= 0 ? 0 : faceCount;
+
   return {
-    consistent: inward === 0 || outward === 0,
+    consistent,
     inwardFaces: inward,
     outwardFaces: outward,
-    flippedFaces: flipped,
+    flippedFaces: degenerate,
   };
 }
 

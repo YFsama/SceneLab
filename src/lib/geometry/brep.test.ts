@@ -3,15 +3,14 @@ import { createExtrude, createBox, createBoundingBoxBody, createCylinder, create
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency } from './brep';
 
-describe('convex primitives have consistent outward normals', () => {
-  // checkNormalConsistency uses a centroid-based heuristic, which is only valid
-  // for convex shapes — the torus (centroid in its hole) is excluded; its normal
-  // correctness is covered by the watertightness + analytic-volume tests instead.
+describe('primitives have consistent outward normals', () => {
+  // Edge-orientation based, so this holds for the non-convex torus too.
   const cases: [string, () => import('./types').SolidBody][] = [
     ['box', () => createBox(10, 10, 10)],
     ['cylinder', () => createCylinder(5, 10, 32)],
     ['sphere', () => createSphere(5, 16)],
     ['cone', () => createCone(5, 0, 10, 32)],
+    ['torus', () => createTorus(10, 3, 32, 16)],
     ['wedge', () => createWedge(10, 6, 4)],
   ];
   for (const [name, make] of cases) {
