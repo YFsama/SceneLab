@@ -811,6 +811,74 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'list_planes',
+    description: 'List the scene\'s datum/reference planes with id, name, origin and normal.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const r3 = (n: number) => Number(n.toFixed(3));
+      return {
+        planes: useStore.getState().planes.map((p) => ({
+          id: p.id,
+          name: p.name,
+          origin: { x: r3(p.origin.x), y: r3(p.origin.y), z: r3(p.origin.z) },
+          normal: { x: r3(p.normal.x), y: r3(p.normal.y), z: r3(p.normal.z) },
+        })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'create_standard_planes',
+    description: 'Seed the three standard datum planes (Front/Top/Right) through the origin if none exist.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const added = useStore.getState().ensureStandardPlanes();
+      return { added, planeCount: useStore.getState().planes.length };
+    },
+  });
+
+  registerTool({
+    name: 'create_plane_from_face',
+    description: 'Create a datum plane coincident with a body face, optionally offset (mm) along its outward normal. Use list_faces for face ids.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        faceId: { type: 'string', description: 'Face id from list_faces' },
+        offset: { type: 'number', description: 'Offset along the face normal in mm (default 0)' },
+      },
+      required: ['faceId'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const offset = args.offset !== undefined ? assertNumber(args.offset, 'offset') : 0;
+      const id = useStore.getState().addPlaneFromFace(body.id, assertString(args.faceId, 'faceId'), offset);
+      if (!id) throw new Error('Face id not found on this body');
+      return { success: true, planeId: id };
+    },
+  });
+
+  registerTool({
+    name: 'create_midplane',
+    description: 'Create a datum plane halfway between two parallel faces of a body (SolidWorks mid plane). Use list_faces for face ids.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        faceIdA: { type: 'string', description: 'First face id' },
+        faceIdB: { type: 'string', description: 'Second (parallel) face id' },
+      },
+      required: ['faceIdA', 'faceIdB'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const id = useStore.getState().addMidplane(body.id, assertString(args.faceIdA, 'faceIdA'), assertString(args.faceIdB, 'faceIdB'));
+      if (!id) throw new Error('Faces not found or not parallel enough for a midplane');
+      return { success: true, planeId: id };
+    },
+  });
+
+  registerTool({
     name: 'measure_face_angle',
     description: 'Measure the angle (degrees, 0–180) between two faces of a body — the angle between their outward normals, like SolidWorks Measure. Use list_faces to get face ids.',
     parameters: {

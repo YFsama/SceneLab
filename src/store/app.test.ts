@@ -328,4 +328,60 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).not.toContain(box.id);
     expect(useStore.getState().projectDirty).toBe(true);
   });
+
+  describe('datum planes', () => {
+    beforeEach(() => useStore.getState().clearScene());
+
+    it('ensureStandardPlanes seeds three planes once', () => {
+      expect(useStore.getState().ensureStandardPlanes()).toBe(3);
+      expect(useStore.getState().planes).toHaveLength(3);
+      // Idempotent: a second call adds nothing.
+      expect(useStore.getState().ensureStandardPlanes()).toBe(0);
+      expect(useStore.getState().planes).toHaveLength(3);
+    });
+
+    it('addPlaneFromFace builds a datum on a body face and returns its id', () => {
+      const box = createBox(10, 10, 10);
+      useStore.getState().addDirectBody(box);
+      const top = box.faces.find((f) => f.normal.y > 0.99)!;
+      const id = useStore.getState().addPlaneFromFace(box.id, top.id, 2);
+      expect(id).toBeTruthy();
+      const plane = useStore.getState().planes.find((p) => p.id === id)!;
+      expect(plane.normal.y).toBeCloseTo(1, 6);
+      expect(plane.origin.y).toBeCloseTo(12, 4);
+    });
+
+    it('addPlaneFromFace returns null for an unknown body or face', () => {
+      expect(useStore.getState().addPlaneFromFace('nope', 'x')).toBeNull();
+    });
+
+    it('addOffsetPlane offsets an existing plane', () => {
+      useStore.getState().ensureStandardPlanes();
+      const front = useStore.getState().planes[0];
+      const id = useStore.getState().addOffsetPlane(front.id, 5);
+      const off = useStore.getState().planes.find((p) => p.id === id)!;
+      expect(off.origin.z).toBeCloseTo(front.origin.z + 5, 6);
+      expect(useStore.getState().addOffsetPlane('nope', 5)).toBeNull();
+    });
+
+    it('addMidplane builds the mid-plane between two parallel faces', () => {
+      const box = createBox(10, 20, 10);
+      useStore.getState().addDirectBody(box);
+      const top = box.faces.find((f) => f.normal.y > 0.99)!;
+      const bottom = box.faces.find((f) => f.normal.y < -0.99)!;
+      const id = useStore.getState().addMidplane(box.id, top.id, bottom.id);
+      const mid = useStore.getState().planes.find((p) => p.id === id)!;
+      expect(mid.origin.y).toBeCloseTo(10, 4);
+    });
+
+    it('removePlane removes by id and clearScene wipes all planes', () => {
+      useStore.getState().ensureStandardPlanes();
+      const id = useStore.getState().planes[0].id;
+      useStore.getState().removePlane(id);
+      expect(useStore.getState().planes.find((p) => p.id === id)).toBeUndefined();
+      expect(useStore.getState().planes).toHaveLength(2);
+      useStore.getState().clearScene();
+      expect(useStore.getState().planes).toHaveLength(0);
+    });
+  });
 });

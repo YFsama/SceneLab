@@ -4,7 +4,8 @@ import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
-import type { SolidBody } from '../lib/geometry/types';
+import type { SolidBody, PlaneDefinition } from '../lib/geometry/types';
+import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces } from '../lib/geometry/referenceGeometry';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -85,6 +86,20 @@ interface AppState {
   redo: () => boolean;
   clearScene: () => void;
   loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[]) => void;
+
+  // Reference geometry — datum planes (SolidWorks Front/Top/Right + custom).
+  planes: PlaneDefinition[];
+  /** Add a datum plane to the scene; returns its id. */
+  addPlane: (plane: PlaneDefinition) => string;
+  /** Seed the three standard datum planes if none exist; returns how many were added. */
+  ensureStandardPlanes: () => number;
+  /** Datum plane coincident with a body face (offset along its normal); null if the face is missing. */
+  addPlaneFromFace: (bodyId: string, faceId: string, offset?: number) => string | null;
+  /** Datum plane parallel to an existing plane, offset along its normal; null if the source plane is missing. */
+  addOffsetPlane: (planeId: string, distance: number) => string | null;
+  /** Mid-plane between two parallel faces of a body; null if faces are missing or not parallel. */
+  addMidplane: (bodyId: string, faceIdA: string, faceIdB: string) => string | null;
+  removePlane: (id: string) => void;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -351,6 +366,7 @@ export const useStore = create<AppState>((set, get) => {
       bodies: [],
       objectIds: [],
       selectedIds: [],
+      planes: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -366,6 +382,7 @@ export const useStore = create<AppState>((set, get) => {
       featureTree: tree,
       directBodies,
       selectedIds: [],
+      planes: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -375,6 +392,38 @@ export const useStore = create<AppState>((set, get) => {
     });
     recombine();
   },
+
+  planes: [],
+  addPlane: (plane) => {
+    set((s) => ({ planes: [...s.planes, plane], projectDirty: true }));
+    return plane.id;
+  },
+  ensureStandardPlanes: () => {
+    if (get().planes.length > 0) return 0;
+    const std = standardPlanes();
+    set({ planes: std, projectDirty: true });
+    return std.length;
+  },
+  addPlaneFromFace: (bodyId, faceId, offset = 0) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    if (!body) return null;
+    const plane = planeFromFace(body, faceId, offset);
+    if (!plane) return null;
+    return get().addPlane(plane);
+  },
+  addOffsetPlane: (planeId, distance) => {
+    const src = get().planes.find((p) => p.id === planeId);
+    if (!src) return null;
+    return get().addPlane(offsetPlane(src, distance));
+  },
+  addMidplane: (bodyId, faceIdA, faceIdB) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    if (!body) return null;
+    const plane = midplaneBetweenFaces(body, faceIdA, faceIdB);
+    if (!plane) return null;
+    return get().addPlane(plane);
+  },
+  removePlane: (id) => set((s) => ({ planes: s.planes.filter((p) => p.id !== id), projectDirty: true })),
 
   showExtrudeDialog: false,
   setShowExtrudeDialog: (showExtrudeDialog) => set({ showExtrudeDialog }),
