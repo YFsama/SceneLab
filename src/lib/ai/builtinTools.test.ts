@@ -345,8 +345,11 @@ describe('builtin analysis tools', () => {
     const box = createBox(10, 10, 10);
     useStore.setState({ bodies: [box], directBodies: [box] });
     const tool = getTool('repair_mesh')!;
-    const result = (await tool.execute({ bodyId: box.id })) as { vertices: number };
+    const result = (await tool.execute({ bodyId: box.id })) as { vertices: number; watertight: boolean; holesAfter: number };
     expect(result.vertices).toBe(8);
+    // A welded box is closed — repair reports it watertight.
+    expect(result.watertight).toBe(true);
+    expect(result.holesAfter).toBe(0);
   });
 
   it('export_body emits STL by default and OBJ on request', async () => {

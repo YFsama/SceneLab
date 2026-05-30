@@ -802,9 +802,21 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const tol = args.tolerance !== undefined ? assertNumber(args.tolerance, 'tolerance') : undefined;
+      const holesBefore = findBoundaryLoops(body).holeCount;
       const result = weldVertices(body, tol);
+      const holesAfter = findBoundaryLoops(result).holeCount;
       useStore.getState().replaceBody(body.id, result);
-      return { success: true, bodyId: result.id, vertices: result.vertices.length };
+      // Report watertightness so the caller knows whether repair actually closed
+      // the gaps (welding only merges coincident vertices — it can't fill a real
+      // hole).
+      return {
+        success: true,
+        bodyId: result.id,
+        vertices: result.vertices.length,
+        holesBefore,
+        holesAfter,
+        watertight: holesAfter === 0,
+      };
     },
   });
 
