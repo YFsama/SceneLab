@@ -53,6 +53,16 @@ function addLine(lines: string[], start: Vec3, end: Vec3, layer: string): void {
   lines.push('31', end.z.toFixed(6));
 }
 
+/** Emit one triangular 3DFACE entity (the 4th vertex repeats the 3rd). */
+function add3DFace(lines: string[], v0: Vec3, v1: Vec3, v2: Vec3): void {
+  lines.push('0', '3DFACE');
+  lines.push('8', 'FACES');
+  lines.push('10', v0.x.toFixed(6), '20', v0.y.toFixed(6), '30', v0.z.toFixed(6));
+  lines.push('11', v1.x.toFixed(6), '21', v1.y.toFixed(6), '31', v1.z.toFixed(6));
+  lines.push('12', v2.x.toFixed(6), '22', v2.y.toFixed(6), '32', v2.z.toFixed(6));
+  lines.push('13', v2.x.toFixed(6), '23', v2.y.toFixed(6), '33', v2.z.toFixed(6));
+}
+
 /** Export body as 3D DXF with POLYLINE faces */
 export function exportDXF3D(body: SolidBody): string {
   const lines: string[] = [];
@@ -70,23 +80,15 @@ export function exportDXF3D(body: SolidBody): string {
 
   lines.push('0', 'SECTION', '2', 'ENTITIES');
 
-  // Write faces as 3DFACE entities
+  // Write faces as 3DFACE entities. A 3DFACE holds at most 4 vertices, so
+  // fan-triangulate any larger polygon (e.g. an n-gon cylinder/cone cap) —
+  // writing only the first four would silently drop the rest of the face.
   for (const face of body.faces) {
     const verts = face.vertices;
     if (verts.length < 3) continue;
-
-    // Write as 3DFACE (supports 3 or 4 vertices)
-    lines.push('0', '3DFACE');
-    lines.push('8', 'FACES');
-    const v0 = verts[0]!;
-    const v1 = verts[1]!;
-    const v2 = verts[2]!;
-    const v3 = verts.length >= 4 ? verts[3]! : verts[2]!; // repeat last if triangle
-
-    lines.push('10', v0.x.toFixed(6), '20', v0.y.toFixed(6), '30', v0.z.toFixed(6));
-    lines.push('11', v1.x.toFixed(6), '21', v1.y.toFixed(6), '31', v1.z.toFixed(6));
-    lines.push('12', v2.x.toFixed(6), '22', v2.y.toFixed(6), '32', v2.z.toFixed(6));
-    lines.push('13', v3.x.toFixed(6), '23', v3.y.toFixed(6), '33', v3.z.toFixed(6));
+    for (let i = 1; i < verts.length - 1; i++) {
+      add3DFace(lines, verts[0]!, verts[i]!, verts[i + 1]!);
+    }
   }
 
   // Also write edges as LINE entities
