@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { assessPrintReadiness } from './readiness';
 import { createBox } from '../geometry';
+import { exportSTLBinary, importSTLBinary } from '../io';
 import type { SolidBody } from '../geometry/types';
+
+describe('print readiness on imported meshes', () => {
+  it('a re-imported, welded box is watertight and ready', () => {
+    const imported = importSTLBinary(exportSTLBinary(createBox(10, 10, 10)));
+    const r = assessPrintReadiness(imported, { buildVolume: { x: 200, y: 200, z: 200 } });
+    expect(r.ready).toBe(true);
+    expect(r.issues.some((i) => i.code === 'not-watertight')).toBe(false);
+  });
+});
 
 describe('assessPrintReadiness', () => {
   it('a watertight box that fits is ready with no issues', () => {
