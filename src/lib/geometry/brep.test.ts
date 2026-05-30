@@ -18,10 +18,12 @@ describe('computeSolidity', () => {
     }
   });
 
-  it('keeps solidity in [0,1] for a non-convex part', () => {
+  it('keeps solidity in [0,1] for a non-convex part with no phantom cavities', () => {
     const s = computeSolidity(createTorus(10, 3, 32, 16));
     expect(s.solidity).toBeGreaterThan(0);
     expect(s.solidity).toBeLessThanOrEqual(1);
+    // A torus is one connected surface — no enclosed voids.
+    expect(s.internalCavities).toBe(0);
   });
 });
 

@@ -2249,6 +2249,56 @@ export interface SolidityInfo {
   internalCavities: number; // Estimated number of internal voids
 }
 
+/** Number of connected surface shells (face components joined by shared edges). */
+function countShells(body: SolidBody): number {
+  const faces = body.faces;
+  const n = faces.length;
+  if (n === 0) return 0;
+  const q = (v: Vec3) => `${Math.round(v.x * 1e5)},${Math.round(v.y * 1e5)},${Math.round(v.z * 1e5)}`;
+  const edgeKey = (a: Vec3, b: Vec3) => {
+    const ka = q(a);
+    const kb = q(b);
+    return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+  };
+  const edgeFaces = new Map<string, number[]>();
+  faces.forEach((f, fi) => {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const k = edgeKey(vs[i]!, vs[(i + 1) % vs.length]!);
+      const l = edgeFaces.get(k);
+      if (l) l.push(fi);
+      else edgeFaces.set(k, [fi]);
+    }
+  });
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (const fis of edgeFaces.values()) {
+    for (let i = 0; i < fis.length; i++) {
+      for (let j = i + 1; j < fis.length; j++) {
+        adj[fis[i]!]!.push(fis[j]!);
+        adj[fis[j]!]!.push(fis[i]!);
+      }
+    }
+  }
+  const seen = new Array<boolean>(n).fill(false);
+  let comps = 0;
+  for (let s = 0; s < n; s++) {
+    if (seen[s]) continue;
+    comps++;
+    const stack = [s];
+    seen[s] = true;
+    while (stack.length) {
+      const c = stack.pop()!;
+      for (const nb of adj[c]!) {
+        if (!seen[nb]) {
+          seen[nb] = true;
+          stack.push(nb);
+        }
+      }
+    }
+  }
+  return comps;
+}
+
 export function computeSolidity(body: SolidBody): SolidityInfo {
   const volume = computeVolume(body);
   if (volume < 1e-10) {
@@ -2271,8 +2321,9 @@ export function computeSolidity(body: SolidBody): SolidityInfo {
   const solidity = hullVolume > 1e-10 ? Math.min(1, volume / hullVolume) : 0;
   const voidRatio = 1 - solidity;
 
-  // Estimate internal cavities based on void ratio
-  const internalCavities = voidRatio > 0.3 ? Math.ceil(voidRatio * 5) : 0;
+  // Real internal cavities = enclosed shells beyond the outer surface. A single
+  // connected surface (torus, L-shape) has none; an interior bubble adds one.
+  const internalCavities = Math.max(0, countShells(body) - 1);
 
   return {
     solidity,
