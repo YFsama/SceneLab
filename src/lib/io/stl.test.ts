@@ -68,6 +68,28 @@ describe('importSTLAscii', () => {
     const imported = importSTLAscii('solid widget\nendsolid widget\n');
     expect(imported.name).toBe('widget');
   });
+
+  it('recomputes the facet normal from the winding when the file normal is zero', () => {
+    // A single CCW triangle in the z=0 plane → outward normal +Z. The file
+    // declares a (0,0,0) normal, as many real STL exporters do.
+    const stl = [
+      'solid tri',
+      '  facet normal 0 0 0',
+      '    outer loop',
+      '      vertex 0 0 0',
+      '      vertex 1 0 0',
+      '      vertex 0 1 0',
+      '    endloop',
+      '  endfacet',
+      'endsolid tri',
+    ].join('\n');
+    const imported = importSTLAscii(stl, 0);
+    expect(imported.faces).toHaveLength(1);
+    const n = imported.faces[0]!.normal;
+    expect(n.x).toBeCloseTo(0, 6);
+    expect(n.y).toBeCloseTo(0, 6);
+    expect(n.z).toBeCloseTo(1, 6);
+  });
 });
 
 describe('importSTLBinary', () => {

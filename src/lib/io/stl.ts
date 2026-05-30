@@ -74,6 +74,27 @@ export function exportSTLAscii(body: SolidBody): string {
 
 let importId = 1;
 
+/** Unit normal from a triangle's winding (right-hand rule), or null if degenerate. */
+function windingNormal(a: Vec3, b: Vec3, c: Vec3): Vec3 | null {
+  const ux = b.x - a.x;
+  const uy = b.y - a.y;
+  const uz = b.z - a.z;
+  const vx = c.x - a.x;
+  const vy = c.y - a.y;
+  const vz = c.z - a.z;
+  const nx = uy * vz - uz * vy;
+  const ny = uz * vx - ux * vz;
+  const nz = ux * vy - uy * vx;
+  const len = Math.hypot(nx, ny, nz);
+  if (len < 1e-12) return null;
+  return { x: nx / len, y: ny / len, z: nz / len };
+}
+
+function normalizeOrZero(v: Vec3): Vec3 {
+  const len = Math.hypot(v.x, v.y, v.z);
+  return len < 1e-12 ? { x: 0, y: 0, z: 0 } : { x: v.x / len, y: v.y / len, z: v.z / len };
+}
+
 function buildBody(
   name: string,
   tris: Array<{ normal: Vec3; verts: [Vec3, Vec3, Vec3] }>,
@@ -98,7 +119,12 @@ function buildBody(
     const a = intern(tri.verts[0]);
     const b = intern(tri.verts[1]);
     const c = intern(tri.verts[2]);
-    faces.push({ id: `face_${importId++}`, vertices: [a, b, c], normal: tri.normal });
+    // The STL spec makes the vertex winding (right-hand rule) authoritative;
+    // file facet normals are frequently (0,0,0) or wrong. Recompute from the
+    // winding so imported parts have valid normals for printability analysis,
+    // falling back to the file normal only for degenerate (zero-area) triangles.
+    const normal = windingNormal(a, b, c) ?? normalizeOrZero(tri.normal);
+    faces.push({ id: `face_${importId++}`, vertices: [a, b, c], normal });
     edges.push(
       { id: `edge_${importId++}`, start: a, end: b },
       { id: `edge_${importId++}`, start: b, end: c },
