@@ -4,6 +4,18 @@ import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import type { SolidBody } from '../lib/geometry/types';
+import {
+  createBox,
+  createCylinder,
+  createSphere,
+  createCone,
+  createTorus,
+  createWedge,
+  createPrism,
+  createTube,
+} from '../lib/geometry/brep';
+
+export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | 'wedge' | 'prism' | 'tube';
 
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
@@ -54,6 +66,8 @@ interface AppState {
   directBodies: SolidBody[];
   addDirectBody: (body: SolidBody) => void;
   addDirectBodies: (bodies: SolidBody[]) => void;
+  /** Create a default-sized primitive of `kind`, add it, and return its id. */
+  addPrimitive: (kind: PrimitiveKind) => string;
   replaceBody: (oldId: string, newBody: SolidBody) => void;
   removeDirectBody: (id: string) => void;
   clearScene: () => void;
@@ -204,6 +218,23 @@ export const useStore = create<AppState>((set, get) => {
   addDirectBody: (body) => {
     set((s) => ({ directBodies: [...s.directBodies, body], projectDirty: true }));
     recombine();
+  },
+  addPrimitive: (kind) => {
+    // Sensible default dimensions (mm) so a single click/call yields a usable part.
+    const body = ((): SolidBody => {
+      switch (kind) {
+        case 'box': return createBox(20, 20, 20);
+        case 'cylinder': return createCylinder(10, 20);
+        case 'sphere': return createSphere(10);
+        case 'cone': return createCone(10, 0, 20);
+        case 'torus': return createTorus(10, 3);
+        case 'wedge': return createWedge(20, 20, 20);
+        case 'prism': return createPrism(6, 10, 20);
+        case 'tube': return createTube(10, 6, 20);
+      }
+    })();
+    get().addDirectBody(body);
+    return body.id;
   },
   addDirectBodies: (newBodies) => {
     set((s) => ({ directBodies: [...s.directBodies, ...newBodies], projectDirty: true }));

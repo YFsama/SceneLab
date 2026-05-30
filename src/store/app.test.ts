@@ -224,6 +224,19 @@ describe('app store — direct bodies', () => {
     expect(bodies[0]?.id).toBe(edited.id);
   });
 
+  it('addPrimitive creates each kind and adds it to the scene', () => {
+    const kinds = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube'] as const;
+    for (const kind of kinds) {
+      useStore.setState({ featureTree: new FeatureTree(), bodies: [], directBodies: [], objectIds: [] });
+      const id = useStore.getState().addPrimitive(kind);
+      const bodies = useStore.getState().bodies;
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]!.id).toBe(id);
+      expect(bodies[0]!.faces.length).toBeGreaterThan(0);
+      expect(useStore.getState().projectDirty).toBe(true);
+    }
+  });
+
   it('removeDirectBody clears its selection and marks the project dirty', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);
