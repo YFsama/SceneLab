@@ -1,7 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry } from './brep';
+
+describe('computeSymmetry', () => {
+  it('a box is symmetric on all three axes', () => {
+    const s = computeSymmetry(createBox(10, 20, 10));
+    expect(s.hasXSymmetry).toBe(true);
+    expect(s.hasYSymmetry).toBe(true);
+    expect(s.hasZSymmetry).toBe(true);
+    expect(s.symmetryScore).toBeCloseTo(1, 5);
+  });
+
+  it('a wedge is symmetric only across the depth (Z) axis', () => {
+    const s = computeSymmetry(createWedge(10, 6, 4));
+    expect(s.hasZSymmetry).toBe(true);
+    expect(s.hasXSymmetry).toBe(false); // the slope breaks X symmetry
+    expect(s.hasYSymmetry).toBe(false);
+  });
+});
 
 describe('computeTotalEdgeLength', () => {
   it('a box has 12 edges summing to 12 × side length', () => {

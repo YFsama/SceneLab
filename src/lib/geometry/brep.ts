@@ -1875,30 +1875,26 @@ export interface SymmetryInfo {
 export function computeSymmetry(body: SolidBody): SymmetryInfo {
   const center = computeCentroid(body);
 
-  // Check symmetry by comparing vertices on opposite sides
+  // Mirror symmetry across the centre plane perpendicular to `axis`: every
+  // vertex should have a partner whose `axis` coordinate is reflected and whose
+  // other two coordinates match.
+  const others: Array<'x' | 'y' | 'z'> = ['x', 'y', 'z'];
   const checkAxisSymmetry = (axis: 'x' | 'y' | 'z'): boolean => {
     const tolerance = 1e-3;
+    const rest = others.filter((a) => a !== axis);
     let symmetricCount = 0;
-    let totalCount = 0;
 
     for (const v of body.vertices) {
-      const coord = v[axis];
-      const distFromCenter = coord - center[axis];
-
-      // Find a matching vertex on the opposite side
-      const hasMatch = body.vertices.some((other) => {
-        const otherDist = other[axis] - center[axis];
-        return Math.abs(distFromCenter + otherDist) < tolerance &&
-               Math.abs(v.x - other.x) < tolerance &&
-               Math.abs(v.y - other.y) < tolerance &&
-               Math.abs(v.z - other.z) < tolerance;
-      });
-
+      const mirrored = 2 * center[axis] - v[axis];
+      const hasMatch = body.vertices.some(
+        (o) =>
+          Math.abs(o[axis] - mirrored) < tolerance &&
+          rest.every((a) => Math.abs(o[a] - v[a]) < tolerance),
+      );
       if (hasMatch) symmetricCount++;
-      totalCount++;
     }
 
-    return totalCount > 0 && symmetricCount / totalCount > 0.95;
+    return body.vertices.length > 0 && symmetricCount / body.vertices.length > 0.95;
   };
 
   const hasX = checkAxisSymmetry('x');
