@@ -187,6 +187,16 @@ describe('computeMomentOfInertiaAboutAxis', () => {
   it('returns 0 for a zero-length axis', () => {
     expect(computeMomentOfInertiaAboutAxis(createBox(10, 10, 10), { x: 0, y: 0, z: 0 })).toBe(0);
   });
+
+  it('applies the parallel-axis theorem about an offset pivot', () => {
+    const box = createBox(20, 10, 20);
+    const mp = computeMassProperties(box, 1);
+    const iCom = computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 }); // about CoM, Y
+    // Same Y axis but shifted to pass through a point 7mm away in X from the CoM.
+    const pivot = { x: mp.centerOfMass.x + 7, y: mp.centerOfMass.y, z: mp.centerOfMass.z };
+    const iPivot = computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 }, 1, pivot);
+    expect(iPivot).toBeCloseTo(iCom + mp.mass * 49, 4); // I_cm + m·d², d=7
+  });
 });
 
 describe('computePrincipalMoments', () => {

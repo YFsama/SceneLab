@@ -1067,7 +1067,12 @@ export function registerBuiltinTools(): void {
         axis: {
           type: 'object',
           properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
-          description: 'Optional axis to also report the scalar moment of inertia about (through the CoM)',
+          description: 'Optional axis to also report the scalar moment of inertia about',
+        },
+        axisPoint: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Optional point the axis passes through (a hinge/pivot); applies the parallel-axis theorem. Defaults to the CoM.',
         },
       },
     },
@@ -1085,7 +1090,14 @@ export function registerBuiltinTools(): void {
       const i = mp.inertia;
       const axisMoment =
         args.axis !== undefined
-          ? r3(computeMomentOfInertiaAboutAxis(body, assertVec3(args.axis, 'axis'), densityGramsPerMm3))
+          ? r3(
+              computeMomentOfInertiaAboutAxis(
+                body,
+                assertVec3(args.axis, 'axis'),
+                densityGramsPerMm3,
+                args.axisPoint !== undefined ? assertVec3(args.axisPoint, 'axisPoint') : undefined,
+              ),
+            )
           : undefined;
       return {
         bodyId: body.id,

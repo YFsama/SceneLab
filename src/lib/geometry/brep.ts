@@ -2727,25 +2727,37 @@ export function computePrincipalMoments(body: SolidBody, density = 1): Principal
 }
 
 /**
- * Scalar moment of inertia about an arbitrary axis through the center of mass:
- * I = n̂ᵀ·I·n̂ for the unit direction n̂. Use for "how hard is this to spin about
- * this axis" — flywheels, rotation about a shaft, etc. Returns 0 for a
- * zero-length axis.
+ * Scalar moment of inertia about an arbitrary axis. With no `point` the axis
+ * passes through the center of mass and I = n̂ᵀ·I·n̂. Pass a `point` on the axis
+ * (e.g. a hinge or pivot) to apply the parallel-axis theorem: I = I_cm + m·d²,
+ * where d is the perpendicular distance from the CoM to the axis line. Use for
+ * flywheels, shafts, hinges and pendulums. Returns 0 for a zero-length axis.
  */
-export function computeMomentOfInertiaAboutAxis(body: SolidBody, axis: Vec3, density = 1): number {
+export function computeMomentOfInertiaAboutAxis(body: SolidBody, axis: Vec3, density = 1, point?: Vec3): number {
   const len = Math.hypot(axis.x, axis.y, axis.z);
   if (len < 1e-12) return 0;
   const nx = axis.x / len;
   const ny = axis.y / len;
   const nz = axis.z / len;
-  const i = computeMassProperties(body, density).inertia;
+  const mp = computeMassProperties(body, density);
+  const i = mp.inertia;
   // nᵀ I n with the symmetric tensor (products of inertia doubled).
-  return (
+  const iCom =
     i.ixx * nx * nx +
     i.iyy * ny * ny +
     i.izz * nz * nz +
-    2 * (i.ixy * nx * ny + i.iyz * ny * nz + i.ixz * nx * nz)
-  );
+    2 * (i.ixy * nx * ny + i.iyz * ny * nz + i.ixz * nx * nz);
+  if (!point) return iCom;
+  // Perpendicular distance from the CoM to the axis line through `point`.
+  const rx = mp.centerOfMass.x - point.x;
+  const ry = mp.centerOfMass.y - point.y;
+  const rz = mp.centerOfMass.z - point.z;
+  const along = rx * nx + ry * ny + rz * nz;
+  const px = rx - along * nx;
+  const py = ry - along * ny;
+  const pz = rz - along * nz;
+  const d2 = px * px + py * py + pz * pz;
+  return iCom + mp.mass * d2;
 }
 
 export interface CenterOfMassInfo {
