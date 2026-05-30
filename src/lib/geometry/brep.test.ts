@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
+import { computeTopology, computeMeshGenus } from './brep';
+
+describe('topology', () => {
+  it('a box is genus 0 and sphere-like (Euler χ = 2)', () => {
+    const topo = computeTopology(createBox(10, 10, 10));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+    expect(topo.isSphereLike).toBe(true);
+  });
+
+  it('a torus is genus 1 with one handle (Euler χ = 0)', () => {
+    const g = computeMeshGenus(createTorus(10, 3, 32, 16));
+    expect(g.eulerCharacteristic).toBe(0);
+    expect(g.genus).toBe(1);
+    expect(g.handles).toBe(1);
+    expect(g.isOrientable).toBe(true);
+  });
+});
 import type { Vec3, SolidBody } from './types';
 
 /** Translate every position of a body by an offset (helper for invariance tests). */
