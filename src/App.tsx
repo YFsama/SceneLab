@@ -5,6 +5,7 @@ import { ViewCube } from './components/viewport/ViewCube';
 import { DrawingCanvas } from './components/viewport/DrawingCanvas';
 import { Toolbar } from './components/toolbar/Toolbar';
 import { SketchToolbar } from './components/toolbar/SketchToolbar';
+import { PrimitiveBar } from './components/toolbar/PrimitiveBar';
 import { BrowserTree } from './components/panels/BrowserTree';
 import { PropertiesPanel } from './components/panels/PropertiesPanel';
 import { StatusBar } from './components/ui/StatusBar';
@@ -52,6 +53,7 @@ export default function App() {
               <ViewportCanvas />
               <ViewCube />
               {workspace === 'sketch' && <SketchToolbar />}
+              {workspace === 'model' && <PrimitiveBar />}
             </>
           )}
         </main>
