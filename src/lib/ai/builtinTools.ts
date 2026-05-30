@@ -5,6 +5,7 @@ import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { booleanOp, hollowBody } from '../geometry/boolean';
 import { listFaces, angleBetweenFaces } from '../geometry/query';
+import { listDimensions } from '../sketch/dimensions';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -806,6 +807,21 @@ export function registerBuiltinTools(): void {
           normal: { x: r3(f.normal.x), y: r3(f.normal.y), z: r3(f.normal.z) },
           centroid: { x: r3(f.centroid.x), y: r3(f.centroid.y), z: r3(f.centroid.z) },
         })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'list_sketch_dimensions',
+    description: 'List the measured dimensions of the active sketch — a length per line and a radius per circle/arc, with mm values. Use to read a sketch\'s current sizes.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const sketch = useStore.getState().currentSketch;
+      if (!sketch) throw new Error('No active sketch');
+      const dims = listDimensions(sketch);
+      return {
+        count: dims.length,
+        dimensions: dims.map((d) => ({ kind: d.kind, value: Number(d.value.toFixed(3)), entityIds: d.entityIds, label: d.label })),
       };
     },
   });
