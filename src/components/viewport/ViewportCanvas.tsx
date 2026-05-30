@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
 import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
+import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -27,6 +28,7 @@ export function ViewportCanvas() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const planesGroupRef = useRef<THREE.Group | null>(null);
+  const datumGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -39,6 +41,7 @@ export function ViewportCanvas() {
   const currentSketch = useStore((s) => s.currentSketch);
   const drawStart = useStore((s) => s.drawStart);
   const bodies = useStore((s) => s.bodies);
+  const datumPlanes = useStore((s) => s.planes);
   const deselectAll = useStore((s) => s.deselectAll);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -146,6 +149,11 @@ export function ViewportCanvas() {
     bodiesGroup.name = 'bodies';
     scene.add(bodiesGroup);
     bodiesGroupRef.current = bodiesGroup;
+
+    const datumGroup = new THREE.Group();
+    datumGroup.name = 'datum-planes';
+    scene.add(datumGroup);
+    datumGroupRef.current = datumGroup;
 
     animate();
 
@@ -360,6 +368,45 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [bodies]);
+
+  // Render the store's datum/reference planes as translucent outlined quads.
+  useEffect(() => {
+    const datumGroup = datumGroupRef.current;
+    if (!datumGroup) return;
+
+    while (datumGroup.children.length > 0) {
+      const child = datumGroup.children[0]!;
+      datumGroup.remove(child);
+      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+
+    const size = 6;
+    for (const plane of datumPlanes) {
+      const fillGeo = new THREE.BufferGeometry();
+      fillGeo.setAttribute('position', new THREE.Float32BufferAttribute(datumPlaneTriangles(plane, size), 3));
+      fillGeo.computeVertexNormals();
+      const fillMat = new THREE.MeshBasicMaterial({
+        color: 0xf9e2af,
+        transparent: true,
+        opacity: 0.12,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const fill = new THREE.Mesh(fillGeo, fillMat);
+      fill.name = `datum-${plane.id}`;
+      datumGroup.add(fill);
+
+      const outlineGeo = new THREE.BufferGeometry().setFromPoints(
+        datumPlaneOutline(plane, size).map((p) => new THREE.Vector3(p.x, p.y, p.z)),
+      );
+      const outlineMat = new THREE.LineBasicMaterial({ color: 0xf9e2af, transparent: true, opacity: 0.6 });
+      datumGroup.add(new THREE.Line(outlineGeo, outlineMat));
+    }
+    dirtyRef.current = true;
+  }, [datumPlanes]);
 
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;
