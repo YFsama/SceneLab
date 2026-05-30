@@ -5,7 +5,7 @@ import { Box, Layers, History } from 'lucide-react';
 import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
-import { centerBody, convexHullBody } from '../../lib/geometry';
+import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import type { SolidBody } from '../../lib/geometry/types';
 
 export function BrowserTree() {
@@ -15,6 +15,7 @@ export function BrowserTree() {
   const selectObject = useStore((s) => s.selectObject);
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
+  const addDirectBodies = useStore((s) => s.addDirectBodies);
   const featureTree = useStore((s) => s.featureTree);
   const [menu, setMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
 
@@ -23,11 +24,35 @@ export function BrowserTree() {
     if (body) replaceBody(bodyId, op(body));
   };
 
+  // Mirror-merge a body about its min face along an axis, replacing it in place.
+  const mirror = (bodyId: string, axis: Axis) => {
+    const body = bodies.find((b) => b.id === bodyId);
+    if (!body) return;
+    const r = mirrorAcrossAxis(body, axis);
+    if (r) replaceBody(bodyId, r);
+  };
+
+  // Split a body in half through its centre along an axis, replacing it with the halves.
+  const split = (bodyId: string, axis: Axis) => {
+    const body = bodies.find((b) => b.id === bodyId);
+    if (!body) return;
+    const halves = splitAcrossAxis(body, axis);
+    if (halves.length === 0) return;
+    removeDirectBody(bodyId);
+    addDirectBodies(halves);
+  };
+
   const menuItems = (bodyId: string): ContextMenuItem[] => [
     { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat) },
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
     { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
+    { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
+    { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },
+    { label: t('menu.mirrorZ'), onClick: () => mirror(bodyId, 'z') },
+    { label: t('menu.splitX'), onClick: () => split(bodyId, 'x'), separatorBefore: true },
+    { label: t('menu.splitY'), onClick: () => split(bodyId, 'y') },
+    { label: t('menu.splitZ'), onClick: () => split(bodyId, 'z') },
     { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
   ];
 
