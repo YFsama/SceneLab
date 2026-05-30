@@ -460,4 +460,46 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().axes).toHaveLength(0);
     });
   });
+
+  describe('datum points', () => {
+    beforeEach(() => useStore.getState().clearScene());
+
+    it('addPoint and addMidpoint store points', () => {
+      useStore.getState().addPoint({ x: 1, y: 2, z: 3 });
+      const midId = useStore.getState().addMidpoint({ x: 0, y: 0, z: 0 }, { x: 4, y: 0, z: 0 });
+      expect(useStore.getState().points).toHaveLength(2);
+      expect(useStore.getState().points.find((p) => p.id === midId)!.position.x).toBeCloseTo(2, 6);
+    });
+
+    it('addPointAtAxisPlane finds the pierce point of an axis through a plane', () => {
+      // Z axis at (3,4) and the offset of the Top (XZ) plane... use a Z=7 plane via offset.
+      const axisId = useStore.getState().addAxisFromPoints({ x: 3, y: 4, z: 0 }, { x: 3, y: 4, z: 1 })!;
+      useStore.getState().ensureStandardPlanes();
+      const front = useStore.getState().planes[0]; // Front (XY), normal +Z, origin z=0
+      const z7 = useStore.getState().addOffsetPlane(front.id, 7)!; // plane z=7
+      const id = useStore.getState().addPointAtAxisPlane(axisId, z7);
+      expect(id).toBeTruthy();
+      const p = useStore.getState().points.find((pt) => pt.id === id)!;
+      expect(p.position.x).toBeCloseTo(3, 6);
+      expect(p.position.y).toBeCloseTo(4, 6);
+      expect(p.position.z).toBeCloseTo(7, 6);
+    });
+
+    it('addPointAtAxisPlane returns null for missing ids or a parallel axis', () => {
+      const xAxis = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })!;
+      useStore.getState().ensureStandardPlanes();
+      const front = useStore.getState().planes[0]; // z=0 plane; X axis lies in it → parallel
+      expect(useStore.getState().addPointAtAxisPlane(xAxis, front.id)).toBeNull();
+      expect(useStore.getState().addPointAtAxisPlane('nope', front.id)).toBeNull();
+    });
+
+    it('removePoint removes by id and clearScene wipes all points', () => {
+      const id = useStore.getState().addPoint({ x: 0, y: 0, z: 0 });
+      useStore.getState().removePoint(id);
+      expect(useStore.getState().points).toHaveLength(0);
+      useStore.getState().addPoint({ x: 1, y: 1, z: 1 });
+      useStore.getState().clearScene();
+      expect(useStore.getState().points).toHaveLength(0);
+    });
+  });
 });

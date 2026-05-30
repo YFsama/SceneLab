@@ -30,6 +30,7 @@ export function ViewportCanvas() {
   const planesGroupRef = useRef<THREE.Group | null>(null);
   const datumGroupRef = useRef<THREE.Group | null>(null);
   const axisGroupRef = useRef<THREE.Group | null>(null);
+  const pointGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -44,6 +45,7 @@ export function ViewportCanvas() {
   const bodies = useStore((s) => s.bodies);
   const datumPlanes = useStore((s) => s.planes);
   const datumAxes = useStore((s) => s.axes);
+  const datumPoints = useStore((s) => s.points);
   const deselectAll = useStore((s) => s.deselectAll);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -161,6 +163,11 @@ export function ViewportCanvas() {
     axisGroup.name = 'datum-axes';
     scene.add(axisGroup);
     axisGroupRef.current = axisGroup;
+
+    const pointGroup = new THREE.Group();
+    pointGroup.name = 'datum-points';
+    scene.add(pointGroup);
+    pointGroupRef.current = pointGroup;
 
     animate();
 
@@ -445,6 +452,31 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [datumAxes]);
+
+  // Render the store's datum points as small markers.
+  useEffect(() => {
+    const pointGroup = pointGroupRef.current;
+    if (!pointGroup) return;
+
+    while (pointGroup.children.length > 0) {
+      const child = pointGroup.children[0]!;
+      pointGroup.remove(child);
+      if (child instanceof THREE.Points) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+
+    for (const pt of datumPoints) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([pt.position.x, pt.position.y, pt.position.z], 3));
+      const mat = new THREE.PointsMaterial({ color: 0xf9e2af, size: 8, sizeAttenuation: false });
+      const marker = new THREE.Points(geo, mat);
+      marker.name = `point-${pt.id}`;
+      pointGroup.add(marker);
+    }
+    dirtyRef.current = true;
+  }, [datumPoints]);
 
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;

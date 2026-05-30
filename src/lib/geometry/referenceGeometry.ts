@@ -182,3 +182,40 @@ export function distancePointToAxis(axis: AxisDefinition, point: Vec3): number {
   const c = closestPointOnAxis(axis, point);
   return Math.hypot(point.x - c.x, point.y - c.y, point.z - c.z);
 }
+
+// --- Reference points (datum points) ---
+
+let nextPointId = 1;
+const genPointId = () => `point_${nextPointId++}`;
+
+/** A datum point: a named position in space. */
+export interface PointDefinition {
+  id: string;
+  name: string;
+  position: Vec3;
+}
+
+/** Build a datum point at a position. */
+export function makePoint(position: Vec3, name = 'Point'): PointDefinition {
+  return { id: genPointId(), name, position: { ...position } };
+}
+
+/** Datum point at the midpoint of two points. */
+export function midpoint(p1: Vec3, p2: Vec3, name = 'Midpoint'): PointDefinition {
+  return makePoint({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2, z: (p1.z + p2.z) / 2 }, name);
+}
+
+/**
+ * Datum point where an axis pierces a plane (SolidWorks point at axis/plane
+ * intersection). Returns null if the axis is parallel to the plane.
+ */
+export function pointAtAxisPlaneIntersection(axis: AxisDefinition, plane: PlaneDefinition, name = 'Point'): PointDefinition | null {
+  const denom = dot(plane.normal, axis.direction);
+  if (Math.abs(denom) < 1e-12) return null; // axis parallel to plane
+  const w = { x: plane.origin.x - axis.origin.x, y: plane.origin.y - axis.origin.y, z: plane.origin.z - axis.origin.z };
+  const t = dot(plane.normal, w) / denom;
+  return makePoint(
+    { x: axis.origin.x + axis.direction.x * t, y: axis.origin.y + axis.direction.y * t, z: axis.origin.z + axis.direction.z * t },
+    name,
+  );
+}

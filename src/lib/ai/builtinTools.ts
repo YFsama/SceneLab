@@ -938,6 +938,56 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'list_points',
+    description: 'List the scene\'s datum/reference points with id, name and position (mm).',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const r3 = (n: number) => Number(n.toFixed(3));
+      return {
+        points: useStore.getState().points.map((p) => ({
+          id: p.id,
+          name: p.name,
+          position: { x: r3(p.position.x), y: r3(p.position.y), z: r3(p.position.z) },
+        })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'create_point',
+    description: 'Create a datum point at a position (mm).',
+    parameters: {
+      type: 'object',
+      properties: {
+        position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+      },
+      required: ['position'],
+    },
+    execute: async (args) => {
+      const id = useStore.getState().addPoint(assertVec3(args.position, 'position'));
+      return { success: true, pointId: id };
+    },
+  });
+
+  registerTool({
+    name: 'create_point_at_axis_plane',
+    description: 'Create a datum point where a datum axis pierces a datum plane (SolidWorks point at axis/plane intersection). Use list_axes and list_planes for ids; null if the axis is parallel to the plane.',
+    parameters: {
+      type: 'object',
+      properties: {
+        axisId: { type: 'string', description: 'Datum axis id from list_axes' },
+        planeId: { type: 'string', description: 'Datum plane id from list_planes' },
+      },
+      required: ['axisId', 'planeId'],
+    },
+    execute: async (args) => {
+      const id = useStore.getState().addPointAtAxisPlane(assertString(args.axisId, 'axisId'), assertString(args.planeId, 'planeId'));
+      if (!id) throw new Error('Axis/plane not found or axis parallel to the plane');
+      return { success: true, pointId: id };
+    },
+  });
+
+  registerTool({
     name: 'create_axis_from_points',
     description: 'Create a datum axis through two points (mm).',
     parameters: {

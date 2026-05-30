@@ -12,6 +12,9 @@ import {
   axisFromPlanes,
   closestPointOnAxis,
   distancePointToAxis,
+  makePoint,
+  midpoint,
+  pointAtAxisPlaneIntersection,
 } from './referenceGeometry';
 import { createBox } from './brep';
 import { listFaces } from './query';
@@ -175,5 +178,35 @@ describe('reference axes', () => {
     expect(c.y).toBeCloseTo(0, 6);
     expect(c.z).toBeCloseTo(7, 6); // projects onto the axis at the same height
     expect(distancePointToAxis(zAxis, p)).toBeCloseTo(5, 6); // √(3²+4²)
+  });
+});
+
+describe('reference points', () => {
+  it('makePoint copies the position', () => {
+    const src = { x: 1, y: 2, z: 3 };
+    const p = makePoint(src);
+    expect(p.position).toEqual(src);
+    src.x = 99; // mutating the source must not affect the stored point
+    expect(p.position.x).toBe(1);
+  });
+
+  it('midpoint averages two points', () => {
+    const m = midpoint({ x: 0, y: 0, z: 0 }, { x: 4, y: 2, z: 8 });
+    expect(m.position).toEqual({ x: 2, y: 1, z: 4 });
+  });
+
+  it('pointAtAxisPlaneIntersection finds where an axis pierces a plane', () => {
+    const zAxis = makeAxis({ x: 3, y: 4, z: 0 }, { x: 0, y: 0, z: 1 });
+    const plane = makePlane({ x: 0, y: 0, z: 7 }, { x: 0, y: 0, z: 1 }); // z = 7
+    const p = pointAtAxisPlaneIntersection(zAxis, plane)!;
+    expect(p.position.x).toBeCloseTo(3, 6);
+    expect(p.position.y).toBeCloseTo(4, 6);
+    expect(p.position.z).toBeCloseTo(7, 6);
+  });
+
+  it('pointAtAxisPlaneIntersection is null when the axis lies parallel to the plane', () => {
+    const xAxis = makeAxis({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 });
+    const plane = makePlane({ x: 0, y: 0, z: 5 }, { x: 0, y: 0, z: 1 }); // axis runs in z=0, parallel
+    expect(pointAtAxisPlaneIntersection(xAxis, plane)).toBeNull();
   });
 });

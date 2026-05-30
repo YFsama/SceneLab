@@ -5,7 +5,7 @@ import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
-import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, type AxisDefinition } from '../lib/geometry/referenceGeometry';
+import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, type AxisDefinition, type PointDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
 import { applyCircularArray } from '../lib/geometry/operations';
 
@@ -114,6 +114,16 @@ interface AppState {
   removeAxis: (id: string) => void;
   /** Circular-pattern a body around a stored datum axis; returns the new body ids ([] on failure). */
   circularPatternAboutAxis: (bodyId: string, axisId: string, count: number) => string[];
+
+  // Reference geometry — datum points.
+  points: PointDefinition[];
+  /** Add a datum point to the scene; returns its id. */
+  addPoint: (position: Vec3, name?: string) => string;
+  /** Datum point at the midpoint of two points; returns its id. */
+  addMidpoint: (p1: Vec3, p2: Vec3) => string;
+  /** Datum point where a datum axis pierces a datum plane; null if missing or parallel. */
+  addPointAtAxisPlane: (axisId: string, planeId: string) => string | null;
+  removePoint: (id: string) => void;
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
 
@@ -384,6 +394,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedIds: [],
       planes: [],
       axes: [],
+      points: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -401,6 +412,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedIds: [],
       planes: [],
       axes: [],
+      points: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -477,6 +489,28 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return copies.map((c) => c.id);
   },
+
+  points: [],
+  addPoint: (position, name) => {
+    const p = makePoint(position, name);
+    set((s) => ({ points: [...s.points, p], projectDirty: true }));
+    return p.id;
+  },
+  addMidpoint: (p1, p2) => {
+    const p = midpoint(p1, p2);
+    set((s) => ({ points: [...s.points, p], projectDirty: true }));
+    return p.id;
+  },
+  addPointAtAxisPlane: (axisId, planeId) => {
+    const axis = get().axes.find((a) => a.id === axisId);
+    const plane = get().planes.find((p) => p.id === planeId);
+    if (!axis || !plane) return null;
+    const p = pointAtAxisPlaneIntersection(axis, plane);
+    if (!p) return null;
+    set((s) => ({ points: [...s.points, p], projectDirty: true }));
+    return p.id;
+  },
+  removePoint: (id) => set((s) => ({ points: s.points.filter((p) => p.id !== id), projectDirty: true })),
 
   splitBodyByPlane: (bodyId, planeId) => {
     const body = get().bodies.find((b) => b.id === bodyId);
