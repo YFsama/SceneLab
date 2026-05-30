@@ -225,7 +225,7 @@ describe('app store — direct bodies', () => {
   });
 
   it('addPrimitive creates each kind and adds it to the scene', () => {
-    const kinds = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube'] as const;
+    const kinds = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube', 'coil'] as const;
     for (const kind of kinds) {
       useStore.setState({ featureTree: new FeatureTree(), bodies: [], directBodies: [], objectIds: [] });
       const id = useStore.getState().addPrimitive(kind);

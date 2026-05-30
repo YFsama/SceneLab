@@ -1,6 +1,6 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot } from 'lucide-react';
+import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline } from 'lucide-react';
 
 const primitives: { kind: PrimitiveKind; icon: typeof Box }[] = [
   { kind: 'box', icon: Box },
@@ -11,6 +11,7 @@ const primitives: { kind: PrimitiveKind; icon: typeof Box }[] = [
   { kind: 'wedge', icon: Triangle },
   { kind: 'prism', icon: Hexagon },
   { kind: 'tube', icon: CircleDot },
+  { kind: 'coil', icon: Spline },
 ];
 
 /** Floating bar in the model workspace for inserting default-sized primitives. */

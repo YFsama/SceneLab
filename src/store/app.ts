@@ -13,9 +13,10 @@ import {
   createWedge,
   createPrism,
   createTube,
+  createCoil,
 } from '../lib/geometry/brep';
 
-export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | 'wedge' | 'prism' | 'tube';
+export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | 'wedge' | 'prism' | 'tube' | 'coil';
 
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
@@ -235,6 +236,7 @@ export const useStore = create<AppState>((set, get) => {
         case 'wedge': return createWedge(20, 20, 20);
         case 'prism': return createPrism(6, 10, 20);
         case 'tube': return createTube(10, 6, 20);
+        case 'coil': return createCoil(10, 2, 6, 3);
       }
     })();
     get().addDirectBody(body);
