@@ -883,6 +883,59 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'list_axes',
+    description: 'List the scene\'s datum/reference axes with id, name, origin and unit direction.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const r3 = (n: number) => Number(n.toFixed(3));
+      return {
+        axes: useStore.getState().axes.map((a) => ({
+          id: a.id,
+          name: a.name,
+          origin: { x: r3(a.origin.x), y: r3(a.origin.y), z: r3(a.origin.z) },
+          direction: { x: r3(a.direction.x), y: r3(a.direction.y), z: r3(a.direction.z) },
+        })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'create_axis_from_planes',
+    description: 'Create a datum axis at the intersection of two datum planes (SolidWorks axis from two planes). Use list_planes for ids; the planes must not be parallel.',
+    parameters: {
+      type: 'object',
+      properties: {
+        planeIdA: { type: 'string', description: 'First datum plane id' },
+        planeIdB: { type: 'string', description: 'Second datum plane id' },
+      },
+      required: ['planeIdA', 'planeIdB'],
+    },
+    execute: async (args) => {
+      const id = useStore.getState().addAxisFromPlanes(assertString(args.planeIdA, 'planeIdA'), assertString(args.planeIdB, 'planeIdB'));
+      if (!id) throw new Error('Planes not found or parallel — no intersection axis');
+      return { success: true, axisId: id };
+    },
+  });
+
+  registerTool({
+    name: 'create_axis_from_points',
+    description: 'Create a datum axis through two points (mm).',
+    parameters: {
+      type: 'object',
+      properties: {
+        p1: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+        p2: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+      },
+      required: ['p1', 'p2'],
+    },
+    execute: async (args) => {
+      const id = useStore.getState().addAxisFromPoints(assertVec3(args.p1, 'p1'), assertVec3(args.p2, 'p2'));
+      if (!id) throw new Error('The two points coincide — no axis');
+      return { success: true, axisId: id };
+    },
+  });
+
+  registerTool({
     name: 'create_plane_from_face',
     description: 'Create a datum plane coincident with a body face, optionally offset (mm) along its outward normal. Use list_faces for face ids.',
     parameters: {

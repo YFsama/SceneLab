@@ -402,4 +402,41 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().planes).toHaveLength(0);
     });
   });
+
+  describe('datum axes', () => {
+    beforeEach(() => useStore.getState().clearScene());
+
+    it('addAxisFromPlanes builds the intersection axis of two standard planes', () => {
+      useStore.getState().ensureStandardPlanes();
+      const [front, top] = useStore.getState().planes;
+      const id = useStore.getState().addAxisFromPlanes(front.id, top.id);
+      expect(id).toBeTruthy();
+      const axis = useStore.getState().axes.find((a) => a.id === id)!;
+      expect(Math.abs(axis.direction.x)).toBeCloseTo(1, 6); // Front ∩ Top = X axis
+    });
+
+    it('addAxisFromPlanes returns null for parallel or missing planes', () => {
+      useStore.getState().ensureStandardPlanes();
+      const front = useStore.getState().planes[0];
+      const offsetId = useStore.getState().addOffsetPlane(front.id, 5)!;
+      expect(useStore.getState().addAxisFromPlanes(front.id, offsetId)).toBeNull(); // parallel
+      expect(useStore.getState().addAxisFromPlanes('nope', front.id)).toBeNull();
+    });
+
+    it('addAxisFromPoints builds an axis; null if coincident', () => {
+      const id = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 5 });
+      expect(id).toBeTruthy();
+      expect(useStore.getState().axes.find((a) => a.id === id)!.direction.z).toBeCloseTo(1, 6);
+      expect(useStore.getState().addAxisFromPoints({ x: 1, y: 1, z: 1 }, { x: 1, y: 1, z: 1 })).toBeNull();
+    });
+
+    it('removeAxis removes by id and clearScene wipes all axes', () => {
+      const id = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })!;
+      useStore.getState().removeAxis(id);
+      expect(useStore.getState().axes).toHaveLength(0);
+      useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 });
+      useStore.getState().clearScene();
+      expect(useStore.getState().axes).toHaveLength(0);
+    });
+  });
 });

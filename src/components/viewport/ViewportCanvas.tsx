@@ -29,6 +29,7 @@ export function ViewportCanvas() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const planesGroupRef = useRef<THREE.Group | null>(null);
   const datumGroupRef = useRef<THREE.Group | null>(null);
+  const axisGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -42,6 +43,7 @@ export function ViewportCanvas() {
   const drawStart = useStore((s) => s.drawStart);
   const bodies = useStore((s) => s.bodies);
   const datumPlanes = useStore((s) => s.planes);
+  const datumAxes = useStore((s) => s.axes);
   const deselectAll = useStore((s) => s.deselectAll);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -154,6 +156,11 @@ export function ViewportCanvas() {
     datumGroup.name = 'datum-planes';
     scene.add(datumGroup);
     datumGroupRef.current = datumGroup;
+
+    const axisGroup = new THREE.Group();
+    axisGroup.name = 'datum-axes';
+    scene.add(axisGroup);
+    axisGroupRef.current = axisGroup;
 
     animate();
 
@@ -407,6 +414,37 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [datumPlanes]);
+
+  // Render the store's datum axes as long line segments through their origins.
+  useEffect(() => {
+    const axisGroup = axisGroupRef.current;
+    if (!axisGroup) return;
+
+    while (axisGroup.children.length > 0) {
+      const child = axisGroup.children[0]!;
+      axisGroup.remove(child);
+      if (child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+
+    const half = 12; // draw the (infinite) axis as a finite segment ±half mm
+    for (const axis of datumAxes) {
+      const o = axis.origin;
+      const d = axis.direction;
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(o.x - d.x * half, o.y - d.y * half, o.z - d.z * half),
+        new THREE.Vector3(o.x + d.x * half, o.y + d.y * half, o.z + d.z * half),
+      ]);
+      const mat = new THREE.LineDashedMaterial({ color: 0xf38ba8, dashSize: 0.6, gapSize: 0.3 });
+      const line = new THREE.Line(geo, mat);
+      line.computeLineDistances(); // required for dashed lines
+      line.name = `axis-${axis.id}`;
+      axisGroup.add(line);
+    }
+    dirtyRef.current = true;
+  }, [datumAxes]);
 
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;
