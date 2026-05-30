@@ -1103,8 +1103,11 @@ export function computeEdgeLength(edge: Edge): number {
 }
 
 export function computeTotalEdgeLength(body: SolidBody): number {
+  // Derive edges from faces (unique, deduplicated) rather than body.edges,
+  // which some primitives under- or over-count; this keeps the total correct
+  // for every mesh.
   let total = 0;
-  for (const edge of body.edges) {
+  for (const edge of buildEdgesFromFaces(body.faces)) {
     total += computeEdgeLength(edge);
   }
   return total;
@@ -1156,7 +1159,10 @@ export function computeMeshStatistics(body: SolidBody): MeshStatistics {
   let maxEdgeLength = 0;
   let triangleCount = 0;
 
-  for (const edge of body.edges) {
+  // Use the unique edges implied by the faces; body.edges is inconsistent
+  // across primitives (some under-count, some duplicate).
+  const edges = buildEdgesFromFaces(body.faces);
+  for (const edge of edges) {
     const len = computeEdgeLength(edge);
     totalEdgeLength += len;
     minEdgeLength = Math.min(minEdgeLength, len);
@@ -1171,10 +1177,10 @@ export function computeMeshStatistics(body: SolidBody): MeshStatistics {
   return {
     vertexCount: body.vertices.length,
     faceCount: body.faces.length,
-    edgeCount: body.edges.length,
+    edgeCount: edges.length,
     triangleCount,
-    averageEdgeLength: body.edges.length > 0 ? totalEdgeLength / body.edges.length : 0,
-    minEdgeLength: body.edges.length > 0 ? minEdgeLength : 0,
+    averageEdgeLength: edges.length > 0 ? totalEdgeLength / edges.length : 0,
+    minEdgeLength: edges.length > 0 ? minEdgeLength : 0,
     maxEdgeLength,
   };
 }

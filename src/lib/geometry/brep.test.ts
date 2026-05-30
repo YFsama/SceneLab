@@ -365,11 +365,19 @@ describe('topology', () => {
     expect(g.isOrientable).toBe(true);
   });
 
-  it('hollow primitives expose deduplicated edges (not one per face-side)', () => {
+  it('edge metrics come from faces (consistent for over- and under-counting prims)', () => {
     // 32-segment tube = 128 quad faces → 256 unique edges, not 512.
     expect(computeMeshStatistics(createTube(10, 6, 20, 32)).edgeCount).toBe(256);
     // Wedge = triangular prism → 9 edges.
     expect(computeMeshStatistics(createWedge(10, 6, 4)).edgeCount).toBe(9);
+    // Sphere/cone previously under-counted body.edges; face-derived is correct.
+    // For a closed genus-0 mesh, E = V_unique + F − 2 (Euler).
+    for (const make of [() => createSphere(6, 16), () => createCone(5, 0, 10, 32)]) {
+      const b = make();
+      const s = computeMeshStatistics(b);
+      const uniqueV = new Set(b.faces.flatMap((f) => f.vertices.map((v) => `${v.x.toFixed(4)},${v.y.toFixed(4)},${v.z.toFixed(4)}`))).size;
+      expect(s.edgeCount).toBe(uniqueV + s.faceCount - 2);
+    }
   });
 
   it('a capped tube/frustum is genus 1, a coil genus 0 (edges counted from faces)', () => {
