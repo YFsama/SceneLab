@@ -85,6 +85,9 @@ export function ViewportCanvas() {
       alpha: false,
       // Ask the OS to pick the discrete GPU on dual-GPU machines.
       powerPreference: 'high-performance',
+      // Keep the last frame readable so screenshots / AI-vision capture
+      // (canvas.toDataURL) return the rendered image instead of a black frame.
+      preserveDrawingBuffer: true,
     });
     // Clamp the device pixel ratio: above 2x the extra fragments cost a lot of
     // GPU time for no visible gain on a CAD viewport.

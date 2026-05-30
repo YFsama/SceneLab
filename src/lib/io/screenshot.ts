@@ -1,13 +1,13 @@
 import type * as THREE from 'three';
 
-/** Capture the current viewport as a PNG data URL */
+/**
+ * Capture the current viewport as a PNG data URL. The renderer must have been
+ * created with `preserveDrawingBuffer: true` so the last rendered frame is
+ * still readable here (a WebGL drawing buffer is otherwise cleared after
+ * compositing, yielding a black image).
+ */
 export function captureViewport(renderer: THREE.WebGLRenderer): string {
-  const canvas = renderer.domElement;
-
-  // Force a render
-  renderer.render(renderer.domElement as unknown as THREE.Scene, renderer.domElement as unknown as THREE.Camera);
-
-  return canvas.toDataURL('image/png');
+  return renderer.domElement.toDataURL('image/png');
 }
 
 /** Capture viewport and trigger download */
