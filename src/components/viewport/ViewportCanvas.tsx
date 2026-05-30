@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
 import { createSketch } from '../../lib/sketch/engine';
+import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -196,6 +197,9 @@ export function ViewportCanvas() {
     camera.up.copy(dir.up);
     controls.target.set(0, 0, 0);
     controls.update();
+    // Snapping the camera is an instant jump; mark dirty so the on-demand loop
+    // repaints even if OrbitControls reports no incremental movement.
+    dirtyRef.current = true;
   }, [viewDirection]);
 
   useEffect(() => {
@@ -334,18 +338,7 @@ export function ViewportCanvas() {
 
     for (const body of bodies) {
       const geo = new THREE.BufferGeometry();
-      const positions: number[] = [];
-      const indices: number[] = [];
-
-      for (const face of body.faces) {
-        const baseIdx = positions.length / 3;
-        for (const v of face.vertices) {
-          positions.push(v.x, v.y, v.z);
-        }
-        for (let i = 1; i < face.vertices.length - 1; i++) {
-          indices.push(baseIdx, baseIdx + i, baseIdx + i + 1);
-        }
-      }
+      const { positions, indices } = buildBodyMeshArrays(body);
 
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setIndex(indices);
