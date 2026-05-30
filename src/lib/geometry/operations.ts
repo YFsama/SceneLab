@@ -1,4 +1,5 @@
 import type { Vec3, SolidBody, Face, Edge } from './types';
+import { computeConvexHull } from './convexHull';
 
 let nextId = 1;
 function genId(prefix: string): string {
@@ -435,6 +436,36 @@ export function applyMirror(
 }
 
 // --- Helpers ---
+
+/**
+ * Replace a body with its 3D convex hull — the tightest convex solid that
+ * encloses all its vertices. Useful for collision proxies, clamp/grip shapes
+ * and simplifying messy or concave imported meshes. Returns the original body
+ * unchanged if the points are degenerate (coplanar / too few for a hull).
+ */
+export function convexHullBody(body: SolidBody, name: string = `${body.name} (hull)`): SolidBody {
+  const hull = computeConvexHull(body.vertices);
+  if (!hull) return body;
+  const vertices = hull.vertices.map((v) => ({ ...v }));
+  const faces: Face[] = hull.faces.map(([a, b, c]) => {
+    const va = vertices[a]!;
+    const vb = vertices[b]!;
+    const vc = vertices[c]!;
+    const n = normalize({
+      x: (vb.y - va.y) * (vc.z - va.z) - (vb.z - va.z) * (vc.y - va.y),
+      y: (vb.z - va.z) * (vc.x - va.x) - (vb.x - va.x) * (vc.z - va.z),
+      z: (vb.x - va.x) * (vc.y - va.y) - (vb.y - va.y) * (vc.x - va.x),
+    });
+    return { id: genId('face'), vertices: [va, vb, vc], normal: n };
+  });
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    for (let i = 0; i < f.vertices.length; i++) {
+      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
+    }
+  }
+  return { id: genId('body'), name, vertices, faces, edges };
+}
 
 /**
  * Center a body so its bounding-box center sits at the origin. Useful for

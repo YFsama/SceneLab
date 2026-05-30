@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import type { SolidBody, Vec3 } from './types';
@@ -362,5 +362,24 @@ describe('centerBody', () => {
     const c = centerBody(box);
     const bb = computeBoundingBox(c);
     expect((bb.min.y + bb.max.y) / 2).toBeCloseTo(0, 6); // Y now centered
+  });
+});
+
+describe('convexHullBody', () => {
+  it('hulls a convex box back to itself (watertight, same volume)', () => {
+    const h = convexHullBody(createBox(10, 10, 10));
+    expect(checkManifold(h).isManifold).toBe(true);
+    expect(Math.abs(computeVolume(h))).toBeCloseTo(1000, 3);
+  });
+
+  it('wraps a non-convex (disjoint) shape, enclosing more than the parts', () => {
+    const dumbbell = mergeBodies([
+      createBox(10, 10, 10),
+      translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }),
+    ]);
+    const h = convexHullBody(dumbbell);
+    expect(checkManifold(h).isManifold).toBe(true);
+    // Spans x∈[-5,35]=40, y10, z10 → 4000, > the 2000 of the two parts.
+    expect(Math.abs(computeVolume(h))).toBeCloseTo(4000, 1);
   });
 });

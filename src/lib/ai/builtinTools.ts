@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -952,6 +952,23 @@ export function registerBuiltinTools(): void {
       const seated = seatOnBed(body);
       useStore.getState().replaceBody(body.id, seated);
       return { success: true, bodyId: seated.id };
+    },
+  });
+
+  registerTool({
+    name: 'convex_hull',
+    description: 'Replace a body with its 3D convex hull — the tightest convex solid enclosing it. Useful for collision/grip proxies and simplifying concave or messy meshes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const hull = convexHullBody(body);
+      useStore.getState().replaceBody(body.id, hull);
+      return { success: true, bodyId: hull.id, faces: hull.faces.length };
     },
   });
 
