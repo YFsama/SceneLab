@@ -2760,6 +2760,35 @@ export function computeMomentOfInertiaAboutAxis(body: SolidBody, axis: Vec3, den
   return iCom + mp.mass * d2;
 }
 
+/**
+ * Small-amplitude oscillation period (seconds) of the body as a physical
+ * pendulum: hung on a frictionless pin at `pivot` with rotation axis `axis`,
+ * swinging under gravity. T = 2π·√( (I_pivot/m) / (g·d) ), where d is the
+ * horizontal-ish lever arm (perpendicular distance from the CoM to the axis)
+ * and g is `gravity` in mm/s² (default 9810). Density-independent (I/m cancels
+ * it). Returns Infinity when the CoM lies on the axis (no restoring torque).
+ */
+export function computePendulumPeriod(body: SolidBody, pivot: Vec3, axis: Vec3, gravity = 9810): number {
+  const len = Math.hypot(axis.x, axis.y, axis.z);
+  if (len < 1e-12) return Infinity;
+  const nx = axis.x / len;
+  const ny = axis.y / len;
+  const nz = axis.z / len;
+  const mp = computeMassProperties(body, 1);
+  if (mp.mass < 1e-12) return Infinity;
+
+  // Lever arm d: perpendicular distance from the CoM to the axis line.
+  const rx = mp.centerOfMass.x - pivot.x;
+  const ry = mp.centerOfMass.y - pivot.y;
+  const rz = mp.centerOfMass.z - pivot.z;
+  const along = rx * nx + ry * ny + rz * nz;
+  const d = Math.hypot(rx - along * nx, ry - along * ny, rz - along * nz);
+  if (d < 1e-9 || gravity <= 0) return Infinity;
+
+  const iPivotPerMass = computeMomentOfInertiaAboutAxis(body, axis, 1, pivot) / mp.mass; // mm²
+  return 2 * Math.PI * Math.sqrt(iPivotPerMass / (gravity * d));
+}
+
 export interface CenterOfMassInfo {
   centroid: Vec3;
   boundingBoxCenter: Vec3;

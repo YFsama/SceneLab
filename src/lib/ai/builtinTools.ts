@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -1050,6 +1050,43 @@ export function registerBuiltinTools(): void {
         maxAreaMm2: r3(p.maxArea),
         maxAreaHeight: r3(p.maxAreaHeight),
         samples: p.sections.length,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'pendulum_period',
+    description: 'Small-amplitude swing period (seconds) of a body hung as a physical pendulum on a pin at `pivot` rotating about `axis`. Density-independent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        pivot: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Pin location (mm)',
+        },
+        axis: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Rotation axis through the pivot',
+        },
+        gravity: { type: 'number', description: 'Gravity in mm/s² (default 9810)' },
+      },
+      required: ['pivot', 'axis'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const period = computePendulumPeriod(
+        body,
+        assertVec3(args.pivot, 'pivot'),
+        assertVec3(args.axis, 'axis'),
+        args.gravity !== undefined ? assertNumber(args.gravity, 'gravity') : undefined,
+      );
+      return {
+        bodyId: body.id,
+        periodSeconds: Number.isFinite(period) ? Number(period.toFixed(4)) : null,
+        note: Number.isFinite(period) ? undefined : 'CoM lies on the axis — no restoring torque',
       };
     },
   });

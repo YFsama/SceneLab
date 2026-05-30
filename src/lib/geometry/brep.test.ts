@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
 
@@ -196,6 +196,33 @@ describe('computeMomentOfInertiaAboutAxis', () => {
     const pivot = { x: mp.centerOfMass.x + 7, y: mp.centerOfMass.y, z: mp.centerOfMass.z };
     const iPivot = computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 }, 1, pivot);
     expect(iPivot).toBeCloseTo(iCom + mp.mass * 49, 4); // I_cm + m·d², d=7
+  });
+});
+
+describe('computePendulumPeriod', () => {
+  it('matches T = 2π√((I_pivot/m)/(g·d)) for a rod pivoted at one end', () => {
+    // Thin rod along Y, length 20, pivoted at the bottom, swinging about Z.
+    const rod = createBox(2, 20, 2);
+    const pivot = { x: 0, y: 0, z: 0 };
+    const axis = { x: 0, y: 0, z: 1 };
+    const g = 9810;
+    const mp = computeMassProperties(rod, 1);
+    const iPivot = computeMomentOfInertiaAboutAxis(rod, axis, 1, pivot);
+    const d = mp.centerOfMass.y; // CoM is straight up the rod from the pivot
+    const expected = 2 * Math.PI * Math.sqrt(iPivot / mp.mass / (g * d));
+    expect(computePendulumPeriod(rod, pivot, axis, g)).toBeCloseTo(expected, 6);
+  });
+
+  it('scales as 1/√g and is infinite when the CoM lies on the axis', () => {
+    const rod = createBox(2, 20, 2);
+    const axis = { x: 0, y: 0, z: 1 };
+    const pivot = { x: 0, y: 0, z: 0 };
+    // T ∝ 1/√g → quadrupling g halves the period.
+    const t = computePendulumPeriod(rod, pivot, axis, 9810);
+    const tFast = computePendulumPeriod(rod, pivot, axis, 9810 * 4);
+    expect(tFast).toBeCloseTo(t / 2, 6);
+    // Axis through the CoM → no restoring torque → infinite period.
+    expect(computePendulumPeriod(rod, { x: 0, y: 10, z: 0 }, axis)).toBe(Infinity);
   });
 });
 
