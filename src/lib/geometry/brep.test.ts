@@ -400,6 +400,28 @@ describe('computeVolume translation invariance', () => {
 });
 
 describe('createExtrude', () => {
+  it('is robust to profile winding: CW and CCW both give an outward, watertight solid', () => {
+    const ccw: Vec3[] = [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }, { x: 0, y: 0, z: 10 }];
+    const cw: Vec3[] = [...ccw].reverse();
+    for (const profile of [ccw, cw]) {
+      const body = createExtrude({ profile, direction: { x: 0, y: 1, z: 0 }, distance: 5, symmetric: false });
+      expect(Math.abs(computeVolume(body))).toBeCloseTo(500, 3);
+      expect(checkManifold(body).isManifold).toBe(true);
+      // Every stored normal points away from the centroid (right-side-out).
+      const c = computeVolumetricCentroid(body);
+      for (const f of body.faces) {
+        const fc = { x: 0, y: 0, z: 0 };
+        for (const v of f.vertices) {
+          fc.x += v.x / f.vertices.length;
+          fc.y += v.y / f.vertices.length;
+          fc.z += v.z / f.vertices.length;
+        }
+        const dot = (fc.x - c.x) * f.normal.x + (fc.y - c.y) * f.normal.y + (fc.z - c.z) * f.normal.z;
+        expect(dot).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('should create a box-like extrude from a rectangle profile', () => {
     const profile: Vec3[] = [
       { x: -1, y: 0, z: -1 },
