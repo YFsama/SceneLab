@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
 
@@ -41,6 +41,25 @@ describe('computeThickness', () => {
     expect(t.minThickness).toBeCloseTo(1, 3); // the 1mm wall, not 50
     expect(t.isThin).toBe(true);
     expect(t.thinRegions).toBeGreaterThan(0);
+  });
+});
+
+describe('createFrustumTube', () => {
+  it('builds a watertight hollow frustum with the truncated-cone-shell volume', () => {
+    const t = createFrustumTube(10, 6, 1.5, 20, 64);
+    const m = checkManifold(t);
+    expect(m.isManifold).toBe(true);
+    expect(m.boundaryEdges).toBe(0);
+    const frus = (R: number, r: number, h: number) => (Math.PI * h) / 3 * (R * R + R * r + r * r);
+    const ideal = frus(10, 6, 20) - frus(8.5, 4.5, 20);
+    const vol = Math.abs(computeVolume(t));
+    expect(vol).toBeGreaterThan(ideal * 0.97);
+    expect(vol).toBeLessThanOrEqual(ideal * 1.01);
+  });
+
+  it('rejects a wall thicker than the smaller radius and bad dimensions', () => {
+    expect(() => createFrustumTube(10, 6, 6, 20)).toThrow();
+    expect(() => createFrustumTube(0, 6, 1, 20)).toThrow();
   });
 });
 

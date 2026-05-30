@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -359,6 +359,31 @@ export function registerBuiltinTools(): void {
         assertNumber(args.wireRadius, 'wireRadius'),
         assertNumber(args.pitch, 'pitch'),
         assertNumber(args.turns, 'turns'),
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_frustum_tube',
+    description: 'Create a hollow truncated cone (funnel/nozzle/vase wall) with a constant wall thickness, and add it to the scene. Base on y=0.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bottomRadius: { type: 'number', description: 'Outer radius at the base (mm)' },
+        topRadius: { type: 'number', description: 'Outer radius at the top (mm)' },
+        wallThickness: { type: 'number', description: 'Wall thickness (mm), < smaller radius' },
+        height: { type: 'number', description: 'Height along +Y (mm)' },
+      },
+      required: ['bottomRadius', 'topRadius', 'wallThickness', 'height'],
+    },
+    execute: async (args) => {
+      const body = createFrustumTube(
+        assertNumber(args.bottomRadius, 'bottomRadius'),
+        assertNumber(args.topRadius, 'topRadius'),
+        assertNumber(args.wallThickness, 'wallThickness'),
+        assertNumber(args.height, 'height'),
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };

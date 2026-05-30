@@ -602,6 +602,75 @@ export function createPrism(sides: number, radius: number, height: number): Soli
 }
 
 /**
+ * Hollow truncated cone (funnel / nozzle / vase wall): a frustum with outer
+ * radii `bottomRadius`→`topRadius` and a constant `wallThickness`, `height`
+ * tall along +Y, base on y = 0. Watertight, with annular top/bottom caps.
+ */
+export function createFrustumTube(
+  bottomRadius: number,
+  topRadius: number,
+  wallThickness: number,
+  height: number,
+  segments = 32,
+): SolidBody {
+  if (!(bottomRadius > 0) || !(topRadius > 0) || !(wallThickness > 0) || !(height > 0)) {
+    throw new Error('Frustum tube radii, wall thickness and height must be positive');
+  }
+  if (wallThickness >= Math.min(bottomRadius, topRadius)) {
+    throw new Error('Wall thickness must be smaller than the smaller radius');
+  }
+  if (segments < 3) throw new Error('Frustum tube needs at least 3 segments');
+
+  const ob: Vec3[] = [];
+  const ot: Vec3[] = [];
+  const ib: Vec3[] = [];
+  const it: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    ob.push({ x: c * bottomRadius, y: 0, z: s * bottomRadius });
+    ot.push({ x: c * topRadius, y: height, z: s * topRadius });
+    ib.push({ x: c * (bottomRadius - wallThickness), y: 0, z: s * (bottomRadius - wallThickness) });
+    it.push({ x: c * (topRadius - wallThickness), y: height, z: s * (topRadius - wallThickness) });
+  }
+  const vertices: Vec3[] = [...ob, ...ot, ...ib, ...it];
+
+  // True outward/inward face normal from the quad geometry, oriented by a radial
+  // reference so the sloped walls report accurate normals (matters for overhang).
+  const geoNormal = (quad: Vec3[], refRadialX: number, refRadialZ: number, outward: boolean): Vec3 => {
+    const gn = computeFaceNormal(quad[0]!, quad[1]!, quad[2]!);
+    const dotRef = gn.x * refRadialX + gn.z * refRadialZ;
+    const sign = (outward ? dotRef < 0 : dotRef > 0) ? -1 : 1;
+    return { x: gn.x * sign, y: gn.y * sign, z: gn.z * sign };
+  };
+
+  const faces: Face[] = [];
+  for (let i = 0; i < segments; i++) {
+    const j = (i + 1) % segments;
+    const am = ((i + 0.5) / segments) * Math.PI * 2;
+    const rx = Math.cos(am);
+    const rz = Math.sin(am);
+    const outerQuad = [ob[i]!, ob[j]!, ot[j]!, ot[i]!];
+    const innerQuad = [ib[i]!, ib[j]!, it[j]!, it[i]!];
+    faces.push({ id: genId('face'), vertices: outerQuad, normal: geoNormal(outerQuad, rx, rz, true) });
+    faces.push({ id: genId('face'), vertices: innerQuad, normal: geoNormal(innerQuad, rx, rz, false) });
+    faces.push({ id: genId('face'), vertices: [ob[i]!, ob[j]!, ib[j]!, ib[i]!], normal: { x: 0, y: -1, z: 0 } });
+    faces.push({ id: genId('face'), vertices: [ot[i]!, ot[j]!, it[j]!, it[i]!], normal: { x: 0, y: 1, z: 0 } });
+  }
+
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    for (let i = 0; i < f.vertices.length; i++) {
+      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'FrustumTube', vertices, faces, edges };
+}
+
+/**
  * Hollow cylinder (tube/pipe): an annular ring of outer radius `outerRadius`
  * and inner radius `innerRadius`, `height` tall along +Y, base on y = 0.
  * Watertight (outer wall, inner wall, and top/bottom annular caps). Common for
