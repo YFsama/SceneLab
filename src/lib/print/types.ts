@@ -44,6 +44,11 @@ export interface OverhangReport {
   overhangArea: number;
   /** Total area of all downward-facing faces. */
   downwardArea: number;
+  /**
+   * Shallowest unsupported-overhang angle from horizontal (the worst case):
+   * 0° = a flat bridge, near the threshold = mild. 90° when nothing needs support.
+   */
+  worstAngleDeg: number;
 }
 
 export interface MassEstimate {

@@ -67,6 +67,22 @@ describe('analyzeOverhangs', () => {
     expect(at30.faces.find((x) => x.faceId === 'ramp')!.needsSupport).toBe(false); // 45 > 30
   });
 
+  it('reports the worst (shallowest) overhang angle, 90 when none', () => {
+    // Body with a bed + a flat downward ledge above it → worst = 0 (a bridge).
+    const bed = squareFace('bed',
+      [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 1 }, { x: 0, y: 0, z: 1 }],
+      { x: 0, y: -1, z: 0 });
+    const ledge = squareFace('ledge',
+      [{ x: 0, y: 5, z: 0 }, { x: 1, y: 5, z: 0 }, { x: 1, y: 5, z: 1 }, { x: 0, y: 5, z: 1 }],
+      { x: 0, y: -1, z: 0 });
+    const body: SolidBody = { id: 'b', name: 'b',
+      vertices: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 5, z: 0 }], faces: [bed, ledge], edges: [] };
+    expect(analyzeOverhangs(body).worstAngleDeg).toBeCloseTo(0, 4);
+
+    // A box has no overhangs → worst stays 90.
+    expect(analyzeOverhangs(createBox(10, 10, 10)).worstAngleDeg).toBe(90);
+  });
+
   it('does not count the bed-resting bottom face of a box', () => {
     const box = createBox(10, 10, 10); // bottom face is flat & downward, on the plate
     const excluded = analyzeOverhangs(box);

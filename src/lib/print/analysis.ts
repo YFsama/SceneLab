@@ -55,6 +55,7 @@ export function analyzeOverhangs(body: SolidBody, options: OverhangOptions = {})
   const faces: FaceOverhang[] = [];
   let overhangArea = 0;
   let downwardArea = 0;
+  let worstAngleDeg = 90;
 
   for (const face of body.faces) {
     const n = normalize(face.normal);
@@ -75,12 +76,15 @@ export function analyzeOverhangs(body: SolidBody, options: OverhangOptions = {})
     const angleDeg = Math.acos(clamp(-d, -1, 1)) * DEG;
     const needsSupport = angleDeg < thresholdDeg;
     downwardArea += area;
-    if (needsSupport) overhangArea += area;
+    if (needsSupport) {
+      overhangArea += area;
+      worstAngleDeg = Math.min(worstAngleDeg, angleDeg);
+    }
 
     faces.push({ faceId: face.id, angleDeg, area, needsSupport });
   }
 
-  return { thresholdDeg, faces, overhangArea, downwardArea };
+  return { thresholdDeg, faces, overhangArea, downwardArea, worstAngleDeg };
 }
 
 /** Estimate part mass from its volume and a material density (g/cm³). */
