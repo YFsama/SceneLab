@@ -84,3 +84,70 @@ export function minDistanceBetweenBodies(a: SolidBody, b: SolidBody): number {
   probe(b.vertices, triA);
   return Math.sqrt(min);
 }
+
+/** Möller–Trumbore ray/triangle hit test (positive distance). */
+function rayHitsTriangle(orig: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3): boolean {
+  const e1 = sub(b, a);
+  const e2 = sub(c, a);
+  const px = dir.y * e2.z - dir.z * e2.y;
+  const py = dir.z * e2.x - dir.x * e2.z;
+  const pz = dir.x * e2.y - dir.y * e2.x;
+  const det = e1.x * px + e1.y * py + e1.z * pz;
+  if (Math.abs(det) < 1e-12) return false;
+  const inv = 1 / det;
+  const t = sub(orig, a);
+  const u = (t.x * px + t.y * py + t.z * pz) * inv;
+  if (u < 0 || u > 1) return false;
+  const qx = t.y * e1.z - t.z * e1.y;
+  const qy = t.z * e1.x - t.x * e1.z;
+  const qz = t.x * e1.y - t.y * e1.x;
+  const v = (dir.x * qx + dir.y * qy + dir.z * qz) * inv;
+  if (v < 0 || u + v > 1) return false;
+  return (e2.x * qx + e2.y * qy + e2.z * qz) * inv > 1e-9;
+}
+
+/**
+ * Whether a point lies inside a closed mesh, by ray-casting parity: cast a ray
+ * and count surface crossings — odd means inside. Uses a slightly off-axis
+ * direction to avoid grazing axis-aligned faces.
+ */
+export function isPointInsideBody(body: SolidBody, p: Vec3): boolean {
+  const dir = { x: 0.5773, y: 0.5774, z: 0.5775 };
+  let crossings = 0;
+  for (const f of body.faces) {
+    const vs = f.vertices;
+    for (let i = 1; i < vs.length - 1; i++) {
+      if (rayHitsTriangle(p, dir, vs[0]!, vs[i]!, vs[i + 1]!)) crossings++;
+    }
+  }
+  return crossings % 2 === 1;
+}
+
+/**
+ * Interference (overlap) detection between two bodies — SolidWorks'
+ * Interference Detection. Broad-phase AABB rejection, then true if any vertex
+ * of one body lies inside the other. Catches volumetric overlap (the common
+ * case); pure edge-edge grazing with no contained vertex is not flagged.
+ */
+export function bodiesInterfere(a: SolidBody, b: SolidBody): boolean {
+  const bbA = aabb(a);
+  const bbB = aabb(b);
+  if (
+    bbA.max.x < bbB.min.x || bbB.max.x < bbA.min.x ||
+    bbA.max.y < bbB.min.y || bbB.max.y < bbA.min.y ||
+    bbA.max.z < bbB.min.z || bbB.max.z < bbA.min.z
+  ) {
+    return false;
+  }
+  return a.vertices.some((p) => isPointInsideBody(b, p)) || b.vertices.some((p) => isPointInsideBody(a, p));
+}
+
+function aabb(body: SolidBody): { min: Vec3; max: Vec3 } {
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const v of body.vertices) {
+    min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+    max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+  }
+  return { min, max };
+}

@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
-import { minDistanceBetweenBodies } from '../geometry/measure';
+import { minDistanceBetweenBodies, bodiesInterfere } from '../geometry/measure';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -1547,7 +1547,7 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'measure_distance',
-    description: 'Measure between two bodies: centroid distance, bounding-box gap, and the exact minimum surface clearance (0 if they touch/interfere).',
+    description: 'Measure between two bodies: centroid distance, bounding-box gap, exact minimum surface clearance, and whether they interfere (overlap).',
     parameters: {
       type: 'object',
       properties: {
@@ -1573,6 +1573,7 @@ export function registerBuiltinTools(): void {
         centroidDistance: Number(centroidDistance.toFixed(3)),
         boundingBoxGap: Number(Math.hypot(gx, gy, gz).toFixed(3)),
         surfaceClearance: Number(minDistanceBetweenBodies(a, b).toFixed(3)),
+        interfere: bodiesInterfere(a, b),
       };
     },
   });
