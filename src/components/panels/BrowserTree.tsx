@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Layers, History } from 'lucide-react';
+import { Box, Layers, History, Frame, Slash, Dot, X } from 'lucide-react';
 import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
@@ -16,6 +16,12 @@ export function BrowserTree() {
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
+  const planes = useStore((s) => s.planes);
+  const axes = useStore((s) => s.axes);
+  const points = useStore((s) => s.points);
+  const removePlane = useStore((s) => s.removePlane);
+  const removeAxis = useStore((s) => s.removeAxis);
+  const removePoint = useStore((s) => s.removePoint);
   const featureTree = useStore((s) => s.featureTree);
   const [menu, setMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
 
@@ -99,6 +105,24 @@ export function BrowserTree() {
           )}
         </div>
 
+        {/* Reference geometry section */}
+        {(planes.length > 0 || axes.length > 0 || points.length > 0) && (
+          <div className="border-t border-panel-border p-1">
+            <p className="px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider">
+              {t('panel.referenceGeometry')}
+            </p>
+            {planes.map((p) => (
+              <RefRow key={p.id} icon={<Frame size={12} />} name={p.name} onDelete={() => removePlane(p.id)} deleteLabel={t('menu.delete')} />
+            ))}
+            {axes.map((a) => (
+              <RefRow key={a.id} icon={<Slash size={12} />} name={a.name} onDelete={() => removeAxis(a.id)} deleteLabel={t('menu.delete')} />
+            ))}
+            {points.map((p) => (
+              <RefRow key={p.id} icon={<Dot size={12} />} name={p.name} onDelete={() => removePoint(p.id)} deleteLabel={t('menu.delete')} />
+            ))}
+          </div>
+        )}
+
         {/* Feature history section */}
         <div className="border-t border-panel-border p-1">
           <p className="px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider flex items-center gap-1">
@@ -118,5 +142,23 @@ export function BrowserTree() {
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.bodyId)} onClose={() => setMenu(null)} />
       )}
     </aside>
+  );
+}
+
+/** A reference-geometry row (datum plane/axis/point) with a hover delete button. */
+function RefRow({ icon, name, onDelete, deleteLabel }: { icon: React.ReactNode; name: string; onDelete: () => void; deleteLabel: string }) {
+  return (
+    <div className="group w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-text-secondary hover:bg-surface-hover">
+      <span className="text-text-muted">{icon}</span>
+      <span className="truncate flex-1">{name}</span>
+      <button
+        onClick={onDelete}
+        className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-danger transition-opacity"
+        aria-label={`${deleteLabel}: ${name}`}
+        title={deleteLabel}
+      >
+        <X size={12} />
+      </button>
+    </div>
   );
 }
