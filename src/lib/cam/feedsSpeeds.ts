@@ -40,7 +40,7 @@ export interface FeedsSpeeds {
   spindleRpm: number;
   feedRate: number; // mm/min
   plungeRate: number; // mm/min
-  surfaceSpeed: number; // Vc, m/min (after tool derating)
+  surfaceSpeed: number; // Vc, m/min — actually achieved at the (clamped) RPM
   chipLoad: number; // fz, mm/tooth
 }
 
@@ -62,10 +62,15 @@ export function computeFeedsAndSpeeds(
   const maxRpm = options.maxRpm ?? 24000;
   const minRpm = options.minRpm ?? 1000;
 
-  const surfaceSpeed = base.vc * toolFactor; // m/min
+  const targetVc = base.vc * toolFactor; // m/min
   const diameter = Math.max(0.1, tool.diameter);
-  const idealRpm = (surfaceSpeed * 1000) / (Math.PI * diameter);
+  const idealRpm = (targetVc * 1000) / (Math.PI * diameter);
   const spindleRpm = Math.max(minRpm, Math.min(maxRpm, idealRpm));
+
+  // Surface speed actually achieved at the clamped RPM — when the spindle can't
+  // reach idealRpm (tiny tool) or floors out (huge tool), the real Vc differs
+  // from the target, so report what the tool will actually see.
+  const achievedVc = (Math.PI * diameter * spindleRpm) / 1000;
 
   // Smaller tools take a lighter chip; scale fz down below ~6mm.
   const chipLoad = base.fz * Math.min(1, diameter / 6);
@@ -76,7 +81,7 @@ export function computeFeedsAndSpeeds(
     spindleRpm: Math.round(spindleRpm),
     feedRate: Math.round(feedRate),
     plungeRate: Math.round(feedRate * 0.4),
-    surfaceSpeed: Math.round(surfaceSpeed),
+    surfaceSpeed: Math.round(achievedVc),
     chipLoad: Number(chipLoad.toFixed(4)),
   };
 }

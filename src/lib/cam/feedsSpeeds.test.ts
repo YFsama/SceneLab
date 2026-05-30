@@ -38,6 +38,10 @@ describe('computeFeedsAndSpeeds', () => {
     expect(fs.spindleRpm).toBe(24000);
     // chip load scales down for the small tool (reported to 4 dp)
     expect(fs.chipLoad).toBeCloseTo(0.0083, 4);
+    // RPM is capped well below ideal, so the achieved Vc is far under the 300
+    // target: π·1·24000/1000 ≈ 75 m/min.
+    expect(fs.surfaceSpeed).toBeCloseTo(Math.round((Math.PI * 1 * 24000) / 1000), 0);
+    expect(fs.surfaceSpeed).toBeLessThan(300);
   });
 
   it('clamps RPM to the floor for large tools', () => {
