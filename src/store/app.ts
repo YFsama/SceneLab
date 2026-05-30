@@ -3,7 +3,10 @@ import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 import type { SolidBody } from '../lib/geometry/types';
+
+const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
   createBox,
   createCylinder,
@@ -113,6 +116,12 @@ interface AppState {
   setProjectName: (n: string) => void;
   projectDirty: boolean;
   setProjectDirty: (d: boolean) => void;
+  /** Serialize the project to localStorage if dirty; returns true if it saved. */
+  autosave: () => boolean;
+  /** Restore the last autosaved project; returns true if one was loaded. */
+  restoreAutosave: () => boolean;
+  /** Whether an autosave snapshot exists to restore. */
+  hasAutosave: () => boolean;
 }
 
 export const useStore = create<AppState>((set, get) => {
@@ -439,5 +448,31 @@ export const useStore = create<AppState>((set, get) => {
   setProjectName: (projectName) => set({ projectName }),
   projectDirty: false,
   setProjectDirty: (projectDirty) => set({ projectDirty }),
+
+  autosave: () => {
+    if (typeof localStorage === 'undefined') return false;
+    const { projectDirty, projectName, featureTree, directBodies } = get();
+    if (!projectDirty) return false;
+    try {
+      const project = serializeProject(projectName, featureTree.features, [], directBodies);
+      localStorage.setItem(AUTOSAVE_KEY, saveToFile(project));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  restoreAutosave: () => {
+    if (typeof localStorage === 'undefined') return false;
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return false;
+    try {
+      const project = loadFromFile(raw);
+      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  hasAutosave: () => typeof localStorage !== 'undefined' && localStorage.getItem(AUTOSAVE_KEY) !== null,
   };
 });

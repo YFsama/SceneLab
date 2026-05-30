@@ -265,6 +265,27 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().bodies).toHaveLength(1);
   });
 
+  it('autosave writes to localStorage and restoreAutosave reloads the scene', () => {
+    localStorage.removeItem('scenelab.autosave');
+    useStore.getState().addDirectBody(createBox(10, 10, 10)); // marks dirty
+    expect(useStore.getState().autosave()).toBe(true);
+    expect(useStore.getState().hasAutosave()).toBe(true);
+
+    useStore.getState().clearScene();
+    expect(useStore.getState().bodies).toHaveLength(0);
+
+    expect(useStore.getState().restoreAutosave()).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+    localStorage.removeItem('scenelab.autosave');
+  });
+
+  it('autosave is a no-op when there are no unsaved changes', () => {
+    localStorage.removeItem('scenelab.autosave');
+    useStore.setState({ projectDirty: false });
+    expect(useStore.getState().autosave()).toBe(false);
+  });
+
   it('undo/redo revert and re-apply scene-body edits', () => {
     const a = createBox(10, 10, 10);
     const b = createBox(5, 5, 5);

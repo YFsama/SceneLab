@@ -16,6 +16,7 @@ import { RevolveDialog } from './components/ui/RevolveDialog';
 import { AIPanel } from './components/panels/AIPanel';
 import { CAMPanel } from './components/panels/CAMPanel';
 import { useKeyboardShortcuts, initShortcuts } from './lib/hooks/useKeyboardShortcuts';
+import { useAutosave } from './lib/hooks/useAutosave';
 import { SkipLink } from './components/ui/SkipLink';
 
 initShortcuts();
@@ -33,6 +34,9 @@ export default function App() {
 
   // Keyboard shortcuts
   useKeyboardShortcuts();
+
+  // Periodic autosave to localStorage while there are unsaved changes.
+  useAutosave();
 
   return (
     <div className="h-screen flex flex-col" data-theme={theme}>
