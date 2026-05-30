@@ -7,6 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, type AxisDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
+import { applyCircularArray } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -111,6 +112,8 @@ interface AppState {
   /** Datum axis through two points; null if the points coincide. */
   addAxisFromPoints: (p1: Vec3, p2: Vec3) => string | null;
   removeAxis: (id: string) => void;
+  /** Circular-pattern a body around a stored datum axis; returns the new body ids ([] on failure). */
+  circularPatternAboutAxis: (bodyId: string, axisId: string, count: number) => string[];
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
 
@@ -459,6 +462,21 @@ export const useStore = create<AppState>((set, get) => {
     return get().addAxis(axis);
   },
   removeAxis: (id) => set((s) => ({ axes: s.axes.filter((a) => a.id !== id), projectDirty: true })),
+  circularPatternAboutAxis: (bodyId, axisId, count) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    const axis = get().axes.find((a) => a.id === axisId);
+    if (!body || !axis || !(count > 0)) return [];
+    const copies = applyCircularArray(body, { origin: axis.origin, direction: axis.direction }, Math.floor(count));
+    if (copies.length === 0) return [];
+    pushUndo();
+    set((s) => ({
+      directBodies: [...s.directBodies.filter((b) => b.id !== bodyId), ...copies],
+      selectedIds: [],
+      projectDirty: true,
+    }));
+    recombine();
+    return copies.map((c) => c.id);
+  },
 
   splitBodyByPlane: (bodyId, planeId) => {
     const body = get().bodies.find((b) => b.id === bodyId);

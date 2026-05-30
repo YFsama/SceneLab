@@ -709,6 +709,26 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'circular_array_about_axis',
+    description: 'Circular-pattern a body around a stored datum axis (reference geometry driving the pattern). Use list_axes for axis ids; the original body is replaced by the pattern.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        axisId: { type: 'string', description: 'Datum axis id from list_axes' },
+        count: { type: 'number', description: 'Number of instances around the axis' },
+      },
+      required: ['axisId', 'count'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const ids = useStore.getState().circularPatternAboutAxis(body.id, assertString(args.axisId, 'axisId'), assertNumber(args.count, 'count'));
+      if (ids.length === 0) throw new Error('Pattern failed — check the axis id and count');
+      return { success: true, bodyIds: ids, count: ids.length };
+    },
+  });
+
+  registerTool({
     name: 'mirror',
     description: 'Mirror a body across a plane',
     parameters: {

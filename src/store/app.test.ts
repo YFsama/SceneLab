@@ -430,6 +430,27 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().addAxisFromPoints({ x: 1, y: 1, z: 1 }, { x: 1, y: 1, z: 1 })).toBeNull();
     });
 
+    it('circularPatternAboutAxis patterns a body around a datum axis', () => {
+      const box = createBox(4, 4, 4);
+      useStore.getState().addDirectBody(box);
+      // Z axis through the origin.
+      const axisId = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 })!;
+      const ids = useStore.getState().circularPatternAboutAxis(box.id, axisId, 4);
+      expect(ids).toHaveLength(4);
+      // Original replaced by the 4 instances.
+      expect(useStore.getState().bodies.find((b) => b.id === box.id)).toBeUndefined();
+      for (const id of ids) expect(useStore.getState().bodies.find((b) => b.id === id)).toBeDefined();
+    });
+
+    it('circularPatternAboutAxis returns [] for an unknown body, axis or count', () => {
+      const box = createBox(4, 4, 4);
+      useStore.getState().addDirectBody(box);
+      const axisId = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 })!;
+      expect(useStore.getState().circularPatternAboutAxis('nope', axisId, 4)).toEqual([]);
+      expect(useStore.getState().circularPatternAboutAxis(box.id, 'nope', 4)).toEqual([]);
+      expect(useStore.getState().circularPatternAboutAxis(box.id, axisId, 0)).toEqual([]);
+    });
+
     it('removeAxis removes by id and clearScene wipes all axes', () => {
       const id = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })!;
       useStore.getState().removeAxis(id);
