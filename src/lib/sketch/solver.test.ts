@@ -248,6 +248,31 @@ describe('solveConstraints', () => {
     expect(circle.type === 'circle' && circle.radius).toBe(9);
   });
 
+  it('converges a skewed quad to a rectangle under combined h/v constraints', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 1 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 11, y: 8 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 1, y: 7 });
+    entities.set('bottom', { id: 'bottom', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('right', { id: 'right', type: 'line', p1Id: 'p2', p2Id: 'p3' });
+    entities.set('top', { id: 'top', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+    entities.set('left', { id: 'left', type: 'line', p1Id: 'p4', p2Id: 'p1' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('h1', { id: 'h1', type: 'horizontal', entityIds: ['bottom'] });
+    constraints.set('h2', { id: 'h2', type: 'horizontal', entityIds: ['top'] });
+    constraints.set('v1', { id: 'v1', type: 'vertical', entityIds: ['left'] });
+    constraints.set('v2', { id: 'v2', type: 'vertical', entityIds: ['right'] });
+
+    const r = solveConstraints(entities, constraints, 200);
+    const p = (id: string) => r.get(id)!;
+    expect(p('p1').y).toBeCloseTo(p('p2').y, 4); // bottom horizontal
+    expect(p('p3').y).toBeCloseTo(p('p4').y, 4); // top horizontal
+    expect(p('p1').x).toBeCloseTo(p('p4').x, 4); // left vertical
+    expect(p('p2').x).toBeCloseTo(p('p3').x, 4); // right vertical
+  });
+
   it('should make two circles concentric (shared center)', () => {
     const entities = new Map<string, SketchEntity>();
     entities.set('c1', { id: 'c1', type: 'circle', centerId: 'p1', radius: 5 });
