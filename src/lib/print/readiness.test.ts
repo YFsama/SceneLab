@@ -38,6 +38,16 @@ describe('assessPrintReadiness', () => {
     expect(r.ready).toBe(true);
   });
 
+  it('warns about walls thinner than the printable minimum', () => {
+    // A 0.5mm-thick slab is below the 0.8mm default minimum wall.
+    const slab = createBox(0.5, 30, 30);
+    const r = assessPrintReadiness(slab, { buildVolume: { x: 200, y: 200, z: 200 } });
+    expect(r.issues.some((i) => i.code === 'thin-walls' && i.severity === 'warning')).toBe(true);
+    // A normal 10mm box has no thin-wall issue.
+    const ok = assessPrintReadiness(createBox(10, 10, 10), { buildVolume: { x: 200, y: 200, z: 200 } });
+    expect(ok.issues.some((i) => i.code === 'thin-walls')).toBe(false);
+  });
+
   it('flags a non-watertight mesh as an error', () => {
     const sliver: SolidBody = {
       id: 's',

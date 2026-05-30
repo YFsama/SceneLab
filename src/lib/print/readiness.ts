@@ -1,5 +1,5 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
-import { checkManifold } from '../geometry';
+import { checkManifold, computeThickness } from '../geometry';
 import { analyzeOverhangs } from './analysis';
 import { analyzeStability } from './stability';
 import { analyzeBedContact } from './bedContact';
@@ -7,7 +7,7 @@ import { checkBuildVolume } from './analysis';
 
 export interface PrintIssue {
   severity: 'error' | 'warning';
-  code: 'not-watertight' | 'overhangs' | 'unstable' | 'tippy' | 'tall' | 'too-big';
+  code: 'not-watertight' | 'overhangs' | 'unstable' | 'tippy' | 'tall' | 'thin-walls' | 'too-big';
   message: string;
 }
 
@@ -29,6 +29,12 @@ export interface ReadinessOptions {
    * easily tipped. Default 10°.
    */
   minTippingAngleDeg?: number;
+  /**
+   * Minimum printable wall thickness in mm; walls thinner than this are flagged
+   * (they can't be printed below the nozzle/line width). Default 0.8mm
+   * (~2 perimeters at a 0.4mm nozzle).
+   */
+  minWallThicknessMm?: number;
 }
 
 /**
@@ -81,6 +87,16 @@ export function assessPrintReadiness(body: SolidBody, options: ReadinessOptions 
       severity: 'warning',
       code: 'tall',
       message: `Tall on a small base (tallness ${bed.tallness.toFixed(1)}) — warp/detach risk`,
+    });
+  }
+
+  const minWall = options.minWallThicknessMm ?? 0.8;
+  const thickness = computeThickness(body);
+  if (thickness.minThickness < minWall) {
+    issues.push({
+      severity: 'warning',
+      code: 'thin-walls',
+      message: `Thin walls (min ${thickness.minThickness.toFixed(2)} mm < ${minWall} mm) may not print`,
     });
   }
 
