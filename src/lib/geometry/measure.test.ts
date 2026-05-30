@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere, interferenceVolume } from './measure';
+import { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from './measure';
 import { createBox } from './brep';
 import { translateBody } from './operations';
 
@@ -48,5 +48,23 @@ describe('interferenceVolume', () => {
   });
   it('is 0 for separated bodies', () => {
     expect(interferenceVolume(a, translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }))).toBe(0);
+  });
+});
+
+describe('computeSceneMassProperties', () => {
+  it('combines volume, mass and mass-weighted CoM across bodies', () => {
+    const a = createBox(10, 10, 10); // com (0,5,0), vol 1000
+    const b = translateBody(createBox(10, 10, 10), { x: 20, y: 0, z: 0 }); // com (20,5,0)
+    const s = computeSceneMassProperties([a, b], 1);
+    expect(s.bodyCount).toBe(2);
+    expect(s.totalVolume).toBeCloseTo(2000, 2);
+    expect(s.totalMass).toBeCloseTo(2000, 2);
+    expect(s.centerOfMass.x).toBeCloseTo(10, 3);
+    expect(s.centerOfMass.y).toBeCloseTo(5, 3);
+    expect(s.centerOfMass.z).toBeCloseTo(0, 3);
+  });
+  it('handles an empty scene', () => {
+    const s = computeSceneMassProperties([], 1);
+    expect(s.totalMass).toBe(0);
   });
 });

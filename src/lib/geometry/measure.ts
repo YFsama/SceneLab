@@ -1,4 +1,5 @@
 import type { SolidBody, Vec3 } from './types';
+import { computeMassProperties } from './brep';
 
 const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 const dot = (a: Vec3, b: Vec3): number => a.x * b.x + a.y * b.y + a.z * b.z;
@@ -172,6 +173,37 @@ export function interferenceVolume(a: SolidBody, b: SolidBody, samplesPerAxis = 
     }
   }
   return inside * cell;
+}
+
+export interface SceneMassProperties {
+  bodyCount: number;
+  totalVolume: number;
+  totalMass: number;
+  /** Mass-weighted center of mass of all bodies combined. */
+  centerOfMass: Vec3;
+}
+
+/**
+ * Combined mass properties of a multi-body scene (assembly), like SolidWorks'
+ * assembly mass properties: total volume, total mass, and the mass-weighted
+ * center of mass across all bodies, for the given uniform density.
+ */
+export function computeSceneMassProperties(bodies: SolidBody[], density = 1): SceneMassProperties {
+  let totalVolume = 0;
+  let totalMass = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const body of bodies) {
+    const mp = computeMassProperties(body, density);
+    totalVolume += mp.volume;
+    totalMass += mp.mass;
+    cx += mp.centerOfMass.x * mp.mass;
+    cy += mp.centerOfMass.y * mp.mass;
+    cz += mp.centerOfMass.z * mp.mass;
+  }
+  const centerOfMass = totalMass > 1e-12 ? { x: cx / totalMass, y: cy / totalMass, z: cz / totalMass } : { x: 0, y: 0, z: 0 };
+  return { bodyCount: bodies.length, totalVolume, totalMass, centerOfMass };
 }
 
 function aabb(body: SolidBody): { min: Vec3; max: Vec3 } {

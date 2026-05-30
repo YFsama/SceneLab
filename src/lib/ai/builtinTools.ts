@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
-import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume } from '../geometry/measure';
+import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -1329,6 +1329,33 @@ export function registerBuiltinTools(): void {
         materialVolumeCm3: Number((est.materialVolumeMm3 / 1000).toFixed(2)),
         layerCount: est.layerCount,
         infill: est.infill,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'scene_mass_properties',
+    description: 'Combined mass properties of the whole scene (assembly): total volume, total mass, and the assembly center of mass. Density defaults to PLA.',
+    parameters: {
+      type: 'object',
+      properties: {
+        material: { type: 'string', enum: MATERIALS, description: 'Material whose density to use' },
+        density: { type: 'number', description: 'Custom density in g/cm³ (overrides material)' },
+      },
+    },
+    execute: async (args) => {
+      const bodies = useStore.getState().bodies;
+      const densityGramsPerCm3 =
+        args.density !== undefined
+          ? assertNumber(args.density, 'density')
+          : MATERIAL_DENSITIES[args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA'];
+      const s = computeSceneMassProperties(bodies, densityGramsPerCm3 / 1000);
+      const r3 = (n: number) => Number(n.toFixed(3));
+      return {
+        bodyCount: s.bodyCount,
+        totalVolumeMm3: r3(s.totalVolume),
+        totalMassGrams: r3(s.totalMass),
+        centerOfMass: { x: r3(s.centerOfMass.x), y: r3(s.centerOfMass.y), z: r3(s.centerOfMass.z) },
       };
     },
   });
