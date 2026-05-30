@@ -4,6 +4,7 @@ export { booleanOp, hollowBody } from './boolean';
 export type { BooleanOp } from './boolean';
 export { listFaces, angleBetweenFaces } from './query';
 export type { FaceInfo } from './query';
+export { makePlane, standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, signedDistanceToPlane, projectPointOntoPlane } from './referenceGeometry';
 export { computeConvexHull } from './convexHull';
 export type { ConvexHull } from './convexHull';
 export { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from './measure';
