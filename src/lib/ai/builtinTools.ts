@@ -25,6 +25,7 @@ import {
   sliceCrossSection,
   sliceProfile,
   seatOnBed,
+  layFlat,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -935,6 +936,23 @@ export function registerBuiltinTools(): void {
       const result = orientForPrint(body);
       useStore.getState().replaceBody(body.id, result.body);
       return { success: true, bodyId: result.body.id, orientation: result.orientation, rotated: result.rotated };
+    },
+  });
+
+  registerTool({
+    name: 'lay_flat',
+    description: 'Rotate a body to rest on its largest flat face (most stable, usually least support) and seat it on the bed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const result = layFlat(body);
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
     },
   });
 

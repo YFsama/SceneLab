@@ -29,6 +29,7 @@ export type { ArrangeResult } from './arrange';
 export { sliceCrossSection, sliceProfile } from './slice';
 export type { CrossSection, SliceProfile } from './slice';
 export { seatOnBed } from './seat';
+export { layFlat } from './layFlat';
 export { assessPrintReadiness } from './readiness';
 export type { PrintIssue, PrintReadiness, ReadinessOptions } from './readiness';
 export { MATERIAL_DENSITIES } from './types';
