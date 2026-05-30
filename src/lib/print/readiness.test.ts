@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { assessPrintReadiness } from './readiness';
-import { createBox } from '../geometry';
+import { createBox, createSphere } from '../geometry';
 import { exportSTLBinary, importSTLBinary } from '../io';
 import type { SolidBody } from '../geometry/types';
 
@@ -46,6 +46,14 @@ describe('assessPrintReadiness', () => {
     // A normal 10mm box has no thin-wall issue.
     const ok = assessPrintReadiness(createBox(10, 10, 10), { buildVolume: { x: 200, y: 200, z: 200 } });
     expect(ok.issues.some((i) => i.code === 'thin-walls')).toBe(false);
+  });
+
+  it('reports the worst overhang angle in the support warning', () => {
+    // A sphere has a downward lower hemisphere → shallow overhangs needing support.
+    const r = assessPrintReadiness(createSphere(10, 24), { buildVolume: { x: 200, y: 200, z: 200 } });
+    const overhang = r.issues.find((i) => i.code === 'overhangs');
+    expect(overhang).toBeDefined();
+    expect(overhang!.message).toMatch(/worst \d+° from horizontal/);
   });
 
   it('flags a non-watertight mesh as an error', () => {

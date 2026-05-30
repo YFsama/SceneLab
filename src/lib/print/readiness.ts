@@ -57,10 +57,12 @@ export function assessPrintReadiness(body: SolidBody, options: ReadinessOptions 
   const oh = analyzeOverhangs(body, { thresholdDeg: options.thresholdDeg });
   const supportFaces = oh.faces.filter((f) => f.needsSupport).length;
   if (supportFaces > 0) {
+    // Include the worst (shallowest) overhang angle — 0° is a flat bridge,
+    // near the threshold is mild — so the user knows how severe it is.
     issues.push({
       severity: 'warning',
       code: 'overhangs',
-      message: `${supportFaces} face(s) need support (${oh.overhangArea.toFixed(1)} mm²)`,
+      message: `${supportFaces} face(s) need support (${oh.overhangArea.toFixed(1)} mm², worst ${oh.worstAngleDeg.toFixed(0)}° from horizontal)`,
     });
   }
 
