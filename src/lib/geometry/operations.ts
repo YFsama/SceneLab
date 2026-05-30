@@ -236,12 +236,17 @@ export function applyLinearArray(
 ): SolidBody[] {
   if (count <= 0) throw new Error('Array count must be positive');
   if (spacing <= 0) throw new Error('Array spacing must be positive');
+  // Normalize the direction so `spacing` is honored as a true mm gap regardless
+  // of the direction vector's magnitude.
+  const dirLen = Math.hypot(direction.x, direction.y, direction.z);
+  if (dirLen < 1e-12) throw new Error('Array direction cannot be zero');
+  const dir = { x: direction.x / dirLen, y: direction.y / dirLen, z: direction.z / dirLen };
   const results: SolidBody[] = [];
   for (let i = 0; i < count; i++) {
     const offset = {
-      x: direction.x * spacing * i,
-      y: direction.y * spacing * i,
-      z: direction.z * spacing * i,
+      x: dir.x * spacing * i,
+      y: dir.y * spacing * i,
+      z: dir.z * spacing * i,
     };
     results.push(translateBody(body, offset, `${body.name} [${i}]`));
   }

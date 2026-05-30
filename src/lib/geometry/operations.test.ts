@@ -239,6 +239,22 @@ describe('applyLinearArray positions', () => {
     expect(centersX[1]! - centersX[0]!).toBeCloseTo(20, 5);
     expect(centersX[2]! - centersX[0]!).toBeCloseTo(40, 5);
   });
+
+  it('honors spacing as mm even when the direction is not a unit vector', () => {
+    const part = createBox(10, 10, 10);
+    // Direction magnitude 10; spacing must still be 5mm, not 50mm.
+    const instances = applyLinearArray(part, { x: 10, y: 0, z: 0 }, 3, 5);
+    const centersX = instances.map((b) => {
+      const bb = computeBoundingBox(b);
+      return (bb.min.x + bb.max.x) / 2;
+    });
+    expect(centersX[1]! - centersX[0]!).toBeCloseTo(5, 5);
+    expect(centersX[2]! - centersX[0]!).toBeCloseTo(10, 5);
+  });
+
+  it('rejects a zero-length array direction', () => {
+    expect(() => applyLinearArray(createBox(1, 1, 1), { x: 0, y: 0, z: 0 }, 3, 5)).toThrow('direction');
+  });
 });
 
 describe('applyCircularArray positions', () => {
