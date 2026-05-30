@@ -3,7 +3,7 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
-import { booleanOp } from '../geometry/boolean';
+import { booleanOp, hollowBody } from '../geometry/boolean';
 import { listFaces } from '../geometry/query';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
@@ -590,6 +590,28 @@ export function registerBuiltinTools(): void {
       const results = applyLinearArray(body, assertVec3(args.direction, 'direction'), assertNumber(args.count, 'count'), assertNumber(args.spacing, 'spacing'));
       store.addDirectBodies(results);
       return { success: true, count: results.length };
+    },
+  });
+
+  registerTool({
+    name: 'hollow_body',
+    description: 'Hollow a solid into a closed shell of the given wall thickness (true lightweighting hollow). Voxel-based watertight result; replaces the body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        wallThickness: { type: 'number', description: 'Wall thickness in mm' },
+        resolution: { type: 'number', description: 'Voxel grid resolution per axis (default 48)' },
+      },
+      required: ['wallThickness'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const resolution = args.resolution !== undefined ? assertNumber(args.resolution, 'resolution') : 48;
+      const result = hollowBody(body, assertNumber(args.wallThickness, 'wallThickness'), resolution);
+      if (!result) return { success: false, reason: 'Wall thickness consumes the whole part' };
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id, faces: result.faces.length };
     },
   });
 

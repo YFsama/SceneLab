@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { booleanOp } from './boolean';
+import { booleanOp, hollowBody } from './boolean';
 import { createBox, checkManifold, computeVolume } from './brep';
 import { translateBody } from './operations';
 
@@ -28,5 +28,21 @@ describe('booleanOp', () => {
   it('intersect of disjoint bodies is null', () => {
     const far = translateBody(createBox(10, 10, 10), { x: 40, y: 0, z: 0 });
     expect(booleanOp(a, far, 'intersect', 16)).toBeNull();
+  });
+});
+
+describe('hollowBody', () => {
+  it('produces a closed shell with less material than the solid', () => {
+    const solid = createBox(20, 20, 20); // vol 8000
+    const h = hollowBody(solid, 2, 40)!;
+    expect(h).not.toBeNull();
+    expect(checkManifold(h).boundaryEdges).toBe(0); // watertight
+    const v = Math.abs(computeVolume(h));
+    expect(v).toBeGreaterThan(0);
+    expect(v).toBeLessThan(8000 * 0.75); // hollowed out (material removed)
+  });
+
+  it('throws on non-positive wall thickness', () => {
+    expect(() => hollowBody(createBox(10, 10, 10), 0)).toThrow();
   });
 });
