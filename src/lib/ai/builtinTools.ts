@@ -3,6 +3,7 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
+import { booleanOp } from '../geometry/boolean';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -588,6 +589,33 @@ export function registerBuiltinTools(): void {
       const results = applyLinearArray(body, assertVec3(args.direction, 'direction'), assertNumber(args.count, 'count'), assertNumber(args.spacing, 'spacing'));
       store.addDirectBodies(results);
       return { success: true, count: results.length };
+    },
+  });
+
+  registerTool({
+    name: 'boolean_op',
+    description: 'Combine two bodies with a boolean: union, difference (A−B), or intersect. Voxel-based — watertight blocky result; raise resolution for finer detail. Adds the result as a new body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyIdA: { type: 'string', description: 'First body (the base for difference)' },
+        bodyIdB: { type: 'string', description: 'Second body (subtracted for difference)' },
+        op: { type: 'string', enum: ['union', 'difference', 'intersect'], description: 'Boolean operation' },
+        resolution: { type: 'number', description: 'Voxel grid resolution per axis (default 48)' },
+      },
+      required: ['bodyIdA', 'bodyIdB', 'op'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const a = store.bodies.find((x) => x.id === args.bodyIdA);
+      const b = store.bodies.find((x) => x.id === args.bodyIdB);
+      if (!a || !b) throw new Error('Both bodyIdA and bodyIdB must exist');
+      const op = assertEnum(args.op, ['union', 'difference', 'intersect'] as const, 'op');
+      const resolution = args.resolution !== undefined ? assertNumber(args.resolution, 'resolution') : 48;
+      const result = booleanOp(a, b, op, resolution);
+      if (!result) return { success: false, reason: 'Empty result (bodies do not overlap for this op)' };
+      store.addDirectBody(result);
+      return { success: true, bodyId: result.id, op, faces: result.faces.length };
     },
   });
 

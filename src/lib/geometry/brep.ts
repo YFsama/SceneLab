@@ -8,7 +8,7 @@ let nextId = 1;
  * Use this instead of pushing one edge per face-side, which double-counts
  * shared edges and corrupts edge-based metrics (count, total length, genus).
  */
-function buildEdgesFromFaces(faces: Face[]): Edge[] {
+export function buildEdgesFromFaces(faces: Face[]): Edge[] {
   const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
   const vkey = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
   const seen = new Set<string>();
