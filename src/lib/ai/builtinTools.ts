@@ -23,6 +23,7 @@ import {
   orientForPrint,
   arrangeOnPlate,
   sliceCrossSection,
+  sliceProfile,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -854,6 +855,33 @@ export function registerBuiltinTools(): void {
         areaMm2: Number(r.area.toFixed(3)),
         perimeterMm: Number(r.perimeter.toFixed(3)),
         segments: r.segments,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'find_weak_section',
+    description:
+      'Sample the cross-section along the build axis (+Y) and report the thinnest (minimum-area) section and its height — the likely weak point or narrowest neck — alongside the largest section.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        samples: { type: 'number', description: 'Number of height samples (default 32)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const samples = args.samples !== undefined ? assertNumber(args.samples, 'samples') : 32;
+      const p = sliceProfile(body, samples);
+      const r3 = (n: number) => Number(n.toFixed(3));
+      return {
+        bodyId: body.id,
+        minAreaMm2: r3(p.minArea),
+        minAreaHeight: r3(p.minAreaHeight),
+        maxAreaMm2: r3(p.maxArea),
+        maxAreaHeight: r3(p.maxAreaHeight),
+        samples: p.sections.length,
       };
     },
   });

@@ -92,3 +92,56 @@ export function sliceCrossSection(body: SolidBody, height: number, up: Vec3 = { 
 
   return { height, area: Math.abs(area2) / 2, perimeter, segments };
 }
+
+export interface SliceProfile {
+  /** Cross-sections sampled at evenly spaced heights along the build axis. */
+  sections: CrossSection[];
+  /** Smallest filled area among the samples (the weakest/narrowest section). */
+  minArea: number;
+  /** Height of the minimum-area section. */
+  minAreaHeight: number;
+  /** Largest filled area among the samples. */
+  maxArea: number;
+  /** Height of the maximum-area section. */
+  maxAreaHeight: number;
+}
+
+/**
+ * Sample the cross-section at `samples` evenly spaced heights through the part
+ * (at layer midpoints, so the top/bottom faces aren't grazed) and summarise the
+ * profile — notably the minimum-area section, the weak point for strength or
+ * the narrowest neck. Returns empty stats for a part with no height.
+ */
+export function sliceProfile(body: SolidBody, samples = 32, up: Vec3 = { x: 0, y: 1, z: 0 }): SliceProfile {
+  const axis = normalize(up);
+  const n = Math.max(1, Math.floor(samples));
+
+  const heights = body.vertices.map((p) => dot(p, axis));
+  const minH = heights.length ? Math.min(...heights) : 0;
+  const maxH = heights.length ? Math.max(...heights) : 0;
+  const range = maxH - minH;
+  if (range < 1e-9) {
+    return { sections: [], minArea: 0, minAreaHeight: 0, maxArea: 0, maxAreaHeight: 0 };
+  }
+
+  const sections: CrossSection[] = [];
+  let minArea = Infinity;
+  let minAreaHeight = minH;
+  let maxArea = -Infinity;
+  let maxAreaHeight = minH;
+  for (let i = 0; i < n; i++) {
+    const h = minH + (range * (i + 0.5)) / n; // layer midpoint
+    const sec = sliceCrossSection(body, h, axis);
+    sections.push(sec);
+    if (sec.area < minArea) {
+      minArea = sec.area;
+      minAreaHeight = h;
+    }
+    if (sec.area > maxArea) {
+      maxArea = sec.area;
+      maxAreaHeight = h;
+    }
+  }
+
+  return { sections, minArea, minAreaHeight, maxArea, maxAreaHeight };
+}
