@@ -1971,7 +1971,9 @@ export function computeElongation(body: SolidBody): ElongationInfo {
     flatness,
     principalAxes: { x: dx, y: dy, z: dz },
     isElongated: elongation > 3,
-    isFlat: flatness < 1.5 && elongation > 2,
+    // Flat = one dimension much smaller than the other two, i.e. a high
+    // middle/shortest ratio (a plate/slab). A square-section rod has flatness 1.
+    isFlat: flatness > 3,
   };
 }
 

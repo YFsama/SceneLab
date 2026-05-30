@@ -1,7 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation } from './brep';
+
+describe('computeElongation', () => {
+  it('a plate is flat, a rod is elongated (not flat), a cube is neither', () => {
+    const plate = computeElongation(createBox(40, 2, 40)); // thin in Y
+    expect(plate.isFlat).toBe(true);
+
+    const rod = computeElongation(createBox(40, 10, 10)); // long, square section
+    expect(rod.isElongated).toBe(true);
+    expect(rod.isFlat).toBe(false);
+
+    const cube = computeElongation(createBox(10, 10, 10));
+    expect(cube.isElongated).toBe(false);
+    expect(cube.isFlat).toBe(false);
+  });
+});
 
 describe('computeSymmetry', () => {
   it('a box is symmetric on all three axes', () => {
