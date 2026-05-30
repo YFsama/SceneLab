@@ -1283,10 +1283,29 @@ export interface TopologyInfo {
 }
 
 export function computeTopology(body: SolidBody): TopologyInfo {
-  // Euler characteristic: V - E + F
-  const v = body.vertices.length;
-  const e = body.edges.length;
-  const f = body.faces.length;
+  // Euler characteristic χ = V − E + F, derived from the FACES so it's correct
+  // regardless of how body.edges was populated. Some primitives store one edge
+  // per face-side (shared edges double-counted), which would otherwise inflate
+  // E and produce a nonsense genus. Count unique vertices and unique undirected
+  // edges by coordinate key.
+  const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
+  const vkey = (vert: Vec3) => `${q(vert.x)},${q(vert.y)},${q(vert.z)}`;
+  const verts = new Set<string>();
+  const edges = new Set<string>();
+  let f = 0;
+  for (const face of body.faces) {
+    const vs = face.vertices;
+    if (vs.length < 3) continue;
+    f += 1;
+    for (let i = 0; i < vs.length; i++) {
+      const ka = vkey(vs[i]!);
+      const kb = vkey(vs[(i + 1) % vs.length]!);
+      verts.add(ka);
+      edges.add(ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+    }
+  }
+  const v = verts.size;
+  const e = edges.size;
   const chi = v - e + f;
 
   // For a closed orientable surface: chi = 2 - 2g

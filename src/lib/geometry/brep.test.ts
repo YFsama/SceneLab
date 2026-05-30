@@ -364,6 +364,15 @@ describe('topology', () => {
     expect(g.handles).toBe(1);
     expect(g.isOrientable).toBe(true);
   });
+
+  it('a capped tube/frustum is genus 1, a coil genus 0 (edges counted from faces)', () => {
+    // These primitives store one edge per face-side (shared edges duplicated);
+    // topology must be derived from faces, not body.edges.length.
+    expect(computeMeshGenus(createTube(10, 6, 20, 32)).genus).toBe(1);
+    expect(computeMeshGenus(createFrustumTube(10, 6, 1.5, 20, 32)).genus).toBe(1);
+    // A coil is an open swept tube capped at both ends → topologically a ball.
+    expect(computeMeshGenus(createCoil(10, 2, 8, 3, 48, 16)).genus).toBe(0);
+  });
 });
 import type { Vec3, SolidBody } from './types';
 
