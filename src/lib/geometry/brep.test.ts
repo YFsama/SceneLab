@@ -365,6 +365,12 @@ describe('topology', () => {
     expect(g.isOrientable).toBe(true);
   });
 
+  it('curved primitives store a complete deduplicated edge list', () => {
+    // body.edges (used by many edge-stat functions) must match the faces' edges.
+    expect(createSphere(6, 16).edges.length).toBe(240);
+    expect(createCone(5, 0, 10, 32).edges.length).toBe(64);
+  });
+
   it('edge metrics come from faces (consistent for over- and under-counting prims)', () => {
     // 32-segment tube = 128 quad faces → 256 unique edges, not 512.
     expect(computeMeshStatistics(createTube(10, 6, 20, 32)).edgeCount).toBe(256);

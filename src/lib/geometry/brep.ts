@@ -192,7 +192,6 @@ export function createRevolve(params: RevolveParams): SolidBody {
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
-  const edges: Edge[] = [];
 
   // A full turn wraps onto itself, so the final ring must reuse ring 0 instead
   // of a coincident duplicate — otherwise the seam edges are used by one face
@@ -254,8 +253,6 @@ export function createRevolve(params: RevolveParams): SolidBody {
       const v2 = vertices[nextRing * n + pNext]!;
       const v3 = vertices[nextRing * n + p]!;
       faces.push({ id: genId('face'), vertices: [v0, v1, v2, v3], normal: computeFaceNormal(v0, v1, v2) });
-      edges.push({ id: genId('edge'), start: v0, end: v1 });
-      edges.push({ id: genId('edge'), start: v0, end: v3 });
     }
   }
 
@@ -294,7 +291,7 @@ export function createRevolve(params: RevolveParams): SolidBody {
     name: 'Revolve',
     vertices,
     faces,
-    edges,
+    edges: buildEdgesFromFaces(faces),
   };
 }
 
@@ -379,7 +376,6 @@ export function createSphere(radius: number, segments = 16): SolidBody {
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
-  const edges: Edge[] = [];
   const unit = (v: Vec3): Vec3 => {
     const l = Math.hypot(v.x, v.y, v.z) || 1;
     return { x: v.x / l, y: v.y / l, z: v.z / l };
@@ -418,8 +414,6 @@ export function createSphere(radius: number, segments = 16): SolidBody {
       const c = ringStart(i + 1) + ((j + 1) % lon);
       const d = ringStart(i) + ((j + 1) % lon);
       faces.push({ id: genId('face'), vertices: [v(a), v(b), v(c), v(d)], normal: unit(v(a)) });
-      edges.push({ id: genId('edge'), start: v(a), end: v(d) });
-      edges.push({ id: genId('edge'), start: v(a), end: v(b) });
     }
   }
   // Bottom cap triangles.
@@ -430,7 +424,7 @@ export function createSphere(radius: number, segments = 16): SolidBody {
   }
 
   alignWindingToNormal(faces);
-  return { id: genId('body'), name: 'Sphere', vertices, faces, edges };
+  return { id: genId('body'), name: 'Sphere', vertices, faces, edges: buildEdgesFromFaces(faces) };
 }
 
 /** Cone / frustum along +Y. radiusTop = 0 gives a pointed cone. */
@@ -447,7 +441,6 @@ export function createCone(
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
-  const edges: Edge[] = [];
   const pointed = radiusTop < 1e-9;
 
   const bottom: Vec3[] = [];
@@ -484,13 +477,11 @@ export function createCone(
     } else {
       const verts = [bottom[j]!, bottom[next]!, top[next]!, top[j]!];
       faces.push({ id: genId('face'), vertices: verts, normal: orientOut(verts) });
-      edges.push({ id: genId('edge'), start: top[j]!, end: top[next]! });
     }
-    edges.push({ id: genId('edge'), start: bottom[j]!, end: bottom[next]! });
   }
 
   alignWindingToNormal(faces);
-  return { id: genId('body'), name: 'Cone', vertices, faces, edges };
+  return { id: genId('body'), name: 'Cone', vertices, faces, edges: buildEdgesFromFaces(faces) };
 }
 
 /** Ring torus around the +Y axis, lying in the XZ plane. */
