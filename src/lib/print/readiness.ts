@@ -7,7 +7,7 @@ import { checkBuildVolume } from './analysis';
 
 export interface PrintIssue {
   severity: 'error' | 'warning';
-  code: 'not-watertight' | 'overhangs' | 'unstable' | 'tall' | 'too-big';
+  code: 'not-watertight' | 'overhangs' | 'unstable' | 'tippy' | 'tall' | 'too-big';
   message: string;
 }
 
@@ -24,6 +24,11 @@ export interface ReadinessOptions {
   buildVolume?: Vec3;
   /** Tallness ratio above which a warp/detach warning is raised (default 4). */
   tallnessLimit?: number;
+  /**
+   * Critical tipping angle (degrees) below which a stable part is flagged as
+   * easily tipped. Default 10°.
+   */
+  minTippingAngleDeg?: number;
 }
 
 /**
@@ -53,8 +58,20 @@ export function assessPrintReadiness(body: SolidBody, options: ReadinessOptions 
     });
   }
 
-  if (!analyzeStability(body).stable) {
+  const stability = analyzeStability(body);
+  if (!stability.stable) {
     issues.push({ severity: 'warning', code: 'unstable', message: 'May tip over (center of mass outside base)' });
+  } else {
+    // Stable, but how much tilt does it take to topple? A small critical angle
+    // means it tips easily (tall/top-heavy on a narrow base).
+    const minTip = options.minTippingAngleDeg ?? 10;
+    if (stability.tippingAngleDeg < minTip) {
+      issues.push({
+        severity: 'warning',
+        code: 'tippy',
+        message: `Tips easily (topples at ${stability.tippingAngleDeg.toFixed(0)}° tilt) — top-heavy on a narrow base`,
+      });
+    }
   }
 
   const bed = analyzeBedContact(body);

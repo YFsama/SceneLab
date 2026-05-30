@@ -28,6 +28,16 @@ describe('assessPrintReadiness', () => {
     expect(r.issues.some((i) => i.code === 'too-big' && i.severity === 'error')).toBe(true);
   });
 
+  it('warns that a tall narrow box tips easily (stable but marginal)', () => {
+    // 4×40×4: CoM inside the base (stable) but topples at atan(2/20) ≈ 5.7°.
+    const tall = createBox(4, 40, 4);
+    const r = assessPrintReadiness(tall, { buildVolume: { x: 200, y: 200, z: 200 } });
+    expect(r.issues.some((i) => i.code === 'unstable')).toBe(false);
+    expect(r.issues.some((i) => i.code === 'tippy' && i.severity === 'warning')).toBe(true);
+    // Tippy is only a warning, so a watertight part that fits is still "ready".
+    expect(r.ready).toBe(true);
+  });
+
   it('flags a non-watertight mesh as an error', () => {
     const sliver: SolidBody = {
       id: 's',
