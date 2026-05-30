@@ -112,6 +112,9 @@ describe('app store — direct bodies', () => {
       bodies: [],
       directBodies: [],
       objectIds: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
     });
   });
 
@@ -260,6 +263,36 @@ describe('app store — direct bodies', () => {
     useStore.getState().deselectAll();
     expect(useStore.getState().deleteSelected()).toBe(0);
     expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
+  it('undo/redo revert and re-apply scene-body edits', () => {
+    const a = createBox(10, 10, 10);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    expect(useStore.getState().bodies).toHaveLength(2);
+
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(useStore.getState().bodies[0]!.id).toBe(a.id);
+
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(0);
+    expect(useStore.getState().undo()).toBe(false);
+
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(2);
+    expect(useStore.getState().redo()).toBe(false);
+  });
+
+  it('a new edit clears the redo stack', () => {
+    useStore.getState().addDirectBody(createBox(10, 10, 10));
+    useStore.getState().undo();
+    expect(useStore.getState().redoStack.length).toBe(1);
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    expect(useStore.getState().redoStack.length).toBe(0);
+    expect(useStore.getState().redo()).toBe(false);
   });
 
   it('removeDirectBody clears its selection and marks the project dirty', () => {

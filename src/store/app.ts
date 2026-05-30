@@ -73,6 +73,13 @@ interface AppState {
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
+  /** Undo/redo history for scene-body edits (create/transform/delete). */
+  undoStack: SolidBody[][];
+  redoStack: SolidBody[][];
+  /** Revert the last scene-body change; returns true if something was undone. */
+  undo: () => boolean;
+  /** Re-apply the last undone change; returns true if something was redone. */
+  redo: () => boolean;
   clearScene: () => void;
   loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[]) => void;
 
@@ -122,6 +129,13 @@ export const useStore = create<AppState>((set, get) => {
     const { featureTree, directBodies } = get();
     const bodies = [...featureTree.getLatestBodies(), ...directBodies];
     set({ bodies, objectIds: bodies.map((b) => b.id) });
+  };
+
+  // Snapshot the current direct bodies onto the undo stack before a mutation,
+  // clearing the redo stack (a new edit invalidates the redo branch). Capped so
+  // history can't grow without bound.
+  const pushUndo = () => {
+    set((s) => ({ undoStack: [...s.undoStack, s.directBodies].slice(-50), redoStack: [] }));
   };
 
   return {
@@ -221,6 +235,7 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   addDirectBody: (body) => {
+    pushUndo();
     set((s) => ({ directBodies: [...s.directBodies, body], projectDirty: true }));
     recombine();
   },
@@ -243,10 +258,12 @@ export const useStore = create<AppState>((set, get) => {
     return body.id;
   },
   addDirectBodies: (newBodies) => {
+    pushUndo();
     set((s) => ({ directBodies: [...s.directBodies, ...newBodies], projectDirty: true }));
     recombine();
   },
   replaceBody: (oldId, newBody) => {
+    pushUndo();
     const { directBodies } = get();
     if (directBodies.some((b) => b.id === oldId)) {
       // Stable case: editing a direct body replaces it in place.
@@ -260,6 +277,7 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
   },
   removeDirectBody: (id) => {
+    pushUndo();
     set((s) => ({
       directBodies: s.directBodies.filter((b) => b.id !== id),
       // Drop any stale selection of the removed body and mark the edit, like
@@ -276,6 +294,7 @@ export const useStore = create<AppState>((set, get) => {
     const remaining = directBodies.filter((b) => !selected.has(b.id));
     const removed = directBodies.length - remaining.length;
     if (removed === 0) return 0; // only feature-tree bodies selected — not deletable here
+    pushUndo();
     set((s) => ({
       directBodies: remaining,
       selectedIds: s.selectedIds.filter((id) => !selected.has(id)),
@@ -284,6 +303,36 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return removed;
   },
+  undoStack: [],
+  redoStack: [],
+  undo: () => {
+    const { undoStack, directBodies } = get();
+    if (undoStack.length === 0) return false;
+    const prev = undoStack[undoStack.length - 1]!;
+    set((s) => ({
+      directBodies: prev,
+      undoStack: s.undoStack.slice(0, -1),
+      redoStack: [...s.redoStack, directBodies],
+      selectedIds: [],
+      projectDirty: true,
+    }));
+    recombine();
+    return true;
+  },
+  redo: () => {
+    const { redoStack, directBodies } = get();
+    if (redoStack.length === 0) return false;
+    const next = redoStack[redoStack.length - 1]!;
+    set((s) => ({
+      directBodies: next,
+      redoStack: s.redoStack.slice(0, -1),
+      undoStack: [...s.undoStack, directBodies],
+      selectedIds: [],
+      projectDirty: true,
+    }));
+    recombine();
+    return true;
+  },
   clearScene: () => {
     set({
       featureTree: new FeatureTree(),
@@ -291,6 +340,8 @@ export const useStore = create<AppState>((set, get) => {
       bodies: [],
       objectIds: [],
       selectedIds: [],
+      undoStack: [],
+      redoStack: [],
       currentSketch: null,
       sketchActive: false,
       projectDirty: true,
@@ -304,6 +355,8 @@ export const useStore = create<AppState>((set, get) => {
       featureTree: tree,
       directBodies,
       selectedIds: [],
+      undoStack: [],
+      redoStack: [],
       currentSketch: null,
       sketchActive: false,
       projectName: name ?? get().projectName,
