@@ -81,6 +81,20 @@ describe('CAM module exports', () => {
     expect(tool).toBeUndefined();
   });
 
+  it('addCustomTool upserts by id rather than duplicating', () => {
+    const mk = (diameter: number) => ({
+      id: 'custom-upsert', name: 'Custom', type: 'endmill' as const,
+      diameter, fluteLength: 10, overallLength: 40, flutes: 2, material: 'carbide' as const,
+    });
+    const before = getAllTools().length;
+    addCustomTool(mk(4));
+    addCustomTool(mk(8)); // same id, edited diameter
+    expect(getAllTools().length).toBe(before + 1); // not + 2
+    expect(getTool('custom-upsert')?.diameter).toBe(8); // latest wins
+    removeCustomTool('custom-upsert');
+    expect(getTool('custom-upsert')).toBeUndefined();
+  });
+
   it('should generate pocket toolpath', () => {
     const tool = getTool('em-6mm')!;
     const tp = generatePocketToolpath(
