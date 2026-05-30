@@ -32,6 +32,25 @@ describe('arrangeOnPlate', () => {
     expect(r.usedZ).toBeLessThanOrEqual(25);
   });
 
+  it('packs by decreasing depth so similar-depth items share rows (NFDH)', () => {
+    // Two deep (z=20) and two shallow (z=5) boxes, 10 wide, interleaved. Two fit
+    // per 25-wide row. Sorted: row1 = both deep (depth 20), row2 = both shallow
+    // (depth 5) → usedZ = 20 + spacing(5) + 5 = 30. Arbitrary order would mix a
+    // deep box into the second row and waste space.
+    const boxes = [
+      createBox(10, 10, 5),
+      createBox(10, 10, 20),
+      createBox(10, 10, 5),
+      createBox(10, 10, 20),
+    ];
+    const r = arrangeOnPlate(boxes, 25, 100, 5);
+    expect(r.fits).toBe(true);
+    expect(r.usedZ).toBeCloseTo(30, 6);
+    // Without sorting the same input wastes more depth.
+    const unsorted = arrangeOnPlate(boxes, 25, 100, 5, false);
+    expect(unsorted.usedZ).toBeGreaterThan(r.usedZ);
+  });
+
   it('reports fits=false when the bed is too small', () => {
     const boxes = [createBox(20, 10, 20), createBox(20, 10, 20)];
     const r = arrangeOnPlate(boxes, 25, 25, 5); // two 20-wide boxes can't share a 25 bed

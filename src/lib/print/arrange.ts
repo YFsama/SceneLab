@@ -12,16 +12,22 @@ export interface ArrangeResult {
 }
 
 /**
- * Lay bodies out on the build plate with simple shelf (row) packing: place them
+ * Lay bodies out on the build plate with shelf (row) packing: place them
  * left-to-right, wrap to a new row when the bed width is exceeded, and seat each
  * on the bed (min Y = 0). Items are kept `spacing` mm apart. Reports whether the
  * arrangement fits inside bedX × bedZ.
+ *
+ * Bodies are packed in order of decreasing depth (Next-Fit Decreasing Height) so
+ * each row groups similar depths and wastes less of the bed — a large
+ * improvement over packing in arbitrary order. Pass `sort: false` to keep the
+ * given order.
  */
 export function arrangeOnPlate(
   bodies: SolidBody[],
   bedX: number,
   bedZ: number,
   spacing = 5,
+  sort = true,
 ): ArrangeResult {
   const placed: SolidBody[] = [];
   let cursorX = 0;
@@ -29,7 +35,15 @@ export function arrangeOnPlate(
   let rowDepth = 0;
   let usedX = 0;
 
-  for (const body of bodies) {
+  const order = sort
+    ? [...bodies].sort((a, b) => {
+        const da = computeBoundingBox(a);
+        const db = computeBoundingBox(b);
+        return db.max.z - db.min.z - (da.max.z - da.min.z);
+      })
+    : bodies;
+
+  for (const body of order) {
     const bb = computeBoundingBox(body);
     const w = bb.max.x - bb.min.x;
     const d = bb.max.z - bb.min.z;
