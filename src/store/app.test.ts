@@ -501,5 +501,20 @@ describe('app store — direct bodies', () => {
       useStore.getState().clearScene();
       expect(useStore.getState().points).toHaveLength(0);
     });
+
+    it('autosave + restoreAutosave preserves datum planes, axes and points', () => {
+      useStore.getState().clearScene();
+      useStore.getState().ensureStandardPlanes();
+      useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
+      useStore.getState().addPoint({ x: 5, y: 6, z: 7 });
+      expect(useStore.getState().autosave()).toBe(true);
+      useStore.getState().clearScene();
+      expect(useStore.getState().planes).toHaveLength(0);
+      expect(useStore.getState().restoreAutosave()).toBe(true);
+      expect(useStore.getState().planes).toHaveLength(3);
+      expect(useStore.getState().axes).toHaveLength(1);
+      expect(useStore.getState().points).toHaveLength(1);
+      expect(useStore.getState().points[0].position).toEqual({ x: 5, y: 6, z: 7 });
+    });
   });
 });

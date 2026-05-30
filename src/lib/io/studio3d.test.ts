@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from './studio3d';
+import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, saveToFile, loadFromFile } from './studio3d';
 import { createBox, computeVolume } from '../geometry/brep';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
+import { standardPlanes, makeAxis, makePoint } from '../geometry/referenceGeometry';
 
 describe('project round-trip (parametric)', () => {
   it('rebuilds the feature tree and geometry from a saved project', () => {
@@ -72,6 +73,28 @@ describe('saveToFile / loadFromFile', () => {
     expect(loaded.name).toBe('Test');
     expect(loaded.version).toBe(1);
     expect(loaded.bodies.length).toBe(1);
+  });
+
+  it('round-trips reference geometry (planes/axes/points)', () => {
+    const tree = new FeatureTree();
+    const refGeo = {
+      planes: standardPlanes(),
+      axes: [makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 'Z')],
+      points: [makePoint({ x: 1, y: 2, z: 3 }, 'P')],
+    };
+    const json = saveToFile(serializeProject('Ref', tree.features, [], [], refGeo));
+    const loaded = loadFromFile(json);
+    const rg = deserializeReferenceGeometry(loaded);
+    expect(rg.planes).toHaveLength(3);
+    expect(rg.axes).toHaveLength(1);
+    expect(rg.axes[0].direction.z).toBeCloseTo(1, 6);
+    expect(rg.points).toHaveLength(1);
+    expect(rg.points[0].position).toEqual({ x: 1, y: 2, z: 3 });
+  });
+
+  it('deserializeReferenceGeometry defaults to empty arrays for old files', () => {
+    const rg = deserializeReferenceGeometry({ version: 1, name: 'x', features: [], bodies: [], metadata: { created: '', modified: '', appVersion: '' } });
+    expect(rg).toEqual({ planes: [], axes: [], points: [] });
   });
 
   it('should throw on invalid JSON', () => {

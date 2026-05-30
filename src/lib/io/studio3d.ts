@@ -12,6 +12,14 @@ import type {
 } from '../features/types';
 import type { SolidBody } from '../geometry/types';
 import type { SketchEntity, SketchConstraint } from '../sketch/types';
+import type { PlaneDefinition, AxisDefinition, PointDefinition } from '../geometry/referenceGeometry';
+
+/** Datum planes/axes/points — plain serializable reference geometry. */
+export interface SerializedReferenceGeometry {
+  planes: PlaneDefinition[];
+  axes: AxisDefinition[];
+  points: PointDefinition[];
+}
 
 export interface ProjectFile {
   version: number;
@@ -20,6 +28,8 @@ export interface ProjectFile {
   bodies: SerializedBody[];
   /** Full meshes of bodies created outside the feature tree (AI/imported). */
   directBodies?: SolidBody[];
+  /** Datum planes/axes/points (reference geometry). */
+  referenceGeometry?: SerializedReferenceGeometry;
   metadata: {
     created: string;
     modified: string;
@@ -52,11 +62,13 @@ export function serializeProject(
   features: Feature[],
   bodies: SolidBody[],
   directBodies: SolidBody[] = [],
+  referenceGeometry: SerializedReferenceGeometry = { planes: [], axes: [], points: [] },
 ): ProjectFile {
   return {
     version: FILE_VERSION,
     name,
     directBodies,
+    referenceGeometry,
     features: features.map((f) => ({
       id: f.id,
       type: f.type,
@@ -103,6 +115,16 @@ function serializeFeatureData(feature: Feature): unknown {
 /** Full direct-body meshes stored in a loaded project (empty if none). */
 export function deserializeDirectBodies(project: ProjectFile): SolidBody[] {
   return Array.isArray(project.directBodies) ? project.directBodies : [];
+}
+
+/** Datum planes/axes/points stored in a loaded project (empty arrays if absent). */
+export function deserializeReferenceGeometry(project: ProjectFile): SerializedReferenceGeometry {
+  const rg = project.referenceGeometry;
+  return {
+    planes: Array.isArray(rg?.planes) ? rg.planes : [],
+    axes: Array.isArray(rg?.axes) ? rg.axes : [],
+    points: Array.isArray(rg?.points) ? rg.points : [],
+  };
 }
 
 /** Reconstruct Feature objects (incl. sketch Maps) from a loaded project. */

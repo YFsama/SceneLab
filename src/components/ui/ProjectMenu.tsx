@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { Save, FolderOpen, Download, FileBox, Image, Upload } from 'lucide-react';
 
@@ -11,6 +11,9 @@ export function ProjectMenu() {
   const featureTree = useStore((s) => s.featureTree);
   const bodies = useStore((s) => s.bodies);
   const directBodies = useStore((s) => s.directBodies);
+  const planes = useStore((s) => s.planes);
+  const axes = useStore((s) => s.axes);
+  const points = useStore((s) => s.points);
   const setProjectDirty = useStore((s) => s.setProjectDirty);
   const loadProject = useStore((s) => s.loadProject);
   const addDirectBody = useStore((s) => s.addDirectBody);
@@ -19,7 +22,7 @@ export function ProjectMenu() {
 
   const handleSave = () => {
     try {
-      const project = serializeProject(projectName, featureTree.features, bodies, directBodies);
+      const project = serializeProject(projectName, featureTree.features, bodies, directBodies, { planes, axes, points });
       const json = saveToFile(project);
       downloadFile(json, `${projectName}.studio3d`);
       setProjectDirty(false);
@@ -37,7 +40,7 @@ export function ProjectMenu() {
       const json = await readFileAsText(file);
       const project = loadFromFile(json);
       // Rebuild the parametric model, not just the name.
-      loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project));
+      loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project));
       showToast(`${t('toast.loaded')} "${project.name}"`, 'success');
     } catch (err) {
       showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');

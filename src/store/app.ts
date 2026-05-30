@@ -3,7 +3,7 @@ import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, type AxisDefinition, type PointDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
@@ -87,7 +87,7 @@ interface AppState {
   /** Re-apply the last undone change; returns true if something was redone. */
   redo: () => boolean;
   clearScene: () => void;
-  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[]) => void;
+  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry) => void;
 
   // Reference geometry — datum planes (SolidWorks Front/Top/Right + custom).
   planes: PlaneDefinition[];
@@ -402,7 +402,7 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: true,
     });
   },
-  loadProject: (features, name, directBodies = []) => {
+  loadProject: (features, name, directBodies = [], referenceGeometry) => {
     const tree = new FeatureTree();
     for (const f of features) tree.addFeature(f);
     tree.recompute();
@@ -410,9 +410,9 @@ export const useStore = create<AppState>((set, get) => {
       featureTree: tree,
       directBodies,
       selectedIds: [],
-      planes: [],
-      axes: [],
-      points: [],
+      planes: referenceGeometry?.planes ?? [],
+      axes: referenceGeometry?.axes ?? [],
+      points: referenceGeometry?.points ?? [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -608,10 +608,10 @@ export const useStore = create<AppState>((set, get) => {
 
   autosave: () => {
     if (typeof localStorage === 'undefined') return false;
-    const { projectDirty, projectName, featureTree, directBodies } = get();
+    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points } = get();
     if (!projectDirty) return false;
     try {
-      const project = serializeProject(projectName, featureTree.features, [], directBodies);
+      const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points });
       localStorage.setItem(AUTOSAVE_KEY, saveToFile(project));
       return true;
     } catch {
@@ -624,7 +624,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!raw) return false;
     try {
       const project = loadFromFile(raw);
-      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project));
+      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project));
       return true;
     } catch {
       return false;
