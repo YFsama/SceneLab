@@ -361,11 +361,21 @@ export function applyMirror(
     };
   };
 
+  // A reflection is orientation-reversing: it flips each face's winding. To
+  // keep the mirrored solid right-side-out, reverse each face's vertex order
+  // (restoring CCW-outward winding) and reflect the normal *across the plane*
+  // (linear part of the reflection) — not merely negate it, which is only
+  // correct when the plane normal happens to align with the face normal.
+  const reflectDir = (v: Vec3): Vec3 => {
+    const k = 2 * (n.x * v.x + n.y * v.y + n.z * v.z);
+    return { x: v.x - n.x * k, y: v.y - n.y * k, z: v.z - n.z * k };
+  };
+
   const newVertices = body.vertices.map(mirrorVert);
   const newFaces = body.faces.map((f) => ({
     id: genId('face'),
-    vertices: f.vertices.map(mirrorVert),
-    normal: { x: -f.normal.x, y: -f.normal.y, z: -f.normal.z },
+    vertices: f.vertices.map(mirrorVert).reverse(),
+    normal: reflectDir(f.normal),
   }));
   const newEdges = body.edges.map((e) => ({
     id: genId('edge'),

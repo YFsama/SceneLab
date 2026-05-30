@@ -279,4 +279,24 @@ describe('applyMirror', () => {
     const mirX = result.vertices[0]!.x;
     expect(mirX).toBeCloseTo(-origX, 5);
   });
+
+  it('keeps stored normals consistent with the winding (right-side-out)', () => {
+    // Mirror across a tilted plane: a reflection flips winding, so the result
+    // must reverse face order and reflect (not negate) normals.
+    const result = applyMirror(createBox(10, 6, 4), {
+      origin: { x: 0, y: 0, z: 0 },
+      normal: { x: 1, y: 1, z: 0 },
+    });
+    for (const f of result.faces) {
+      const v0 = f.vertices[0]!;
+      const v1 = f.vertices[1]!;
+      const v2 = f.vertices[2]!;
+      const e1 = { x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z };
+      const e2 = { x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z };
+      const wn = { x: e1.y * e2.z - e1.z * e2.y, y: e1.z * e2.x - e1.x * e2.z, z: e1.x * e2.y - e1.y * e2.x };
+      const dot = wn.x * f.normal.x + wn.y * f.normal.y + wn.z * f.normal.z;
+      // Stored normal must agree with the winding-derived normal, not oppose it.
+      expect(dot).toBeGreaterThan(0);
+    }
+  });
 });
