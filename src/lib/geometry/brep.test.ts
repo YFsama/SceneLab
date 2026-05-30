@@ -1,7 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
+
+describe('computeSolidity', () => {
+  it('reports convex solids as fully solid with no cavities', () => {
+    for (const make of [
+      () => createBox(10, 10, 10),
+      () => createSphere(5, 24),
+      () => createCylinder(5, 10, 32),
+    ]) {
+      const s = computeSolidity(make());
+      expect(s.solidity).toBeCloseTo(1, 6);
+      expect(s.isSolid).toBe(true);
+      expect(s.voidRatio).toBeCloseTo(0, 6);
+      expect(s.internalCavities).toBe(0);
+    }
+  });
+
+  it('keeps solidity in [0,1] for a non-convex part', () => {
+    const s = computeSolidity(createTorus(10, 3, 32, 16));
+    expect(s.solidity).toBeGreaterThan(0);
+    expect(s.solidity).toBeLessThanOrEqual(1);
+  });
+});
 
 describe('computeThickness', () => {
   it('measures wall-to-wall distance by inward ray casting', () => {

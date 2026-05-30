@@ -2202,11 +2202,20 @@ export function computeSolidity(body: SolidBody): SolidityInfo {
     return { solidity: 0, isSolid: false, voidRatio: 1, internalCavities: 0 };
   }
 
-  // Approximate convex hull volume using bounding box
+  // Solidity is volume / convex-hull volume. A convex solid equals its own
+  // hull, so its solidity is exactly 1 — short-circuit those (a sphere/
+  // cylinder/cone otherwise read ~0.5 against a bounding-box hull proxy and
+  // were wrongly flagged as full of voids).
+  if (computeConvexity(body).isConvex) {
+    return { solidity: 1, isSolid: true, voidRatio: 0, internalCavities: 0 };
+  }
+
+  // Non-convex: approximate the hull with the bounding box. The box is at least
+  // as big as the hull, so this under-estimates solidity (clamp to ≤ 1).
   const bb = computeBoundingBox(body);
   const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
 
-  const solidity = hullVolume > 1e-10 ? volume / hullVolume : 0;
+  const solidity = hullVolume > 1e-10 ? Math.min(1, volume / hullVolume) : 0;
   const voidRatio = 1 - solidity;
 
   // Estimate internal cavities based on void ratio
