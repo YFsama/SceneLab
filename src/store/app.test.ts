@@ -237,6 +237,31 @@ describe('app store — direct bodies', () => {
     }
   });
 
+  it('deleteSelected removes selected direct bodies and clears their selection', () => {
+    const a = createBox(10, 10, 10);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().selectObject(a.id);
+    useStore.setState({ projectDirty: false });
+
+    const removed = useStore.getState().deleteSelected();
+
+    expect(removed).toBe(1);
+    const bodies = useStore.getState().bodies;
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.id).toBe(b.id); // unselected body survives
+    expect(useStore.getState().selectedIds).not.toContain(a.id);
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
+
+  it('deleteSelected is a no-op with nothing selected', () => {
+    useStore.getState().addDirectBody(createBox(10, 10, 10));
+    useStore.getState().deselectAll();
+    expect(useStore.getState().deleteSelected()).toBe(0);
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
   it('removeDirectBody clears its selection and marks the project dirty', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);

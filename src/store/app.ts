@@ -70,6 +70,8 @@ interface AppState {
   addPrimitive: (kind: PrimitiveKind) => string;
   replaceBody: (oldId: string, newBody: SolidBody) => void;
   removeDirectBody: (id: string) => void;
+  /** Delete all currently-selected direct bodies; returns how many were removed. */
+  deleteSelected: () => number;
   clearScene: () => void;
   loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[]) => void;
 
@@ -262,6 +264,21 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: true,
     }));
     recombine();
+  },
+  deleteSelected: () => {
+    const { selectedIds, directBodies } = get();
+    if (selectedIds.length === 0) return 0;
+    const selected = new Set(selectedIds);
+    const remaining = directBodies.filter((b) => !selected.has(b.id));
+    const removed = directBodies.length - remaining.length;
+    if (removed === 0) return 0; // only feature-tree bodies selected — not deletable here
+    set((s) => ({
+      directBodies: remaining,
+      selectedIds: s.selectedIds.filter((id) => !selected.has(id)),
+      projectDirty: true,
+    }));
+    recombine();
+    return removed;
   },
   clearScene: () => {
     set({

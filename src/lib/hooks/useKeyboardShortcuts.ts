@@ -70,6 +70,8 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+p', () => store.toggleProperties());
 
   // Actions
+  registerShortcut('delete', () => store.deleteSelected());
+  registerShortcut('backspace', () => store.deleteSelected());
   registerShortcut('escape', () => {
     if (store.sketchActive) {
       store.setSketchActive(false);
