@@ -62,10 +62,14 @@ describe('recommendOrientation', () => {
     const minusY = report.candidates.find((c) => c.label === '-Y')!;
     // +Y: the floating ledge is a downward overhang needing support.
     expect(plusY.supportArea).toBeGreaterThan(0);
+    // Support volume = projected area (16) × drop (5) = 80.
+    expect(plusY.supportVolume).toBeCloseTo(80, 4);
     // -Y: flipping makes that face point up → no support.
     expect(minusY.supportArea).toBe(0);
+    expect(minusY.supportVolume).toBe(0);
     // The recommended orientation has no support.
     expect(report.best.supportArea).toBe(0);
+    expect(report.best.supportVolume).toBe(0);
   });
 
   it('reports bed contact area and prefers it as a tie-break', () => {

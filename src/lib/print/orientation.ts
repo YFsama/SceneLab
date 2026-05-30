@@ -14,6 +14,12 @@ export interface OrientationCandidate {
   label: '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z';
   /** Area of overhang faces needing support (bed-resting faces excluded). */
   supportArea: number;
+  /**
+   * Approximate support-material volume: each overhang's horizontal projection
+   * (area × |n·up|) times its drop to the bed. Better reflects support cost
+   * than area alone, since a tall overhang costs more than a low one.
+   */
+  supportVolume: number;
   supportFaces: number;
   /** Part height along the build axis. */
   buildHeight: number;
@@ -65,7 +71,7 @@ export function recommendOrientation(body: SolidBody, options: OrientationOption
   const candidates: OrientationCandidate[] = DIRECTIONS.map(({ up, label }) => {
     const dir = normalize(up);
     if (body.vertices.length === 0) {
-      return { up, label, supportArea: 0, supportFaces: 0, buildHeight: 0, bedContactArea: 0 };
+      return { up, label, supportArea: 0, supportVolume: 0, supportFaces: 0, buildHeight: 0, bedContactArea: 0 };
     }
 
     const heights = body.vertices.map((v) => dot(v, dir));
@@ -75,12 +81,14 @@ export function recommendOrientation(body: SolidBody, options: OrientationOption
     const tol = Math.max(1e-6, buildHeight * 0.01);
 
     let supportArea = 0;
+    let supportVolume = 0;
     let supportFaces = 0;
     let bedContactArea = 0;
     for (const face of body.faces) {
       const n = normalize(face.normal);
       const d = dot(n, dir);
-      const onBed = faceCentroidHeight(face, dir) <= minH + tol;
+      const centroidH = faceCentroidHeight(face, dir);
+      const onBed = centroidH <= minH + tol;
       if (d < 0 && onBed) {
         bedContactArea += areaById.get(face.id) ?? 0; // first-layer contact
         continue;
@@ -89,17 +97,21 @@ export function recommendOrientation(body: SolidBody, options: OrientationOption
       if (onBed) continue; // resting on the bed
       const angleDeg = Math.acos(Math.max(-1, Math.min(1, -d))) * DEG;
       if (angleDeg < thresholdDeg) {
-        supportArea += areaById.get(face.id) ?? 0;
+        const area = areaById.get(face.id) ?? 0;
+        supportArea += area;
+        // Vertical support column: horizontal projection (area × |n·up|) × drop.
+        supportVolume += area * Math.abs(d) * Math.max(0, centroidH - minH);
         supportFaces += 1;
       }
     }
-    return { up, label, supportArea, supportFaces, buildHeight, bedContactArea };
+    return { up, label, supportArea, supportVolume, supportFaces, buildHeight, bedContactArea };
   });
 
-  // Prefer least support, then shortest build, then largest bed contact (best
-  // first-layer adhesion).
+  // Prefer least support material (volume), then support area, then shortest
+  // build, then largest bed contact (best first-layer adhesion).
   const sorted = [...candidates].sort(
     (a, b) =>
+      a.supportVolume - b.supportVolume ||
       a.supportArea - b.supportArea ||
       a.buildHeight - b.buildHeight ||
       b.bedContactArea - a.bedContactArea,

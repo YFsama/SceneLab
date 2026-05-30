@@ -1058,6 +1058,7 @@ export function registerBuiltinTools(): void {
         best: {
           orientation: report.best.label,
           supportArea: Number(report.best.supportArea.toFixed(2)),
+          supportVolume: Number(report.best.supportVolume.toFixed(2)),
           supportFaces: report.best.supportFaces,
           buildHeight: Number(report.best.buildHeight.toFixed(2)),
           bedContactArea: Number(report.best.bedContactArea.toFixed(2)),
@@ -1065,6 +1066,7 @@ export function registerBuiltinTools(): void {
         ranked: report.candidates.map((c) => ({
           orientation: c.label,
           supportArea: Number(c.supportArea.toFixed(2)),
+          supportVolume: Number(c.supportVolume.toFixed(2)),
         })),
       };
     },
