@@ -7,6 +7,11 @@ import {
   midplaneBetweenFaces,
   signedDistanceToPlane,
   projectPointOntoPlane,
+  makeAxis,
+  axisFromPoints,
+  axisFromPlanes,
+  closestPointOnAxis,
+  distancePointToAxis,
 } from './referenceGeometry';
 import { createBox } from './brep';
 import { listFaces } from './query';
@@ -116,5 +121,59 @@ describe('signedDistanceToPlane / projectPointOntoPlane', () => {
     expect(q.x).toBeCloseTo(5, 6);
     expect(q.z).toBeCloseTo(2, 6);
     expect(signedDistanceToPlane(plane, q)).toBeCloseTo(0, 6);
+  });
+});
+
+describe('reference axes', () => {
+  it('makeAxis normalizes the direction; throws on zero', () => {
+    const a = makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 5 });
+    expect(Math.hypot(a.direction.x, a.direction.y, a.direction.z)).toBeCloseTo(1, 6);
+    expect(a.direction.z).toBeCloseTo(1, 6);
+    expect(() => makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })).toThrow();
+  });
+
+  it('axisFromPoints points from p1 toward p2; null if coincident', () => {
+    const a = axisFromPoints({ x: 1, y: 1, z: 1 }, { x: 1, y: 1, z: 6 })!;
+    expect(a.direction.z).toBeCloseTo(1, 6);
+    expect(axisFromPoints({ x: 2, y: 2, z: 2 }, { x: 2, y: 2, z: 2 })).toBeNull();
+  });
+
+  it('intersection of the Front (XY) and Top (XZ) planes is the X axis', () => {
+    const [front, top] = standardPlanes();
+    const axis = axisFromPlanes(front, top)!;
+    expect(axis).not.toBeNull();
+    // Direction is ±X.
+    expect(Math.abs(axis.direction.x)).toBeCloseTo(1, 6);
+    expect(Math.abs(axis.direction.y)).toBeCloseTo(0, 6);
+    expect(Math.abs(axis.direction.z)).toBeCloseTo(0, 6);
+    // The line passes through the origin (y=0, z=0).
+    expect(axis.origin.y).toBeCloseTo(0, 6);
+    expect(axis.origin.z).toBeCloseTo(0, 6);
+  });
+
+  it('intersection of two offset planes lies on both', () => {
+    // Plane z=2 and plane y=3 intersect in the line x-free, y=3, z=2.
+    const pz = makePlane({ x: 0, y: 0, z: 2 }, { x: 0, y: 0, z: 1 });
+    const py = makePlane({ x: 0, y: 3, z: 0 }, { x: 0, y: 1, z: 0 });
+    const axis = axisFromPlanes(pz, py)!;
+    expect(signedDistanceToPlane(pz, axis.origin)).toBeCloseTo(0, 6);
+    expect(signedDistanceToPlane(py, axis.origin)).toBeCloseTo(0, 6);
+    expect(Math.abs(axis.direction.x)).toBeCloseTo(1, 6); // line runs along X
+  });
+
+  it('parallel planes have no intersection axis', () => {
+    const a = makePlane({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
+    const b = makePlane({ x: 0, y: 0, z: 5 }, { x: 0, y: 0, z: 1 });
+    expect(axisFromPlanes(a, b)).toBeNull();
+  });
+
+  it('closestPointOnAxis and distancePointToAxis measure perpendicular offset', () => {
+    const zAxis = makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
+    const p = { x: 3, y: 4, z: 7 };
+    const c = closestPointOnAxis(zAxis, p);
+    expect(c.x).toBeCloseTo(0, 6);
+    expect(c.y).toBeCloseTo(0, 6);
+    expect(c.z).toBeCloseTo(7, 6); // projects onto the axis at the same height
+    expect(distancePointToAxis(zAxis, p)).toBeCloseTo(5, 6); // √(3²+4²)
   });
 });

@@ -122,3 +122,63 @@ export function projectPointOntoPlane(plane: PlaneDefinition, point: Vec3): Vec3
   const d = signedDistanceToPlane(plane, point);
   return { x: point.x - plane.normal.x * d, y: point.y - plane.normal.y * d, z: point.z - plane.normal.z * d };
 }
+
+// --- Reference axes (datum axes) ---
+
+let nextAxisId = 1;
+const genAxisId = () => `axis_${nextAxisId++}`;
+
+/** A datum axis: an infinite line given by a point and a unit direction. */
+export interface AxisDefinition {
+  id: string;
+  name: string;
+  origin: Vec3;
+  direction: Vec3;
+}
+
+/** Build a datum axis from a point and a direction (normalized). Throws on a zero direction. */
+export function makeAxis(origin: Vec3, direction: Vec3, name = 'Axis'): AxisDefinition {
+  return { id: genAxisId(), name, origin: { ...origin }, direction: normalize(direction) };
+}
+
+/** Datum axis through two distinct points; null if the points coincide. */
+export function axisFromPoints(p1: Vec3, p2: Vec3, name = 'Axis'): AxisDefinition | null {
+  const dir = { x: p2.x - p1.x, y: p2.y - p1.y, z: p2.z - p1.z };
+  if (len(dir) < 1e-12) return null;
+  return makeAxis(p1, dir, name);
+}
+
+/**
+ * Datum axis at the intersection of two datum planes (SolidWorks "axis from two
+ * planes"). Returns null if the planes are parallel. Direction = nA × nB; a
+ * point on the line is found by Goldman's two-plane formula.
+ */
+export function axisFromPlanes(a: PlaneDefinition, b: PlaneDefinition, name = 'Axis'): AxisDefinition | null {
+  const u = cross(a.normal, b.normal);
+  const uu = dot(u, u);
+  if (uu < 1e-18) return null; // parallel planes — no intersection line
+  const ca = dot(a.normal, a.origin);
+  const cb = dot(b.normal, b.origin);
+  const t1 = cross(b.normal, u); // ca · (nB × u)
+  const t2 = cross(u, a.normal); // cb · (u × nA)
+  const origin: Vec3 = {
+    x: (ca * t1.x + cb * t2.x) / uu,
+    y: (ca * t1.y + cb * t2.y) / uu,
+    z: (ca * t1.z + cb * t2.z) / uu,
+  };
+  return makeAxis(origin, u, name);
+}
+
+/** Closest point on an (infinite) axis to a point. */
+export function closestPointOnAxis(axis: AxisDefinition, point: Vec3): Vec3 {
+  const d = axis.direction;
+  const w = { x: point.x - axis.origin.x, y: point.y - axis.origin.y, z: point.z - axis.origin.z };
+  const t = dot(w, d); // direction is unit length
+  return { x: axis.origin.x + d.x * t, y: axis.origin.y + d.y * t, z: axis.origin.z + d.z * t };
+}
+
+/** Perpendicular distance from a point to an axis. */
+export function distancePointToAxis(axis: AxisDefinition, point: Vec3): number {
+  const c = closestPointOnAxis(axis, point);
+  return Math.hypot(point.x - c.x, point.y - c.y, point.z - c.z);
+}
