@@ -171,4 +171,23 @@ describe('solveConstraints', () => {
     const d2y = result.get('p4')!.y - result.get('p3')!.y;
     expect(d1x * d2x + d1y * d2y).toBeCloseTo(0, 3);
   });
+
+  it('should apply coincident constraint between two points', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 4, y: 6 });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'coincident', entityIds: ['p1', 'p2'] });
+
+    const result = solveConstraints(entities, constraints);
+
+    const a = result.get('p1')!;
+    const b = result.get('p2')!;
+    expect(a.x).toBeCloseTo(b.x, 6);
+    expect(a.y).toBeCloseTo(b.y, 6);
+    // Both free → they meet at the midpoint (2, 3).
+    expect(a.x).toBeCloseTo(2, 6);
+    expect(a.y).toBeCloseTo(3, 6);
+  });
 });

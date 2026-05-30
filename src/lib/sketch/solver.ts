@@ -56,6 +56,8 @@ function applyConstraint(
       return applyPerpendicular(constraint, points, entities);
     case 'equal':
       return applyEqual(constraint, points, entities);
+    case 'coincident':
+      return applyCoincident(constraint, points);
     case 'distance':
       return applyDistance(constraint, points);
   }
@@ -311,6 +313,44 @@ function applyEqual(
     e1.radius = avgR;
     e2.radius = avgR;
     return delta;
+  }
+
+  return 0;
+}
+
+function applyCoincident(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+): number {
+  // Pin two points to the same location. Operates on point IDs directly.
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+
+  const p1 = points.get(id1);
+  const p2 = points.get(id2);
+  if (!p1 || !p2) return 0;
+
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 1e-12) return 0;
+
+  if (!p1.fixed && !p2.fixed) {
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    p1.x = mx;
+    p1.y = my;
+    p2.x = mx;
+    p2.y = my;
+    return d / 2;
+  } else if (!p1.fixed) {
+    p1.x = p2.x;
+    p1.y = p2.y;
+    return d;
+  } else if (!p2.fixed) {
+    p2.x = p1.x;
+    p2.y = p1.y;
+    return d;
   }
 
   return 0;
