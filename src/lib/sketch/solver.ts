@@ -71,9 +71,24 @@ function applyConstraint(
       return applyCoincident(constraint, points);
     case 'distance':
       return applyDistance(constraint, points);
+    case 'radius':
+      return applyRadius(constraint, entities);
     case 'fixed':
       return 0; // Handled by anchoring points before the solve loop.
   }
+}
+
+/** Set a circle/arc's radius to the constraint value (an absolute dimension). */
+function applyRadius(constraint: SketchConstraint, entities: Map<string, SketchEntity>): number {
+  const target = constraint.value;
+  if (target === undefined || target <= 0) return 0;
+  const [id] = constraint.entityIds;
+  if (!id) return 0;
+  const e = entities.get(id);
+  if (!e || (e.type !== 'circle' && e.type !== 'arc')) return 0;
+  const delta = Math.abs(e.radius - target);
+  e.radius = target;
+  return delta;
 }
 
 function getLineEndpoints(

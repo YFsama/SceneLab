@@ -235,6 +235,19 @@ describe('solveConstraints', () => {
     expect(b.x).toBeCloseTo(10, 4);
   });
 
+  it('should set a circle radius via the radius constraint', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c', { id: 'c', type: 'circle', centerId: 'cc', radius: 4 });
+    entities.set('cc', { id: 'cc', type: 'point', x: 0, y: 0 });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('r', { id: 'r', type: 'radius', entityIds: ['c'], value: 9 });
+
+    solveConstraints(entities, constraints);
+    const circle = entities.get('c')!;
+    expect(circle.type === 'circle' && circle.radius).toBe(9);
+  });
+
   it('should apply coincident constraint between two points', () => {
     const entities = new Map<string, SketchEntity>();
     entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });

@@ -54,7 +54,8 @@ export type ConstraintType =
   | 'coincident'
   | 'fixed'
   | 'equal'
-  | 'distance';
+  | 'distance'
+  | 'radius';
 
 export interface SketchConstraint {
   id: string;
