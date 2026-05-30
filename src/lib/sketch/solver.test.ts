@@ -172,6 +172,27 @@ describe('solveConstraints', () => {
     expect(d1x * d2x + d1y * d2y).toBeCloseTo(0, 3);
   });
 
+  it('a fixed point stays put while a distance constraint moves the other', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 6, y: 0 });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('fix', { id: 'fix', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('d', { id: 'd', type: 'distance', entityIds: ['p1', 'p2'], value: 10 });
+
+    const result = solveConstraints(entities, constraints, 200);
+
+    const a = result.get('p1')!;
+    const b = result.get('p2')!;
+    // p1 is anchored at the origin.
+    expect(a.x).toBeCloseTo(0, 6);
+    expect(a.y).toBeCloseTo(0, 6);
+    // p2 absorbs the whole correction → distance is exactly 10 (p2 at x=10).
+    expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeCloseTo(10, 4);
+    expect(b.x).toBeCloseTo(10, 4);
+  });
+
   it('should apply coincident constraint between two points', () => {
     const entities = new Map<string, SketchEntity>();
     entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });

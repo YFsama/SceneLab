@@ -21,6 +21,17 @@ export function solveConstraints(
     }
   }
 
+  // Anchor points named by 'fixed' constraints before solving, so every other
+  // constraint resolves against them instead of drifting the whole sketch.
+  for (const constraint of constraints.values()) {
+    if (constraint.type === 'fixed') {
+      for (const id of constraint.entityIds) {
+        const p = points.get(id);
+        if (p) p.fixed = true;
+      }
+    }
+  }
+
   // Iterative constraint resolution
   for (let iter = 0; iter < maxIterations; iter++) {
     let maxDelta = 0;
@@ -60,6 +71,8 @@ function applyConstraint(
       return applyCoincident(constraint, points);
     case 'distance':
       return applyDistance(constraint, points);
+    case 'fixed':
+      return 0; // Handled by anchoring points before the solve loop.
   }
 }
 

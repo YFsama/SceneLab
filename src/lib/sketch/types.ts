@@ -52,6 +52,7 @@ export type ConstraintType =
   | 'parallel'
   | 'perpendicular'
   | 'coincident'
+  | 'fixed'
   | 'equal'
   | 'distance';
 
