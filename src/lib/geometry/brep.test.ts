@@ -1,7 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold } from './brep';
+
+describe('primitives are manifold with no isolated vertices', () => {
+  const cases: [string, () => import('./types').SolidBody][] = [
+    ['box', () => createBox(10, 10, 10)],
+    ['cylinder', () => createCylinder(5, 10, 32)],
+    ['sphere', () => createSphere(5, 16)],
+    ['cone', () => createCone(5, 0, 10, 32)],
+    ['torus', () => createTorus(10, 3, 32, 16)],
+    ['wedge', () => createWedge(10, 6, 4)],
+  ];
+  for (const [name, make] of cases) {
+    it(`${name} is watertight manifold`, () => {
+      const m = checkManifold(make());
+      expect(m.isManifold).toBe(true);
+      expect(m.boundaryEdges).toBe(0);
+      expect(m.nonManifoldEdges).toBe(0);
+      expect(m.isolatedVertices).toBe(0); // apex/poles are used by faces
+    });
+  }
+});
 
 describe('primitives have consistent outward normals', () => {
   // Edge-orientation based, so this holds for the non-convex torus too.

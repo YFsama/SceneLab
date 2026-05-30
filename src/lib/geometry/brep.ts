@@ -892,11 +892,12 @@ export function checkManifold(body: SolidBody): ManifoldCheck {
     if (count > 2) nonManifoldEdges++;
   }
 
-  // Count isolated vertices (vertices not used by any edge)
+  // Count isolated vertices (vertices used by no face). Checking faces — not the
+  // edge list — avoids false positives for apex/pole vertices whose cap-face
+  // edges aren't enumerated in body.edges.
   const usedVertices = new Set<string>();
-  for (const edge of body.edges) {
-    usedVertices.add(`${edge.start.x},${edge.start.y},${edge.start.z}`);
-    usedVertices.add(`${edge.end.x},${edge.end.y},${edge.end.z}`);
+  for (const face of body.faces) {
+    for (const v of face.vertices) usedVertices.add(`${v.x},${v.y},${v.z}`);
   }
   const isolatedVertices = body.vertices.filter(
     (v) => !usedVertices.has(`${v.x},${v.y},${v.z}`),
