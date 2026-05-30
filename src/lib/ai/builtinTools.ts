@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -1014,6 +1014,11 @@ export function registerBuiltinTools(): void {
         bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
         material: { type: 'string', enum: MATERIALS, description: 'Material whose density to use' },
         density: { type: 'number', description: 'Custom density in g/cm³ (overrides material)' },
+        axis: {
+          type: 'object',
+          properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+          description: 'Optional axis to also report the scalar moment of inertia about (through the CoM)',
+        },
       },
     },
     execute: async (args) => {
@@ -1023,10 +1028,15 @@ export function registerBuiltinTools(): void {
         args.density !== undefined
           ? assertNumber(args.density, 'density')
           : MATERIAL_DENSITIES[args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA'];
-      const mp = computeMassProperties(body, densityGramsPerCm3 / 1000);
-      const pm = computePrincipalMoments(body, densityGramsPerCm3 / 1000);
+      const densityGramsPerMm3 = densityGramsPerCm3 / 1000;
+      const mp = computeMassProperties(body, densityGramsPerMm3);
+      const pm = computePrincipalMoments(body, densityGramsPerMm3);
       const r3 = (n: number) => Number(n.toFixed(3));
       const i = mp.inertia;
+      const axisMoment =
+        args.axis !== undefined
+          ? r3(computeMomentOfInertiaAboutAxis(body, assertVec3(args.axis, 'axis'), densityGramsPerMm3))
+          : undefined;
       return {
         bodyId: body.id,
         volumeMm3: r3(mp.volume),
@@ -1038,6 +1048,7 @@ export function registerBuiltinTools(): void {
         // Principal moments (descending, g·mm²) and radii of gyration (mm).
         principalMoments: pm.moments.map(r3),
         radiiOfGyration: pm.radiiOfGyration.map(r3),
+        ...(axisMoment !== undefined ? { momentAboutAxis: axisMoment } : {}),
       };
     },
   });

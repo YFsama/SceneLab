@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
 
@@ -126,6 +126,22 @@ describe('computeMassProperties', () => {
     const shifted = computeMassProperties(moved, 1);
     expect(shifted.inertia.ixx).toBeCloseTo(at0.inertia.ixx, 2);
     expect(shifted.inertia.izz).toBeCloseTo(at0.inertia.izz, 2);
+  });
+});
+
+describe('computeMomentOfInertiaAboutAxis', () => {
+  it('matches the inertia-tensor diagonal for the coordinate axes', () => {
+    const box = createBox(20, 10, 20);
+    const i = computeMassProperties(box, 1).inertia;
+    expect(computeMomentOfInertiaAboutAxis(box, { x: 1, y: 0, z: 0 })).toBeCloseTo(i.ixx, 4);
+    expect(computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 })).toBeCloseTo(i.iyy, 4);
+    expect(computeMomentOfInertiaAboutAxis(box, { x: 0, y: 0, z: 1 })).toBeCloseTo(i.izz, 4);
+    // Axis length shouldn't matter — only direction.
+    expect(computeMomentOfInertiaAboutAxis(box, { x: 0, y: 5, z: 0 })).toBeCloseTo(i.iyy, 4);
+  });
+
+  it('returns 0 for a zero-length axis', () => {
+    expect(computeMomentOfInertiaAboutAxis(createBox(10, 10, 10), { x: 0, y: 0, z: 0 })).toBe(0);
   });
 });
 

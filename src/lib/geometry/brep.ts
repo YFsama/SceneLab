@@ -2573,6 +2573,28 @@ export function computePrincipalMoments(body: SolidBody, density = 1): Principal
   return { moments, radiiOfGyration: [k(moments[0]), k(moments[1]), k(moments[2])] };
 }
 
+/**
+ * Scalar moment of inertia about an arbitrary axis through the center of mass:
+ * I = n̂ᵀ·I·n̂ for the unit direction n̂. Use for "how hard is this to spin about
+ * this axis" — flywheels, rotation about a shaft, etc. Returns 0 for a
+ * zero-length axis.
+ */
+export function computeMomentOfInertiaAboutAxis(body: SolidBody, axis: Vec3, density = 1): number {
+  const len = Math.hypot(axis.x, axis.y, axis.z);
+  if (len < 1e-12) return 0;
+  const nx = axis.x / len;
+  const ny = axis.y / len;
+  const nz = axis.z / len;
+  const i = computeMassProperties(body, density).inertia;
+  // nᵀ I n with the symmetric tensor (products of inertia doubled).
+  return (
+    i.ixx * nx * nx +
+    i.iyy * ny * ny +
+    i.izz * nz * nz +
+    2 * (i.ixy * nx * ny + i.iyz * ny * nz + i.ixz * nx * nz)
+  );
+}
+
 export interface CenterOfMassInfo {
   centroid: Vec3;
   boundingBoxCenter: Vec3;
