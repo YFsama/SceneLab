@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
 
@@ -39,6 +39,29 @@ describe('computeThickness', () => {
     expect(t.minThickness).toBeCloseTo(1, 3); // the 1mm wall, not 50
     expect(t.isThin).toBe(true);
     expect(t.thinRegions).toBeGreaterThan(0);
+  });
+});
+
+describe('createTube', () => {
+  it('builds a watertight tube with the annular-ring volume', () => {
+    const outer = 10;
+    const inner = 6;
+    const height = 5;
+    const tube = createTube(outer, inner, height, 64);
+    const m = checkManifold(tube);
+    expect(m.isManifold).toBe(true);
+    expect(m.boundaryEdges).toBe(0);
+    // V = π(R² − r²)·h, faceted slightly under the ideal.
+    const ideal = Math.PI * (outer * outer - inner * inner) * height;
+    const vol = Math.abs(computeVolume(tube));
+    expect(vol).toBeGreaterThan(ideal * 0.97);
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+  });
+
+  it('rejects inner ≥ outer and non-positive dimensions', () => {
+    expect(() => createTube(5, 5, 10)).toThrow();
+    expect(() => createTube(5, 8, 10)).toThrow();
+    expect(() => createTube(10, 6, 0)).toThrow();
   });
 });
 

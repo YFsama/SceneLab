@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -334,6 +334,29 @@ export function registerBuiltinTools(): void {
         assertNumber(args.width, 'width'),
         assertNumber(args.height, 'height'),
         assertNumber(args.depth, 'depth'),
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_tube',
+    description: 'Create a hollow cylinder (tube/pipe — ring, bushing, spacer) and add it to the scene. Base on y=0, extruded up +Y.',
+    parameters: {
+      type: 'object',
+      properties: {
+        outerRadius: { type: 'number', description: 'Outer radius in mm' },
+        innerRadius: { type: 'number', description: 'Inner (bore) radius in mm, < outerRadius' },
+        height: { type: 'number', description: 'Height along +Y in mm' },
+      },
+      required: ['outerRadius', 'innerRadius', 'height'],
+    },
+    execute: async (args) => {
+      const body = createTube(
+        assertNumber(args.outerRadius, 'outerRadius'),
+        assertNumber(args.innerRadius, 'innerRadius'),
+        assertNumber(args.height, 'height'),
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };

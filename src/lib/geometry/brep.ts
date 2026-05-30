@@ -601,6 +601,59 @@ export function createPrism(sides: number, radius: number, height: number): Soli
   };
 }
 
+/**
+ * Hollow cylinder (tube/pipe): an annular ring of outer radius `outerRadius`
+ * and inner radius `innerRadius`, `height` tall along +Y, base on y = 0.
+ * Watertight (outer wall, inner wall, and top/bottom annular caps). Common for
+ * rings, bushings, spacers and nozzles.
+ */
+export function createTube(outerRadius: number, innerRadius: number, height: number, segments = 32): SolidBody {
+  if (!(outerRadius > 0) || !(innerRadius > 0) || !(height > 0)) {
+    throw new Error('Tube radii and height must be positive');
+  }
+  if (innerRadius >= outerRadius) throw new Error('Inner radius must be smaller than outer radius');
+  if (segments < 3) throw new Error('Tube needs at least 3 segments');
+
+  const ob: Vec3[] = [];
+  const ot: Vec3[] = [];
+  const ib: Vec3[] = [];
+  const it: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    ob.push({ x: c * outerRadius, y: 0, z: s * outerRadius });
+    ot.push({ x: c * outerRadius, y: height, z: s * outerRadius });
+    ib.push({ x: c * innerRadius, y: 0, z: s * innerRadius });
+    it.push({ x: c * innerRadius, y: height, z: s * innerRadius });
+  }
+  const vertices: Vec3[] = [...ob, ...ot, ...ib, ...it];
+
+  const faces: Face[] = [];
+  for (let i = 0; i < segments; i++) {
+    const j = (i + 1) % segments;
+    const am = ((i + 0.5) / segments) * Math.PI * 2;
+    const nx = Math.cos(am);
+    const nz = Math.sin(am);
+    // Outer wall (normal points out), inner wall (points into the hole),
+    // bottom and top annular caps. Winding is fixed by alignWindingToNormal.
+    faces.push({ id: genId('face'), vertices: [ob[i]!, ob[j]!, ot[j]!, ot[i]!], normal: { x: nx, y: 0, z: nz } });
+    faces.push({ id: genId('face'), vertices: [ib[i]!, ib[j]!, it[j]!, it[i]!], normal: { x: -nx, y: 0, z: -nz } });
+    faces.push({ id: genId('face'), vertices: [ob[i]!, ob[j]!, ib[j]!, ib[i]!], normal: { x: 0, y: -1, z: 0 } });
+    faces.push({ id: genId('face'), vertices: [ot[i]!, ot[j]!, it[j]!, it[i]!], normal: { x: 0, y: 1, z: 0 } });
+  }
+
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    for (let i = 0; i < f.vertices.length; i++) {
+      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Tube', vertices, faces, edges };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };
