@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics } from './brep';
 
 describe('computeSolidity', () => {
   it('reports convex solids as fully solid with no cavities', () => {
@@ -363,6 +363,13 @@ describe('topology', () => {
     expect(g.genus).toBe(1);
     expect(g.handles).toBe(1);
     expect(g.isOrientable).toBe(true);
+  });
+
+  it('hollow primitives expose deduplicated edges (not one per face-side)', () => {
+    // 32-segment tube = 128 quad faces → 256 unique edges, not 512.
+    expect(computeMeshStatistics(createTube(10, 6, 20, 32)).edgeCount).toBe(256);
+    // Wedge = triangular prism → 9 edges.
+    expect(computeMeshStatistics(createWedge(10, 6, 4)).edgeCount).toBe(9);
   });
 
   it('a capped tube/frustum is genus 1, a coil genus 0 (edges counted from faces)', () => {

@@ -2,6 +2,33 @@ import type { Vec3, SolidBody, Face, Edge, ExtrudeParams, RevolveParams } from '
 import { computeConvexHull } from './convexHull';
 
 let nextId = 1;
+
+/**
+ * Unique undirected edges of a face list (deduplicated by vertex coordinate).
+ * Use this instead of pushing one edge per face-side, which double-counts
+ * shared edges and corrupts edge-based metrics (count, total length, genus).
+ */
+function buildEdgesFromFaces(faces: Face[]): Edge[] {
+  const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
+  const vkey = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
+  const seen = new Set<string>();
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const a = vs[i]!;
+      const b = vs[(i + 1) % vs.length]!;
+      const ka = vkey(a);
+      const kb = vkey(b);
+      const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ id: genId('edge'), start: a, end: b });
+    }
+  }
+  return edges;
+}
+
 function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
 }
@@ -570,12 +597,7 @@ export function createWedge(width: number, height: number, depth: number): Solid
     return { id: genId('face'), vertices: loop, normal: outward };
   });
 
-  const edges: Edge[] = [];
-  for (const f of faces) {
-    for (let i = 0; i < f.vertices.length; i++) {
-      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
-    }
-  }
+  const edges = buildEdgesFromFaces(faces);
 
   alignWindingToNormal(faces);
   return { id: genId('body'), name: 'Wedge', vertices, faces, edges };
@@ -660,12 +682,7 @@ export function createFrustumTube(
     faces.push({ id: genId('face'), vertices: [ot[i]!, ot[j]!, it[j]!, it[i]!], normal: { x: 0, y: 1, z: 0 } });
   }
 
-  const edges: Edge[] = [];
-  for (const f of faces) {
-    for (let i = 0; i < f.vertices.length; i++) {
-      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
-    }
-  }
+  const edges = buildEdgesFromFaces(faces);
 
   alignWindingToNormal(faces);
   return { id: genId('body'), name: 'FrustumTube', vertices, faces, edges };
@@ -713,12 +730,7 @@ export function createTube(outerRadius: number, innerRadius: number, height: num
     faces.push({ id: genId('face'), vertices: [ot[i]!, ot[j]!, it[j]!, it[i]!], normal: { x: 0, y: 1, z: 0 } });
   }
 
-  const edges: Edge[] = [];
-  for (const f of faces) {
-    for (let i = 0; i < f.vertices.length; i++) {
-      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
-    }
-  }
+  const edges = buildEdgesFromFaces(faces);
 
   alignWindingToNormal(faces);
   return { id: genId('body'), name: 'Tube', vertices, faces, edges };
@@ -797,12 +809,7 @@ export function createCoil(
   const endT = normalize({ x: rings[last]![0]!.x - rings[last - 1]![0]!.x, y: rings[last]![0]!.y - rings[last - 1]![0]!.y, z: rings[last]![0]!.z - rings[last - 1]![0]!.z });
   faces.push({ id: genId('face'), vertices: [...rings[last]!], normal: endT });
 
-  const edges: Edge[] = [];
-  for (const f of faces) {
-    for (let i = 0; i < f.vertices.length; i++) {
-      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
-    }
-  }
+  const edges = buildEdgesFromFaces(faces);
 
   alignWindingToNormal(faces);
   return { id: genId('body'), name: 'Coil', vertices, faces, edges };
