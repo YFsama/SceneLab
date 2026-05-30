@@ -107,6 +107,31 @@ describe('CAM module exports', () => {
     expect(gcode).toContain('M2');
   });
 
+  it('emits rapids and cuts interleaved in execution order, not batched', () => {
+    const tool = getTool('em-6mm')!;
+    const tp = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } },
+      tool,
+      { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -5 },
+    );
+    // Each motion line in execution order, tagged by its G-code.
+    const motion = generateGCode(tp)
+      .split('\n')
+      .map((l) => l.trim())
+      // Toolpath moves carry full X/Y/Z; the footer retract/return moves don't.
+      .filter((l) => (l.startsWith('G0 ') || l.startsWith('G1 ')) && /X.*Y.*Z/.test(l))
+      .map((l) => l.slice(0, 2));
+    // A real pocket plunges then cuts, so a G0 must be followed later by a G1
+    // (interleaving). The buggy batched form put every G0 before any G1.
+    const firstCut = motion.indexOf('G1');
+    const lastRapid = motion.lastIndexOf('G0');
+    expect(firstCut).toBeGreaterThan(-1);
+    expect(lastRapid).toBeGreaterThan(firstCut); // a rapid occurs after the first cut
+    // And the emitted order matches the toolpath's ordered points exactly.
+    const fromPoints = tp.points.map((p) => (p.rapid ? 'G0' : 'G1'));
+    expect(motion).toEqual(fromPoints);
+  });
+
   it('should estimate machining time', () => {
     const tool = getTool('em-6mm')!;
     const tp = generatePocketToolpath(
