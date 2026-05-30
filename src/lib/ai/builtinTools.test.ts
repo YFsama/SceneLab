@@ -103,6 +103,18 @@ describe('builtin analysis tools', () => {
     expect(result.printTimeMinutes).toBeGreaterThan(0);
   });
 
+  it('estimate_scene_print_job sums across all bodies', async () => {
+    useStore.setState({ bodies: [createBox(20, 20, 20), createBox(20, 20, 20)], directBodies: [] });
+    const tool = getTool('estimate_scene_print_job')!;
+    const result = (await tool.execute({ infill: 1, material: 'PLA' })) as {
+      bodyCount: number;
+      filamentMassG: number;
+    };
+    expect(result.bodyCount).toBe(2);
+    // Two solid 8 cm³ PLA boxes ≈ 2 × 8 × 1.24 g.
+    expect(result.filamentMassG).toBeCloseTo(2 * 8 * 1.24, 0);
+  });
+
   it('estimate_hollow_savings reports shell savings', async () => {
     useStore.setState({ bodies: [createBox(20, 20, 20)], directBodies: [] });
     const tool = getTool('estimate_hollow_savings')!;

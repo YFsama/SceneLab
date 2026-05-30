@@ -1264,6 +1264,46 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'estimate_scene_print_job',
+    description:
+      'Sum the FDM print material and time across every body in the scene — a batch-job total (filament length, mass, time) to print all parts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        material: { type: 'string', enum: MATERIALS, description: 'Material (defaults to PLA)' },
+        infill: { type: 'number', description: 'Infill fraction 0–1 (default 0.2)' },
+        wallThickness: { type: 'number', description: 'Wall thickness in mm (default 1.2)' },
+      },
+    },
+    execute: async (args) => {
+      const bodies = useStore.getState().bodies;
+      const opts = {
+        material: args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA',
+        infill: args.infill !== undefined ? assertNumber(args.infill, 'infill') : undefined,
+        wallThickness: args.wallThickness !== undefined ? assertNumber(args.wallThickness, 'wallThickness') : undefined,
+      };
+      let filamentLengthM = 0;
+      let filamentMassG = 0;
+      let printTimeMinutes = 0;
+      let materialVolumeMm3 = 0;
+      for (const b of bodies) {
+        const est = estimatePrintJob(b, opts);
+        filamentLengthM += est.filamentLengthM;
+        filamentMassG += est.filamentMassG;
+        printTimeMinutes += est.printTimeMinutes;
+        materialVolumeMm3 += est.materialVolumeMm3;
+      }
+      return {
+        bodyCount: bodies.length,
+        filamentLengthM: Number(filamentLengthM.toFixed(2)),
+        filamentMassG: Number(filamentMassG.toFixed(2)),
+        printTimeMinutes: Number(printTimeMinutes.toFixed(1)),
+        materialVolumeCm3: Number((materialVolumeMm3 / 1000).toFixed(2)),
+      };
+    },
+  });
+
+  registerTool({
     name: 'estimate_hollow_savings',
     description: 'Estimate material saved by hollowing (shelling) a body to a wall thickness.',
     parameters: {
