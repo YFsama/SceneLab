@@ -85,6 +85,22 @@ describe('FeatureTree', () => {
     expect(bodies[0]?.faces.length).toBeGreaterThan(0);
   });
 
+  it('re-evaluates geometry when a feature parameter is edited', () => {
+    // The extrude/revolve edit dialogs drive updateFeature + recompute; this
+    // locks that the edited parameter actually changes the resulting body.
+    const tree = new FeatureTree();
+    const ext = boxExtrude(); // 10×10 profile × distance 10 → volume 1000
+    tree.addFeature(ext);
+    tree.recompute();
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(1000, 3);
+
+    tree.updateFeature(ext.id, (f) =>
+      f.type === 'extrude' ? { ...f, params: { ...f.params, distance: 20 } } : f,
+    );
+    tree.recompute();
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(2000, 3);
+  });
+
   it('should get feature by id', () => {
     const tree = new FeatureTree();
     const sketch = createSketch('xy');
