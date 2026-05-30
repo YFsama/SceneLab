@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -852,6 +852,7 @@ export function registerBuiltinTools(): void {
           ? assertNumber(args.density, 'density')
           : MATERIAL_DENSITIES[args.material !== undefined ? assertEnum(args.material, MATERIALS, 'material') : 'PLA'];
       const mp = computeMassProperties(body, densityGramsPerCm3 / 1000);
+      const pm = computePrincipalMoments(body, densityGramsPerCm3 / 1000);
       const r3 = (n: number) => Number(n.toFixed(3));
       const i = mp.inertia;
       return {
@@ -862,6 +863,9 @@ export function registerBuiltinTools(): void {
         centerOfMass: { x: r3(mp.centerOfMass.x), y: r3(mp.centerOfMass.y), z: r3(mp.centerOfMass.z) },
         // Inertia tensor (g·mm²) about the center of mass.
         inertia: { ixx: r3(i.ixx), iyy: r3(i.iyy), izz: r3(i.izz), ixy: r3(i.ixy), iyz: r3(i.iyz), ixz: r3(i.ixz) },
+        // Principal moments (descending, g·mm²) and radii of gyration (mm).
+        principalMoments: pm.moments.map(r3),
+        radiiOfGyration: pm.radiiOfGyration.map(r3),
       };
     },
   });

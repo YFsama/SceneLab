@@ -2316,6 +2316,77 @@ export function computeThickness(body: SolidBody): ThicknessInfo {
   };
 }
 
+/**
+ * Eigenvalues of a symmetric 3×3 matrix, returned in descending order. Uses
+ * the closed-form trigonometric solution (Smith 1961); falls back to the
+ * diagonal when the off-diagonal terms vanish.
+ */
+function symmetricEigenvalues3(a: number[][]): [number, number, number] {
+  const a11 = a[0]![0]!;
+  const a22 = a[1]![1]!;
+  const a33 = a[2]![2]!;
+  const a12 = a[0]![1]!;
+  const a13 = a[0]![2]!;
+  const a23 = a[1]![2]!;
+
+  const p1 = a12 * a12 + a13 * a13 + a23 * a23;
+  if (p1 < 1e-18) {
+    const e = [a11, a22, a33].sort((x, y) => y - x);
+    return [e[0]!, e[1]!, e[2]!];
+  }
+
+  const q = (a11 + a22 + a33) / 3;
+  const p2 = (a11 - q) ** 2 + (a22 - q) ** 2 + (a33 - q) ** 2 + 2 * p1;
+  const p = Math.sqrt(p2 / 6);
+
+  // B = (1/p)(A - qI); r = det(B)/2.
+  const b11 = (a11 - q) / p;
+  const b22 = (a22 - q) / p;
+  const b33 = (a33 - q) / p;
+  const b12 = a12 / p;
+  const b13 = a13 / p;
+  const b23 = a23 / p;
+  const detB =
+    b11 * (b22 * b33 - b23 * b23) -
+    b12 * (b12 * b33 - b23 * b13) +
+    b13 * (b12 * b23 - b22 * b13);
+  let r = detB / 2;
+  r = Math.max(-1, Math.min(1, r));
+
+  const phi = Math.acos(r) / 3;
+  const eig1 = q + 2 * p * Math.cos(phi); // largest
+  const eig3 = q + 2 * p * Math.cos(phi + (2 * Math.PI) / 3); // smallest
+  const eig2 = 3 * q - eig1 - eig3;
+  return [eig1, eig2, eig3];
+}
+
+export interface PrincipalMoments {
+  /** Principal moments of inertia about the center of mass, descending. */
+  moments: [number, number, number];
+  /** Radii of gyration k = sqrt(I / mass) for each principal moment. */
+  radiiOfGyration: [number, number, number];
+}
+
+/**
+ * Principal moments of inertia (eigenvalues of the inertia tensor about the
+ * center of mass) and the corresponding radii of gyration. These are the
+ * body's natural rotation axes — the smallest principal moment is the axis it
+ * most readily spins about.
+ */
+export function computePrincipalMoments(body: SolidBody, density = 1): PrincipalMoments {
+  const mp = computeMassProperties(body, density);
+  const i = mp.inertia;
+  const tensor = [
+    [i.ixx, i.ixy, i.ixz],
+    [i.ixy, i.iyy, i.iyz],
+    [i.ixz, i.iyz, i.izz],
+  ];
+  const moments = symmetricEigenvalues3(tensor);
+  const m = mp.mass;
+  const k = (v: number): number => (m > 1e-12 ? Math.sqrt(Math.max(0, v) / m) : 0);
+  return { moments, radiiOfGyration: [k(moments[0]), k(moments[1]), k(moments[2])] };
+}
+
 export interface CenterOfMassInfo {
   centroid: Vec3;
   boundingBoxCenter: Vec3;

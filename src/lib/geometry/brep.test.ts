@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity } from './brep';
 
@@ -41,6 +41,35 @@ describe('computeMassProperties', () => {
     const shifted = computeMassProperties(moved, 1);
     expect(shifted.inertia.ixx).toBeCloseTo(at0.inertia.ixx, 2);
     expect(shifted.inertia.izz).toBeCloseTo(at0.inertia.izz, 2);
+  });
+});
+
+describe('computePrincipalMoments', () => {
+  it('an axis-aligned box has principal moments equal to its tensor diagonal', () => {
+    const dx = 20;
+    const dy = 10;
+    const dz = 20;
+    const m = dx * dy * dz;
+    const pm = computePrincipalMoments(createBox(dx, dy, dz), 1);
+    // Sorted descending: iyy is the largest for this box.
+    const expected = [
+      (m * (dx * dx + dz * dz)) / 12, // iyy
+      (m * (dy * dy + dz * dz)) / 12, // ixx
+      (m * (dx * dx + dy * dy)) / 12, // izz
+    ].sort((a, b) => b - a);
+    expect(pm.moments[0]).toBeCloseTo(expected[0]!, 1);
+    expect(pm.moments[1]).toBeCloseTo(expected[1]!, 1);
+    expect(pm.moments[2]).toBeCloseTo(expected[2]!, 1);
+    // Radius of gyration k = sqrt(I/m).
+    expect(pm.radiiOfGyration[0]).toBeCloseTo(Math.sqrt(expected[0]! / m), 4);
+  });
+
+  it('a cube has three equal principal moments (m·L²/6)', () => {
+    const L = 10;
+    const m = L ** 3;
+    const pm = computePrincipalMoments(createBox(L, L, L), 1);
+    const expected = (m * L * L) / 6;
+    for (const mom of pm.moments) expect(mom).toBeCloseTo(expected, 1);
   });
 });
 
