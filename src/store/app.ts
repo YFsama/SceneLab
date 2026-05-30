@@ -223,7 +223,13 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
   },
   removeDirectBody: (id) => {
-    set((s) => ({ directBodies: s.directBodies.filter((b) => b.id !== id) }));
+    set((s) => ({
+      directBodies: s.directBodies.filter((b) => b.id !== id),
+      // Drop any stale selection of the removed body and mark the edit, like
+      // every other mutation, so unsaved-changes tracking stays consistent.
+      selectedIds: s.selectedIds.filter((sid) => sid !== id),
+      projectDirty: true,
+    }));
     recombine();
   },
   clearScene: () => {

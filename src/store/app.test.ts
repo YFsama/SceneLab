@@ -223,4 +223,17 @@ describe('app store — direct bodies', () => {
     expect(bodies).toHaveLength(1);
     expect(bodies[0]?.id).toBe(edited.id);
   });
+
+  it('removeDirectBody clears its selection and marks the project dirty', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.setState({ projectDirty: false });
+
+    useStore.getState().removeDirectBody(box.id);
+
+    expect(useStore.getState().bodies).toHaveLength(0);
+    expect(useStore.getState().selectedIds).not.toContain(box.id);
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
 });
