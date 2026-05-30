@@ -168,7 +168,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (300+ tests)
+- Every `lib/*` module has vitest tests (390+ tests) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops)
