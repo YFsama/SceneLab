@@ -3,7 +3,7 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
-import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
+import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
@@ -602,18 +602,18 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'export_body',
-    description: 'Export a body as STL (ASCII) or OBJ text — the printable/downloadable mesh.',
+    description: 'Export a body as STL (ASCII), OBJ, or 3MF text — the printable/downloadable mesh. 3MF is the modern 3D-print format.',
     parameters: {
       type: 'object',
       properties: {
         bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
-        format: { type: 'string', enum: ['stl', 'obj'], description: 'Output format (default stl)' },
+        format: { type: 'string', enum: ['stl', 'obj', '3mf'], description: 'Output format (default stl)' },
       },
     },
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
-      const format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj'] as const, 'format') : 'stl';
-      const content = format === 'obj' ? exportOBJ(body) : exportSTLAscii(body);
+      const format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj', '3mf'] as const, 'format') : 'stl';
+      const content = format === 'obj' ? exportOBJ(body) : format === '3mf' ? export3MF([body]) : exportSTLAscii(body);
       return { bodyId: body.id, format, bytes: content.length, content };
     },
   });

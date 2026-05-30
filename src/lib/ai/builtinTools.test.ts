@@ -360,6 +360,11 @@ describe('builtin analysis tools', () => {
     const obj = (await tool.execute({ format: 'obj' })) as { content: string };
     expect(obj.content).toContain('v ');
     expect(obj.content).toMatch(/^f /m);
+
+    const tmf = (await tool.execute({ format: '3mf' })) as { format: string; content: string };
+    expect(tmf.format).toBe('3mf');
+    expect(tmf.content).toContain('<model');
+    expect(tmf.content).toContain('<triangle ');
   });
 
   it('import_mesh loads an OBJ string into the scene', async () => {
