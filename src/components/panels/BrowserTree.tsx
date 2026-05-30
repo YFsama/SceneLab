@@ -1,14 +1,35 @@
+import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { Box, Layers, History } from 'lucide-react';
 import { FeatureEditor } from './FeatureEditor';
+import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
+import { layFlat, seatOnBed } from '../../lib/print';
+import { centerBody, convexHullBody } from '../../lib/geometry';
+import type { SolidBody } from '../../lib/geometry/types';
 
 export function BrowserTree() {
   const { t } = useT();
   const bodies = useStore((s) => s.bodies);
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
+  const replaceBody = useStore((s) => s.replaceBody);
+  const removeDirectBody = useStore((s) => s.removeDirectBody);
   const featureTree = useStore((s) => s.featureTree);
+  const [menu, setMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
+
+  const apply = (bodyId: string, op: (b: SolidBody) => SolidBody) => {
+    const body = bodies.find((b) => b.id === bodyId);
+    if (body) replaceBody(bodyId, op(body));
+  };
+
+  const menuItems = (bodyId: string): ContextMenuItem[] => [
+    { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat) },
+    { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
+    { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
+    { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
+    { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
+  ];
 
   return (
     <aside
@@ -33,6 +54,11 @@ export function BrowserTree() {
               <button
                 key={body.id}
                 onClick={() => selectObject(body.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  selectObject(body.id);
+                  setMenu({ x: e.clientX, y: e.clientY, bodyId: body.id });
+                }}
                 className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors
                   ${selectedIds.includes(body.id)
                     ? 'bg-accent/20 text-accent'
@@ -62,6 +88,10 @@ export function BrowserTree() {
           <FeatureEditor />
         </div>
       </div>
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.bodyId)} onClose={() => setMenu(null)} />
+      )}
     </aside>
   );
 }
