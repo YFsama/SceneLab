@@ -75,6 +75,7 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+z', () => store.undo());
   registerShortcut('ctrl+shift+z', () => store.redo());
   registerShortcut('ctrl+y', () => store.redo());
+  registerShortcut('ctrl+k', () => store.setCommandPaletteOpen(true));
   registerShortcut('escape', () => {
     if (store.sketchActive) {
       store.setSketchActive(false);

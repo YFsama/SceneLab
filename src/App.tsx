@@ -18,8 +18,11 @@ import { CAMPanel } from './components/panels/CAMPanel';
 import { useKeyboardShortcuts, initShortcuts } from './lib/hooks/useKeyboardShortcuts';
 import { useAutosave } from './lib/hooks/useAutosave';
 import { SkipLink } from './components/ui/SkipLink';
+import { CommandPalette } from './components/ui/CommandPalette';
+import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
+initBuiltinCommands();
 
 export default function App() {
   const theme = useStore((s) => s.theme);
@@ -81,6 +84,7 @@ export default function App() {
       <ConfirmDialog />
       <ExtrudeDialog />
       <RevolveDialog />
+      <CommandPalette />
       <AIPanel />
     </div>
   );

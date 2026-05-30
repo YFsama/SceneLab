@@ -91,6 +91,8 @@ interface AppState {
   setShowExtrudeDialog: (v: boolean) => void;
   showRevolveDialog: boolean;
   setShowRevolveDialog: (v: boolean) => void;
+  commandPaletteOpen: boolean;
+  setCommandPaletteOpen: (v: boolean) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
 
@@ -378,6 +380,8 @@ export const useStore = create<AppState>((set, get) => {
   setShowExtrudeDialog: (showExtrudeDialog) => set({ showExtrudeDialog }),
   showRevolveDialog: false,
   setShowRevolveDialog: (showRevolveDialog) => set({ showRevolveDialog }),
+  commandPaletteOpen: false,
+  setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
