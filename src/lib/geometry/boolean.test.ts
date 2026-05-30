@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { booleanOp, hollowBody, splitByPlane } from './boolean';
+import { booleanOp, hollowBody, splitByPlane, mirrorMerge } from './boolean';
 import { createBox, checkManifold, computeVolume } from './brep';
 import { translateBody } from './operations';
 import { makePlane } from './referenceGeometry';
@@ -72,5 +72,26 @@ describe('splitByPlane', () => {
     const { positive, negative } = splitByPlane(box, plane, 30);
     expect(positive).toBeNull(); // nothing above y=100
     expect(negative).not.toBeNull(); // whole body below
+  });
+});
+
+describe('mirrorMerge', () => {
+  // createBox(10,10,10): x ∈ [-5,5], y ∈ [0,10], z ∈ [-5,5], vol 1000.
+  const box = createBox(10, 10, 10);
+
+  it('fuses a body with its reflection into one symmetric watertight solid', () => {
+    // Mirror across x = 5: the copy fills x ∈ [5,15]; union ≈ a 20×10×10 box.
+    const merged = mirrorMerge(box, { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }, 40)!;
+    expect(merged).not.toBeNull();
+    expect(checkManifold(merged).boundaryEdges).toBe(0); // closed, single seamless body
+    expect(Math.abs(computeVolume(merged))).toBeCloseTo(2000, -2);
+  });
+
+  it('is symmetric about the mirror plane (bounding box centred on it)', () => {
+    const merged = mirrorMerge(box, { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }, 30)!;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (const v of merged.vertices) { minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x); }
+    expect((minX + maxX) / 2).toBeCloseTo(5, 1);
   });
 });

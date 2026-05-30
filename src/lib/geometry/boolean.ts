@@ -2,6 +2,7 @@ import type { SolidBody, Vec3, Face, PlaneDefinition } from './types';
 import { isPointInsideBody } from './measure';
 import { buildEdgesFromFaces } from './brep';
 import { signedDistanceToPlane } from './referenceGeometry';
+import { applyMirror } from './operations';
 
 let nextId = 1;
 const genId = (p: string) => `${p}_bool_${nextId++}`;
@@ -104,6 +105,25 @@ function meshFromOccupancy(occ: Uint8Array, N: number, n: number, lo: Vec3, cs: 
   const vertices: Vec3[] = [];
   for (const f of faces) vertices.push(...f.vertices);
   return { id: genId('body'), name, vertices, faces, edges: buildEdgesFromFaces(faces) };
+}
+
+/**
+ * Mirror a body across a plane and fuse the original with its reflection into a
+ * single symmetric solid (SolidWorks Mirror with "merge solids"). Unlike a bare
+ * applyMirror — which yields a separate mirrored copy — this unions the two so
+ * the seam at the mirror plane closes into one watertight body. Returns null if
+ * the union is empty. Voxel-based, so the result is blocky; raise `resolution`
+ * for fidelity.
+ */
+export function mirrorMerge(
+  body: SolidBody,
+  plane: { origin: Vec3; normal: Vec3 },
+  resolution = 40,
+): SolidBody | null {
+  const mirrored = applyMirror(body, plane);
+  const merged = booleanOp(body, mirrored, 'union', resolution);
+  if (merged) merged.name = `${body.name} (mirrored)`;
+  return merged;
 }
 
 /**

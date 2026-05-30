@@ -3,7 +3,7 @@ import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
-import { booleanOp, hollowBody } from '../geometry/boolean';
+import { booleanOp, hollowBody, mirrorMerge } from '../geometry/boolean';
 import { listFaces, angleBetweenFaces } from '../geometry/query';
 import { listDimensions } from '../sketch/dimensions';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
@@ -734,6 +734,35 @@ export function registerBuiltinTools(): void {
       const plane = { origin: assertVec3(planeArg.origin, 'plane.origin'), normal: assertVec3(planeArg.normal, 'plane.normal') };
       const result = applyMirror(body, plane);
       store.addDirectBody(result);
+      return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'mirror_merge',
+    description: 'Mirror a body across a plane and fuse it with its reflection into one symmetric watertight solid (SolidWorks Mirror with "merge solids"). Use for symmetric parts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        plane: {
+          type: 'object',
+          properties: {
+            origin: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+            normal: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+          },
+          description: 'Mirror plane (origin + normal)',
+        },
+      },
+      required: ['plane'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const planeArg = (args.plane ?? {}) as { origin?: unknown; normal?: unknown };
+      const plane = { origin: assertVec3(planeArg.origin, 'plane.origin'), normal: assertVec3(planeArg.normal, 'plane.normal') };
+      const result = mirrorMerge(body, plane);
+      if (!result) throw new Error('Mirror merge produced no result');
+      useStore.getState().addDirectBody(result);
       return { success: true, bodyId: result.id };
     },
   });
