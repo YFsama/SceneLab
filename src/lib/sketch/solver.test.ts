@@ -90,6 +90,24 @@ describe('solveConstraints', () => {
     expect(len1).toBeCloseTo(len2, 0);
   });
 
+  it('converges with combined horizontal + distance constraints', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('h', { id: 'h', type: 'horizontal', entityIds: ['line1'] });
+    constraints.set('d', { id: 'd', type: 'distance', entityIds: ['p1', 'p2'], value: 20 });
+
+    const result = solveConstraints(entities, constraints, 200);
+    const a = result.get('p1')!;
+    const b = result.get('p2')!;
+    // Both satisfied: same Y, and the points are ~20 apart.
+    expect(b.y).toBeCloseTo(a.y, 1);
+    expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeCloseTo(20, 0);
+  });
+
   it('should equalize two circle radii with an equal constraint', () => {
     const entities = new Map<string, SketchEntity>();
     entities.set('pc1', { id: 'pc1', type: 'point', x: 0, y: 0 });
