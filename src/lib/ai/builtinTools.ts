@@ -4,7 +4,7 @@ import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { booleanOp, hollowBody } from '../geometry/boolean';
-import { listFaces } from '../geometry/query';
+import { listFaces, angleBetweenFaces } from '../geometry/query';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -807,6 +807,26 @@ export function registerBuiltinTools(): void {
           centroid: { x: r3(f.centroid.x), y: r3(f.centroid.y), z: r3(f.centroid.z) },
         })),
       };
+    },
+  });
+
+  registerTool({
+    name: 'measure_face_angle',
+    description: 'Measure the angle (degrees, 0–180) between two faces of a body — the angle between their outward normals, like SolidWorks Measure. Use list_faces to get face ids.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        faceIdA: { type: 'string', description: 'First face id (from list_faces)' },
+        faceIdB: { type: 'string', description: 'Second face id (from list_faces)' },
+      },
+      required: ['faceIdA', 'faceIdB'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const angle = angleBetweenFaces(body, assertString(args.faceIdA, 'faceIdA'), assertString(args.faceIdB, 'faceIdB'));
+      if (angle === null) throw new Error('Face id not found on this body');
+      return { bodyId: body.id, angleDeg: Number(angle.toFixed(3)) };
     },
   });
 

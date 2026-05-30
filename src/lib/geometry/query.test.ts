@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { listFaces } from './query';
+import { listFaces, angleBetweenFaces } from './query';
 import { createBox } from './brep';
 
 describe('listFaces', () => {
@@ -15,5 +15,29 @@ describe('listFaces', () => {
     const top = faces.find((f) => f.normal.y > 0.99);
     expect(top).toBeDefined();
     expect(top!.centroid.y).toBeCloseTo(10, 4);
+  });
+});
+
+describe('angleBetweenFaces', () => {
+  const box = createBox(10, 10, 10);
+  const faces = listFaces(box);
+  const top = faces.find((f) => f.normal.y > 0.99)!;
+  const bottom = faces.find((f) => f.normal.y < -0.99)!;
+  const side = faces.find((f) => f.normal.x > 0.99)!;
+
+  it('adjacent box faces meet at 90°', () => {
+    expect(angleBetweenFaces(box, top.id, side.id)).toBeCloseTo(90, 6);
+  });
+
+  it('opposite box faces read 180°', () => {
+    expect(angleBetweenFaces(box, top.id, bottom.id)).toBeCloseTo(180, 6);
+  });
+
+  it('a face against itself reads 0°', () => {
+    expect(angleBetweenFaces(box, top.id, top.id)).toBeCloseTo(0, 6);
+  });
+
+  it('returns null for an unknown face id', () => {
+    expect(angleBetweenFaces(box, top.id, 'nope')).toBeNull();
   });
 });

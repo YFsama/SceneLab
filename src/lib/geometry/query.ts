@@ -17,6 +17,21 @@ function normalize(v: Vec3): Vec3 {
 }
 
 /**
+ * Angle in degrees between two faces' planes (0–180), like SolidWorks' Measure
+ * between two faces: the angle between their outward normals. Returns null if
+ * either face id is missing. Adjacent box faces read 90°, opposite faces 180°.
+ */
+export function angleBetweenFaces(body: SolidBody, faceIdA: string, faceIdB: string): number | null {
+  const a = body.faces.find((f) => f.id === faceIdA);
+  const b = body.faces.find((f) => f.id === faceIdB);
+  if (!a || !b) return null;
+  const na = normalize(a.normal);
+  const nb = normalize(b.normal);
+  const d = Math.max(-1, Math.min(1, na.x * nb.x + na.y * nb.y + na.z * nb.z));
+  return (Math.acos(d) * 180) / Math.PI;
+}
+
+/**
  * Inspect a body's faces — id, area, outward normal and centroid — so the UI
  * or AI can reference specific faces (e.g. to fillet, chamfer, or shell). The
  * face ids match those accepted by the face-based operations.
