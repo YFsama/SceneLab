@@ -23,6 +23,13 @@ describe('CAM toolpath generators (contour/drill/face)', () => {
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
   });
 
+  it('drills hole depth measured from the stock top, not absolute Z', () => {
+    const raised = { ...PARAMS, stockTop: 12, stockBottom: 2 };
+    const tp = generateDrillToolpath([{ x: 0, y: 0, depth: 5 }], getTool('em-3mm')!, raised);
+    // Plunge should reach stockTop - depth = 12 - 5 = 7, not -5.
+    expect(tp.cuttingMoves[0]!.z).toBeCloseTo(7, 6);
+  });
+
   it('generateFaceToolpath covers the stock top', () => {
     const tp = generateFaceToolpath(
       { min: { x: 0, y: 0, z: 0 }, max: { x: 20, y: 0, z: 20 } },

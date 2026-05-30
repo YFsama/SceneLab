@@ -141,8 +141,8 @@ export function generateDrillToolpath(
   for (const hole of holes) {
     // Rapid to hole position
     rapidMoves.push({ x: hole.x, y: hole.y, z: safeZ });
-    // Plunge
-    cuttingMoves.push({ x: hole.x, y: hole.y, z: -hole.depth });
+    // Plunge: depth is measured down from the stock surface, not absolute Z.
+    cuttingMoves.push({ x: hole.x, y: hole.y, z: params.stockTop - hole.depth });
     // Retract
     rapidMoves.push({ x: hole.x, y: hole.y, z: retractZ });
   }
