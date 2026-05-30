@@ -16,6 +16,31 @@ const cross = (a: Vec3, b: Vec3): Vec3 => ({
 });
 const dot = (a: Vec3, b: Vec3): number => a.x * b.x + a.y * b.y + a.z * b.z;
 
+/**
+ * 2D convex hull (Andrew's monotone chain), returning the hull points CCW with
+ * no repeated closing point. Fewer than 3 points are returned as-is. A simple,
+ * non-self-intersecting outline — unlike sorting points by angle.
+ */
+export function convexHull2D<P extends { x: number; y: number }>(points: P[]): P[] {
+  if (points.length < 3) return [...points];
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const crossZ = (o: P, a: P, b: P) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: P[] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && crossZ(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: P[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i]!;
+    while (upper.length >= 2 && crossZ(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
 export interface ConvexHull {
   /** Hull vertices (a subset of the input points). */
   vertices: Vec3[];

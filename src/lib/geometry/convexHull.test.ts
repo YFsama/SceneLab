@@ -1,6 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { computeConvexHull } from './convexHull';
+import { computeConvexHull, convexHull2D } from './convexHull';
 import { createBox, createSphere } from './brep';
+
+describe('convexHull2D', () => {
+  it('drops interior points and keeps the outer corners', () => {
+    const pts = [
+      { x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 },
+      { x: 2, y: 2 }, // interior
+      { x: 2, y: 0 }, // edge-collinear
+    ];
+    const hull = convexHull2D(pts);
+    expect(hull).toHaveLength(4); // the 4 corners only
+  });
+
+  it('returns fewer-than-3 point sets unchanged', () => {
+    expect(convexHull2D([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toHaveLength(2);
+  });
+});
 
 describe('computeConvexHull', () => {
   it('hulls a box to itself (8 verts, 12 tris, full volume)', () => {

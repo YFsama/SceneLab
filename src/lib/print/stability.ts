@@ -1,5 +1,6 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
 import { computeVolumetricCentroid } from '../geometry';
+import { convexHull2D } from '../geometry/convexHull';
 
 export interface StabilityOptions {
   /** Build / "up" axis. Defaults to +Y (model up). */
@@ -64,40 +65,6 @@ function planeBasis(up: Vec3): { u: Vec3; v: Vec3 } {
   const u = norm(cross(ref, n));
   const v = cross(n, u);
   return { u, v };
-}
-
-/** 2D convex hull (monotone chain), returns CCW hull vertices. */
-function convexHull(points: Vec2[]): Vec2[] {
-  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
-  // Dedup
-  const uniq: Vec2[] = [];
-  for (const p of pts) {
-    const last = uniq[uniq.length - 1];
-    if (!last || Math.abs(last.x - p.x) > 1e-9 || Math.abs(last.y - p.y) > 1e-9) uniq.push(p);
-  }
-  if (uniq.length < 3) return uniq;
-
-  const crossZ = (o: Vec2, a: Vec2, b: Vec2) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-
-  const lower: Vec2[] = [];
-  for (const p of uniq) {
-    while (lower.length >= 2 && crossZ(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) {
-      lower.pop();
-    }
-    lower.push(p);
-  }
-  const upper: Vec2[] = [];
-  for (let i = uniq.length - 1; i >= 0; i--) {
-    const p = uniq[i]!;
-    while (upper.length >= 2 && crossZ(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) {
-      upper.pop();
-    }
-    upper.push(p);
-  }
-  lower.pop();
-  upper.pop();
-  return lower.concat(upper);
 }
 
 function polygonArea(poly: Vec2[]): number {
@@ -173,7 +140,7 @@ export function analyzeStability(body: SolidBody, options: StabilityOptions = {}
     if (dot(vert, up) <= minH + tol) base2d.push(project(vert));
   }
 
-  const hull = convexHull(base2d);
+  const hull = convexHull2D(base2d);
   if (hull.length < 3) return empty;
 
   const comUV = project(com);
