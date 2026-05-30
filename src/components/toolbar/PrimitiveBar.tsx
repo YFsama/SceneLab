@@ -1,6 +1,6 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline } from 'lucide-react';
+import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline, Frame } from 'lucide-react';
 
 const primitives: { kind: PrimitiveKind; icon: typeof Box }[] = [
   { kind: 'box', icon: Box },
@@ -19,6 +19,7 @@ export function PrimitiveBar() {
   const { t } = useT();
   const addPrimitive = useStore((s) => s.addPrimitive);
   const selectObject = useStore((s) => s.selectObject);
+  const ensureStandardPlanes = useStore((s) => s.ensureStandardPlanes);
 
   return (
     <div
@@ -37,6 +38,15 @@ export function PrimitiveBar() {
           <Icon size={18} />
         </button>
       ))}
+      <div className="w-px self-stretch my-1 bg-panel-border" aria-hidden="true" />
+      <button
+        onClick={() => ensureStandardPlanes()}
+        className="w-9 h-9 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+        aria-label={t('reference.standardPlanes')}
+        title={t('reference.standardPlanes')}
+      >
+        <Frame size={18} />
+      </button>
     </div>
   );
 }

@@ -1,4 +1,33 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
+import { listFaces } from '../geometry/query';
+
+/**
+ * Build a midplane on the selected body (or the first body) from its two
+ * largest parallel, opposite-facing faces — the common SolidWorks workflow of
+ * picking a part's bounding walls. Returns the new plane id, or null if no
+ * suitable face pair exists. Exported for testing.
+ */
+export function addMidplaneFromSelection(): string | null {
+  const st = useStore.getState();
+  const selected = st.selectedIds.find((id) => st.bodies.some((b) => b.id === id));
+  const body = selected ? st.bodies.find((b) => b.id === selected) : st.bodies[0];
+  if (!body) return null;
+  const faces = listFaces(body);
+  // Find the opposite-facing face pair with the greatest combined area.
+  let best: { a: string; b: string; score: number } | null = null;
+  for (let i = 0; i < faces.length; i++) {
+    for (let j = i + 1; j < faces.length; j++) {
+      const na = faces[i]!.normal;
+      const nb = faces[j]!.normal;
+      const d = na.x * nb.x + na.y * nb.y + na.z * nb.z;
+      if (d > -0.9) continue; // not opposite-facing
+      const score = faces[i]!.area + faces[j]!.area;
+      if (!best || score > best.score) best = { a: faces[i]!.id, b: faces[j]!.id, score };
+    }
+  }
+  if (!best) return null;
+  return st.addMidplane(body.id, best.a, best.b);
+}
 
 export interface Command {
   id: string;
@@ -68,6 +97,8 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'edit.deleteSelected', label: 'Delete selected', category: 'Edit', shortcut: 'Del', run: () => s().deleteSelected() });
   registerCommand({ id: 'edit.deselectAll', label: 'Deselect all', category: 'Edit', run: () => s().deselectAll() });
   registerCommand({ id: 'scene.clear', label: 'Clear scene', category: 'Scene', run: () => s().clearScene() });
+  registerCommand({ id: 'reference.standardPlanes', label: 'Add standard planes (Front/Top/Right)', category: 'Reference', run: () => s().ensureStandardPlanes() });
+  registerCommand({ id: 'reference.midplaneFromSelection', label: 'Midplane from selected body (largest opposite faces)', category: 'Reference', run: () => addMidplaneFromSelection() });
   registerCommand({ id: 'project.save', label: 'Autosave now', category: 'Project', run: () => s().autosave() });
   registerCommand({ id: 'project.restore', label: 'Restore autosave', category: 'Project', run: () => s().restoreAutosave() });
   for (const dir of ['top', 'front', 'right', 'iso'] as const) {
