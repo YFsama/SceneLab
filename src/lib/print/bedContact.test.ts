@@ -20,6 +20,40 @@ describe('analyzeBedContact', () => {
     expect(tall.tallness).toBeGreaterThan(squat.tallness);
   });
 
+  it('counts only the outer boundary when the base is two triangles', () => {
+    // A 10×10 base split into two triangles sharing the diagonal, plus a top
+    // face so a height exists. The shared diagonal must not count toward the
+    // brim perimeter — only the four outer 10mm edges (= 40mm).
+    const base: SolidBody = {
+      id: 't',
+      name: 't',
+      vertices: [],
+      faces: [
+        {
+          id: 'b1',
+          vertices: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }],
+          normal: { x: 0, y: -1, z: 0 },
+        },
+        {
+          id: 'b2',
+          vertices: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }, { x: 0, y: 0, z: 10 }],
+          normal: { x: 0, y: -1, z: 0 },
+        },
+        {
+          id: 'top',
+          vertices: [{ x: 0, y: 5, z: 0 }, { x: 10, y: 5, z: 0 }, { x: 10, y: 5, z: 10 }],
+          normal: { x: 0, y: 1, z: 0 },
+        },
+      ],
+      edges: [],
+    };
+    const r = analyzeBedContact(base);
+    expect(r.contactFaces).toBe(2);
+    expect(r.contactArea).toBeCloseTo(100, 3); // two 50mm² triangles
+    // Diagonal (length √200) shared by both triangles is excluded → 4×10 = 40.
+    expect(r.perimeterMm).toBeCloseTo(40, 3);
+  });
+
   it('returns zeros for an empty body', () => {
     const empty: SolidBody = { id: 'e', name: 'e', vertices: [], faces: [], edges: [] };
     const r = analyzeBedContact(empty);

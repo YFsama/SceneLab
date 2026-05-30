@@ -53,7 +53,12 @@ export function analyzeBedContact(body: SolidBody, options: BedContactOptions = 
 
   let contactArea = 0;
   let contactFaces = 0;
-  let perimeterMm = 0;
+  // Tally each contact-face edge by an orientation-independent key; only edges
+  // used an odd number of times lie on the outer boundary. Edges shared between
+  // adjacent contact faces (e.g. a triangulated base) cancel, so the perimeter
+  // is the true brim outline rather than the sum of every face's perimeter.
+  const edgeUse = new Map<string, { count: number; len: number }>();
+  const vkey = (v: Vec3) => `${v.x.toFixed(4)},${v.y.toFixed(4)},${v.z.toFixed(4)}`;
 
   for (const face of body.faces) {
     if (face.vertices.length === 0) continue;
@@ -65,9 +70,21 @@ export function analyzeBedContact(body: SolidBody, options: BedContactOptions = 
       contactArea += areaById.get(face.id) ?? 0;
       contactFaces += 1;
       for (let i = 0; i < face.vertices.length; i++) {
-        perimeterMm += dist(face.vertices[i]!, face.vertices[(i + 1) % face.vertices.length]!);
+        const a = face.vertices[i]!;
+        const b = face.vertices[(i + 1) % face.vertices.length]!;
+        const ka = vkey(a);
+        const kb = vkey(b);
+        const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+        const entry = edgeUse.get(key);
+        if (entry) entry.count += 1;
+        else edgeUse.set(key, { count: 1, len: dist(a, b) });
       }
     }
+  }
+
+  let perimeterMm = 0;
+  for (const { count, len } of edgeUse.values()) {
+    if (count % 2 === 1) perimeterMm += len; // boundary edge
   }
 
   const tallness = contactArea > 1e-9 ? height / Math.sqrt(contactArea) : 0;
