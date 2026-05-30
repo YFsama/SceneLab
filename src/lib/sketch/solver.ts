@@ -109,17 +109,25 @@ function applyHorizontal(
 
   if (involved.length < 2) return 0;
 
-  // Average y
-  const avgY = involved.reduce((s, p) => s + p.y, 0) / involved.length;
+  // Snap to the anchored y when any endpoint is fixed (so the line aligns to
+  // the datum, not a drifting average); otherwise use the mean.
+  const targetY = sharedTarget(involved, (p) => p.y);
   for (const p of involved) {
     if (!p.fixed) {
-      const delta = Math.abs(p.y - avgY);
+      const delta = Math.abs(p.y - targetY);
       maxDelta = Math.max(maxDelta, delta);
-      p.y = avgY;
+      p.y = targetY;
     }
   }
 
   return maxDelta;
+}
+
+/** Target coordinate for an alignment: mean of fixed points if any, else mean of all. */
+function sharedTarget(pts: SolverPoint[], coord: (p: SolverPoint) => number): number {
+  const fixed = pts.filter((p) => p.fixed);
+  const pool = fixed.length > 0 ? fixed : pts;
+  return pool.reduce((s, p) => s + coord(p), 0) / pool.length;
 }
 
 function applyVertical(
@@ -140,12 +148,12 @@ function applyVertical(
 
   if (involved.length < 2) return 0;
 
-  const avgX = involved.reduce((s, p) => s + p.x, 0) / involved.length;
+  const targetX = sharedTarget(involved, (p) => p.x);
   for (const p of involved) {
     if (!p.fixed) {
-      const delta = Math.abs(p.x - avgX);
+      const delta = Math.abs(p.x - targetX);
       maxDelta = Math.max(maxDelta, delta);
-      p.x = avgX;
+      p.x = targetX;
     }
   }
 

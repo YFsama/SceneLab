@@ -172,6 +172,22 @@ describe('solveConstraints', () => {
     expect(d1x * d2x + d1y * d2y).toBeCloseTo(0, 3);
   });
 
+  it('horizontal aligns to the fixed endpoint, not the average', () => {
+    const entities = new Map<string, SketchEntity>();
+    // p1 fixed at y=3; p2 free at y=9. Horizontal must bring p2 to y=3, not 6.
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 3 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 9 });
+    entities.set('l1', { id: 'l1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('fix', { id: 'fix', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('h', { id: 'h', type: 'horizontal', entityIds: ['l1'] });
+
+    const result = solveConstraints(entities, constraints);
+    expect(result.get('p1')!.y).toBeCloseTo(3, 6);
+    expect(result.get('p2')!.y).toBeCloseTo(3, 6); // snapped to the datum, not 6
+  });
+
   it('equal-length with a fixed endpoint keeps the anchor and matches lengths', () => {
     const entities = new Map<string, SketchEntity>();
     // line1: p1(fixed origin)→p2(x=4) length 4. line2: p3(0,0)→p4(0,10) length 10.
