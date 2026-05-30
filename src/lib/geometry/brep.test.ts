@@ -1,7 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity } from './brep';
+
+describe('createPrism', () => {
+  it('builds a watertight regular prism with the polygon-area volume', () => {
+    const sides = 6;
+    const radius = 10;
+    const height = 5;
+    const hex = createPrism(sides, radius, height);
+    const m = checkManifold(hex);
+    expect(m.isManifold).toBe(true);
+    expect(m.boundaryEdges).toBe(0);
+    // Regular polygon area = ½·n·r²·sin(2π/n).
+    const area = 0.5 * sides * radius * radius * Math.sin((2 * Math.PI) / sides);
+    expect(Math.abs(computeVolume(hex))).toBeCloseTo(area * height, 3);
+  });
+
+  it('rejects fewer than 3 sides and non-positive dimensions', () => {
+    expect(() => createPrism(2, 10, 5)).toThrow();
+    expect(() => createPrism(6, 0, 5)).toThrow();
+    expect(() => createPrism(6, 10, -1)).toThrow();
+  });
+});
 
 describe('computeMassProperties', () => {
   it('matches the closed-form inertia tensor of a solid box', () => {

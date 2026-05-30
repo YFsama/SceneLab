@@ -580,6 +580,27 @@ export function createWedge(width: number, height: number, depth: number): Solid
   return { id: genId('body'), name: 'Wedge', vertices, faces, edges };
 }
 
+/**
+ * Regular n-sided prism: a regular polygon (circumradius `radius`, `sides`
+ * corners) extruded `height` along +Y. Useful for nuts, standoffs, knobs and
+ * other faceted parts. The base sits on y = 0.
+ */
+export function createPrism(sides: number, radius: number, height: number): SolidBody {
+  if (!Number.isInteger(sides) || sides < 3) throw new Error('Prism must have at least 3 sides');
+  if (![radius, height].every((d) => Number.isFinite(d) && d > 0)) {
+    throw new Error('Prism radius and height must be positive');
+  }
+  const profile: Vec3[] = [];
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2;
+    profile.push({ x: radius * Math.cos(a), y: 0, z: radius * Math.sin(a) });
+  }
+  return {
+    ...createExtrude({ profile, direction: { x: 0, y: 1, z: 0 }, distance: height, symmetric: false }),
+    name: `Prism${sides}`,
+  };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };

@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -334,6 +334,29 @@ export function registerBuiltinTools(): void {
         assertNumber(args.width, 'width'),
         assertNumber(args.height, 'height'),
         assertNumber(args.depth, 'depth'),
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_prism',
+    description: 'Create a regular n-sided prism (e.g. hexagon for a nut/standoff) and add it to the scene. Base on y=0, extruded up +Y.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sides: { type: 'number', description: 'Number of sides (>= 3, e.g. 6 for a hexagon)' },
+        radius: { type: 'number', description: 'Circumradius (center to corner) in mm' },
+        height: { type: 'number', description: 'Height along +Y in mm' },
+      },
+      required: ['sides', 'radius', 'height'],
+    },
+    execute: async (args) => {
+      const body = createPrism(
+        assertNumber(args.sides, 'sides'),
+        assertNumber(args.radius, 'radius'),
+        assertNumber(args.height, 'height'),
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };
