@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics } from './brep';
 
@@ -41,6 +41,31 @@ describe('computeThickness', () => {
     expect(t.minThickness).toBeCloseTo(1, 3); // the 1mm wall, not 50
     expect(t.isThin).toBe(true);
     expect(t.thinRegions).toBeGreaterThan(0);
+  });
+});
+
+describe('createLoft', () => {
+  const sq = (s: number, y: number): Vec3[] => [
+    { x: -s, y, z: -s }, { x: s, y, z: -s }, { x: s, y, z: s }, { x: -s, y, z: s },
+  ];
+
+  it('lofts equal squares into a box', () => {
+    const box = createLoft(sq(5, 0), sq(5, 20));
+    expect(checkManifold(box).isManifold).toBe(true);
+    expect(Math.abs(computeVolume(box))).toBeCloseTo(2000, 3);
+  });
+
+  it('lofts unequal squares to the prismatoid volume', () => {
+    const fr = createLoft(sq(5, 0), sq(3, 20));
+    expect(checkManifold(fr).isManifold).toBe(true);
+    // V = h/6·(A_bottom + 4·A_mid + A_top), mid side = 8.
+    const ideal = (20 / 6) * (100 + 4 * 64 + 36);
+    expect(Math.abs(computeVolume(fr))).toBeCloseTo(ideal, 1);
+  });
+
+  it('rejects mismatched or too-small profiles', () => {
+    expect(() => createLoft(sq(5, 0), [{ x: 0, y: 1, z: 0 }, { x: 1, y: 1, z: 0 }, { x: 0, y: 1, z: 1 }])).toThrow();
+    expect(() => createLoft([{ x: 0, y: 0, z: 0 }], [{ x: 0, y: 1, z: 0 }])).toThrow();
   });
 });
 

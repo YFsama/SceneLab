@@ -616,6 +616,45 @@ export function createPrism(sides: number, radius: number, height: number): Soli
 }
 
 /**
+ * Loft a solid between two closed profiles with the same number of points,
+ * connecting corresponding vertices into side faces and capping both ends.
+ * The profiles are positioned in 3D by the caller (e.g. at different heights).
+ * Foundation for sketch-based transitions, adapters and tapered shapes.
+ */
+export function createLoft(profileA: Vec3[], profileB: Vec3[]): SolidBody {
+  const n = profileA.length;
+  if (n < 3) throw new Error('Loft profiles need at least 3 points');
+  if (profileB.length !== n) throw new Error('Loft profiles must have the same number of points');
+
+  const a = profileA.map((p) => ({ ...p }));
+  const b = profileB.map((p) => ({ ...p }));
+  const vertices: Vec3[] = [...a, ...b];
+
+  const center = vertices.reduce(
+    (s, v) => ({ x: s.x + v.x / vertices.length, y: s.y + v.y / vertices.length, z: s.z + v.z / vertices.length }),
+    { x: 0, y: 0, z: 0 },
+  );
+  const outward = (verts: Vec3[]): Vec3 => {
+    const gn = computeFaceNormal(verts[0]!, verts[1]!, verts[2]!);
+    const fc = verts.reduce((s, v) => ({ x: s.x + v.x / verts.length, y: s.y + v.y / verts.length, z: s.z + v.z / verts.length }), { x: 0, y: 0, z: 0 });
+    const d = gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z);
+    return d < 0 ? { x: -gn.x, y: -gn.y, z: -gn.z } : gn;
+  };
+
+  const faces: Face[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const quad = [a[i]!, a[j]!, b[j]!, b[i]!];
+    faces.push({ id: genId('face'), vertices: quad, normal: outward(quad) });
+  }
+  faces.push({ id: genId('face'), vertices: a, normal: outward(a) });
+  faces.push({ id: genId('face'), vertices: b, normal: outward(b) });
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Loft', vertices, faces, edges: buildEdgesFromFaces(faces) };
+}
+
+/**
  * Hollow truncated cone (funnel / nozzle / vase wall): a frustum with outer
  * radii `bottomRadius`→`topRadius` and a constant `wallThickness`, `height`
  * tall along +Y, base on y = 0. Watertight, with annular top/bottom caps.
