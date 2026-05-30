@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength } from './brep';
+
+describe('computeTotalEdgeLength', () => {
+  it('a box has 12 edges summing to 12 × side length', () => {
+    const box = createBox(10, 10, 10);
+    expect(box.edges).toHaveLength(12);
+    expect(computeTotalEdgeLength(box)).toBeCloseTo(120, 5); // 12 × 10
+  });
+});
 
 describe('primitives are manifold with no isolated vertices', () => {
   const cases: [string, () => import('./types').SolidBody][] = [
