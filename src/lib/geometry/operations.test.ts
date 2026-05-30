@@ -227,6 +227,26 @@ describe('applyCircularArray', () => {
   });
 });
 
+describe('applyCircularArray positions', () => {
+  it('places instances on a circle around the axis', () => {
+    // A box centered at x=10, arrayed around the Y axis through the origin.
+    const part = translateBody(createBox(2, 2, 2), { x: 10, y: 0, z: 0 });
+    const instances = applyCircularArray(part, { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } }, 4);
+    expect(instances).toHaveLength(4);
+    const centers = instances.map((b) => computeBoundingBox(b)).map((bb) => ({
+      x: (bb.min.x + bb.max.x) / 2,
+      z: (bb.min.z + bb.max.z) / 2,
+    }));
+    // Every instance centre sits ~10mm from the axis (radius preserved).
+    for (const c of centers) {
+      expect(Math.hypot(c.x, c.z)).toBeCloseTo(10, 3);
+    }
+    // The four instances occupy distinct positions.
+    const distinct = new Set(centers.map((c) => `${c.x.toFixed(2)},${c.z.toFixed(2)}`));
+    expect(distinct.size).toBe(4);
+  });
+});
+
 describe('applyMirror', () => {
   it('should create a mirrored copy', () => {
     const body = createBox(1, 1, 1);
