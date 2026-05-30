@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exportOBJ, importOBJ } from './obj';
-import { createBox, computeVolume } from '../geometry/brep';
+import { createBox, computeVolume, findBoundaryLoops } from '../geometry/brep';
 
 describe('exportOBJ', () => {
   it('emits v and polygon f lines', () => {
@@ -17,6 +17,11 @@ describe('importOBJ', () => {
     expect(imported.vertices).toHaveLength(8);
     expect(imported.faces).toHaveLength(6); // quads, not triangulated
     expect(Math.abs(computeVolume(imported))).toBeCloseTo(1000, 3);
+  });
+
+  it('round-trips to a watertight mesh (shared vertices)', () => {
+    const imported = importOBJ(exportOBJ(createBox(10, 10, 10)));
+    expect(findBoundaryLoops(imported).holeCount).toBe(0);
   });
 
   it('parses faces with v/vt/vn tokens and the object name', () => {
