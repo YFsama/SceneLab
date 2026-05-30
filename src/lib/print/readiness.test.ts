@@ -54,6 +54,8 @@ describe('assessPrintReadiness', () => {
     const overhang = r.issues.find((i) => i.code === 'overhangs');
     expect(overhang).toBeDefined();
     expect(overhang!.message).toMatch(/worst \d+° from horizontal/);
+    // Also reports a rough support-material volume.
+    expect(overhang!.message).toMatch(/[\d.]+ cm³ support/);
   });
 
   it('flags a non-watertight mesh as an error', () => {

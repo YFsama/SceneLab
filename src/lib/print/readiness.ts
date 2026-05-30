@@ -1,6 +1,7 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
 import { checkManifold, computeThickness } from '../geometry';
 import { analyzeOverhangs } from './analysis';
+import { estimateSupportVolume } from './support';
 import { analyzeStability } from './stability';
 import { analyzeBedContact } from './bedContact';
 import { checkBuildVolume } from './analysis';
@@ -58,11 +59,12 @@ export function assessPrintReadiness(body: SolidBody, options: ReadinessOptions 
   const supportFaces = oh.faces.filter((f) => f.needsSupport).length;
   if (supportFaces > 0) {
     // Include the worst (shallowest) overhang angle — 0° is a flat bridge,
-    // near the threshold is mild — so the user knows how severe it is.
+    // near the threshold is mild — and the rough support volume (material cost).
+    const supportCm3 = estimateSupportVolume(body, { thresholdDeg: options.thresholdDeg }).supportVolumeMm3 / 1000;
     issues.push({
       severity: 'warning',
       code: 'overhangs',
-      message: `${supportFaces} face(s) need support (${oh.overhangArea.toFixed(1)} mm², worst ${oh.worstAngleDeg.toFixed(0)}° from horizontal)`,
+      message: `${supportFaces} face(s) need support (${oh.overhangArea.toFixed(1)} mm², worst ${oh.worstAngleDeg.toFixed(0)}° from horizontal, ~${supportCm3.toFixed(2)} cm³ support)`,
     });
   }
 
