@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere } from './measure';
+import { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere, interferenceVolume } from './measure';
 import { createBox } from './brep';
 import { translateBody } from './operations';
 
@@ -37,5 +37,16 @@ describe('bodiesInterfere', () => {
   it('flags overlapping bodies and clears separated ones', () => {
     expect(bodiesInterfere(a, translateBody(createBox(10, 10, 10), { x: 4, y: 4, z: 4 }))).toBe(true);
     expect(bodiesInterfere(a, translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }))).toBe(false);
+  });
+});
+
+describe('interferenceVolume', () => {
+  const a = createBox(10, 10, 10); // x,z ∈ [-5,5]
+  it('estimates the overlap volume of two boxes', () => {
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 }); // overlap x∈[0,5] → 5·10·10
+    expect(interferenceVolume(a, b, 32)).toBeCloseTo(500, -1); // within ~10 of 500
+  });
+  it('is 0 for separated bodies', () => {
+    expect(interferenceVolume(a, translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }))).toBe(0);
   });
 });

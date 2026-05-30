@@ -142,6 +142,38 @@ export function bodiesInterfere(a: SolidBody, b: SolidBody): boolean {
   return a.vertices.some((p) => isPointInsideBody(b, p)) || b.vertices.some((p) => isPointInsideBody(a, p));
 }
 
+/**
+ * Volume of the overlap region between two bodies — the figure SolidWorks'
+ * Interference Detection reports. Estimated by sampling a regular grid over the
+ * bounding-box intersection and counting cells inside both bodies. Deterministic
+ * (no randomness); accuracy improves with `samplesPerAxis`. Returns 0 when the
+ * AABBs don't overlap.
+ */
+export function interferenceVolume(a: SolidBody, b: SolidBody, samplesPerAxis = 24): number {
+  const bbA = aabb(a);
+  const bbB = aabb(b);
+  const lo = { x: Math.max(bbA.min.x, bbB.min.x), y: Math.max(bbA.min.y, bbB.min.y), z: Math.max(bbA.min.z, bbB.min.z) };
+  const hi = { x: Math.min(bbA.max.x, bbB.max.x), y: Math.min(bbA.max.y, bbB.max.y), z: Math.min(bbA.max.z, bbB.max.z) };
+  const dx = hi.x - lo.x, dy = hi.y - lo.y, dz = hi.z - lo.z;
+  if (dx <= 0 || dy <= 0 || dz <= 0) return 0;
+
+  const n = Math.max(2, Math.floor(samplesPerAxis));
+  const cell = (dx / n) * (dy / n) * (dz / n);
+  let inside = 0;
+  for (let i = 0; i < n; i++) {
+    const px = lo.x + ((i + 0.5) / n) * dx;
+    for (let j = 0; j < n; j++) {
+      const py = lo.y + ((j + 0.5) / n) * dy;
+      for (let k = 0; k < n; k++) {
+        const pz = lo.z + ((k + 0.5) / n) * dz;
+        const p = { x: px, y: py, z: pz };
+        if (isPointInsideBody(a, p) && isPointInsideBody(b, p)) inside++;
+      }
+    }
+  }
+  return inside * cell;
+}
+
 function aabb(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min = { x: Infinity, y: Infinity, z: Infinity };
   const max = { x: -Infinity, y: -Infinity, z: -Infinity };
