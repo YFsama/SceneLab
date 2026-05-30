@@ -323,6 +323,43 @@ function computeBoundingBoxLocal(body: SolidBody): { min: Vec3; max: Vec3 } {
   return { min, max };
 }
 
+/**
+ * Resize a body to exact per-axis dimensions (mm), scaling each axis
+ * independently about the bounding-box center. Unlike uniform scaleBody this
+ * changes the aspect ratio, so normals are transformed by the inverse-transpose
+ * of the (diagonal) scale — n → (nx/sx, ny/sy, nz/sz) normalized — to stay
+ * perpendicular to the deformed faces.
+ */
+export function resizeBody(body: SolidBody, target: Vec3): SolidBody {
+  if (![target.x, target.y, target.z].every((d) => Number.isFinite(d) && d > 0)) {
+    throw new Error('Target dimensions must be positive');
+  }
+  const bb = computeBoundingBoxLocal(body);
+  const ext = { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z };
+  // A zero-extent axis (flat part) can't be resized along that axis; keep it.
+  const sx = ext.x > 1e-9 ? target.x / ext.x : 1;
+  const sy = ext.y > 1e-9 ? target.y / ext.y : 1;
+  const sz = ext.z > 1e-9 ? target.z / ext.z : 1;
+  const cx = (bb.min.x + bb.max.x) / 2;
+  const cy = (bb.min.y + bb.max.y) / 2;
+  const cz = (bb.min.z + bb.max.z) / 2;
+
+  const p = (v: Vec3): Vec3 => ({
+    x: cx + (v.x - cx) * sx,
+    y: cy + (v.y - cy) * sy,
+    z: cz + (v.z - cz) * sz,
+  });
+  const transformNormal = (n: Vec3): Vec3 => normalize({ x: n.x / sx, y: n.y / sy, z: n.z / sz });
+
+  return {
+    id: genId('body'),
+    name: body.name,
+    vertices: body.vertices.map(p),
+    faces: body.faces.map((f) => ({ id: genId('face'), vertices: f.vertices.map(p), normal: transformNormal(f.normal) })),
+    edges: body.edges.map((e) => ({ id: genId('edge'), start: p(e.start), end: p(e.end) })),
+  };
+}
+
 /** Uniform scale of a body about an origin point (default world origin). */
 export function scaleBody(body: SolidBody, factor: number, origin: Vec3 = { x: 0, y: 0, z: 0 }): SolidBody {
   if (factor <= 0) throw new Error('Scale factor must be positive');

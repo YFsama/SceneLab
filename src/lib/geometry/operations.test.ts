@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, weldVertices, mergeBodies, translateBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody } from './operations';
 import { createBox } from './brep';
-import { computeBoundingBox, computeVolume } from './brep';
+import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import type { SolidBody, Vec3 } from './types';
 
 describe('translateBody', () => {
@@ -314,5 +314,34 @@ describe('applyMirror', () => {
       // Stored normal must agree with the winding-derived normal, not oppose it.
       expect(dot).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('resizeBody', () => {
+  it('resizes to exact per-axis dimensions, staying watertight', () => {
+    const r = resizeBody(createBox(10, 10, 10), { x: 50, y: 30, z: 10 });
+    const bb = computeBoundingBox(r);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(50, 5);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(30, 5);
+    expect(bb.max.z - bb.min.z).toBeCloseTo(10, 5);
+    expect(Math.abs(computeVolume(r))).toBeCloseTo(50 * 30 * 10, 3);
+    expect(checkManifold(r).isManifold).toBe(true);
+  });
+
+  it('keeps normals consistent with the winding under non-uniform scale', () => {
+    const r = resizeBody(createBox(10, 10, 10), { x: 40, y: 5, z: 20 });
+    for (const f of r.faces) {
+      const v0 = f.vertices[0]!;
+      const v1 = f.vertices[1]!;
+      const v2 = f.vertices[2]!;
+      const e1 = { x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z };
+      const e2 = { x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z };
+      const wn = { x: e1.y * e2.z - e1.z * e2.y, y: e1.z * e2.x - e1.x * e2.z, z: e1.x * e2.y - e1.y * e2.x };
+      expect(wn.x * f.normal.x + wn.y * f.normal.y + wn.z * f.normal.z).toBeGreaterThan(0);
+    }
+  });
+
+  it('rejects non-positive target dimensions', () => {
+    expect(() => resizeBody(createBox(1, 1, 1), { x: 0, y: 5, z: 5 })).toThrow();
   });
 });

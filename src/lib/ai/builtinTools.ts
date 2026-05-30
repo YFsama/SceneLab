@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody } from '../geometry/operations';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -783,6 +783,31 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const axis = assertEnum(args.axis, ['x', 'y', 'z'] as const, 'axis');
       const result = scaleBodyToTarget(body, axis, assertNumber(args.target, 'target'));
+      useStore.getState().replaceBody(body.id, result);
+      return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'resize_to_dimensions',
+    description: 'Resize a body to exact width/height/depth (X/Y/Z mm), scaling each axis independently (changes aspect ratio).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        x: { type: 'number', description: 'Target size along X (mm)' },
+        y: { type: 'number', description: 'Target size along Y (mm)' },
+        z: { type: 'number', description: 'Target size along Z (mm)' },
+      },
+      required: ['x', 'y', 'z'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const result = resizeBody(body, {
+        x: assertNumber(args.x, 'x'),
+        y: assertNumber(args.y, 'y'),
+        z: assertNumber(args.z, 'z'),
+      });
       useStore.getState().replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
