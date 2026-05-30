@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -585,6 +585,40 @@ export function registerBuiltinTools(): void {
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const results = applyLinearArray(body, assertVec3(args.direction, 'direction'), assertNumber(args.count, 'count'), assertNumber(args.spacing, 'spacing'));
+      store.addDirectBodies(results);
+      return { success: true, count: results.length };
+    },
+  });
+
+  registerTool({
+    name: 'grid_array',
+    description: 'Create a 2-direction grid pattern (SolidWorks linear pattern with a second direction) of a body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'ID of the body to pattern' },
+        direction1: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, description: 'First direction' },
+        count1: { type: 'number', description: 'Instances along direction 1' },
+        spacing1: { type: 'number', description: 'Spacing along direction 1 (mm)' },
+        direction2: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, description: 'Second direction' },
+        count2: { type: 'number', description: 'Instances along direction 2' },
+        spacing2: { type: 'number', description: 'Spacing along direction 2 (mm)' },
+      },
+      required: ['bodyId', 'direction1', 'count1', 'spacing1', 'direction2', 'count2', 'spacing2'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const body = store.bodies.find((b) => b.id === args.bodyId);
+      if (!body) throw new Error(`Body "${args.bodyId}" not found`);
+      const results = applyGridArray(
+        body,
+        assertVec3(args.direction1, 'direction1'),
+        assertNumber(args.count1, 'count1'),
+        assertNumber(args.spacing1, 'spacing1'),
+        assertVec3(args.direction2, 'direction2'),
+        assertNumber(args.count2, 'count2'),
+        assertNumber(args.spacing2, 'spacing2'),
+      );
       store.addDirectBodies(results);
       return { success: true, count: results.length };
     },

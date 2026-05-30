@@ -254,6 +254,44 @@ export function applyLinearArray(
   return results;
 }
 
+/**
+ * Grid (2-direction linear) pattern, like SolidWorks' linear pattern with a
+ * second direction. Produces count1 × count2 copies offset along the two
+ * (normalized) directions; spacings are true mm gaps. The (0,0) copy is the
+ * original position.
+ */
+export function applyGridArray(
+  body: SolidBody,
+  dir1: Vec3,
+  count1: number,
+  spacing1: number,
+  dir2: Vec3,
+  count2: number,
+  spacing2: number,
+): SolidBody[] {
+  if (count1 <= 0 || count2 <= 0) throw new Error('Array counts must be positive');
+  if (spacing1 <= 0 || spacing2 <= 0) throw new Error('Array spacings must be positive');
+  const n = (d: Vec3): Vec3 => {
+    const l = Math.hypot(d.x, d.y, d.z);
+    if (l < 1e-12) throw new Error('Array direction cannot be zero');
+    return { x: d.x / l, y: d.y / l, z: d.z / l };
+  };
+  const u = n(dir1);
+  const v = n(dir2);
+  const results: SolidBody[] = [];
+  for (let i = 0; i < count1; i++) {
+    for (let j = 0; j < count2; j++) {
+      const offset = {
+        x: u.x * spacing1 * i + v.x * spacing2 * j,
+        y: u.y * spacing1 * i + v.y * spacing2 * j,
+        z: u.z * spacing1 * i + v.z * spacing2 * j,
+      };
+      results.push(translateBody(body, offset, `${body.name} [${i},${j}]`));
+    }
+  }
+  return results;
+}
+
 /** Circular array: duplicate body around an axis */
 export function applyCircularArray(
   body: SolidBody,

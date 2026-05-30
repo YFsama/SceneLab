@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import type { SolidBody, Vec3 } from './types';
@@ -381,5 +381,32 @@ describe('convexHullBody', () => {
     expect(checkManifold(h).isManifold).toBe(true);
     // Spans x∈[-5,35]=40, y10, z10 → 4000, > the 2000 of the two parts.
     expect(Math.abs(computeVolume(h))).toBeCloseTo(4000, 1);
+  });
+});
+
+describe('applyGridArray', () => {
+  it('produces count1 × count2 copies at the expected offsets', () => {
+    const part = createBox(2, 2, 2); // centred at origin
+    const grid = applyGridArray(part, { x: 1, y: 0, z: 0 }, 3, 10, { x: 0, y: 0, z: 1 }, 2, 20);
+    expect(grid).toHaveLength(6);
+    // The (2,1) copy sits at +20 in X and +20 in Z.
+    const centre = (b: ReturnType<typeof createBox>) => {
+      const bb = computeBoundingBox(b);
+      return { x: (bb.min.x + bb.max.x) / 2, z: (bb.min.z + bb.max.z) / 2 };
+    };
+    const last = grid.find((b) => b.name.includes('[2,1]'))!;
+    expect(centre(last).x).toBeCloseTo(20, 5);
+    expect(centre(last).z).toBeCloseTo(20, 5);
+  });
+
+  it('honors spacing in mm for non-unit directions and rejects bad input', () => {
+    const g = applyGridArray(createBox(1, 1, 1), { x: 5, y: 0, z: 0 }, 2, 4, { x: 0, y: 5, z: 0 }, 2, 4);
+    const xs = g.map((b) => {
+      const bb = computeBoundingBox(b);
+      return (bb.min.x + bb.max.x) / 2;
+    }).sort((a, b) => a - b);
+    expect(xs[xs.length - 1]! - xs[0]!).toBeCloseTo(4, 5); // 4mm gap, not 20
+    expect(() => applyGridArray(createBox(1, 1, 1), { x: 0, y: 0, z: 0 }, 2, 4, { x: 0, y: 1, z: 0 }, 2, 4)).toThrow();
+    expect(() => applyGridArray(createBox(1, 1, 1), { x: 1, y: 0, z: 0 }, 0, 4, { x: 0, y: 1, z: 0 }, 2, 4)).toThrow();
   });
 });
