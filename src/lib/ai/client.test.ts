@@ -82,4 +82,32 @@ describe('sendMessageWithTools', () => {
     const block = (second.messages[second.messages.length - 1]!.content as Array<{ is_error: boolean }>)[0]!;
     expect(block.is_error).toBe(true);
   });
+
+  it('makes a final tool-free summary call when iterations are exhausted', async () => {
+    const bodies: unknown[] = [];
+    const toolTurn = {
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 'list_bodies', input: {} }],
+    };
+    // The model keeps asking for tools; after maxIterations a no-tools call
+    // elicits this closing summary.
+    const fetchFn = mockFetch(
+      [toolTurn, toolTurn, { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Done after summary.' }] }],
+      bodies,
+    );
+    let calls = 0;
+    const executeTool = async (c: AIToolCall): Promise<AIToolResult> => {
+      calls += 1;
+      return { name: c.name, result: { count: 0 } };
+    };
+
+    const res = await sendMessageWithTools('key', [userMsg('go')], executeTool, { fetchFn, maxIterations: 2 });
+
+    expect(calls).toBe(2); // one tool per allowed iteration
+    expect(res.text).toBe('Done after summary.');
+    // 2 loop iterations + 1 closing call.
+    expect(bodies).toHaveLength(3);
+    // The closing call must omit tools so the model has to answer in text.
+    expect((bodies[2] as { tools?: unknown }).tools).toBeUndefined();
+  });
 });

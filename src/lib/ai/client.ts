@@ -154,6 +154,21 @@ export async function sendMessageWithTools(
     aMsgs.push({ role: 'user', content: resultBlocks });
   }
 
+  // Iterations exhausted while the model still wanted tools. Make one final call
+  // with no tools available so it must summarize in text, instead of leaving the
+  // user with empty or stale output after the last tool ran.
+  const closing = await postMessages(fetchFn, apiKey, {
+    model,
+    max_tokens: maxTokens,
+    system: SYSTEM_PROMPT,
+    messages: aMsgs,
+  });
+  let closingText = '';
+  for (const block of closing.content) {
+    if (block.type === 'text') closingText += block.text ?? '';
+  }
+  if (closingText) finalText = closingText;
+
   return { text: finalText, toolResults };
 }
 
