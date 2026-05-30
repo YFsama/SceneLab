@@ -24,6 +24,7 @@ import {
   arrangeOnPlate,
   sliceCrossSection,
   sliceProfile,
+  seatOnBed,
   MATERIAL_DENSITIES,
 } from '../print';
 import type { MaterialName } from '../print';
@@ -801,6 +802,23 @@ export function registerBuiltinTools(): void {
       const result = orientForPrint(body);
       useStore.getState().replaceBody(body.id, result.body);
       return { success: true, bodyId: result.body.id, orientation: result.orientation, rotated: result.rotated };
+    },
+  });
+
+  registerTool({
+    name: 'seat_on_bed',
+    description: 'Drop a body onto the build plate so its lowest point rests at the bed (height 0 along +Y). Footprint position is preserved.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const seated = seatOnBed(body);
+      useStore.getState().replaceBody(body.id, seated);
+      return { success: true, bodyId: seated.id };
     },
   });
 
