@@ -850,6 +850,7 @@ export function registerBuiltinTools(): void {
         comInsideBase: r.comInsideBase,
         footprintArea: Number(r.footprintArea.toFixed(2)),
         tipOverMarginMm: Number(r.marginMm.toFixed(2)),
+        tippingAngleDeg: Number(r.tippingAngleDeg.toFixed(1)),
         centerOfMass: r.centerOfMass,
       };
     },

@@ -13,6 +13,18 @@ describe('analyzeStability', () => {
     // CoM at the center projects ~10mm from each base edge.
     expect(r.marginMm).toBeGreaterThan(5);
     expect(r.centerOfMass.y).toBeCloseTo(5, 5);
+    // CoM 5mm up, 10mm margin → tips at atan(10/5) = atan(2) ≈ 63.43°.
+    expect(r.comHeightMm).toBeCloseTo(5, 5);
+    expect(r.tippingAngleDeg).toBeCloseTo((Math.atan2(10, 5) * 180) / Math.PI, 1);
+  });
+
+  it('a tall narrow box tips at a smaller angle than a short wide one', () => {
+    const tall = analyzeStability(createBox(10, 40, 10)); // narrow base, tall
+    const wide = analyzeStability(createBox(40, 10, 40)); // wide base, short
+    expect(tall.tippingAngleDeg).toBeLessThan(wide.tippingAngleDeg);
+    // A cube tips at exactly 45° (margin == CoM height).
+    const cube = analyzeStability(createBox(20, 20, 20));
+    expect(cube.tippingAngleDeg).toBeCloseTo(45, 4);
   });
 
   it('a top-heavy, off-center mass is unstable', () => {

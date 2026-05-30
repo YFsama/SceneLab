@@ -25,6 +25,15 @@ export interface StabilityReport {
   marginMm: number;
   /** Convenience flag: comInsideBase with a usable (≥3-point) base. */
   stable: boolean;
+  /** Height of the center of mass above the base plane (mm). */
+  comHeightMm: number;
+  /**
+   * Critical tilt angle (degrees): how far the base can be tilted before the
+   * part topples about its nearest base edge, `atan(marginMm / comHeightMm)`.
+   * 90° for a part whose CoM sits directly over the base with no height; 0 if
+   * the part is already unstable (CoM outside the base).
+   */
+  tippingAngleDeg: number;
 }
 
 interface Vec2 {
@@ -145,6 +154,8 @@ export function analyzeStability(body: SolidBody, options: StabilityOptions = {}
     comInsideBase: false,
     marginMm: 0,
     stable: false,
+    comHeightMm: 0,
+    tippingAngleDeg: 0,
   };
   if (body.vertices.length === 0) return empty;
 
@@ -168,12 +179,24 @@ export function analyzeStability(body: SolidBody, options: StabilityOptions = {}
   const comUV = project(com);
   const inside = pointInConvex(comUV, hull);
   const dist = distToBoundary(comUV, hull);
+  const marginMm = inside ? dist : -dist;
+
+  const comHeightMm = Math.max(0, dot(com, up) - minH);
+  // Tip-over about the nearest base edge: tan(θ) = horizontal margin / CoM
+  // height. Already-unstable parts (CoM outside the base) report 0.
+  const tippingAngleDeg = !inside
+    ? 0
+    : comHeightMm < 1e-9
+      ? 90
+      : (Math.atan2(marginMm, comHeightMm) * 180) / Math.PI;
 
   return {
     centerOfMass: com,
     footprintArea: polygonArea(hull),
     comInsideBase: inside,
-    marginMm: inside ? dist : -dist,
+    marginMm,
     stable: inside,
+    comHeightMm,
+    tippingAngleDeg,
   };
 }

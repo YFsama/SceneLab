@@ -172,6 +172,7 @@ export function PropertiesPanel() {
                       </span>
                     </p>
                     <p>{t('panel.tipMargin')}: {st.marginMm.toFixed(2)} mm</p>
+                    <p>{t('panel.tipAngle')}: {st.tippingAngleDeg.toFixed(1)}°</p>
                     <p>{t('panel.footprint')}: {st.footprintArea.toFixed(2)} mm²</p>
                     <p>{t('panel.filament')}: {job.filamentLengthM.toFixed(2)} m / {job.filamentMassG.toFixed(1)} g (PLA)</p>
                     <p>{t('panel.printTime')}: ~{job.printTimeMinutes.toFixed(0)} min</p>
