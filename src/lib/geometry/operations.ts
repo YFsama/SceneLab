@@ -436,6 +436,23 @@ export function applyMirror(
 
 // --- Helpers ---
 
+/**
+ * Center a body so its bounding-box center sits at the origin. Useful for
+ * normalizing imported meshes (STL/OBJ often arrive far from the origin), which
+ * makes orbiting and center-based transforms behave intuitively.
+ */
+export function centerBody(body: SolidBody): SolidBody {
+  if (body.vertices.length === 0) return body;
+  const bb = computeBoundingBoxLocal(body);
+  const offset: Vec3 = {
+    x: -(bb.min.x + bb.max.x) / 2,
+    y: -(bb.min.y + bb.max.y) / 2,
+    z: -(bb.min.z + bb.max.z) / 2,
+  };
+  if (Math.abs(offset.x) < 1e-9 && Math.abs(offset.y) < 1e-9 && Math.abs(offset.z) < 1e-9) return body;
+  return translateBody(body, offset);
+}
+
 /** Translate a body by an offset vector. */
 export function translateBody(body: SolidBody, offset: Vec3, name: string = body.name): SolidBody {
   const translate = (v: Vec3): Vec3 => ({

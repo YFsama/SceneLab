@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import type { SolidBody, Vec3 } from './types';
@@ -343,5 +343,24 @@ describe('resizeBody', () => {
 
   it('rejects non-positive target dimensions', () => {
     expect(() => resizeBody(createBox(1, 1, 1), { x: 0, y: 5, z: 5 })).toThrow();
+  });
+});
+
+describe('centerBody', () => {
+  it('moves the bounding-box center to the origin and preserves volume', () => {
+    const off = translateBody(createBox(10, 20, 30), { x: 100, y: -50, z: 7 });
+    const centered = centerBody(off);
+    const bb = computeBoundingBox(centered);
+    expect((bb.min.x + bb.max.x) / 2).toBeCloseTo(0, 6);
+    expect((bb.min.y + bb.max.y) / 2).toBeCloseTo(0, 6);
+    expect((bb.min.z + bb.max.z) / 2).toBeCloseTo(0, 6);
+    expect(Math.abs(computeVolume(centered))).toBeCloseTo(Math.abs(computeVolume(off)), 4);
+  });
+
+  it('returns an already-centered body unchanged', () => {
+    const box = createBox(10, 10, 10); // centered in X/Z, Y in [0,10] → center (0,5,0)
+    const c = centerBody(box);
+    const bb = computeBoundingBox(c);
+    expect((bb.min.y + bb.max.y) / 2).toBeCloseTo(0, 6); // Y now centered
   });
 });

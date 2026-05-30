@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody } from '../geometry/operations';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -902,6 +902,23 @@ export function registerBuiltinTools(): void {
       const seated = seatOnBed(body);
       useStore.getState().replaceBody(body.id, seated);
       return { success: true, bodyId: seated.id };
+    },
+  });
+
+  registerTool({
+    name: 'center_body',
+    description: 'Move a body so its bounding-box center is at the origin — normalizes off-origin imported meshes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const centered = centerBody(body);
+      useStore.getState().replaceBody(body.id, centered);
+      return { success: true, bodyId: centered.id };
     },
   });
 
