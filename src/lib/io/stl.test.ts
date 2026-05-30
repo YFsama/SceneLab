@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exportSTLBinary, exportSTLAscii, importSTLAscii, importSTLBinary, importSTL } from './stl';
-import { createBox, computeVolume } from '../geometry/brep';
+import { createBox, computeVolume, findBoundaryLoops } from '../geometry/brep';
 
 describe('exportSTLBinary', () => {
   it('should return an ArrayBuffer', () => {
@@ -80,6 +80,16 @@ describe('importSTLBinary', () => {
 
   it('rejects a truncated buffer', () => {
     expect(() => importSTLBinary(new ArrayBuffer(10))).toThrow('too short');
+  });
+});
+
+describe('STL round-trip is watertight after welding', () => {
+  it('a box exported and re-imported has no boundary holes', () => {
+    const box = createBox(10, 10, 10);
+    const back = importSTLBinary(exportSTLBinary(box)); // welds by default
+    const loops = findBoundaryLoops(back);
+    expect(loops.holeCount).toBe(0);
+    expect(loops.boundaryEdgeCount).toBe(0);
   });
 });
 
