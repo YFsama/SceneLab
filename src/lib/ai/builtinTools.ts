@@ -875,6 +875,25 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'split_by_plane',
+    description: 'Split a body into two halves with a datum plane (SolidWorks Split). Use list_planes for plane ids and create_* tools to make one first. The original body is replaced by its two halves.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        planeId: { type: 'string', description: 'Datum plane id from list_planes' },
+      },
+      required: ['planeId'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const ids = useStore.getState().splitBodyByPlane(body.id, assertString(args.planeId, 'planeId'));
+      if (ids.length === 0) throw new Error('Split produced no result — check the plane id and that it intersects the body');
+      return { success: true, bodyIds: ids, pieces: ids.length };
+    },
+  });
+
+  registerTool({
     name: 'create_midplane',
     description: 'Create a datum plane halfway between two parallel faces of a body (SolidWorks mid plane). Use list_faces for face ids.',
     parameters: {

@@ -6,6 +6,7 @@ import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFe
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 import type { SolidBody, PlaneDefinition } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces } from '../lib/geometry/referenceGeometry';
+import { splitByPlane } from '../lib/geometry/boolean';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -100,6 +101,8 @@ interface AppState {
   /** Mid-plane between two parallel faces of a body; null if faces are missing or not parallel. */
   addMidplane: (bodyId: string, faceIdA: string, faceIdB: string) => string | null;
   removePlane: (id: string) => void;
+  /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
+  splitBodyByPlane: (bodyId: string, planeId: string) => string[];
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -424,6 +427,22 @@ export const useStore = create<AppState>((set, get) => {
     return get().addPlane(plane);
   },
   removePlane: (id) => set((s) => ({ planes: s.planes.filter((p) => p.id !== id), projectDirty: true })),
+  splitBodyByPlane: (bodyId, planeId) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    const plane = get().planes.find((p) => p.id === planeId);
+    if (!body || !plane) return [];
+    const { positive, negative } = splitByPlane(body, plane);
+    const halves = [positive, negative].filter((h): h is NonNullable<typeof h> => h !== null);
+    if (halves.length === 0) return [];
+    pushUndo();
+    set((s) => ({
+      directBodies: [...s.directBodies.filter((b) => b.id !== bodyId), ...halves],
+      selectedIds: [],
+      projectDirty: true,
+    }));
+    recombine();
+    return halves.map((h) => h.id);
+  },
 
   showExtrudeDialog: false,
   setShowExtrudeDialog: (showExtrudeDialog) => set({ showExtrudeDialog }),

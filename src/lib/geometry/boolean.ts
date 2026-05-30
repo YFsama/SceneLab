@@ -1,6 +1,7 @@
-import type { SolidBody, Vec3, Face } from './types';
+import type { SolidBody, Vec3, Face, PlaneDefinition } from './types';
 import { isPointInsideBody } from './measure';
 import { buildEdgesFromFaces } from './brep';
+import { signedDistanceToPlane } from './referenceGeometry';
 
 let nextId = 1;
 const genId = (p: string) => `${p}_bool_${nextId++}`;
@@ -103,6 +104,46 @@ function meshFromOccupancy(occ: Uint8Array, N: number, n: number, lo: Vec3, cs: 
   const vertices: Vec3[] = [];
   for (const f of faces) vertices.push(...f.vertices);
   return { id: genId('body'), name, vertices, faces, edges: buildEdgesFromFaces(faces) };
+}
+
+/**
+ * Split a solid with a datum plane (SolidWorks "Split" / planar cut). Voxelize
+ * the body's interior, then partition the cells by which side of the plane
+ * their centre falls on (positive = the plane-normal side). Each side is meshed
+ * into a watertight blocky solid; a side with no volume comes back null. Raise
+ * `resolution` for a cleaner cut surface.
+ */
+export function splitByPlane(
+  body: SolidBody,
+  plane: PlaneDefinition,
+  resolution = 40,
+): { positive: SolidBody | null; negative: SolidBody | null } {
+  const bb = aabb(body);
+  const lo = { ...bb.min };
+  const dim = { x: bb.max.x - lo.x, y: bb.max.y - lo.y, z: bb.max.z - lo.z };
+  if (dim.x <= 0 || dim.y <= 0 || dim.z <= 0) return { positive: null, negative: null };
+  const n = Math.max(2, Math.floor(resolution));
+  const cs = { x: dim.x / n, y: dim.y / n, z: dim.z / n };
+  const N = n + 2;
+  const pos = new Uint8Array(N * N * N);
+  const neg = new Uint8Array(N * N * N);
+  let anyPos = false;
+  let anyNeg = false;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= n; j++) {
+      for (let k = 1; k <= n; k++) {
+        const p = { x: lo.x + (i - 1 + 0.5) * cs.x, y: lo.y + (j - 1 + 0.5) * cs.y, z: lo.z + (k - 1 + 0.5) * cs.z };
+        if (!isPointInsideBody(body, p)) continue;
+        const idx = (i * N + j) * N + k;
+        if (signedDistanceToPlane(plane, p) >= 0) { pos[idx] = 1; anyPos = true; }
+        else { neg[idx] = 1; anyNeg = true; }
+      }
+    }
+  }
+  return {
+    positive: anyPos ? meshFromOccupancy(pos, N, n, lo, cs, `${body.name} (+)`) : null,
+    negative: anyNeg ? meshFromOccupancy(neg, N, n, lo, cs, `${body.name} (−)`) : null,
+  };
 }
 
 /**

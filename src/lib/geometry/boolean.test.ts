@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { booleanOp, hollowBody } from './boolean';
+import { booleanOp, hollowBody, splitByPlane } from './boolean';
 import { createBox, checkManifold, computeVolume } from './brep';
 import { translateBody } from './operations';
+import { makePlane } from './referenceGeometry';
 
 describe('booleanOp', () => {
   const a = createBox(10, 10, 10); // x,z ∈ [-5,5], y ∈ [0,10], vol 1000
@@ -44,5 +45,32 @@ describe('hollowBody', () => {
 
   it('throws on non-positive wall thickness', () => {
     expect(() => hollowBody(createBox(10, 10, 10), 0)).toThrow();
+  });
+});
+
+describe('splitByPlane', () => {
+  // createBox(10,10,10): x,z ∈ [-5,5], y ∈ [0,10], vol 1000.
+  const box = createBox(10, 10, 10);
+
+  it('a mid-height horizontal plane halves the volume, both sides watertight', () => {
+    const plane = makePlane({ x: 0, y: 5, z: 0 }, { x: 0, y: 1, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(positive).not.toBeNull();
+    expect(negative).not.toBeNull();
+    expect(checkManifold(positive!).boundaryEdges).toBe(0);
+    expect(checkManifold(negative!).boundaryEdges).toBe(0);
+    const vp = Math.abs(computeVolume(positive!));
+    const vn = Math.abs(computeVolume(negative!));
+    expect(vp).toBeCloseTo(500, -2);
+    expect(vn).toBeCloseTo(500, -2);
+    // The two halves together conserve the original volume.
+    expect(vp + vn).toBeCloseTo(1000, -2);
+  });
+
+  it('a plane outside the body leaves one side empty', () => {
+    const plane = makePlane({ x: 0, y: 100, z: 0 }, { x: 0, y: 1, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 30);
+    expect(positive).toBeNull(); // nothing above y=100
+    expect(negative).not.toBeNull(); // whole body below
   });
 });

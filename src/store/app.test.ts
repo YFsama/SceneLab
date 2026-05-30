@@ -374,6 +374,24 @@ describe('app store — direct bodies', () => {
       expect(mid.origin.y).toBeCloseTo(10, 4);
     });
 
+    it('splitBodyByPlane replaces a body with its two halves', () => {
+      const box = createBox(10, 10, 10);
+      useStore.getState().addDirectBody(box);
+      useStore.getState().ensureStandardPlanes();
+      // Top plane is the XZ plane (normal +Y) through the origin; offset it to the
+      // body's mid-height so it actually cuts through the box (y ∈ [0,10]).
+      const top = useStore.getState().planes.find((p) => p.normal.y > 0.99)!;
+      const midId = useStore.getState().addOffsetPlane(top.id, 5)!;
+      const ids = useStore.getState().splitBodyByPlane(box.id, midId);
+      expect(ids).toHaveLength(2);
+      expect(useStore.getState().bodies.find((b) => b.id === box.id)).toBeUndefined();
+      for (const id of ids) expect(useStore.getState().bodies.find((b) => b.id === id)).toBeDefined();
+    });
+
+    it('splitBodyByPlane returns empty for an unknown body or plane', () => {
+      expect(useStore.getState().splitBodyByPlane('nope', 'nope')).toEqual([]);
+    });
+
     it('removePlane removes by id and clearScene wipes all planes', () => {
       useStore.getState().ensureStandardPlanes();
       const id = useStore.getState().planes[0].id;
