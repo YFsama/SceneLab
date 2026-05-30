@@ -84,16 +84,28 @@ describe('addConstraint', () => {
 });
 
 describe('removeEntity', () => {
-  it('should remove entity and its constraints', () => {
+  it('removes an entity, its constraints, and its orphaned points', () => {
     const sketch = createSketch('xy');
     const line = addLine(sketch, 0, 0, 10, 0);
     addConstraint(sketch, 'horizontal', [line.id]);
-    expect(sketch.entities.size).toBe(3);
+    expect(sketch.entities.size).toBe(3); // line + 2 endpoints
     expect(sketch.constraints.size).toBe(1);
 
     removeEntity(sketch, line.id);
-    expect(sketch.entities.size).toBe(2); // points remain
-    expect(sketch.constraints.size).toBe(0); // constraint removed
+    expect(sketch.entities.size).toBe(0); // endpoints cleaned up, not orphaned
+    expect(sketch.constraints.size).toBe(0);
+  });
+
+  it('keeps a shared/constrained point when its line is removed', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    // Anchor one endpoint; that point must survive the line's removal.
+    addConstraint(sketch, 'fixed', [line.p1Id]);
+
+    removeEntity(sketch, line.id);
+    expect(sketch.entities.has(line.p1Id)).toBe(true); // referenced by 'fixed'
+    expect(sketch.entities.has(line.p2Id)).toBe(false); // private, removed
+    expect(sketch.constraints.size).toBe(1); // 'fixed' still references p1
   });
 });
 

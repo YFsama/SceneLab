@@ -108,9 +108,36 @@ export function addConstraint(
   return constraint;
 }
 
+/** Point ids an entity is built from (its endpoints / center). */
+function pointIdsOf(entity: SketchEntity): string[] {
+  switch (entity.type) {
+    case 'line':
+      return [entity.p1Id, entity.p2Id];
+    case 'circle':
+    case 'arc':
+      return [entity.centerId];
+    case 'rectangle':
+      return [entity.p1Id, entity.p2Id, entity.p3Id, entity.p4Id];
+    case 'point':
+      return [];
+  }
+}
+
 export function removeEntity(sketch: Sketch, entityId: string): void {
+  const entity = sketch.entities.get(entityId);
+  if (!entity) return;
   sketch.entities.delete(entityId);
-  // Remove constraints referencing this entity
+
+  // Clean up the entity's own points (e.g. a line's endpoints) so deleting a
+  // line doesn't orphan its vertices. Keep a point if another entity still
+  // uses it or a constraint references it directly (it may be intentional).
+  for (const pid of pointIdsOf(entity)) {
+    const usedByEntity = [...sketch.entities.values()].some((e) => pointIdsOf(e).includes(pid));
+    const usedByConstraint = [...sketch.constraints.values()].some((c) => c.entityIds.includes(pid));
+    if (!usedByEntity && !usedByConstraint) sketch.entities.delete(pid);
+  }
+
+  // Remove constraints referencing the deleted entity.
   for (const [id, c] of sketch.constraints) {
     if (c.entityIds.includes(entityId)) {
       sketch.constraints.delete(id);
