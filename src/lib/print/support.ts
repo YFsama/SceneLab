@@ -29,10 +29,13 @@ function normalize(v: Vec3): Vec3 {
 /**
  * Rough estimate of support-material volume for a print.
  *
- * Each overhang face that needs support is treated as the top of a column that
- * drops to the build plate; the column volume is its area × drop height ×
- * support density (supports are sparse, ~20% by default). This ignores the
- * part occluding some columns, so it's an upper-bound-ish guide, not exact.
+ * Each overhang face that needs support is treated as the top of a vertical
+ * column that drops to the build plate. Because the column is vertical, its
+ * cross-section is the face's *horizontal projection* (`area × |n·up|`), not
+ * the tilted true area — a steep overhang casts a narrower column than a flat
+ * bridge of the same area. The column volume is that projected area × drop
+ * height × support density (supports are sparse, ~20% by default). This ignores
+ * the part occluding some columns, so it's an upper-bound-ish guide, not exact.
  */
 export function estimateSupportVolume(body: SolidBody, options: SupportOptions = {}): SupportEstimate {
   const buildDirection = normalize(options.buildDirection ?? { x: 0, y: 1, z: 0 });
@@ -51,7 +54,9 @@ export function estimateSupportVolume(body: SolidBody, options: SupportOptions =
     if (!face || face.vertices.length === 0) continue;
     const centroidH = face.vertices.reduce((s, v) => s + dot(v, buildDirection), 0) / face.vertices.length;
     const drop = Math.max(0, centroidH - minH);
-    supportVolumeMm3 += fo.area * drop * supportDensity;
+    // Horizontal projection of the face: vertical column cross-section.
+    const projectedArea = fo.area * Math.abs(dot(normalize(face.normal), buildDirection));
+    supportVolumeMm3 += projectedArea * drop * supportDensity;
     supportFaces += 1;
   }
 
