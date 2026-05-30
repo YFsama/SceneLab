@@ -1,6 +1,6 @@
 import { useStore, type SketchTool } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { MousePointer2, Minus, Square, Circle, CircleDot, Box, LogOut } from 'lucide-react';
+import { MousePointer2, Minus, Square, Circle, CircleDot, Box, RotateCw, LogOut } from 'lucide-react';
 
 const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[] = [
   { tool: 'select', icon: MousePointer2, shortcut: 'V' },
@@ -18,6 +18,7 @@ export function SketchToolbar() {
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
   const setWorkspace = useStore((s) => s.setWorkspace);
   const setShowExtrudeDialog = useStore((s) => s.setShowExtrudeDialog);
+  const setShowRevolveDialog = useStore((s) => s.setShowRevolveDialog);
 
   const exitSketch = () => {
     setSketchActive(false);
@@ -60,6 +61,15 @@ export function SketchToolbar() {
         title={t('feature.extrude')}
       >
         <Box size={18} />
+      </button>
+
+      <button
+        onClick={() => setShowRevolveDialog(true)}
+        className="w-9 h-9 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+        aria-label={t('feature.revolve')}
+        title={t('feature.revolve')}
+      >
+        <RotateCw size={18} />
       </button>
 
       <button

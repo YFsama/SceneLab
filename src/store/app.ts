@@ -78,6 +78,8 @@ interface AppState {
   // Extrude dialog
   showExtrudeDialog: boolean;
   setShowExtrudeDialog: (v: boolean) => void;
+  showRevolveDialog: boolean;
+  setShowRevolveDialog: (v: boolean) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
 
@@ -310,6 +312,8 @@ export const useStore = create<AppState>((set, get) => {
 
   showExtrudeDialog: false,
   setShowExtrudeDialog: (showExtrudeDialog) => set({ showExtrudeDialog }),
+  showRevolveDialog: false,
+  setShowRevolveDialog: (showRevolveDialog) => set({ showRevolveDialog }),
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
@@ -356,6 +360,7 @@ export const useStore = create<AppState>((set, get) => {
       sketchActive: false,
       currentSketch: null,
       workspace: 'model',
+      showRevolveDialog: false,
       projectDirty: true,
     });
     recombine();

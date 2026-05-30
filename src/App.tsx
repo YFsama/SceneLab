@@ -12,6 +12,7 @@ import { StatusBar } from './components/ui/StatusBar';
 import { ToastHost } from './components/ui/ToastHost';
 import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { ExtrudeDialog } from './components/ui/ExtrudeDialog';
+import { RevolveDialog } from './components/ui/RevolveDialog';
 import { AIPanel } from './components/panels/AIPanel';
 import { CAMPanel } from './components/panels/CAMPanel';
 import { useKeyboardShortcuts, initShortcuts } from './lib/hooks/useKeyboardShortcuts';
@@ -75,6 +76,7 @@ export default function App() {
       <ToastHost />
       <ConfirmDialog />
       <ExtrudeDialog />
+      <RevolveDialog />
       <AIPanel />
     </div>
   );
