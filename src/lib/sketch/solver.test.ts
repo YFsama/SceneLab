@@ -172,6 +172,32 @@ describe('solveConstraints', () => {
     expect(d1x * d2x + d1y * d2y).toBeCloseTo(0, 3);
   });
 
+  it('equal-length with a fixed endpoint keeps the anchor and matches lengths', () => {
+    const entities = new Map<string, SketchEntity>();
+    // line1: p1(fixed origin)→p2(x=4) length 4. line2: p3(0,0)→p4(0,10) length 10.
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 4, y: 0 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 0, y: 0 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 0, y: 10 });
+    entities.set('l1', { id: 'l1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('l2', { id: 'l2', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('fix', { id: 'fix', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('eq', { id: 'eq', type: 'equal', entityIds: ['l1', 'l2'] });
+
+    const result = solveConstraints(entities, constraints, 300);
+
+    const p1 = result.get('p1')!;
+    const len1 = Math.hypot(result.get('p2')!.x - p1.x, result.get('p2')!.y - p1.y);
+    const len2 = Math.hypot(result.get('p4')!.x - result.get('p3')!.x, result.get('p4')!.y - result.get('p3')!.y);
+    // p1 must remain anchored at the origin.
+    expect(p1.x).toBeCloseTo(0, 6);
+    expect(p1.y).toBeCloseTo(0, 6);
+    // Both lines converge to equal length.
+    expect(len1).toBeCloseTo(len2, 3);
+  });
+
   it('a fixed point stays put while a distance constraint moves the other', () => {
     const entities = new Map<string, SketchEntity>();
     entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });

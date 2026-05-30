@@ -289,34 +289,13 @@ function applyEqual(
 
     if (len1 < 1e-10 || len2 < 1e-10) return 0;
 
-    // Scale each line toward average length
-    const scale1 = avgLen / len1;
-    const scale2 = avgLen / len2;
-
-    const mid1 = midpoint(eps1[0], eps1[1]);
-    const mid2 = midpoint(eps2[0], eps2[1]);
-
-    let maxDelta = 0;
-    if (!eps1[0].fixed) {
-      eps1[0].x = mid1.x + (eps1[0].x - mid1.x) * scale1;
-      eps1[0].y = mid1.y + (eps1[0].y - mid1.y) * scale1;
-      maxDelta = Math.max(maxDelta, Math.abs(len1 - avgLen));
-    }
-    if (!eps1[1].fixed) {
-      eps1[1].x = mid1.x + (eps1[1].x - mid1.x) * scale1;
-      eps1[1].y = mid1.y + (eps1[1].y - mid1.y) * scale1;
-    }
-    if (!eps2[0].fixed) {
-      eps2[0].x = mid2.x + (eps2[0].x - mid2.x) * scale2;
-      eps2[0].y = mid2.y + (eps2[0].y - mid2.y) * scale2;
-      maxDelta = Math.max(maxDelta, Math.abs(len2 - avgLen));
-    }
-    if (!eps2[1].fixed) {
-      eps2[1].x = mid2.x + (eps2[1].x - mid2.x) * scale2;
-      eps2[1].y = mid2.y + (eps2[1].y - mid2.y) * scale2;
-    }
-
-    return maxDelta;
+    // Scale each line toward the average length about the right pivot: the
+    // anchored endpoint if one is fixed (so it stays put and the length is
+    // corrected in one step), otherwise the midpoint. A fully fixed line is
+    // left untouched.
+    const d1 = scaleLineToLength(eps1[0], eps1[1], avgLen, len1);
+    const d2 = scaleLineToLength(eps2[0], eps2[1], avgLen, len2);
+    return Math.max(d1, d2);
   }
 
   // Equal radius for circles
@@ -416,12 +395,39 @@ function applyDistance(
   return maxDelta;
 }
 
+/**
+ * Scale segment a–b to `targetLen` about the correct pivot: the fixed endpoint
+ * if exactly one is anchored (keeping it put), otherwise the midpoint. Returns
+ * the length error corrected (0 if both endpoints are fixed).
+ */
+function scaleLineToLength(a: SolverPoint, b: SolverPoint, targetLen: number, currentLen: number): number {
+  if (a.fixed && b.fixed) return 0;
+  let px: number;
+  let py: number;
+  if (a.fixed) {
+    px = a.x;
+    py = a.y;
+  } else if (b.fixed) {
+    px = b.x;
+    py = b.y;
+  } else {
+    px = (a.x + b.x) / 2;
+    py = (a.y + b.y) / 2;
+  }
+  const scale = targetLen / currentLen;
+  if (!a.fixed) {
+    a.x = px + (a.x - px) * scale;
+    a.y = py + (a.y - py) * scale;
+  }
+  if (!b.fixed) {
+    b.x = px + (b.x - px) * scale;
+    b.y = py + (b.y - py) * scale;
+  }
+  return Math.abs(currentLen - targetLen);
+}
+
 function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   return Math.sqrt(dx * dx + dy * dy);
-}
-
-function midpoint(a: { x: number; y: number }, b: { x: number; y: number }): { x: number; y: number } {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
