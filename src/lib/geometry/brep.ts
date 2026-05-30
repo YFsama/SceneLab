@@ -1,4 +1,5 @@
 import type { Vec3, SolidBody, Face, Edge, ExtrudeParams, RevolveParams } from './types';
+import { computeConvexHull } from './convexHull';
 
 let nextId = 1;
 function genId(prefix: string): string {
@@ -2466,10 +2467,16 @@ export function computeSolidity(body: SolidBody): SolidityInfo {
     return { solidity: 1, isSolid: true, voidRatio: 0, internalCavities: 0 };
   }
 
-  // Non-convex: approximate the hull with the bounding box. The box is at least
-  // as big as the hull, so this under-estimates solidity (clamp to ≤ 1).
-  const bb = computeBoundingBox(body);
-  const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+  // Non-convex: use the true convex-hull volume (volume / hull). Fall back to
+  // the bounding-box volume only if the hull is degenerate (flat/empty input).
+  const hull = computeConvexHull(body.vertices);
+  let hullVolume: number;
+  if (hull && hull.volume > 1e-10) {
+    hullVolume = hull.volume;
+  } else {
+    const bb = computeBoundingBox(body);
+    hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+  }
 
   const solidity = hullVolume > 1e-10 ? Math.min(1, volume / hullVolume) : 0;
   const voidRatio = 1 - solidity;
