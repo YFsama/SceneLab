@@ -52,6 +52,8 @@ function applyConstraint(
       return applyVertical(constraint, points, entities);
     case 'parallel':
       return applyParallel(constraint, points, entities);
+    case 'perpendicular':
+      return applyPerpendicular(constraint, points, entities);
     case 'equal':
       return applyEqual(constraint, points, entities);
     case 'distance':
@@ -194,6 +196,55 @@ function applyParallel(
     b2.x -= nx * correction;
     b2.y -= ny * correction;
     maxDelta = Math.abs(correction);
+  }
+
+  return maxDelta;
+}
+
+function applyPerpendicular(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+  entities: Map<string, SketchEntity>,
+): number {
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+
+  const eps1 = getLineEndpoints(id1, entities, points);
+  const eps2 = getLineEndpoints(id2, entities, points);
+  if (!eps1 || !eps2) return 0;
+
+  const [a1, a2] = eps1;
+  const [b1, b2] = eps2;
+
+  // Unit tangent of line 1.
+  const dx1 = a2.x - a1.x;
+  const dy1 = a2.y - a1.y;
+  const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+  if (len1 < 1e-10) return 0;
+  const tx = dx1 / len1;
+  const ty = dy1 / len1;
+
+  // For perpendicular lines, line 2's direction must have no component along
+  // line 1's tangent — i.e. dot product 0. `dot` is that tangential component;
+  // remove it by sliding line 2's endpoints along the tangent.
+  const dot = (b2.x - b1.x) * tx + (b2.y - b1.y) * ty;
+
+  let maxDelta = 0;
+  if (!b1.fixed && !b2.fixed) {
+    const half = dot / 2;
+    b1.x += tx * half;
+    b1.y += ty * half;
+    b2.x -= tx * half;
+    b2.y -= ty * half;
+    maxDelta = Math.abs(dot);
+  } else if (!b1.fixed) {
+    b1.x += tx * dot;
+    b1.y += ty * dot;
+    maxDelta = Math.abs(dot);
+  } else if (!b2.fixed) {
+    b2.x -= tx * dot;
+    b2.y -= ty * dot;
+    maxDelta = Math.abs(dot);
   }
 
   return maxDelta;
