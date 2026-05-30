@@ -227,6 +227,20 @@ describe('applyCircularArray', () => {
   });
 });
 
+describe('applyLinearArray positions', () => {
+  it('spaces instances evenly along the direction', () => {
+    const part = createBox(10, 10, 10); // centred at x=0
+    const instances = applyLinearArray(part, { x: 1, y: 0, z: 0 }, 3, 20);
+    expect(instances).toHaveLength(3);
+    const centersX = instances.map((b) => {
+      const bb = computeBoundingBox(b);
+      return (bb.min.x + bb.max.x) / 2;
+    });
+    expect(centersX[1]! - centersX[0]!).toBeCloseTo(20, 5);
+    expect(centersX[2]! - centersX[0]!).toBeCloseTo(40, 5);
+  });
+});
+
 describe('applyCircularArray positions', () => {
   it('places instances on a circle around the axis', () => {
     // A box centered at x=10, arrayed around the Y axis through the origin.
