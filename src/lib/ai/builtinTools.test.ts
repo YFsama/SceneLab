@@ -76,7 +76,7 @@ describe('builtin analysis tools', () => {
       material: 'PETG',
       buildVolume: { x: 200, y: 200, z: 200 },
     })) as {
-      overhangs: { facesNeedingSupport: number };
+      overhangs: { facesNeedingSupport: number; worstAngleDeg: number };
       mass: { material: string; grams: number };
       buildVolume: { fits: boolean } | null;
       stability: { stable: boolean };
@@ -86,6 +86,7 @@ describe('builtin analysis tools', () => {
     expect(result.buildVolume?.fits).toBe(true);
     expect(result.stability.stable).toBe(true);
     expect(typeof result.overhangs.facesNeedingSupport).toBe('number');
+    expect(result.overhangs.worstAngleDeg).toBe(90); // a box has no overhangs
     expect(typeof result.recommendedOrientation.orientation).toBe('string');
   });
 

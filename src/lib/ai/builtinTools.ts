@@ -894,6 +894,7 @@ export function registerBuiltinTools(): void {
           thresholdDeg: report.overhangs.thresholdDeg,
           facesNeedingSupport: support.length,
           overhangArea: Number(report.overhangs.overhangArea.toFixed(2)),
+          worstAngleDeg: Number(report.overhangs.worstAngleDeg.toFixed(1)),
           supportVolumeCm3: Number((supportVol.supportVolumeMm3 / 1000).toFixed(2)),
         },
         mass: { material, grams: Number(report.mass.massGrams.toFixed(3)) },
