@@ -593,6 +593,18 @@ describe('createRevolve solid', () => {
     expect(vol).toBeLessThanOrEqual(ideal * 1.001);
   });
 
+  it('a full revolution welds its seam into a manifold mesh', () => {
+    // The seam ring must reuse ring 0 rather than a coincident duplicate, or
+    // the start/end profile edges are each used by a single face (non-manifold).
+    const full = checkManifold(createRevolve({ profile: rect, axis: axisY, angle: Math.PI * 2 }));
+    expect(full.isManifold).toBe(true);
+    expect(full.boundaryEdges).toBe(0);
+    // A partial revolution stays manifold too (its open ends are capped).
+    const half = checkManifold(createRevolve({ profile: rect, axis: axisY, angle: Math.PI }));
+    expect(half.isManifold).toBe(true);
+    expect(half.boundaryEdges).toBe(0);
+  });
+
   it('full-revolution volume is translation invariant', () => {
     const body = createRevolve({ profile: rect, axis: axisY, angle: Math.PI * 2 });
     const t = (v: Vec3) => ({ x: v.x + 30, y: v.y + 5, z: v.z - 12 });

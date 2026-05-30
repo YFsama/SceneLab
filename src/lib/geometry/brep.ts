@@ -166,9 +166,16 @@ export function createRevolve(params: RevolveParams): SolidBody {
   const faces: Face[] = [];
   const edges: Edge[] = [];
 
+  // A full turn wraps onto itself, so the final ring must reuse ring 0 instead
+  // of a coincident duplicate — otherwise the seam edges are used by one face
+  // each and the mesh is non-manifold (not watertight). Partial revolves keep
+  // the extra end ring so the open ends can be capped.
+  const fullTurn = Math.abs(Math.abs(angle) - Math.PI * 2) < 1e-9;
+  const ringCount = fullTurn ? segments : segments + 1;
+
   // Generate vertices by rotating profile around axis
   const rings: Vec3[][] = [];
-  for (let s = 0; s <= segments; s++) {
+  for (let s = 0; s < ringCount; s++) {
     const a = angleStep * s;
     const cos = Math.cos(a);
     const sin = Math.sin(a);
@@ -209,13 +216,15 @@ export function createRevolve(params: RevolveParams): SolidBody {
   }
 
   // Side faces, wrapping the profile loop (pNext) so the cross-section closes.
+  // On a full turn the band after the last ring wraps back to ring 0.
   for (let s = 0; s < segments; s++) {
+    const nextRing = (s + 1) % ringCount;
     for (let p = 0; p < n; p++) {
       const pNext = (p + 1) % n;
       const v0 = vertices[s * n + p]!;
       const v1 = vertices[s * n + pNext]!;
-      const v2 = vertices[(s + 1) * n + pNext]!;
-      const v3 = vertices[(s + 1) * n + p]!;
+      const v2 = vertices[nextRing * n + pNext]!;
+      const v3 = vertices[nextRing * n + p]!;
       faces.push({ id: genId('face'), vertices: [v0, v1, v2, v3], normal: computeFaceNormal(v0, v1, v2) });
       edges.push({ id: genId('edge'), start: v0, end: v1 });
       edges.push({ id: genId('edge'), start: v0, end: v3 });
@@ -224,7 +233,6 @@ export function createRevolve(params: RevolveParams): SolidBody {
 
   // For a partial revolution the two ends are open — cap them with the profile
   // polygon at the start and end rings (a full turn wraps and needs no caps).
-  const fullTurn = Math.abs(Math.abs(angle) - Math.PI * 2) < 1e-9;
   if (!fullTurn && n >= 3) {
     const center = { x: 0, y: 0, z: 0 };
     for (const v of vertices) {
