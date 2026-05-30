@@ -1,7 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness } from './brep';
+
+describe('computeThickness', () => {
+  it('measures wall-to-wall distance by inward ray casting', () => {
+    // Solid 10×20×10: the smallest cross dimension is 10, the largest 20.
+    const t = computeThickness(createBox(10, 20, 10));
+    expect(t.minThickness).toBeCloseTo(10, 2);
+    expect(t.maxThickness).toBeCloseTo(20, 2);
+    expect(t.isThin).toBe(false);
+  });
+
+  it('flags a thin slab as thin (and finds its true thickness)', () => {
+    const t = computeThickness(createBox(1, 50, 50));
+    expect(t.minThickness).toBeCloseTo(1, 3); // the 1mm wall, not 50
+    expect(t.isThin).toBe(true);
+    expect(t.thinRegions).toBeGreaterThan(0);
+  });
+});
 
 describe('createPrism', () => {
   it('builds a watertight regular prism with the polygon-area volume', () => {

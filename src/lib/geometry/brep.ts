@@ -2298,49 +2298,93 @@ export interface ThicknessInfo {
   thinRegions: number;
 }
 
+/** Möller–Trumbore ray/triangle intersection; returns the positive hit distance or null. */
+function rayTriangleDistance(orig: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3): number | null {
+  const ex1 = b.x - a.x, ey1 = b.y - a.y, ez1 = b.z - a.z;
+  const ex2 = c.x - a.x, ey2 = c.y - a.y, ez2 = c.z - a.z;
+  const px = dir.y * ez2 - dir.z * ey2;
+  const py = dir.z * ex2 - dir.x * ez2;
+  const pz = dir.x * ey2 - dir.y * ex2;
+  const det = ex1 * px + ey1 * py + ez1 * pz;
+  if (Math.abs(det) < 1e-12) return null; // parallel
+  const inv = 1 / det;
+  const tx = orig.x - a.x, ty = orig.y - a.y, tz = orig.z - a.z;
+  const u = (tx * px + ty * py + tz * pz) * inv;
+  if (u < -1e-9 || u > 1 + 1e-9) return null;
+  const qx = ty * ez1 - tz * ey1;
+  const qy = tz * ex1 - tx * ez1;
+  const qz = tx * ey1 - ty * ex1;
+  const v = (dir.x * qx + dir.y * qy + dir.z * qz) * inv;
+  if (v < -1e-9 || u + v > 1 + 1e-9) return null;
+  const t = (ex2 * qx + ey2 * qy + ez2 * qz) * inv;
+  return t > 1e-9 ? t : null;
+}
+
+/**
+ * Wall thickness by inward ray casting: from each face, shoot a ray along the
+ * inward normal and measure the distance to the opposite wall (the standard
+ * thickness probe used by slicers). Unlike a bounding-box proxy this reports the
+ * true wall thickness of hollow/shelled parts — the case that actually matters
+ * for printability. O(faces × triangles); faces are sampled when the mesh is
+ * large to bound the cost.
+ */
 export function computeThickness(body: SolidBody): ThicknessInfo {
   const bb = computeBoundingBox(body);
-  const dx = bb.max.x - bb.min.x;
-  const dy = bb.max.y - bb.min.y;
-  const dz = bb.max.z - bb.min.z;
+  const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1;
+  const eps = diag * 1e-5;
 
-  // Approximate thickness as minimum bounding box dimension
-  const minThickness = Math.min(dx, dy, dz);
-  const maxThickness = Math.max(dx, dy, dz);
-  const avgThickness = (dx + dy + dz) / 3;
-
-  // Count thin regions (faces with small bounding box)
-  let thinRegions = 0;
-  for (const face of body.faces) {
-    const verts = face.vertices;
-    if (verts.length < 3) continue;
-
-    let faceMinX = Infinity, faceMaxX = -Infinity;
-    let faceMinY = Infinity, faceMaxY = -Infinity;
-    let faceMinZ = Infinity, faceMaxZ = -Infinity;
-
-    for (const v of verts) {
-      faceMinX = Math.min(faceMinX, v.x);
-      faceMaxX = Math.max(faceMaxX, v.x);
-      faceMinY = Math.min(faceMinY, v.y);
-      faceMaxY = Math.max(faceMaxY, v.y);
-      faceMinZ = Math.min(faceMinZ, v.z);
-      faceMaxZ = Math.max(faceMaxZ, v.z);
+  // Pre-triangulate all faces once for ray targets.
+  const tris: [Vec3, Vec3, Vec3][] = [];
+  for (const f of body.faces) {
+    for (let i = 1; i < f.vertices.length - 1; i++) {
+      tris.push([f.vertices[0]!, f.vertices[i]!, f.vertices[i + 1]!]);
     }
-
-    const faceDx = faceMaxX - faceMinX;
-    const faceDy = faceMaxY - faceMinY;
-    const faceDz = faceMaxZ - faceMinZ;
-    const faceThickness = Math.min(faceDx, faceDy, faceDz);
-
-    if (faceThickness < minThickness * 0.5) thinRegions++;
   }
+
+  // Sample faces to keep the O(F²) probe bounded on large meshes.
+  const faces = body.faces.filter((f) => f.vertices.length >= 3);
+  const step = Math.max(1, Math.floor(faces.length / 400));
+
+  const samples: number[] = [];
+  for (let fi = 0; fi < faces.length; fi += step) {
+    const face = faces[fi]!;
+    const n = normalize(face.normal);
+    if (n.x === 0 && n.y === 0 && n.z === 0) continue;
+    // Centroid, nudged just inside the surface so we don't hit our own face.
+    let cx = 0, cy = 0, cz = 0;
+    for (const v of face.vertices) {
+      cx += v.x / face.vertices.length;
+      cy += v.y / face.vertices.length;
+      cz += v.z / face.vertices.length;
+    }
+    const dir = { x: -n.x, y: -n.y, z: -n.z }; // inward
+    const orig = { x: cx + dir.x * eps, y: cy + dir.y * eps, z: cz + dir.z * eps };
+
+    let nearest = Infinity;
+    for (const [a, b, c] of tris) {
+      const t = rayTriangleDistance(orig, dir, a, b, c);
+      if (t !== null && t < nearest) nearest = t;
+    }
+    if (nearest < Infinity) samples.push(nearest + eps);
+  }
+
+  if (samples.length === 0) {
+    const fallback = Math.min(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+    return { minThickness: fallback, maxThickness: fallback, avgThickness: fallback, isThin: false, thinRegions: 0 };
+  }
+
+  const minThickness = Math.min(...samples);
+  const maxThickness = Math.max(...samples);
+  const avgThickness = samples.reduce((s, t) => s + t, 0) / samples.length;
+  // Thin if the minimum wall is a small fraction of the part's overall size.
+  const thinLimit = diag * 0.02;
+  const thinRegions = samples.filter((t) => t < thinLimit).length;
 
   return {
     minThickness,
     maxThickness,
     avgThickness,
-    isThin: minThickness < avgThickness * 0.2,
+    isThin: minThickness < thinLimit,
     thinRegions,
   };
 }
