@@ -14,6 +14,10 @@ describe('CAM toolpath generators (contour/drill/face)', () => {
     expect(tp.operation).toBe('contour');
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
     expect(generateGCode(tp)).toContain('G1');
+    // The XY outline is the convex hull → a box projects to its 4 rectangle
+    // corners (no self-intersecting angular-sort artifacts).
+    const distinctXY = new Set(tp.cuttingMoves.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`));
+    expect(distinctXY.size).toBe(4);
   });
 
   it('generateDrillToolpath visits each hole', () => {
