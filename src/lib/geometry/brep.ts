@@ -654,6 +654,90 @@ export function createTube(outerRadius: number, innerRadius: number, height: num
   return { id: genId('body'), name: 'Tube', vertices, faces, edges };
 }
 
+/**
+ * Helical coil / spring: sweep a circular wire (radius `wireRadius`, `sides`
+ * facets) along a helix of radius `coilRadius`, advancing `pitch` mm per turn
+ * for `turns` turns, about the +Y axis. Watertight, with end caps. Useful for
+ * springs, coils and as the basis for threads.
+ */
+export function createCoil(
+  coilRadius: number,
+  wireRadius: number,
+  pitch: number,
+  turns: number,
+  segmentsPerTurn = 32,
+  sides = 12,
+): SolidBody {
+  if (!(coilRadius > 0) || !(wireRadius > 0) || !(pitch > 0) || !(turns > 0)) {
+    throw new Error('Coil radius, wire radius, pitch and turns must be positive');
+  }
+  if (segmentsPerTurn < 3 || sides < 3) throw new Error('Coil needs >= 3 segments per turn and >= 3 sides');
+
+  const ringCount = Math.max(2, Math.round(turns * segmentsPerTurn)) + 1;
+  const dy = pitch / (2 * Math.PI);
+
+  const rings: Vec3[][] = [];
+  const ringNormals: Vec3[][] = [];
+  for (let r = 0; r < ringCount; r++) {
+    const theta = (r / (ringCount - 1)) * turns * 2 * Math.PI;
+    const cosT = Math.cos(theta);
+    const sinT = Math.sin(theta);
+    // Center curve and its analytic Frenet frame.
+    const center = { x: coilRadius * cosT, y: dy * theta, z: coilRadius * sinT };
+    const tangent = normalize({ x: -coilRadius * sinT, y: dy, z: coilRadius * cosT });
+    const nrm = { x: -cosT, y: 0, z: -sinT }; // principal normal (toward axis)
+    const binorm = {
+      x: tangent.y * nrm.z - tangent.z * nrm.y,
+      y: tangent.z * nrm.x - tangent.x * nrm.z,
+      z: tangent.x * nrm.y - tangent.y * nrm.x,
+    };
+    const ring: Vec3[] = [];
+    const rn: Vec3[] = [];
+    for (let j = 0; j < sides; j++) {
+      const phi = (j / sides) * 2 * Math.PI;
+      const c = Math.cos(phi);
+      const s = Math.sin(phi);
+      const radial = { x: nrm.x * c + binorm.x * s, y: nrm.y * c + binorm.y * s, z: nrm.z * c + binorm.z * s };
+      ring.push({ x: center.x + radial.x * wireRadius, y: center.y + radial.y * wireRadius, z: center.z + radial.z * wireRadius });
+      rn.push(radial);
+    }
+    rings.push(ring);
+    ringNormals.push(rn);
+  }
+
+  const vertices: Vec3[] = [];
+  for (const ring of rings) vertices.push(...ring);
+
+  const faces: Face[] = [];
+  for (let r = 0; r < ringCount - 1; r++) {
+    for (let j = 0; j < sides; j++) {
+      const jn = (j + 1) % sides;
+      const a = rings[r]![j]!;
+      const b = rings[r]![jn]!;
+      const c = rings[r + 1]![jn]!;
+      const d = rings[r + 1]![j]!;
+      const rn = ringNormals[r]![j]!;
+      faces.push({ id: genId('face'), vertices: [a, b, c, d], normal: rn });
+    }
+  }
+  // End caps (open ends of the wire): start faces backward along the path, end forward.
+  const startT = normalize({ x: rings[1]![0]!.x - rings[0]![0]!.x, y: rings[1]![0]!.y - rings[0]![0]!.y, z: rings[1]![0]!.z - rings[0]![0]!.z });
+  faces.push({ id: genId('face'), vertices: [...rings[0]!], normal: { x: -startT.x, y: -startT.y, z: -startT.z } });
+  const last = ringCount - 1;
+  const endT = normalize({ x: rings[last]![0]!.x - rings[last - 1]![0]!.x, y: rings[last]![0]!.y - rings[last - 1]![0]!.y, z: rings[last]![0]!.z - rings[last - 1]![0]!.z });
+  faces.push({ id: genId('face'), vertices: [...rings[last]!], normal: endT });
+
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    for (let i = 0; i < f.vertices.length; i++) {
+      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Coil', vertices, faces, edges };
+}
+
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
   const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };

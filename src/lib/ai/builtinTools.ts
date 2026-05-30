@@ -2,7 +2,7 @@ import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody } from '../geometry/operations';
-import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis } from '../geometry/brep';
+import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -334,6 +334,31 @@ export function registerBuiltinTools(): void {
         assertNumber(args.width, 'width'),
         assertNumber(args.height, 'height'),
         assertNumber(args.depth, 'depth'),
+      );
+      useStore.getState().addDirectBody(body);
+      return { success: true, bodyId: body.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_coil',
+    description: 'Create a helical coil/spring (also the basis for threads) about +Y, and add it to the scene.',
+    parameters: {
+      type: 'object',
+      properties: {
+        coilRadius: { type: 'number', description: 'Helix radius (center to wire center) in mm' },
+        wireRadius: { type: 'number', description: 'Wire (cross-section) radius in mm' },
+        pitch: { type: 'number', description: 'Rise per turn in mm' },
+        turns: { type: 'number', description: 'Number of turns' },
+      },
+      required: ['coilRadius', 'wireRadius', 'pitch', 'turns'],
+    },
+    execute: async (args) => {
+      const body = createCoil(
+        assertNumber(args.coilRadius, 'coilRadius'),
+        assertNumber(args.wireRadius, 'wireRadius'),
+        assertNumber(args.pitch, 'pitch'),
+        assertNumber(args.turns, 'turns'),
       );
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id };

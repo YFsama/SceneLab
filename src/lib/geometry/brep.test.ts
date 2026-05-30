@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity } from './brep';
 
@@ -41,6 +41,31 @@ describe('computeThickness', () => {
     expect(t.minThickness).toBeCloseTo(1, 3); // the 1mm wall, not 50
     expect(t.isThin).toBe(true);
     expect(t.thinRegions).toBeGreaterThan(0);
+  });
+});
+
+describe('createCoil', () => {
+  it('builds a watertight helical coil of about the Pappus volume', () => {
+    const coilR = 10;
+    const wireR = 2;
+    const pitch = 8;
+    const turns = 3;
+    const coil = createCoil(coilR, wireR, pitch, turns, 48, 16);
+    const m = checkManifold(coil);
+    expect(m.isManifold).toBe(true);
+    expect(m.boundaryEdges).toBe(0);
+    // Pappus: V ≈ π·wireR² × helix length; faceting makes it a bit under.
+    const pathLen = turns * Math.hypot(2 * Math.PI * coilR, pitch);
+    const ideal = Math.PI * wireR * wireR * pathLen;
+    const vol = Math.abs(computeVolume(coil));
+    expect(vol).toBeGreaterThan(ideal * 0.9);
+    expect(vol).toBeLessThanOrEqual(ideal * 1.05);
+  });
+
+  it('rejects non-positive parameters and too-few facets', () => {
+    expect(() => createCoil(0, 2, 8, 3)).toThrow();
+    expect(() => createCoil(10, 2, 8, 0)).toThrow();
+    expect(() => createCoil(10, 2, 8, 3, 2, 16)).toThrow();
   });
 });
 
