@@ -11,8 +11,8 @@ describe('hooks module exports', () => {
     expect(typeof useFocusRestore).toBe('function');
   });
 
-  it('useEscapeClose should accept 2 parameters', () => {
-    expect(useEscapeClose.length).toBe(2);
+  it('useEscapeClose should require onClose (active is optional)', () => {
+    expect(useEscapeClose.length).toBe(1);
   });
 
   it('useFocusRestore should accept 0 parameters', () => {

@@ -104,7 +104,11 @@ export function getTool(id: string): ToolDefinition | undefined {
 }
 
 export function addCustomTool(tool: ToolDefinition): void {
-  customTools.push(tool);
+  // Upsert by id so re-adding (e.g. editing) a tool replaces it instead of
+  // accumulating duplicates that shadow each other in getTool/getAllTools.
+  const idx = customTools.findIndex((t) => t.id === tool.id);
+  if (idx !== -1) customTools[idx] = tool;
+  else customTools.push(tool);
 }
 
 export function removeCustomTool(id: string): void {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exportDXF, exportDXF3D } from './dxf';
-import { createBox } from '../geometry/brep';
+import { createBox, createCylinder } from '../geometry/brep';
 
 describe('exportDXF', () => {
   it('should start with SECTION HEADER', () => {
@@ -48,5 +48,16 @@ describe('exportDXF3D', () => {
     const result = exportDXF3D(body);
     // Should have numeric coordinate values
     expect(result).toMatch(/\d+\.\d+/);
+  });
+
+  it('fan-triangulates n-gon faces instead of dropping vertices', () => {
+    // A cylinder has two 32-gon caps. Writing only the first 4 vertices per
+    // face would lose the caps; fan triangulation must emit (n-2) faces each.
+    const segs = 32;
+    const result = exportDXF3D(createCylinder(5, 10, segs));
+    const faceCount = (result.match(/3DFACE/g) ?? []).length;
+    // 2 caps × (32-2) tris + 32 quad side faces × 2 tris each = 60 + 64 = 124.
+    const expected = 2 * (segs - 2) + segs * 2;
+    expect(faceCount).toBe(expected);
   });
 });

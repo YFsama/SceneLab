@@ -17,19 +17,16 @@ export function generateGCode(toolpath: Toolpath): string {
   lines.push({ code: `M3 S${toolpath.params.spindleSpeed}`, comment: 'Start spindle' });
   lines.push({ code: 'G4 P1', comment: 'Dwell 1s for spindle ramp-up' });
 
-  // Rapid moves (G0)
-  for (const point of toolpath.rapidMoves) {
-    lines.push({
-      code: `G0 X${point.x.toFixed(3)} Y${point.y.toFixed(3)} Z${point.z.toFixed(3)}`,
-    });
-  }
-
-  // Cutting moves (G1)
-  for (const point of toolpath.cuttingMoves) {
-    const feed = point.feedRate ?? toolpath.params.feedRate;
-    lines.push({
-      code: `G1 X${point.x.toFixed(3)} Y${point.y.toFixed(3)} Z${point.z.toFixed(3)} F${feed}`,
-    });
+  // Emit moves in their true execution order so the G-code matches the tool
+  // motion: rapids (G0) and cuts (G1) are interleaved, not batched.
+  for (const point of toolpath.points) {
+    const xyz = `X${point.x.toFixed(3)} Y${point.y.toFixed(3)} Z${point.z.toFixed(3)}`;
+    if (point.rapid) {
+      lines.push({ code: `G0 ${xyz}` });
+    } else {
+      const feed = point.feedRate ?? toolpath.params.feedRate;
+      lines.push({ code: `G1 ${xyz} F${feed}` });
+    }
   }
 
   // End
@@ -67,25 +64,25 @@ export function generateMultiToolGCode(toolpaths: Toolpath[]): string {
   return sections.join('\n');
 }
 
-/** Estimate machining time in minutes */
+const RAPID_RATE = 5000; // mm/min
+
+/** Estimate machining time in minutes. Returns 0 for non-positive feed rates. */
 export function estimateMachiningTime(toolpath: Toolpath): number {
   let totalTime = 0;
 
-  // Rapid moves at ~5000 mm/min
-  for (let i = 1; i < toolpath.rapidMoves.length; i++) {
-    const prev = toolpath.rapidMoves[i - 1]!;
-    const curr = toolpath.rapidMoves[i]!;
-    const dist = distance(prev, curr);
-    totalTime += dist / 5000;
-  }
-
-  // Cutting moves at feed rate
-  for (let i = 1; i < toolpath.cuttingMoves.length; i++) {
-    const prev = toolpath.cuttingMoves[i - 1]!;
-    const curr = toolpath.cuttingMoves[i]!;
-    const dist = distance(prev, curr);
-    const feed = curr.feedRate ?? toolpath.params.feedRate;
-    totalTime += dist / feed;
+  // Walk the moves in execution order so each segment's length reflects the
+  // real motion (including rapid↔cut transitions). Rapids move at the rapid
+  // rate; cuts at the per-move or default feed rate (guarding feed > 0).
+  const moves = toolpath.points;
+  for (let i = 1; i < moves.length; i++) {
+    const curr = moves[i]!;
+    const seg = distance(moves[i - 1]!, curr);
+    if (curr.rapid) {
+      totalTime += seg / RAPID_RATE;
+    } else {
+      const feed = curr.feedRate ?? toolpath.params.feedRate;
+      if (feed > 0) totalTime += seg / feed;
+    }
   }
 
   return totalTime;

@@ -1,9 +1,32 @@
 import type { Toolpath, ToolpathPoint, CAMParameters, ToolDefinition } from './types';
 import type { SolidBody, Vec3 } from '../geometry/types';
+import { convexHull2D } from '../geometry/convexHull';
 
 let nextId = 1;
 function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
+}
+
+/**
+ * Ordered move recorder. Toolpaths interleave rapids and cuts (rapid → plunge →
+ * cut → retract → …); keeping a single ordered list preserves that sequence so
+ * the emitted G-code matches the real tool motion. rapidMoves/cuttingMoves are
+ * derived by filtering, for any consumer that wants them split.
+ */
+class MoveList {
+  readonly points: ToolpathPoint[] = [];
+  rapid(p: { x: number; y: number; z: number }): void {
+    this.points.push({ ...p, rapid: true });
+  }
+  cut(p: { x: number; y: number; z: number; feedRate?: number }): void {
+    this.points.push({ ...p, rapid: false });
+  }
+  get rapidMoves(): ToolpathPoint[] {
+    return this.points.filter((m) => m.rapid);
+  }
+  get cuttingMoves(): ToolpathPoint[] {
+    return this.points.filter((m) => !m.rapid);
+  }
 }
 
 /** Generate a pocket toolpath for a rectangular area */
@@ -12,8 +35,7 @@ export function generatePocketToolpath(
   tool: ToolDefinition,
   params: CAMParameters,
 ): Toolpath {
-  const rapidMoves: ToolpathPoint[] = [];
-  const cuttingMoves: ToolpathPoint[] = [];
+  const m = new MoveList();
 
   const { min, max } = bounds;
   const stepover = Math.min(params.stepover, tool.diameter * 0.4);
@@ -31,16 +53,14 @@ export function generatePocketToolpath(
 
     while (y <= max.y - tool.diameter / 2) {
       if (forward) {
-        // Rapid to start
-        rapidMoves.push({ x: min.x + tool.diameter / 2, y, z: safeZ });
-        // Plunge
-        cuttingMoves.push({ x: min.x + tool.diameter / 2, y, z: currentZ });
-        // Cut across
-        cuttingMoves.push({ x: max.x - tool.diameter / 2, y, z: currentZ });
+        // Rapid to start, plunge, cut across
+        m.rapid({ x: min.x + tool.diameter / 2, y, z: safeZ });
+        m.cut({ x: min.x + tool.diameter / 2, y, z: currentZ });
+        m.cut({ x: max.x - tool.diameter / 2, y, z: currentZ });
       } else {
-        rapidMoves.push({ x: max.x - tool.diameter / 2, y, z: safeZ });
-        cuttingMoves.push({ x: max.x - tool.diameter / 2, y, z: currentZ });
-        cuttingMoves.push({ x: min.x + tool.diameter / 2, y, z: currentZ });
+        m.rapid({ x: max.x - tool.diameter / 2, y, z: safeZ });
+        m.cut({ x: max.x - tool.diameter / 2, y, z: currentZ });
+        m.cut({ x: min.x + tool.diameter / 2, y, z: currentZ });
       }
 
       forward = !forward;
@@ -48,7 +68,7 @@ export function generatePocketToolpath(
     }
 
     // Retract
-    rapidMoves.push({ x: min.x, y: min.y, z: safeZ });
+    m.rapid({ x: min.x, y: min.y, z: safeZ });
   }
 
   return {
@@ -57,9 +77,9 @@ export function generatePocketToolpath(
     operation: 'pocket',
     tool,
     params,
-    points: [...rapidMoves, ...cuttingMoves],
-    rapidMoves,
-    cuttingMoves,
+    points: m.points,
+    rapidMoves: m.rapidMoves,
+    cuttingMoves: m.cuttingMoves,
   };
 }
 
@@ -69,8 +89,7 @@ export function generateContourToolpath(
   tool: ToolDefinition,
   params: CAMParameters,
 ): Toolpath {
-  const rapidMoves: ToolpathPoint[] = [];
-  const cuttingMoves: ToolpathPoint[] = [];
+  const m = new MoveList();
 
   const safeZ = params.stockTop + 5;
 
@@ -96,22 +115,22 @@ export function generateContourToolpath(
   while (currentZ > params.stockBottom) {
     currentZ = Math.max(currentZ - contourDoc, params.stockBottom);
 
-    // Rapid to start
+    // Rapid to start, plunge
     const start = outline[0]!;
-    rapidMoves.push({ x: start.x, y: start.y, z: safeZ });
-    cuttingMoves.push({ x: start.x, y: start.y, z: currentZ });
+    m.rapid({ x: start.x, y: start.y, z: safeZ });
+    m.cut({ x: start.x, y: start.y, z: currentZ });
 
     // Follow outline
     for (let i = 1; i < outline.length; i++) {
       const pt = outline[i]!;
-      cuttingMoves.push({ x: pt.x, y: pt.y, z: currentZ });
+      m.cut({ x: pt.x, y: pt.y, z: currentZ });
     }
 
     // Close loop
-    cuttingMoves.push({ x: start.x, y: start.y, z: currentZ });
+    m.cut({ x: start.x, y: start.y, z: currentZ });
 
     // Retract
-    rapidMoves.push({ x: start.x, y: start.y, z: safeZ });
+    m.rapid({ x: start.x, y: start.y, z: safeZ });
   }
 
   return {
@@ -120,9 +139,9 @@ export function generateContourToolpath(
     operation: 'contour',
     tool,
     params,
-    points: [...rapidMoves, ...cuttingMoves],
-    rapidMoves,
-    cuttingMoves,
+    points: m.points,
+    rapidMoves: m.rapidMoves,
+    cuttingMoves: m.cuttingMoves,
   };
 }
 
@@ -132,23 +151,22 @@ export function generateDrillToolpath(
   tool: ToolDefinition,
   params: CAMParameters,
 ): Toolpath {
-  const rapidMoves: ToolpathPoint[] = [];
-  const cuttingMoves: ToolpathPoint[] = [];
+  const m = new MoveList();
 
   const safeZ = params.stockTop + 5;
   const retractZ = params.stockTop + 2;
 
   for (const hole of holes) {
     // Rapid to hole position
-    rapidMoves.push({ x: hole.x, y: hole.y, z: safeZ });
-    // Plunge
-    cuttingMoves.push({ x: hole.x, y: hole.y, z: -hole.depth });
+    m.rapid({ x: hole.x, y: hole.y, z: safeZ });
+    // Plunge: depth is measured down from the stock surface, not absolute Z.
+    m.cut({ x: hole.x, y: hole.y, z: params.stockTop - hole.depth });
     // Retract
-    rapidMoves.push({ x: hole.x, y: hole.y, z: retractZ });
+    m.rapid({ x: hole.x, y: hole.y, z: retractZ });
   }
 
   // Final retract
-  rapidMoves.push({ x: 0, y: 0, z: safeZ });
+  m.rapid({ x: 0, y: 0, z: safeZ });
 
   return {
     id: genId('tp'),
@@ -156,9 +174,9 @@ export function generateDrillToolpath(
     operation: 'drill',
     tool,
     params,
-    points: [...rapidMoves, ...cuttingMoves],
-    rapidMoves,
-    cuttingMoves,
+    points: m.points,
+    rapidMoves: m.rapidMoves,
+    cuttingMoves: m.cuttingMoves,
   };
 }
 
@@ -168,8 +186,7 @@ export function generateFaceToolpath(
   tool: ToolDefinition,
   params: CAMParameters,
 ): Toolpath {
-  const rapidMoves: ToolpathPoint[] = [];
-  const cuttingMoves: ToolpathPoint[] = [];
+  const m = new MoveList();
 
   const { min, max } = bounds;
   const stepover = tool.diameter * 0.6;
@@ -181,20 +198,20 @@ export function generateFaceToolpath(
 
   while (y <= max.y) {
     if (forward) {
-      rapidMoves.push({ x: min.x - tool.diameter, y, z: safeZ });
-      cuttingMoves.push({ x: min.x - tool.diameter, y, z: faceZ });
-      cuttingMoves.push({ x: max.x + tool.diameter, y, z: faceZ });
+      m.rapid({ x: min.x - tool.diameter, y, z: safeZ });
+      m.cut({ x: min.x - tool.diameter, y, z: faceZ });
+      m.cut({ x: max.x + tool.diameter, y, z: faceZ });
     } else {
-      rapidMoves.push({ x: max.x + tool.diameter, y, z: safeZ });
-      cuttingMoves.push({ x: max.x + tool.diameter, y, z: faceZ });
-      cuttingMoves.push({ x: min.x - tool.diameter, y, z: faceZ });
+      m.rapid({ x: max.x + tool.diameter, y, z: safeZ });
+      m.cut({ x: max.x + tool.diameter, y, z: faceZ });
+      m.cut({ x: min.x - tool.diameter, y, z: faceZ });
     }
 
     forward = !forward;
     y += stepover;
   }
 
-  rapidMoves.push({ x: 0, y: 0, z: safeZ });
+  m.rapid({ x: 0, y: 0, z: safeZ });
 
   return {
     id: genId('tp'),
@@ -202,9 +219,9 @@ export function generateFaceToolpath(
     operation: 'face',
     tool,
     params,
-    points: [...rapidMoves, ...cuttingMoves],
-    rapidMoves,
-    cuttingMoves,
+    points: m.points,
+    rapidMoves: m.rapidMoves,
+    cuttingMoves: m.cuttingMoves,
   };
 }
 
@@ -227,17 +244,8 @@ function getOutlineXY(body: SolidBody): Array<{ x: number; y: number }> {
     }
   }
 
-  // Sort by angle from centroid for a reasonable outline order
-  if (points.length < 3) return points;
-
-  const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
-  const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
-
-  points.sort((a, b) => {
-    const angleA = Math.atan2(a.y - cy, a.x - cx);
-    const angleB = Math.atan2(b.y - cy, b.x - cx);
-    return angleA - angleB;
-  });
-
-  return points;
+  // Order into the outer outline via a 2D convex hull. Sorting by angle from
+  // the centroid (the old approach) self-intersects for non-convex point sets;
+  // the hull is always a simple, non-crossing closed loop to cut around.
+  return convexHull2D(points);
 }

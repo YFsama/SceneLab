@@ -5,7 +5,8 @@ export function isString(v: unknown): v is string {
 }
 
 export function isNumber(v: unknown): v is number {
-  return typeof v === 'number' && !isNaN(v);
+  // Reject NaN and ±Infinity so bad inputs can't produce degenerate geometry.
+  return typeof v === 'number' && Number.isFinite(v);
 }
 
 export function isBoolean(v: unknown): v is boolean {

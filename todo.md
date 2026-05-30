@@ -114,9 +114,9 @@ See the original design document for full tech stack rationale. Key choices:
 ### Quality Rules
 
 - Every `lib/*` module has vitest tests
-- Workspace switch paths covered by Playwright E2E
 - AI tool calls have contract tests (input → expected output)
 - ESLint + tsc strict + zero warnings for merge
+- Workspace switch paths covered by Playwright E2E _(planned — not yet set up)_
 
 ---
 
@@ -136,3 +136,41 @@ See the original design document for full tech stack rationale. Key choices:
 ## Changelog
 
 - `2026-05-29`: Initial scaffold — Tauri 2 + React 19 + Vite 8 + Three.js + Zustand + TailwindCSS
+- `2026-05-29`: Hardening pass — fixed compile/test blockers and added build automation:
+  - Removed duplicate `computeVertexDistancePercentiles` in `brep.ts` (was breaking `tsc`/esbuild)
+  - Fixed sketch solver `applyDistance` (aliasing + wrong sign) and symmetric extrude offset
+  - `createBox` now names its body `Box`; fillet retains original faces; feature tree falls
+    back to an explicit profile when the parent sketch is empty
+  - `FeatureEditor` no longer mutates store state — added `updateFeature` store/tree action
+  - Added jsdom test environment (`vitest.config.ts`); all 192 unit tests pass
+  - Added `@tauri-apps/api` + plugin packages + CLI; created `capabilities/default.json`,
+    app icons, and the missing `dirs` crate; `cargo check`/`clippy`/`fmt` clean
+  - Added `.github/workflows/ci.yml` (lint/typecheck/test/build + Rust checks) and
+    `release.yml` (macOS arm64/x64, Windows, Linux desktop clients via tauri-action)
+- `2026-05-30`: Iterative improvement loop (tests 73 → 296, all green):
+  - Modeling: primitives box/cylinder/sphere/cone/torus; feature-tree evaluators
+    for revolve/fillet/chamfer/shell/linear&circular array/mirror; scale, rotate,
+    weld (mesh repair)
+  - New `lib/print` module: overhang/support (bed-excluded), support volume, mass,
+    build-volume fit + scale-to-fit, stability/tip-over, bed contact & warp,
+    recommended orientation + orientForPrint, filament/time estimate, print-readiness
+  - CAM feeds & speeds calculator
+  - IO: STL import (auto-weld) + OBJ import/export
+  - ~30 AI tools covering create/edit/pattern/import/analyze/optimize + CAM
+  - Store: `directBodies` so AI-created bodies survive recompute
+  - Rendering: discrete-GPU request, DPR clamp, pause-when-hidden
+  - Bug fixes: duplicate fn, sketch distance solver, symmetric extrude, outward
+    side normals, consistent winding (translation-invariant volume), bed-face
+    overhang overcount
+  - Continued (tests → 339): primitives torus/wedge; createRevolve watertight
+    (cross-section closure + caps); sketch line/circle/arc profiles (line chaining);
+    OBJ import/export, STL import auto-weld, mergeBodies, translate/rotate body ops;
+    print cost, layer count, bed contact, hole detection, print-readiness;
+    CAM feeds & speeds (lib + AI + panel UI); ~40 AI tools through a proper
+    tool-use loop (fixed: tool results now fed back to the model); store
+    directBodies + scene management (delete/clear/describe); current default model
+  - Later (tests → 362): full project round-trip (deserialize features + direct
+    bodies → loadProject → ProjectMenu open rebuilds geometry); persisted theme/
+    locale/API-key; AI system prompt; volumetric center of mass (mass props +
+    stability); bounding sphere; arrange-on-plate, stock block, measure/dimensions;
+    ~45 AI tools incl import/export/transform; finite-number & Vec3 input guards

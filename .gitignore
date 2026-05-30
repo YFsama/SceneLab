@@ -1,4 +1,29 @@
-# Logs
+# ─── Dependencies ─────────────────────────────────────────────
+node_modules
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+
+# ─── Build output ─────────────────────────────────────────────
+dist
+dist-ssr
+build
+*.local
+
+# ─── Vite / TypeScript caches ─────────────────────────────────
+.vite
+*.tsbuildinfo
+
+# ─── Tests & coverage ─────────────────────────────────────────
+coverage
+*.lcov
+/playwright-report/
+/test-results/
+/playwright/.cache/
+
+# ─── Logs ─────────────────────────────────────────────────────
 logs
 *.log
 npm-debug.log*
@@ -7,21 +32,31 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# ─── Environment / secrets ────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
 
-# Tauri
+# ─── Tauri / Rust ─────────────────────────────────────────────
+# NOTE: src-tauri/Cargo.lock and src-tauri/icons/ are committed on purpose
+# (a Tauri *app* should pin its lockfile, and the icons are build inputs).
 src-tauri/target/
+src-tauri/gen/
 src-tauri/WixTools/
 src-tauri/Frameworks/
 
-# OS
+# ─── OS cruft ─────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+Desktop.ini
 
-# Editor
+# ─── Editors / IDEs ───────────────────────────────────────────
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
@@ -30,10 +65,8 @@ Thumbs.db
 *.ntvs*
 *.njsproj
 *.sln
+*.swp
 *.sw?
 
-# Build
-*.tsbuildinfo
-
-# Lobsterfarm
+# ─── Misc ─────────────────────────────────────────────────────
 .lobsterfarm/

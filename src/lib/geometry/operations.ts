@@ -1,4 +1,5 @@
 import type { Vec3, SolidBody, Face, Edge } from './types';
+import { computeConvexHull } from './convexHull';
 
 let nextId = 1;
 function genId(prefix: string): string {
@@ -63,19 +64,11 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
     );
   }
 
-  // Rebuild faces, skipping faces that were filleted
+  // A fillet rounds an edge: the adjacent faces are retained (a real kernel
+  // would trim them back), and a blend face is inserted along each edge. Keep
+  // every original face and add the fillet faces on top.
   for (const face of body.faces) {
-    const hasFilletedEdge = face.vertices.some((_, i) => {
-      const next = (i + 1) % face.vertices.length;
-      const v1 = face.vertices[i]!;
-      const v2 = face.vertices[next]!;
-      return body.edges.some(
-        (e) => edgeSet.has(e.id) && edgeMatchesPoints(e, v1, v2),
-      );
-    });
-    if (!hasFilletedEdge) {
-      newFaces.push(face);
-    }
+    newFaces.push(face);
   }
 
   newFaces.push(...filletFaces);
@@ -244,12 +237,17 @@ export function applyLinearArray(
 ): SolidBody[] {
   if (count <= 0) throw new Error('Array count must be positive');
   if (spacing <= 0) throw new Error('Array spacing must be positive');
+  // Normalize the direction so `spacing` is honored as a true mm gap regardless
+  // of the direction vector's magnitude.
+  const dirLen = Math.hypot(direction.x, direction.y, direction.z);
+  if (dirLen < 1e-12) throw new Error('Array direction cannot be zero');
+  const dir = { x: direction.x / dirLen, y: direction.y / dirLen, z: direction.z / dirLen };
   const results: SolidBody[] = [];
   for (let i = 0; i < count; i++) {
     const offset = {
-      x: direction.x * spacing * i,
-      y: direction.y * spacing * i,
-      z: direction.z * spacing * i,
+      x: dir.x * spacing * i,
+      y: dir.y * spacing * i,
+      z: dir.z * spacing * i,
     };
     results.push(translateBody(body, offset, `${body.name} [${i}]`));
   }
@@ -273,6 +271,122 @@ export function applyCircularArray(
   return results;
 }
 
+/**
+ * Combine several bodies into one mesh by concatenation (fresh face/edge ids).
+ * For disjoint bodies this is a valid union; overlapping bodies are simply
+ * merged as-is (no boolean). Useful to export an array/pattern as a single mesh.
+ */
+export function mergeBodies(bodies: SolidBody[], name = 'Merged'): SolidBody {
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+  for (const b of bodies) {
+    vertices.push(...b.vertices);
+    for (const f of b.faces) {
+      faces.push({ id: genId('face'), vertices: f.vertices, normal: f.normal });
+    }
+    for (const e of b.edges) {
+      edges.push({ id: genId('edge'), start: e.start, end: e.end });
+    }
+  }
+  return { id: genId('body'), name, vertices, faces, edges };
+}
+
+/**
+ * Uniformly scale a body so its extent along `axis` equals `target` mm,
+ * scaled about its bounding-box center (preserves aspect ratio).
+ */
+export function scaleBodyToTarget(body: SolidBody, axis: 'x' | 'y' | 'z', target: number): SolidBody {
+  if (!Number.isFinite(target) || target <= 0) throw new Error('Target size must be positive');
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of body.vertices) {
+    min = Math.min(min, v[axis]);
+    max = Math.max(max, v[axis]);
+  }
+  const extent = max - min;
+  if (!(extent > 1e-9)) throw new Error('Body has zero extent along the axis');
+  const bb = computeBoundingBoxLocal(body);
+  return scaleBody(body, target / extent, {
+    x: (bb.min.x + bb.max.x) / 2,
+    y: (bb.min.y + bb.max.y) / 2,
+    z: (bb.min.z + bb.max.z) / 2,
+  });
+}
+
+function computeBoundingBoxLocal(body: SolidBody): { min: Vec3; max: Vec3 } {
+  const min: Vec3 = { x: Infinity, y: Infinity, z: Infinity };
+  const max: Vec3 = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const v of body.vertices) {
+    min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+    max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+  }
+  return { min, max };
+}
+
+/**
+ * Resize a body to exact per-axis dimensions (mm), scaling each axis
+ * independently about the bounding-box center. Unlike uniform scaleBody this
+ * changes the aspect ratio, so normals are transformed by the inverse-transpose
+ * of the (diagonal) scale — n → (nx/sx, ny/sy, nz/sz) normalized — to stay
+ * perpendicular to the deformed faces.
+ */
+export function resizeBody(body: SolidBody, target: Vec3): SolidBody {
+  if (![target.x, target.y, target.z].every((d) => Number.isFinite(d) && d > 0)) {
+    throw new Error('Target dimensions must be positive');
+  }
+  const bb = computeBoundingBoxLocal(body);
+  const ext = { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z };
+  // A zero-extent axis (flat part) can't be resized along that axis; keep it.
+  const sx = ext.x > 1e-9 ? target.x / ext.x : 1;
+  const sy = ext.y > 1e-9 ? target.y / ext.y : 1;
+  const sz = ext.z > 1e-9 ? target.z / ext.z : 1;
+  const cx = (bb.min.x + bb.max.x) / 2;
+  const cy = (bb.min.y + bb.max.y) / 2;
+  const cz = (bb.min.z + bb.max.z) / 2;
+
+  const p = (v: Vec3): Vec3 => ({
+    x: cx + (v.x - cx) * sx,
+    y: cy + (v.y - cy) * sy,
+    z: cz + (v.z - cz) * sz,
+  });
+  const transformNormal = (n: Vec3): Vec3 => normalize({ x: n.x / sx, y: n.y / sy, z: n.z / sz });
+
+  return {
+    id: genId('body'),
+    name: body.name,
+    vertices: body.vertices.map(p),
+    faces: body.faces.map((f) => ({ id: genId('face'), vertices: f.vertices.map(p), normal: transformNormal(f.normal) })),
+    edges: body.edges.map((e) => ({ id: genId('edge'), start: p(e.start), end: p(e.end) })),
+  };
+}
+
+/** Uniform scale of a body about an origin point (default world origin). */
+export function scaleBody(body: SolidBody, factor: number, origin: Vec3 = { x: 0, y: 0, z: 0 }): SolidBody {
+  if (factor <= 0) throw new Error('Scale factor must be positive');
+  const s = (v: Vec3): Vec3 => ({
+    x: origin.x + (v.x - origin.x) * factor,
+    y: origin.y + (v.y - origin.y) * factor,
+    z: origin.z + (v.z - origin.z) * factor,
+  });
+  return {
+    id: genId('body'),
+    name: body.name,
+    vertices: body.vertices.map(s),
+    faces: body.faces.map((f) => ({
+      id: genId('face'),
+      vertices: f.vertices.map(s),
+      // Uniform scaling preserves normal directions.
+      normal: { ...f.normal },
+    })),
+    edges: body.edges.map((e) => ({
+      id: genId('edge'),
+      start: s(e.start),
+      end: s(e.end),
+    })),
+  };
+}
+
 /** Mirror: reflect body across a plane */
 export function applyMirror(
   body: SolidBody,
@@ -290,11 +404,21 @@ export function applyMirror(
     };
   };
 
+  // A reflection is orientation-reversing: it flips each face's winding. To
+  // keep the mirrored solid right-side-out, reverse each face's vertex order
+  // (restoring CCW-outward winding) and reflect the normal *across the plane*
+  // (linear part of the reflection) — not merely negate it, which is only
+  // correct when the plane normal happens to align with the face normal.
+  const reflectDir = (v: Vec3): Vec3 => {
+    const k = 2 * (n.x * v.x + n.y * v.y + n.z * v.z);
+    return { x: v.x - n.x * k, y: v.y - n.y * k, z: v.z - n.z * k };
+  };
+
   const newVertices = body.vertices.map(mirrorVert);
   const newFaces = body.faces.map((f) => ({
     id: genId('face'),
-    vertices: f.vertices.map(mirrorVert),
-    normal: { x: -f.normal.x, y: -f.normal.y, z: -f.normal.z },
+    vertices: f.vertices.map(mirrorVert).reverse(),
+    normal: reflectDir(f.normal),
   }));
   const newEdges = body.edges.map((e) => ({
     id: genId('edge'),
@@ -313,7 +437,55 @@ export function applyMirror(
 
 // --- Helpers ---
 
-function translateBody(body: SolidBody, offset: Vec3, name: string): SolidBody {
+/**
+ * Replace a body with its 3D convex hull — the tightest convex solid that
+ * encloses all its vertices. Useful for collision proxies, clamp/grip shapes
+ * and simplifying messy or concave imported meshes. Returns the original body
+ * unchanged if the points are degenerate (coplanar / too few for a hull).
+ */
+export function convexHullBody(body: SolidBody, name: string = `${body.name} (hull)`): SolidBody {
+  const hull = computeConvexHull(body.vertices);
+  if (!hull) return body;
+  const vertices = hull.vertices.map((v) => ({ ...v }));
+  const faces: Face[] = hull.faces.map(([a, b, c]) => {
+    const va = vertices[a]!;
+    const vb = vertices[b]!;
+    const vc = vertices[c]!;
+    const n = normalize({
+      x: (vb.y - va.y) * (vc.z - va.z) - (vb.z - va.z) * (vc.y - va.y),
+      y: (vb.z - va.z) * (vc.x - va.x) - (vb.x - va.x) * (vc.z - va.z),
+      z: (vb.x - va.x) * (vc.y - va.y) - (vb.y - va.y) * (vc.x - va.x),
+    });
+    return { id: genId('face'), vertices: [va, vb, vc], normal: n };
+  });
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    for (let i = 0; i < f.vertices.length; i++) {
+      edges.push({ id: genId('edge'), start: f.vertices[i]!, end: f.vertices[(i + 1) % f.vertices.length]! });
+    }
+  }
+  return { id: genId('body'), name, vertices, faces, edges };
+}
+
+/**
+ * Center a body so its bounding-box center sits at the origin. Useful for
+ * normalizing imported meshes (STL/OBJ often arrive far from the origin), which
+ * makes orbiting and center-based transforms behave intuitively.
+ */
+export function centerBody(body: SolidBody): SolidBody {
+  if (body.vertices.length === 0) return body;
+  const bb = computeBoundingBoxLocal(body);
+  const offset: Vec3 = {
+    x: -(bb.min.x + bb.max.x) / 2,
+    y: -(bb.min.y + bb.max.y) / 2,
+    z: -(bb.min.z + bb.max.z) / 2,
+  };
+  if (Math.abs(offset.x) < 1e-9 && Math.abs(offset.y) < 1e-9 && Math.abs(offset.z) < 1e-9) return body;
+  return translateBody(body, offset);
+}
+
+/** Translate a body by an offset vector. */
+export function translateBody(body: SolidBody, offset: Vec3, name: string = body.name): SolidBody {
   const translate = (v: Vec3): Vec3 => ({
     x: v.x + offset.x,
     y: v.y + offset.y,
@@ -337,18 +509,19 @@ function translateBody(body: SolidBody, offset: Vec3, name: string): SolidBody {
   };
 }
 
-function rotateBody(
+/** Rotate a body by `angle` radians about an arbitrary axis (Rodrigues). */
+export function rotateBody(
   body: SolidBody,
   axis: { origin: Vec3; direction: Vec3 },
   angle: number,
-  name: string,
+  name: string = body.name,
 ): SolidBody {
   const dir = normalize(axis.direction);
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
 
-  const rotate = (v: Vec3): Vec3 => {
-    const p = { x: v.x - axis.origin.x, y: v.y - axis.origin.y, z: v.z - axis.origin.z };
+  // Rotate a direction vector about the axis direction (no translation).
+  const rotateDir = (p: Vec3): Vec3 => {
     const dot = dir.x * p.x + dir.y * p.y + dir.z * p.z;
     const cross = {
       x: dir.y * p.z - dir.z * p.y,
@@ -356,10 +529,16 @@ function rotateBody(
       z: dir.x * p.y - dir.y * p.x,
     };
     return {
-      x: axis.origin.x + p.x * cos + cross.x * sin + dir.x * dot * (1 - cos),
-      y: axis.origin.y + p.y * cos + cross.y * sin + dir.y * dot * (1 - cos),
-      z: axis.origin.z + p.z * cos + cross.z * sin + dir.z * dot * (1 - cos),
+      x: p.x * cos + cross.x * sin + dir.x * dot * (1 - cos),
+      y: p.y * cos + cross.y * sin + dir.y * dot * (1 - cos),
+      z: p.z * cos + cross.z * sin + dir.z * dot * (1 - cos),
     };
+  };
+
+  // Rotate a point: shift to the axis origin, rotate the offset, shift back.
+  const rotate = (v: Vec3): Vec3 => {
+    const r = rotateDir({ x: v.x - axis.origin.x, y: v.y - axis.origin.y, z: v.z - axis.origin.z });
+    return { x: axis.origin.x + r.x, y: axis.origin.y + r.y, z: axis.origin.z + r.z };
   };
 
   return {
@@ -369,7 +548,7 @@ function rotateBody(
     faces: body.faces.map((f) => ({
       id: genId('face'),
       vertices: f.vertices.map(rotate),
-      normal: rotate(f.normal),
+      normal: rotateDir(f.normal),
     })),
     edges: body.edges.map((e) => ({
       id: genId('edge'),
@@ -377,6 +556,46 @@ function rotateBody(
       end: rotate(e.end),
     })),
   };
+}
+
+/**
+ * Weld near-coincident vertices: snap to a tolerance grid and replace every
+ * reference (in faces and edges) with a single representative. Collapses the
+ * degenerate faces/edges that result, so an imported STL (per-triangle, float-
+ * jittered vertices) becomes a shared-vertex, watertight-friendly mesh.
+ */
+export function weldVertices(body: SolidBody, tolerance = 1e-4): SolidBody {
+  const inv = 1 / Math.max(tolerance, 1e-12);
+  const key = (v: Vec3) => `${Math.round(v.x * inv)},${Math.round(v.y * inv)},${Math.round(v.z * inv)}`;
+  const rep = new Map<string, Vec3>();
+  const weld = (v: Vec3): Vec3 => {
+    const k = key(v);
+    let r = rep.get(k);
+    if (!r) {
+      r = v;
+      rep.set(k, r);
+    }
+    return r;
+  };
+
+  const faces: Face[] = [];
+  for (const f of body.faces) {
+    const welded = f.vertices.map(weld);
+    // Drop vertices equal to their predecessor (collapsed edges).
+    const cleaned = welded.filter((v, i) => v !== welded[(i - 1 + welded.length) % welded.length]);
+    if (cleaned.length >= 3) {
+      faces.push({ id: f.id, vertices: cleaned, normal: f.normal });
+    }
+  }
+
+  const edges: Edge[] = [];
+  for (const e of body.edges) {
+    const s = weld(e.start);
+    const t = weld(e.end);
+    if (s !== t) edges.push({ id: e.id, start: s, end: t });
+  }
+
+  return { id: body.id, name: body.name, vertices: Array.from(rep.values()), faces, edges };
 }
 
 /** Deduplicate vertices using spatial hashing (O(n) instead of O(n^2)) */

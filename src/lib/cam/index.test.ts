@@ -4,6 +4,46 @@ import {
   generatePocketToolpath, generateContourToolpath, generateDrillToolpath, generateFaceToolpath,
   generateGCode, generateMultiToolGCode, estimateMachiningTime,
 } from './index';
+import { createBox } from '../geometry';
+
+const PARAMS = { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -5 };
+
+describe('CAM toolpath generators (contour/drill/face)', () => {
+  it('generateContourToolpath traces a body outline', () => {
+    const tp = generateContourToolpath(createBox(20, 10, 20), getTool('em-6mm')!, PARAMS);
+    expect(tp.operation).toBe('contour');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+    expect(generateGCode(tp)).toContain('G1');
+    // The XY outline is the convex hull → a box projects to its 4 rectangle
+    // corners (no self-intersecting angular-sort artifacts).
+    const distinctXY = new Set(tp.cuttingMoves.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`));
+    expect(distinctXY.size).toBe(4);
+  });
+
+  it('generateDrillToolpath visits each hole', () => {
+    const holes = [{ x: 0, y: 0, depth: 5 }, { x: 10, y: 5, depth: 5 }];
+    const tp = generateDrillToolpath(holes, getTool('em-3mm')!, PARAMS);
+    expect(tp.operation).toBe('drill');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+  });
+
+  it('drills hole depth measured from the stock top, not absolute Z', () => {
+    const raised = { ...PARAMS, stockTop: 12, stockBottom: 2 };
+    const tp = generateDrillToolpath([{ x: 0, y: 0, depth: 5 }], getTool('em-3mm')!, raised);
+    // Plunge should reach stockTop - depth = 12 - 5 = 7, not -5.
+    expect(tp.cuttingMoves[0]!.z).toBeCloseTo(7, 6);
+  });
+
+  it('generateFaceToolpath covers the stock top', () => {
+    const tp = generateFaceToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 20, y: 0, z: 20 } },
+      getTool('em-6mm')!,
+      PARAMS,
+    );
+    expect(tp.operation).toBe('face');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+  });
+});
 
 describe('CAM module exports', () => {
   it('should export tool library functions', () => {
@@ -45,6 +85,20 @@ describe('CAM module exports', () => {
     expect(tool).toBeUndefined();
   });
 
+  it('addCustomTool upserts by id rather than duplicating', () => {
+    const mk = (diameter: number) => ({
+      id: 'custom-upsert', name: 'Custom', type: 'endmill' as const,
+      diameter, fluteLength: 10, overallLength: 40, flutes: 2, material: 'carbide' as const,
+    });
+    const before = getAllTools().length;
+    addCustomTool(mk(4));
+    addCustomTool(mk(8)); // same id, edited diameter
+    expect(getAllTools().length).toBe(before + 1); // not + 2
+    expect(getTool('custom-upsert')?.diameter).toBe(8); // latest wins
+    removeCustomTool('custom-upsert');
+    expect(getTool('custom-upsert')).toBeUndefined();
+  });
+
   it('should generate pocket toolpath', () => {
     const tool = getTool('em-6mm')!;
     const tp = generatePocketToolpath(
@@ -71,6 +125,31 @@ describe('CAM module exports', () => {
     expect(gcode).toContain('M2');
   });
 
+  it('emits rapids and cuts interleaved in execution order, not batched', () => {
+    const tool = getTool('em-6mm')!;
+    const tp = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } },
+      tool,
+      { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -5 },
+    );
+    // Each motion line in execution order, tagged by its G-code.
+    const motion = generateGCode(tp)
+      .split('\n')
+      .map((l) => l.trim())
+      // Toolpath moves carry full X/Y/Z; the footer retract/return moves don't.
+      .filter((l) => (l.startsWith('G0 ') || l.startsWith('G1 ')) && /X.*Y.*Z/.test(l))
+      .map((l) => l.slice(0, 2));
+    // A real pocket plunges then cuts, so a G0 must be followed later by a G1
+    // (interleaving). The buggy batched form put every G0 before any G1.
+    const firstCut = motion.indexOf('G1');
+    const lastRapid = motion.lastIndexOf('G0');
+    expect(firstCut).toBeGreaterThan(-1);
+    expect(lastRapid).toBeGreaterThan(firstCut); // a rapid occurs after the first cut
+    // And the emitted order matches the toolpath's ordered points exactly.
+    const fromPoints = tp.points.map((p) => (p.rapid ? 'G0' : 'G1'));
+    expect(motion).toEqual(fromPoints);
+  });
+
   it('should estimate machining time', () => {
     const tool = getTool('em-6mm')!;
     const tp = generatePocketToolpath(
@@ -80,5 +159,17 @@ describe('CAM module exports', () => {
     );
     const time = estimateMachiningTime(tp);
     expect(time).toBeGreaterThan(0);
+  });
+
+  it('estimateMachiningTime stays finite when the feed rate is zero', () => {
+    const tool = getTool('em-6mm')!;
+    const tp = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } },
+      tool,
+      { feedRate: 0, plungeRate: 0, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -5 },
+    );
+    const time = estimateMachiningTime(tp);
+    expect(Number.isFinite(time)).toBe(true);
+    expect(time).toBeGreaterThanOrEqual(0);
   });
 });

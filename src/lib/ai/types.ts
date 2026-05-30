@@ -20,6 +20,8 @@ export interface AIConfig {
 export interface AIToolCall {
   name: string;
   arguments: Record<string, unknown>;
+  /** Anthropic tool_use block id, needed to return the matching tool_result. */
+  id?: string;
 }
 
 export interface AIToolResult {

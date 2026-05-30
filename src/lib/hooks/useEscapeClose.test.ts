@@ -7,9 +7,9 @@ describe('useEscapeClose', () => {
     expect(typeof useEscapeClose).toBe('function');
   });
 
-  it('should accept onClose and active parameters', () => {
-    // Verify the function signature
-    expect(useEscapeClose.length).toBe(2);
+  it('should accept onClose with an optional active parameter', () => {
+    // `active` is optional (defaults to true), so the reported arity is 1.
+    expect(useEscapeClose.length).toBe(1);
   });
 
   it('should handle Escape key behavior', () => {

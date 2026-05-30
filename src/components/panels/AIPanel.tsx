@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useT } from '../../lib/i18n';
-import { sendMessage, executeToolCall, registerBuiltinTools } from '../../lib/ai';
+import { sendMessageWithTools, executeToolCall, registerBuiltinTools } from '../../lib/ai';
 import type { AIMessage } from '../../lib/ai';
 import { showToast } from '../../lib/toast';
 import { Bot, Send, Settings, X, Loader2, Eye } from 'lucide-react';
@@ -12,7 +12,9 @@ export function AIPanel() {
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState('');
+  const [apiKey, setApiKey] = useState(
+    () => (typeof localStorage !== 'undefined' ? localStorage.getItem('scenelab.apiKey') ?? '' : ''),
+  );
   const [showSettings, setShowSettings] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [visionEnabled, setVisionEnabled] = useState(false);
@@ -29,6 +31,13 @@ export function AIPanel() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Persist the API key locally so it survives reloads.
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    if (apiKey) localStorage.setItem('scenelab.apiKey', apiKey);
+    else localStorage.removeItem('scenelab.apiKey');
+  }, [apiKey]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || loading) return;
@@ -63,22 +72,20 @@ export function AIPanel() {
         }
       }
 
-      const { text, toolCalls } = await sendMessage(apiKey, currentMessages, undefined, undefined, screenshot);
-
-      // Execute tool calls
-      const toolResults: string[] = [];
-      for (const toolCall of toolCalls) {
-        const result = await executeToolCall(toolCall);
-        if (result.error) {
-          toolResults.push(`Tool "${result.name}" error: ${result.error}`);
-        } else {
-          toolResults.push(`Tool "${result.name}": ${JSON.stringify(result.result)}`);
-        }
-      }
+      // Run the full tool-use loop so the model sees each tool's result.
+      const { text, toolResults } = await sendMessageWithTools(
+        apiKey,
+        currentMessages,
+        executeToolCall,
+        { screenshot },
+      );
 
       let assistantContent = text;
       if (toolResults.length > 0) {
-        assistantContent += '\n\n' + toolResults.join('\n');
+        const summary = toolResults
+          .map((r) => (r.error ? `Tool "${r.name}" error: ${r.error}` : `Tool "${r.name}": ${JSON.stringify(r.result)}`))
+          .join('\n');
+        assistantContent = `${text}${text ? '\n\n' : ''}${summary}`;
       }
 
       const assistantMessage: AIMessage = {
@@ -100,7 +107,7 @@ export function AIPanel() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, apiKey]);
+  }, [input, loading, apiKey, visionEnabled, t]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

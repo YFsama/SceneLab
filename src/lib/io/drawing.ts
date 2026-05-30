@@ -35,7 +35,11 @@ export function projectBody(
   upDir: Vec3,
   scale = 1,
 ): DrawingView {
-  const right = cross(viewDir, upDir);
+  // Screen right-axis for a right-handed view frame (right × up = viewDir,
+  // i.e. +Z out of the screen toward the viewer). Using cross(viewDir, up)
+  // instead would flip the drawing horizontally — a front view of +X would
+  // project to the left.
+  const right = cross(upDir, viewDir);
   const lines: DrawingLine[] = [];
   const arcs: DrawingArc[] = [];
 

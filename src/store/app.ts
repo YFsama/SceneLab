@@ -2,8 +2,21 @@ import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
-import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../lib/features/tree';
+import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import type { SolidBody } from '../lib/geometry/types';
+import {
+  createBox,
+  createCylinder,
+  createSphere,
+  createCone,
+  createTorus,
+  createWedge,
+  createPrism,
+  createTube,
+  createCoil,
+} from '../lib/geometry/brep';
+
+export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | 'wedge' | 'prism' | 'tube' | 'coil';
 
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
@@ -36,23 +49,40 @@ interface AppState {
   // Sketch drawing
   drawStart: { x: number; y: number } | null;
   setDrawStart: (p: { x: number; y: number } | null) => void;
-  addSketchLine: (x1: number, y1: number, x2: number, y2: number) => void;
-  addSketchRect: (x1: number, y1: number, x2: number, y2: number) => void;
-  addSketchCircle: (cx: number, cy: number, radius: number) => void;
-  addSketchArc: (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => void;
+  addSketchLine: (x1: number, y1: number, x2: number, y2: number) => string;
+  addSketchRect: (x1: number, y1: number, x2: number, y2: number) => string;
+  addSketchCircle: (cx: number, cy: number, radius: number) => string;
+  addSketchArc: (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => string;
   addSketchConstraint: (type: import('../lib/sketch/types').ConstraintType, entityIds: string[], value?: number) => void;
 
   // Feature tree
   featureTree: FeatureTree;
   addFeature: (feature: Feature) => void;
   removeFeature: (id: string) => void;
+  updateFeature: (id: string, mutator: (f: Feature) => Feature) => void;
   recomputeTree: () => void;
+  /** Combined render list: feature-tree bodies + direct bodies. */
   bodies: SolidBody[];
+  /** Bodies created/edited outside the feature tree (AI primitives, arrays, …). */
+  directBodies: SolidBody[];
+  addDirectBody: (body: SolidBody) => void;
+  addDirectBodies: (bodies: SolidBody[]) => void;
+  /** Create a default-sized primitive of `kind`, add it, and return its id. */
+  addPrimitive: (kind: PrimitiveKind) => string;
+  replaceBody: (oldId: string, newBody: SolidBody) => void;
+  removeDirectBody: (id: string) => void;
+  /** Delete all currently-selected direct bodies; returns how many were removed. */
+  deleteSelected: () => number;
+  clearScene: () => void;
+  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[]) => void;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
   setShowExtrudeDialog: (v: boolean) => void;
+  showRevolveDialog: boolean;
+  setShowRevolveDialog: (v: boolean) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
+  performRevolve: (angle: number) => void;
 
   // Viewport
   viewDirection: ViewDirection;
@@ -78,11 +108,33 @@ interface AppState {
   setProjectDirty: (d: boolean) => void;
 }
 
-export const useStore = create<AppState>((set, get) => ({
-  theme: 'dark',
-  locale: 'en',
-  setTheme: (theme) => set({ theme }),
-  setLocale: (locale) => set({ locale }),
+export const useStore = create<AppState>((set, get) => {
+  // Rebuild the render list from the feature tree (minus hidden bodies) plus
+  // any direct bodies, keeping objectIds in sync. Called after every change
+  // that affects geometry.
+  const persist = (key: string, value: string) => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+  };
+  const stored = (key: string): string | null =>
+    typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+
+  const recombine = () => {
+    const { featureTree, directBodies } = get();
+    const bodies = [...featureTree.getLatestBodies(), ...directBodies];
+    set({ bodies, objectIds: bodies.map((b) => b.id) });
+  };
+
+  return {
+  theme: (stored('scenelab.theme') as ThemeMode) ?? 'dark',
+  locale: (stored('scenelab.locale') as Locale) ?? 'en',
+  setTheme: (theme) => {
+    set({ theme });
+    persist('scenelab.theme', theme);
+  },
+  setLocale: (locale) => {
+    set({ locale });
+    persist('scenelab.locale', locale);
+  },
 
   workspace: 'model',
   setWorkspace: (workspace) => set({ workspace }),
@@ -101,30 +153,35 @@ export const useStore = create<AppState>((set, get) => ({
 
   addSketchLine: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addLine(sketch, x1, y1, x2, y2);
+    if (!sketch) return '';
+    const e = addLine(sketch, x1, y1, x2, y2);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    return e.id;
   },
 
   addSketchRect: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addRectangle(sketch, x1, y1, x2, y2);
+    if (!sketch) return '';
+    const e = addRectangle(sketch, x1, y1, x2, y2);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    // A rectangle is decomposed into lines; return the first edge's id.
+    return e.lines[0]?.id ?? '';
   },
 
   addSketchCircle: (cx, cy, radius) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addCircle(sketch, cx, cy, radius);
+    if (!sketch) return '';
+    const e = addCircle(sketch, cx, cy, radius);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    return e.id;
   },
 
   addSketchArc: (cx, cy, radius, startAngle, endAngle) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
-    addArc(sketch, cx, cy, radius, startAngle, endAngle);
+    if (!sketch) return '';
+    const e = addArc(sketch, cx, cy, radius, startAngle, endAngle);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+    return e.id;
   },
 
   addSketchConstraint: (type, entityIds, value) => {
@@ -136,41 +193,129 @@ export const useStore = create<AppState>((set, get) => ({
 
   featureTree: new FeatureTree(),
   bodies: [],
+  directBodies: [],
   addFeature: (feature) => {
     const tree = get().featureTree;
     tree.addFeature(feature);
     tree.recompute();
-    set({
-      featureTree: tree,
-      bodies: tree.getLatestBodies(),
-      objectIds: tree.getLatestBodies().map((b) => b.id),
-      projectDirty: true,
-    });
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
   },
   removeFeature: (id) => {
     const tree = get().featureTree;
     tree.removeFeature(id);
     tree.recompute();
-    const latestBodies = tree.getLatestBodies();
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
+  },
+  updateFeature: (id, mutator) => {
+    const tree = get().featureTree;
+    tree.updateFeature(id, mutator);
+    tree.recompute();
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
+  },
+  recomputeTree: () => {
+    get().featureTree.recompute();
+    recombine();
+  },
+
+  addDirectBody: (body) => {
+    set((s) => ({ directBodies: [...s.directBodies, body], projectDirty: true }));
+    recombine();
+  },
+  addPrimitive: (kind) => {
+    // Sensible default dimensions (mm) so a single click/call yields a usable part.
+    const body = ((): SolidBody => {
+      switch (kind) {
+        case 'box': return createBox(20, 20, 20);
+        case 'cylinder': return createCylinder(10, 20);
+        case 'sphere': return createSphere(10);
+        case 'cone': return createCone(10, 0, 20);
+        case 'torus': return createTorus(10, 3);
+        case 'wedge': return createWedge(20, 20, 20);
+        case 'prism': return createPrism(6, 10, 20);
+        case 'tube': return createTube(10, 6, 20);
+        case 'coil': return createCoil(10, 2, 6, 3);
+      }
+    })();
+    get().addDirectBody(body);
+    return body.id;
+  },
+  addDirectBodies: (newBodies) => {
+    set((s) => ({ directBodies: [...s.directBodies, ...newBodies], projectDirty: true }));
+    recombine();
+  },
+  replaceBody: (oldId, newBody) => {
+    const { directBodies } = get();
+    if (directBodies.some((b) => b.id === oldId)) {
+      // Stable case: editing a direct body replaces it in place.
+      set({ directBodies: directBodies.map((b) => (b.id === oldId ? newBody : b)), projectDirty: true });
+    } else {
+      // Editing a (transient) feature-tree body: keep the edit as a direct body.
+      // A recompute regenerates tree bodies with fresh ids, so we cannot stably
+      // hide the original here — the proper path for tree bodies is a feature.
+      set({ directBodies: [...directBodies, newBody], projectDirty: true });
+    }
+    recombine();
+  },
+  removeDirectBody: (id) => {
+    set((s) => ({
+      directBodies: s.directBodies.filter((b) => b.id !== id),
+      // Drop any stale selection of the removed body and mark the edit, like
+      // every other mutation, so unsaved-changes tracking stays consistent.
+      selectedIds: s.selectedIds.filter((sid) => sid !== id),
+      projectDirty: true,
+    }));
+    recombine();
+  },
+  deleteSelected: () => {
+    const { selectedIds, directBodies } = get();
+    if (selectedIds.length === 0) return 0;
+    const selected = new Set(selectedIds);
+    const remaining = directBodies.filter((b) => !selected.has(b.id));
+    const removed = directBodies.length - remaining.length;
+    if (removed === 0) return 0; // only feature-tree bodies selected — not deletable here
+    set((s) => ({
+      directBodies: remaining,
+      selectedIds: s.selectedIds.filter((id) => !selected.has(id)),
+      projectDirty: true,
+    }));
+    recombine();
+    return removed;
+  },
+  clearScene: () => {
     set({
-      featureTree: tree,
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
       projectDirty: true,
     });
   },
-  recomputeTree: () => {
-    const tree = get().featureTree;
+  loadProject: (features, name, directBodies = []) => {
+    const tree = new FeatureTree();
+    for (const f of features) tree.addFeature(f);
     tree.recompute();
-    const latestBodies = tree.getLatestBodies();
     set({
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
+      featureTree: tree,
+      directBodies,
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
+      projectName: name ?? get().projectName,
+      projectDirty: false,
     });
+    recombine();
   },
 
   showExtrudeDialog: false,
   setShowExtrudeDialog: (showExtrudeDialog) => set({ showExtrudeDialog }),
+  showRevolveDialog: false,
+  setShowRevolveDialog: (showRevolveDialog) => set({ showRevolveDialog }),
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
@@ -189,17 +334,38 @@ export const useStore = create<AppState>((set, get) => ({
     tree.addFeature(extrudeFeat);
     tree.recompute();
 
-    const latestBodies = tree.getLatestBodies();
     set({
       featureTree: tree,
-      bodies: latestBodies,
-      objectIds: latestBodies.map((b) => b.id),
       sketchActive: false,
       currentSketch: null,
       workspace: 'model',
       showExtrudeDialog: false,
       projectDirty: true,
     });
+    recombine();
+  },
+
+  performRevolve: (angle) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return;
+
+    const sketchFeat = createSketchFeature(sketch);
+    const revolveFeat = createRevolveFeature(angle, [sketchFeat.id]);
+
+    const tree = get().featureTree;
+    tree.addFeature(sketchFeat);
+    tree.addFeature(revolveFeat);
+    tree.recompute();
+
+    set({
+      featureTree: tree,
+      sketchActive: false,
+      currentSketch: null,
+      workspace: 'model',
+      showRevolveDialog: false,
+      projectDirty: true,
+    });
+    recombine();
   },
 
   viewDirection: 'iso',
@@ -220,4 +386,5 @@ export const useStore = create<AppState>((set, get) => ({
   setProjectName: (projectName) => set({ projectName }),
   projectDirty: false,
   setProjectDirty: (projectDirty) => set({ projectDirty }),
-}));
+  };
+});

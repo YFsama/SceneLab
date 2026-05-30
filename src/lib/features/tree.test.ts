@@ -1,6 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { FeatureTree, createSketchFeature, createExtrudeFeature } from './tree';
-import { createSketch, addRectangle } from '../sketch/engine';
+import {
+  FeatureTree,
+  createSketchFeature,
+  createExtrudeFeature,
+  createFilletFeature,
+  createChamferFeature,
+  createShellFeature,
+  createLinearArrayFeature,
+  createCircularArrayFeature,
+  createMirrorFeature,
+} from './tree';
+import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
+import { computeVolume } from '../geometry/brep';
+
+/** A standalone extrude feature that produces a box-like body (no parent sketch). */
+function boxExtrude() {
+  return createExtrudeFeature(
+    {
+      profile: [
+        { x: -5, y: 0, z: -5 },
+        { x: 5, y: 0, z: -5 },
+        { x: 5, y: 0, z: 5 },
+        { x: -5, y: 0, z: 5 },
+      ],
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 10,
+    },
+    [],
+  );
+}
 
 describe('FeatureTree', () => {
   it('should start empty', () => {
@@ -57,6 +85,22 @@ describe('FeatureTree', () => {
     expect(bodies[0]?.faces.length).toBeGreaterThan(0);
   });
 
+  it('re-evaluates geometry when a feature parameter is edited', () => {
+    // The extrude/revolve edit dialogs drive updateFeature + recompute; this
+    // locks that the edited parameter actually changes the resulting body.
+    const tree = new FeatureTree();
+    const ext = boxExtrude(); // 10×10 profile × distance 10 → volume 1000
+    tree.addFeature(ext);
+    tree.recompute();
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(1000, 3);
+
+    tree.updateFeature(ext.id, (f) =>
+      f.type === 'extrude' ? { ...f, params: { ...f.params, distance: 20 } } : f,
+    );
+    tree.recompute();
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(2000, 3);
+  });
+
   it('should get feature by id', () => {
     const tree = new FeatureTree();
     const sketch = createSketch('xy');
@@ -84,6 +128,141 @@ describe('FeatureTree', () => {
     tree.recompute();
     // Suppressed features should not produce results
     expect(tree.getResult(feat.id)).toBeUndefined();
+  });
+
+  it('fillet consumes its parent body (output stays a single solid)', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const baseEdges = tree.getResult(ext.id)!.bodies[0]!.edges.slice(0, 4).map((e) => e.id);
+
+    const fillet = createFilletFeature(baseEdges, 0.5, [ext.id]);
+    tree.addFeature(fillet);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    // The extrude body is consumed by the fillet — only one body remains.
+    expect(bodies.length).toBe(1);
+    expect(tree.getResult(fillet.id)?.bodies.length).toBe(1);
+  });
+
+  it('chamfer and shell evaluate without error', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const body = tree.getResult(ext.id)!.bodies[0]!;
+
+    const chamfer = createChamferFeature(body.edges.slice(0, 2).map((e) => e.id), 0.5, [ext.id]);
+    tree.addFeature(chamfer);
+    tree.recompute();
+    expect(tree.getResult(chamfer.id)?.error).toBeUndefined();
+    expect(tree.getLatestBodies().length).toBe(1);
+
+    const shell = createShellFeature(body.faces.slice(0, 1).map((f) => f.id), 1, [chamfer.id]);
+    tree.addFeature(shell);
+    tree.recompute();
+    expect(tree.getResult(shell.id)?.error).toBeUndefined();
+    // chamfer→shell chain still yields a single output solid.
+    expect(tree.getLatestBodies().length).toBe(1);
+  });
+
+  it('extrudes a sketched circle into a cylinder', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    addCircle(sketch, 0, 0, 5); // radius 5
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 10 },
+      [sf.id],
+    );
+    tree.addFeature(sf);
+    tree.addFeature(ef);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    expect(bodies).toHaveLength(1);
+    const ideal = Math.PI * 25 * 10; // πr²·h ≈ 785.4
+    const vol = Math.abs(computeVolume(bodies[0]!));
+    expect(vol).toBeGreaterThan(ideal * 0.97);
+    expect(vol).toBeLessThanOrEqual(ideal + 1e-6);
+  });
+
+  it('extrudes a square drawn as four lines added out of order', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xy');
+    // Add the four edges of a 10×10 square in a shuffled order. Naive endpoint
+    // concatenation would produce a self-intersecting profile; chaining fixes it.
+    addLine(sketch, 0, 0, 10, 0); // bottom
+    addLine(sketch, 0, 10, 0, 0); // left (reversed)
+    addLine(sketch, 10, 0, 10, 10); // right
+    addLine(sketch, 10, 10, 0, 10); // top
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 5 },
+      [sf.id],
+    );
+    tree.addFeature(sf);
+    tree.addFeature(ef);
+    tree.recompute();
+
+    const bodies = tree.getLatestBodies();
+    expect(bodies).toHaveLength(1);
+    // A correct (non-bowtie) square profile → 10·10·5 = 500.
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeCloseTo(500, 3);
+  });
+
+  it('records an error when a fillet has no parent body', () => {
+    const tree = new FeatureTree();
+    const fillet = createFilletFeature([], 1, ['missing']);
+    tree.addFeature(fillet);
+    tree.recompute();
+    expect(tree.getResult(fillet.id)?.error).toContain('parent body');
+  });
+
+  it('linear array produces N instances and consumes the parent', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    const arr = createLinearArrayFeature({ x: 1, y: 0, z: 0 }, 4, 20, [ext.id]);
+    tree.addFeature(arr);
+    tree.recompute();
+    expect(tree.getResult(arr.id)?.bodies.length).toBe(4);
+    // Original is consumed; the 4 instances are the only output.
+    expect(tree.getLatestBodies().length).toBe(4);
+  });
+
+  it('circular array produces N instances', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    const arr = createCircularArrayFeature(
+      { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } },
+      6,
+      [ext.id],
+    );
+    tree.addFeature(arr);
+    tree.recompute();
+    expect(tree.getLatestBodies().length).toBe(6);
+  });
+
+  it('mirror keeps the original by default, drops it when asked', () => {
+    const plane = { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } };
+
+    const keep = new FeatureTree();
+    const e1 = boxExtrude();
+    keep.addFeature(e1);
+    keep.addFeature(createMirrorFeature(plane, [e1.id])); // keepOriginal default true
+    keep.recompute();
+    expect(keep.getLatestBodies().length).toBe(2);
+
+    const drop = new FeatureTree();
+    const e2 = boxExtrude();
+    drop.addFeature(e2);
+    drop.addFeature(createMirrorFeature(plane, [e2.id], false));
+    drop.recompute();
+    expect(drop.getLatestBodies().length).toBe(1);
   });
 });
 

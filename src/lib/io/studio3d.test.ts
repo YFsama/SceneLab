@@ -1,7 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { serializeProject, saveToFile, loadFromFile } from './studio3d';
-import { createBox } from '../geometry/brep';
-import { FeatureTree } from '../features/tree';
+import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from './studio3d';
+import { createBox, computeVolume } from '../geometry/brep';
+import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
+import { createSketch, addRectangle } from '../sketch/engine';
+
+describe('project round-trip (parametric)', () => {
+  it('rebuilds the feature tree and geometry from a saved project', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      {
+        profile: [
+          { x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }, { x: 0, y: 0, z: 10 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 5,
+      },
+      [sf.id],
+    );
+
+    const json = saveToFile(serializeProject('Part', [sf, ef], []));
+    const features = deserializeFeatures(loadFromFile(json));
+
+    expect(features).toHaveLength(2);
+    expect(features[0]!.type).toBe('sketch');
+    // The sketch entities Map survived serialization.
+    const restoredSketch = features[0] as { sketch: { entities: Map<string, unknown> } };
+    expect(restoredSketch.sketch.entities.size).toBe(sketch.entities.size);
+
+    // Rebuilt tree produces the same solid.
+    const tree = new FeatureTree();
+    for (const f of features) tree.addFeature(f);
+    tree.recompute();
+    const bodies = tree.getLatestBodies();
+    expect(bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeCloseTo(500, 3); // 10×10×5
+  });
+});
 
 describe('serializeProject', () => {
   it('should serialize a project with features and bodies', () => {

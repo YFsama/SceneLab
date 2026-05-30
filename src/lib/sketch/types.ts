@@ -50,8 +50,13 @@ export type ConstraintType =
   | 'horizontal'
   | 'vertical'
   | 'parallel'
+  | 'perpendicular'
+  | 'coincident'
+  | 'fixed'
   | 'equal'
-  | 'distance';
+  | 'distance'
+  | 'radius'
+  | 'concentric';
 
 export interface SketchConstraint {
   id: string;

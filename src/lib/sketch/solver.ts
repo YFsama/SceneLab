@@ -21,6 +21,17 @@ export function solveConstraints(
     }
   }
 
+  // Anchor points named by 'fixed' constraints before solving, so every other
+  // constraint resolves against them instead of drifting the whole sketch.
+  for (const constraint of constraints.values()) {
+    if (constraint.type === 'fixed') {
+      for (const id of constraint.entityIds) {
+        const p = points.get(id);
+        if (p) p.fixed = true;
+      }
+    }
+  }
+
   // Iterative constraint resolution
   for (let iter = 0; iter < maxIterations; iter++) {
     let maxDelta = 0;
@@ -52,11 +63,53 @@ function applyConstraint(
       return applyVertical(constraint, points, entities);
     case 'parallel':
       return applyParallel(constraint, points, entities);
+    case 'perpendicular':
+      return applyPerpendicular(constraint, points, entities);
     case 'equal':
       return applyEqual(constraint, points, entities);
+    case 'coincident':
+      return applyCoincident(constraint, points);
     case 'distance':
-      return applyDistance(constraint, points, entities);
+      return applyDistance(constraint, points);
+    case 'radius':
+      return applyRadius(constraint, entities);
+    case 'concentric':
+      return applyConcentric(constraint, points, entities);
+    case 'fixed':
+      return 0; // Handled by anchoring points before the solve loop.
   }
+}
+
+/** Make two circles/arcs share a center by snapping their center points together. */
+function applyConcentric(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+  entities: Map<string, SketchEntity>,
+): number {
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+  const e1 = entities.get(id1);
+  const e2 = entities.get(id2);
+  const centerId = (e?: SketchEntity): string | undefined =>
+    e && (e.type === 'circle' || e.type === 'arc') ? e.centerId : undefined;
+  const c1 = centerId(e1);
+  const c2 = centerId(e2);
+  if (!c1 || !c2) return 0;
+  // Reuse the coincident point-snap on the two center points.
+  return applyCoincident({ ...constraint, entityIds: [c1, c2] }, points);
+}
+
+/** Set a circle/arc's radius to the constraint value (an absolute dimension). */
+function applyRadius(constraint: SketchConstraint, entities: Map<string, SketchEntity>): number {
+  const target = constraint.value;
+  if (target === undefined || target <= 0) return 0;
+  const [id] = constraint.entityIds;
+  if (!id) return 0;
+  const e = entities.get(id);
+  if (!e || (e.type !== 'circle' && e.type !== 'arc')) return 0;
+  const delta = Math.abs(e.radius - target);
+  e.radius = target;
+  return delta;
 }
 
 function getLineEndpoints(
@@ -92,17 +145,25 @@ function applyHorizontal(
 
   if (involved.length < 2) return 0;
 
-  // Average y
-  const avgY = involved.reduce((s, p) => s + p.y, 0) / involved.length;
+  // Snap to the anchored y when any endpoint is fixed (so the line aligns to
+  // the datum, not a drifting average); otherwise use the mean.
+  const targetY = sharedTarget(involved, (p) => p.y);
   for (const p of involved) {
     if (!p.fixed) {
-      const delta = Math.abs(p.y - avgY);
+      const delta = Math.abs(p.y - targetY);
       maxDelta = Math.max(maxDelta, delta);
-      p.y = avgY;
+      p.y = targetY;
     }
   }
 
   return maxDelta;
+}
+
+/** Target coordinate for an alignment: mean of fixed points if any, else mean of all. */
+function sharedTarget(pts: SolverPoint[], coord: (p: SolverPoint) => number): number {
+  const fixed = pts.filter((p) => p.fixed);
+  const pool = fixed.length > 0 ? fixed : pts;
+  return pool.reduce((s, p) => s + coord(p), 0) / pool.length;
 }
 
 function applyVertical(
@@ -123,12 +184,12 @@ function applyVertical(
 
   if (involved.length < 2) return 0;
 
-  const avgX = involved.reduce((s, p) => s + p.x, 0) / involved.length;
+  const targetX = sharedTarget(involved, (p) => p.x);
   for (const p of involved) {
     if (!p.fixed) {
-      const delta = Math.abs(p.x - avgX);
+      const delta = Math.abs(p.x - targetX);
       maxDelta = Math.max(maxDelta, delta);
-      p.x = avgX;
+      p.x = targetX;
     }
   }
 
@@ -170,10 +231,12 @@ function applyParallel(
     const nx = -dy1 / len1;
     const ny = dx1 / len1;
     const correction = halfCross / len1;
-    b1.x -= nx * correction;
-    b1.y -= ny * correction;
-    b2.x += nx * correction;
-    b2.y += ny * correction;
+    // Move endpoints so line 2's component perpendicular to line 1 is removed
+    // (cancelling the cross product, not amplifying it).
+    b1.x += nx * correction;
+    b1.y += ny * correction;
+    b2.x -= nx * correction;
+    b2.y -= ny * correction;
     maxDelta = Math.abs(correction) * 2;
   } else if (!b1.fixed) {
     // Move only b1
@@ -192,6 +255,55 @@ function applyParallel(
     b2.x -= nx * correction;
     b2.y -= ny * correction;
     maxDelta = Math.abs(correction);
+  }
+
+  return maxDelta;
+}
+
+function applyPerpendicular(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+  entities: Map<string, SketchEntity>,
+): number {
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+
+  const eps1 = getLineEndpoints(id1, entities, points);
+  const eps2 = getLineEndpoints(id2, entities, points);
+  if (!eps1 || !eps2) return 0;
+
+  const [a1, a2] = eps1;
+  const [b1, b2] = eps2;
+
+  // Unit tangent of line 1.
+  const dx1 = a2.x - a1.x;
+  const dy1 = a2.y - a1.y;
+  const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+  if (len1 < 1e-10) return 0;
+  const tx = dx1 / len1;
+  const ty = dy1 / len1;
+
+  // For perpendicular lines, line 2's direction must have no component along
+  // line 1's tangent — i.e. dot product 0. `dot` is that tangential component;
+  // remove it by sliding line 2's endpoints along the tangent.
+  const dot = (b2.x - b1.x) * tx + (b2.y - b1.y) * ty;
+
+  let maxDelta = 0;
+  if (!b1.fixed && !b2.fixed) {
+    const half = dot / 2;
+    b1.x += tx * half;
+    b1.y += ty * half;
+    b2.x -= tx * half;
+    b2.y -= ty * half;
+    maxDelta = Math.abs(dot);
+  } else if (!b1.fixed) {
+    b1.x += tx * dot;
+    b1.y += ty * dot;
+    maxDelta = Math.abs(dot);
+  } else if (!b2.fixed) {
+    b2.x -= tx * dot;
+    b2.y -= ty * dot;
+    maxDelta = Math.abs(dot);
   }
 
   return maxDelta;
@@ -221,34 +333,13 @@ function applyEqual(
 
     if (len1 < 1e-10 || len2 < 1e-10) return 0;
 
-    // Scale each line toward average length
-    const scale1 = avgLen / len1;
-    const scale2 = avgLen / len2;
-
-    const mid1 = midpoint(eps1[0], eps1[1]);
-    const mid2 = midpoint(eps2[0], eps2[1]);
-
-    let maxDelta = 0;
-    if (!eps1[0].fixed) {
-      eps1[0].x = mid1.x + (eps1[0].x - mid1.x) * scale1;
-      eps1[0].y = mid1.y + (eps1[0].y - mid1.y) * scale1;
-      maxDelta = Math.max(maxDelta, Math.abs(len1 - avgLen));
-    }
-    if (!eps1[1].fixed) {
-      eps1[1].x = mid1.x + (eps1[1].x - mid1.x) * scale1;
-      eps1[1].y = mid1.y + (eps1[1].y - mid1.y) * scale1;
-    }
-    if (!eps2[0].fixed) {
-      eps2[0].x = mid2.x + (eps2[0].x - mid2.x) * scale2;
-      eps2[0].y = mid2.y + (eps2[0].y - mid2.y) * scale2;
-      maxDelta = Math.max(maxDelta, Math.abs(len2 - avgLen));
-    }
-    if (!eps2[1].fixed) {
-      eps2[1].x = mid2.x + (eps2[1].x - mid2.x) * scale2;
-      eps2[1].y = mid2.y + (eps2[1].y - mid2.y) * scale2;
-    }
-
-    return maxDelta;
+    // Scale each line toward the average length about the right pivot: the
+    // anchored endpoint if one is fixed (so it stays put and the length is
+    // corrected in one step), otherwise the midpoint. A fully fixed line is
+    // left untouched.
+    const d1 = scaleLineToLength(eps1[0], eps1[1], avgLen, len1);
+    const d2 = scaleLineToLength(eps2[0], eps2[1], avgLen, len2);
+    return Math.max(d1, d2);
   }
 
   // Equal radius for circles
@@ -263,10 +354,47 @@ function applyEqual(
   return 0;
 }
 
+function applyCoincident(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+): number {
+  // Pin two points to the same location. Operates on point IDs directly.
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+
+  const p1 = points.get(id1);
+  const p2 = points.get(id2);
+  if (!p1 || !p2) return 0;
+
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 1e-12) return 0;
+
+  if (!p1.fixed && !p2.fixed) {
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    p1.x = mx;
+    p1.y = my;
+    p2.x = mx;
+    p2.y = my;
+    return d / 2;
+  } else if (!p1.fixed) {
+    p1.x = p2.x;
+    p1.y = p2.y;
+    return d;
+  } else if (!p2.fixed) {
+    p2.x = p1.x;
+    p2.y = p1.y;
+    return d;
+  }
+
+  return 0;
+}
+
 function applyDistance(
   constraint: SketchConstraint,
   points: Map<string, SolverPoint>,
-  _entities: Map<string, SketchEntity>,
 ): number {
   const targetDist = constraint.value;
   if (targetDist === undefined) return 0;
@@ -285,32 +413,65 @@ function applyDistance(
   const diff = currentDist - targetDist;
   const ratio = diff / currentDist / 2;
 
+  // Capture the separation vector before mutating either point — reading the
+  // live coordinates mid-update would feed an already-moved p1 back into p2.
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+
   let maxDelta = 0;
   if (!p1.fixed && !p2.fixed) {
-    p1.x += (p1.x - p2.x) * ratio;
-    p1.y += (p1.y - p2.y) * ratio;
-    p2.x -= (p1.x - p2.x) * ratio;
-    p2.y -= (p1.y - p2.y) * ratio;
+    // Move both endpoints toward each other (or apart) by half the error.
+    p1.x -= dx * ratio;
+    p1.y -= dy * ratio;
+    p2.x += dx * ratio;
+    p2.y += dy * ratio;
     maxDelta = Math.abs(diff) / 2;
   } else if (!p1.fixed) {
-    p1.x += (p1.x - p2.x) * ratio * 2;
-    p1.y += (p1.y - p2.y) * ratio * 2;
+    p1.x -= dx * ratio * 2;
+    p1.y -= dy * ratio * 2;
     maxDelta = Math.abs(diff);
   } else if (!p2.fixed) {
-    p2.x -= (p2.x - p1.x) * ratio * 2;
-    p2.y -= (p2.y - p1.y) * ratio * 2;
+    p2.x += dx * ratio * 2;
+    p2.y += dy * ratio * 2;
     maxDelta = Math.abs(diff);
   }
 
   return maxDelta;
 }
 
+/**
+ * Scale segment a–b to `targetLen` about the correct pivot: the fixed endpoint
+ * if exactly one is anchored (keeping it put), otherwise the midpoint. Returns
+ * the length error corrected (0 if both endpoints are fixed).
+ */
+function scaleLineToLength(a: SolverPoint, b: SolverPoint, targetLen: number, currentLen: number): number {
+  if (a.fixed && b.fixed) return 0;
+  let px: number;
+  let py: number;
+  if (a.fixed) {
+    px = a.x;
+    py = a.y;
+  } else if (b.fixed) {
+    px = b.x;
+    py = b.y;
+  } else {
+    px = (a.x + b.x) / 2;
+    py = (a.y + b.y) / 2;
+  }
+  const scale = targetLen / currentLen;
+  if (!a.fixed) {
+    a.x = px + (a.x - px) * scale;
+    a.y = py + (a.y - py) * scale;
+  }
+  if (!b.fixed) {
+    b.x = px + (b.x - px) * scale;
+    b.y = py + (b.y - py) * scale;
+  }
+  return Math.abs(currentLen - targetLen);
+}
+
 function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   return Math.sqrt(dx * dx + dy * dy);
-}
-
-function midpoint(a: { x: number; y: number }, b: { x: number; y: number }): { x: number; y: number } {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }

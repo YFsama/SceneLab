@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { Settings, Box, Ruler, Beaker, Weight, Layers, RulerIcon, Move, BarChart, Network, Maximize, Shield, Torus, Gauge, Crosshair, RefreshCw, GitBranch, Hash, TrendingUp, CornerDownRight, AlertTriangle, Zap, ArrowUpDown, Triangle, CheckCircle, Activity, Proportions, Ratio, Shapes, Minus, Diamond, Orbit, FlipHorizontal, Circle, ArrowRight, Pentagon, Hexagon, Waves, Columns, Anchor, Percent, Sliders, ArrowDownUp, Grid3X3, Network as NetworkIcon, Sigma, AreaChart, Target, Compass, Navigation, TrendingDown, Waypoints, BoxSelect, Layers as LayersIcon, MapPin, GitCommit, GitBranch as GitBranchIcon, GitMerge, GitPullRequest, Spline, Crosshair as CrosshairIcon, Ruler as RulerIcon2, CircleDot, Waypoints as WaypointsIcon, ArrowUpRight, TrendingUp as TrendingUpIcon, Waves as WavesIcon, Move as MoveIcon, Layers as LayersIcon2, Waypoints as WaypointsIcon2, Circle as CircleIcon, ArrowDown as ArrowDownIcon, ArrowRight as ArrowRightIcon, Spline as SplineIcon, Move as MoveIcon2, Square as SquareIcon, Diamond as DiamondIcon, CornerDownLeft, Move as MoveIcon3, ArrowRightLeft, Spline as SplineIcon2, Move as MoveIcon4, Square as SquareIcon2, Diamond as DiamondIcon2, Triangle as TriangleIcon, ArrowDown as ArrowDownIcon2, ArrowRightLeft as ArrowRightLeftIcon, Spline as SplineIcon3, Move as MoveIcon5, Square as SquareIcon3, Diamond as DiamondIcon3, Triangle as TriangleIcon2, ArrowDown as ArrowDownIcon3, ArrowRightLeft as ArrowRightLeftIcon2, Spline as SplineIcon4, Move as MoveIcon6, Square as SquareIcon4, Diamond as DiamondIcon4, Triangle as TriangleIcon3, ArrowDown as ArrowDownIcon4, ArrowRightLeft as ArrowRightLeftIcon3, Spline as SplineIcon5 } from 'lucide-react';
-import { computeBoundingBox, computeBoundingBoxCenter, computeCentroid, computeVolume, computeSurfaceArea, computeTotalEdgeLength, computeBoundingBoxDiagonal, computeMeshStatistics, computeAverageVertexDegree, computeLargestFace, checkManifold, computeTopology, computeMeshQuality, checkWindingOrder, computeAdjacency, computeValenceDistribution, computeCurvature, computeDihedralAngles, computeWorstFaceAspectRatio, computeMaxEdgeCurvature, checkNormalConsistency, computeEdgeAngleDistribution, computeRegularFaceCount, computeEdgeLengthDistribution, computeFaceAngleDistribution, computeEdgeLengthRatio, computeFaceTypeCount, computeEdgeTypeCount, computeVertexTypeCount, computeMeshGenus, computeSymmetry, computeCompactness, computeElongation, computeConvexity, computeSolidity, computeRoughness, computeThickness, computeCenterOfMassOffset, computeVolumeRatios, computeAspectRatioDistribution, computeSkewnessDistribution, computeFaceEdgeCountDistribution, computeVertexValenceDistribution, computeEdgeLengthStatistics, computeFaceAreaStatistics, computeVertexDistanceStatistics, computeEdgeAngleStatistics, computeFaceNormalStatistics, computeEdgeNormalStatistics, computeEdgeDihedralStatistics, computeEdgeLengthPercentiles, computeFaceAreaPercentiles, computeVertexDistancePercentiles, computeEdgeDihedralPercentiles, computeEdgeAnglePercentiles, computeFaceNormalPercentiles, computeEdgeTangentPercentiles, computeEdgeCurvaturePercentiles, computeVertexValencePercentiles } from '../../lib/geometry/brep';
+import { analyzeOverhangs, analyzeStability, recommendOrientation, estimatePrintJob, estimateSupportVolume, analyzeBedContact } from '../../lib/print';
+import { computeBoundingBox, computeBoundingBoxCenter, computeCentroid, computeVolume, computeSurfaceArea, computeTotalEdgeLength, computeBoundingBoxDiagonal, computeMeshStatistics, computeAverageVertexDegree, computeLargestFace, checkManifold, computeTopology, computeMeshQuality, checkWindingOrder, computeAdjacency, computeValenceDistribution, computeCurvature, computeDihedralAngles, computeWorstFaceAspectRatio, computeMaxEdgeCurvature, checkNormalConsistency, computeEdgeAngleDistribution, computeRegularFaceCount, computeEdgeLengthDistribution, computeFaceAngleDistribution, computeEdgeLengthRatio, computeFaceTypeCount, computeEdgeTypeCount, computeVertexTypeCount, computeMeshGenus, computeSymmetry, computeCompactness, computeElongation, computeConvexity, computeSolidity, computeRoughness, computeThickness, computeCenterOfMassOffset, computePrincipalMoments, computeVolumeRatios, computeAspectRatioDistribution, computeSkewnessDistribution, computeFaceEdgeCountDistribution, computeVertexValenceDistribution, computeEdgeLengthStatistics, computeFaceAreaStatistics, computeVertexDistanceStatistics, computeEdgeAngleStatistics, computeFaceNormalStatistics, computeEdgeNormalStatistics, computeEdgeDihedralStatistics, computeEdgeLengthPercentiles, computeFaceAreaPercentiles, computeVertexDistancePercentiles, computeEdgeDihedralPercentiles, computeEdgeAnglePercentiles, computeFaceNormalPercentiles, computeEdgeTangentPercentiles, computeEdgeCurvaturePercentiles, computeVertexValencePercentiles } from '../../lib/geometry/brep';
 
 const materials: Record<string, { name: string; density: number }> = {
   steel: { name: 'Steel', density: 7.85 },
@@ -130,13 +131,63 @@ export function PropertiesPanel() {
                   const volume = computeVolume(selectedBody);
                   const density = materials[material]?.density ?? 7.85;
                   const mass = (volume / 1000) * density; // mm³ to cm³, then * density
+                  // Principal moments of inertia about the CoM (g·mm²); density
+                  // converted g/cm³ → g/mm³ so the units come out as g·mm².
+                  const pm = computePrincipalMoments(selectedBody, density / 1000);
                   return (
-                    <p className="text-xs text-text-secondary">
-                      {mass.toFixed(2)} g ({(mass / 1000).toFixed(4)} kg)
-                    </p>
+                    <>
+                      <p className="text-xs text-text-secondary">
+                        {mass.toFixed(2)} g ({(mass / 1000).toFixed(4)} kg)
+                      </p>
+                      <p className="text-xs text-text-secondary">
+                        {t('panel.inertia')}: {pm.moments.map((m) => m.toExponential(2)).join(' / ')} g·mm²
+                      </p>
+                    </>
                   );
                 })()}
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-1 text-xs text-text-muted">
+                <Box size={12} />
+                <span>{t('panel.printAnalysis')}</span>
+              </div>
+              {(() => {
+                const oh = analyzeOverhangs(selectedBody);
+                const st = analyzeStability(selectedBody);
+                const orient = recommendOrientation(selectedBody);
+                const job = estimatePrintJob(selectedBody, { material: 'PLA' });
+                const support = estimateSupportVolume(selectedBody);
+                const bed = analyzeBedContact(selectedBody);
+                const supportFaces = oh.faces.filter((f) => f.needsSupport).length;
+                return (
+                  <div className="pl-4 text-xs text-text-secondary space-y-0.5">
+                    <p className="flex items-center gap-1">
+                      <AlertTriangle size={10} />
+                      {t('panel.needsSupport')}: {supportFaces} {`(< ${oh.thresholdDeg}°)`}
+                    </p>
+                    <p>{t('panel.overhangArea')}: {oh.overhangArea.toFixed(2)} mm²</p>
+                    <p>{t('panel.supportVolume')}: {(support.supportVolumeMm3 / 1000).toFixed(2)} cm³</p>
+                    <p className="flex items-center gap-1">
+                      <Compass size={10} />
+                      {t('panel.bestOrientation')}: {orient.best.label}
+                    </p>
+                    <p className="flex items-center gap-1">
+                      <Anchor size={10} />
+                      <span className={st.stable ? 'text-success' : 'text-warning'}>
+                        {st.stable ? t('panel.stable') : t('panel.unstable')}
+                      </span>
+                    </p>
+                    <p>{t('panel.tipMargin')}: {st.marginMm.toFixed(2)} mm</p>
+                    <p>{t('panel.tipAngle')}: {st.tippingAngleDeg.toFixed(1)}°</p>
+                    <p>{t('panel.footprint')}: {st.footprintArea.toFixed(2)} mm²</p>
+                    <p>{t('panel.filament')}: {job.filamentLengthM.toFixed(2)} m / {job.filamentMassG.toFixed(1)} g (PLA)</p>
+                    <p>{t('panel.printTime')}: ~{job.printTimeMinutes.toFixed(0)} min</p>
+                    <p>{t('panel.bedContact')}: {bed.contactArea.toFixed(0)} mm² ({t('panel.tallness')} {bed.tallness.toFixed(1)})</p>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="space-y-1">

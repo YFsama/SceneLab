@@ -1,22 +1,74 @@
 import type { Vec3, SolidBody, Face, Edge, ExtrudeParams, RevolveParams } from './types';
+import { computeConvexHull } from './convexHull';
 
 let nextId = 1;
+
+/**
+ * Unique undirected edges of a face list (deduplicated by vertex coordinate).
+ * Use this instead of pushing one edge per face-side, which double-counts
+ * shared edges and corrupts edge-based metrics (count, total length, genus).
+ */
+function buildEdgesFromFaces(faces: Face[]): Edge[] {
+  const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
+  const vkey = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
+  const seen = new Set<string>();
+  const edges: Edge[] = [];
+  for (const f of faces) {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const a = vs[i]!;
+      const b = vs[(i + 1) % vs.length]!;
+      const ka = vkey(a);
+      const kb = vkey(b);
+      const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ id: genId('edge'), start: a, end: b });
+    }
+  }
+  return edges;
+}
+
 function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
+}
+
+/**
+ * Reverse each face's vertex order where it disagrees with the (outward) face
+ * normal, so the whole mesh is consistently CCW-outward. This makes the vector
+ * areas sum to zero, which is what keeps computeVolume correct and
+ * translation-invariant.
+ */
+function alignWindingToNormal(faces: Face[]): void {
+  for (const f of faces) {
+    if (f.vertices.length < 3) continue;
+    const a = f.vertices[0]!;
+    const b = f.vertices[1]!;
+    const c = f.vertices[2]!;
+    const gx = (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y);
+    const gy = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
+    const gz = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (gx * f.normal.x + gy * f.normal.y + gz * f.normal.z < 0) {
+      f.vertices.reverse();
+    }
+  }
 }
 
 export function createExtrude(params: ExtrudeParams): SolidBody {
   const { profile, direction, distance, symmetric } = params;
   const n = profile.length;
   if (n < 3) throw new Error('Profile must have at least 3 points');
-  if (distance <= 0) throw new Error('Distance must be positive');
+  if (!Number.isFinite(distance) || distance <= 0) throw new Error('Distance must be positive');
 
   // Validate direction vector is not zero
   const dirLen = Math.sqrt(direction.x ** 2 + direction.y ** 2 + direction.z ** 2);
   if (dirLen < 1e-10) throw new Error('Direction vector cannot be zero');
 
-  const halfDist = symmetric ? distance / 2 : distance;
-  const offset = symmetric ? halfDist : distance;
+  // The top face is always the full `distance` away from the bottom along the
+  // direction. For a symmetric extrude both faces are then shifted back by half
+  // the distance so the profile plane ends up centered between them.
+  const halfDist = distance / 2;
+  const offset = distance;
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
@@ -46,6 +98,18 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
 
   vertices.push(...bottomVerts, ...topVerts);
 
+  // Centroid of the prism, used to orient side normals outward regardless of
+  // the profile's winding direction.
+  const center: Vec3 = { x: 0, y: 0, z: 0 };
+  for (const v of vertices) {
+    center.x += v.x;
+    center.y += v.y;
+    center.z += v.z;
+  }
+  center.x /= vertices.length;
+  center.y /= vertices.length;
+  center.z /= vertices.length;
+
   // Bottom face
   const bottomNormal: Vec3 = {
     x: -direction.x,
@@ -74,6 +138,18 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
     const t2 = topVerts[next]!;
 
     const sideNormal = computeFaceNormal(b1, b2, t2);
+    // Flip to point away from the centroid (outward) if computeFaceNormal
+    // produced an inward normal for this winding.
+    const fc = {
+      x: (b1.x + b2.x + t2.x + t1.x) / 4 - center.x,
+      y: (b1.y + b2.y + t2.y + t1.y) / 4 - center.y,
+      z: (b1.z + b2.z + t2.z + t1.z) / 4 - center.z,
+    };
+    if (sideNormal.x * fc.x + sideNormal.y * fc.y + sideNormal.z * fc.z < 0) {
+      sideNormal.x = -sideNormal.x;
+      sideNormal.y = -sideNormal.y;
+      sideNormal.z = -sideNormal.z;
+    }
     faces.push({
       id: genId('face'),
       vertices: [b1, b2, t2, t1],
@@ -87,6 +163,8 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
     // Vertical edge
     edges.push({ id: genId('edge'), start: b1, end: t1 });
   }
+
+  alignWindingToNormal(faces);
 
   return {
     id: genId('body'),
@@ -114,11 +192,17 @@ export function createRevolve(params: RevolveParams): SolidBody {
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
-  const edges: Edge[] = [];
+
+  // A full turn wraps onto itself, so the final ring must reuse ring 0 instead
+  // of a coincident duplicate — otherwise the seam edges are used by one face
+  // each and the mesh is non-manifold (not watertight). Partial revolves keep
+  // the extra end ring so the open ends can be capped.
+  const fullTurn = Math.abs(Math.abs(angle) - Math.PI * 2) < 1e-9;
+  const ringCount = fullTurn ? segments : segments + 1;
 
   // Generate vertices by rotating profile around axis
   const rings: Vec3[][] = [];
-  for (let s = 0; s <= segments; s++) {
+  for (let s = 0; s < ringCount; s++) {
     const a = angleStep * s;
     const cos = Math.cos(a);
     const sin = Math.sin(a);
@@ -158,51 +242,63 @@ export function createRevolve(params: RevolveParams): SolidBody {
     vertices.push(...ring);
   }
 
-  // Generate faces between adjacent rings
+  // Side faces, wrapping the profile loop (pNext) so the cross-section closes.
+  // On a full turn the band after the last ring wraps back to ring 0.
   for (let s = 0; s < segments; s++) {
-    for (let p = 0; p < n - 1; p++) {
-      const i0 = s * n + p;
-      const i1 = s * n + p + 1;
-      const i2 = (s + 1) * n + p + 1;
-      const i3 = (s + 1) * n + p;
-
-      const v0 = vertices[i0]!;
-      const v1 = vertices[i1]!;
-      const v2 = vertices[i2]!;
-      const v3 = vertices[i3]!;
-
-      const normal = computeFaceNormal(v0, v1, v2);
-      faces.push({
-        id: genId('face'),
-        vertices: [v0, v1, v2, v3],
-        normal,
-      });
-
-      edges.push({ id: genId('edge'), start: v0, end: v1 });
-      edges.push({ id: genId('edge'), start: v0, end: v3 });
+    const nextRing = (s + 1) % ringCount;
+    for (let p = 0; p < n; p++) {
+      const pNext = (p + 1) % n;
+      const v0 = vertices[s * n + p]!;
+      const v1 = vertices[s * n + pNext]!;
+      const v2 = vertices[nextRing * n + pNext]!;
+      const v3 = vertices[nextRing * n + p]!;
+      faces.push({ id: genId('face'), vertices: [v0, v1, v2, v3], normal: computeFaceNormal(v0, v1, v2) });
     }
-    // Close ring edge
-    const lastInRing = s * n + n - 1;
-    const firstInRing = s * n;
-    edges.push({ id: genId('edge'), start: vertices[lastInRing]!, end: vertices[firstInRing]! });
   }
 
-  // End cap edges
-  for (let p = 0; p < n - 1; p++) {
-    edges.push({ id: genId('edge'), start: vertices[p]!, end: vertices[p + 1]! });
-    edges.push({ id: genId('edge'), start: vertices[segments * n + p]!, end: vertices[segments * n + p + 1]! });
+  // For a partial revolution the two ends are open — cap them with the profile
+  // polygon at the start and end rings (a full turn wraps and needs no caps).
+  if (!fullTurn && n >= 3) {
+    const center = { x: 0, y: 0, z: 0 };
+    for (const v of vertices) {
+      center.x += v.x / vertices.length;
+      center.y += v.y / vertices.length;
+      center.z += v.z / vertices.length;
+    }
+    const capFace = (ringOffset: number) => {
+      const loop = vertices.slice(ringOffset, ringOffset + n);
+      const gn = computeFaceNormal(loop[0]!, loop[1]!, loop[2]!);
+      const fc = { x: 0, y: 0, z: 0 };
+      for (const v of loop) {
+        fc.x += v.x / n;
+        fc.y += v.y / n;
+        fc.z += v.z / n;
+      }
+      const outward =
+        gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z) < 0
+          ? { x: -gn.x, y: -gn.y, z: -gn.z }
+          : gn;
+      faces.push({ id: genId('face'), vertices: loop, normal: outward });
+    };
+    capFace(0);
+    capFace(segments * n);
   }
+
+  alignWindingToNormal(faces);
 
   return {
     id: genId('body'),
     name: 'Revolve',
     vertices,
     faces,
-    edges,
+    edges: buildEdgesFromFaces(faces),
   };
 }
 
 export function createBox(width: number, height: number, depth: number): SolidBody {
+  if (![width, height, depth].every((d) => Number.isFinite(d) && d > 0)) {
+    throw new Error('Box dimensions must be positive');
+  }
   const hw = width / 2;
   const hd = depth / 2;
 
@@ -213,12 +309,540 @@ export function createBox(width: number, height: number, depth: number): SolidBo
     { x: -hw, y: 0, z: hd },
   ];
 
-  return createExtrude({
-    profile,
-    direction: { x: 0, y: 1, z: 0 },
-    distance: height,
-    symmetric: false,
+  return {
+    ...createExtrude({
+      profile,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: height,
+      symmetric: false,
+    }),
+    name: 'Box',
+  };
+}
+
+/** Axis-aligned stock block enclosing a body's bounding box, with optional margin. */
+export function createBoundingBoxBody(body: SolidBody, margin = 0): SolidBody {
+  if (!Number.isFinite(margin) || margin < 0) throw new Error('Margin must be non-negative');
+  if (body.vertices.length === 0) throw new Error('Body has no geometry');
+  const bb = computeBoundingBox(body);
+  const y0 = bb.min.y - margin;
+  const profile: Vec3[] = [
+    { x: bb.min.x - margin, y: y0, z: bb.min.z - margin },
+    { x: bb.max.x + margin, y: y0, z: bb.min.z - margin },
+    { x: bb.max.x + margin, y: y0, z: bb.max.z + margin },
+    { x: bb.min.x - margin, y: y0, z: bb.max.z + margin },
+  ];
+  return {
+    ...createExtrude({
+      profile,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: bb.max.y - bb.min.y + 2 * margin,
+      symmetric: false,
+    }),
+    name: 'Stock',
+  };
+}
+
+/** Circular cylinder along +Y, approximated by an `segments`-gon prism. */
+export function createCylinder(radius: number, height: number, segments = 32): SolidBody {
+  if (radius <= 0) throw new Error('Radius must be positive');
+  if (height <= 0) throw new Error('Height must be positive');
+  if (segments < 3) throw new Error('Cylinder needs at least 3 segments');
+
+  const profile: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    profile.push({ x: Math.cos(a) * radius, y: 0, z: Math.sin(a) * radius });
+  }
+
+  return {
+    ...createExtrude({
+      profile,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: height,
+      symmetric: false,
+    }),
+    name: 'Cylinder',
+  };
+}
+
+/** UV sphere centred at the origin. Normals come straight from position. */
+export function createSphere(radius: number, segments = 16): SolidBody {
+  if (radius <= 0) throw new Error('Radius must be positive');
+  if (segments < 3) throw new Error('Sphere needs at least 3 segments');
+
+  const lon = segments;
+  const lat = Math.max(3, Math.round(segments / 2));
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const unit = (v: Vec3): Vec3 => {
+    const l = Math.hypot(v.x, v.y, v.z) || 1;
+    return { x: v.x / l, y: v.y / l, z: v.z / l };
+  };
+
+  const top = vertices.length; // index 0
+  vertices.push({ x: 0, y: radius, z: 0 });
+
+  // Middle latitude rings i = 1 .. lat-1.
+  const ringStart = (i: number) => 1 + (i - 1) * lon;
+  for (let i = 1; i < lat; i++) {
+    const theta = (i / lat) * Math.PI;
+    const y = Math.cos(theta) * radius;
+    const r = Math.sin(theta) * radius;
+    for (let j = 0; j < lon; j++) {
+      const phi = (j / lon) * Math.PI * 2;
+      vertices.push({ x: r * Math.cos(phi), y, z: r * Math.sin(phi) });
+    }
+  }
+  const bottom = vertices.length;
+  vertices.push({ x: 0, y: -radius, z: 0 });
+
+  const v = (idx: number) => vertices[idx]!;
+
+  // Top cap triangles.
+  for (let j = 0; j < lon; j++) {
+    const a = ringStart(1) + j;
+    const b = ringStart(1) + ((j + 1) % lon);
+    faces.push({ id: genId('face'), vertices: [v(top), v(a), v(b)], normal: unit(v(a)) });
+  }
+  // Middle quads.
+  for (let i = 1; i < lat - 1; i++) {
+    for (let j = 0; j < lon; j++) {
+      const a = ringStart(i) + j;
+      const b = ringStart(i + 1) + j;
+      const c = ringStart(i + 1) + ((j + 1) % lon);
+      const d = ringStart(i) + ((j + 1) % lon);
+      faces.push({ id: genId('face'), vertices: [v(a), v(b), v(c), v(d)], normal: unit(v(a)) });
+    }
+  }
+  // Bottom cap triangles.
+  for (let j = 0; j < lon; j++) {
+    const a = ringStart(lat - 1) + ((j + 1) % lon);
+    const b = ringStart(lat - 1) + j;
+    faces.push({ id: genId('face'), vertices: [v(bottom), v(a), v(b)], normal: unit(v(a)) });
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Sphere', vertices, faces, edges: buildEdgesFromFaces(faces) };
+}
+
+/** Cone / frustum along +Y. radiusTop = 0 gives a pointed cone. */
+export function createCone(
+  radiusBottom: number,
+  radiusTop: number,
+  height: number,
+  segments = 32,
+): SolidBody {
+  if (radiusBottom < 0 || radiusTop < 0) throw new Error('Radius cannot be negative');
+  if (radiusBottom < 1e-9 && radiusTop < 1e-9) throw new Error('At least one radius must be positive');
+  if (height <= 0) throw new Error('Height must be positive');
+  if (segments < 3) throw new Error('Cone needs at least 3 segments');
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const pointed = radiusTop < 1e-9;
+
+  const bottom: Vec3[] = [];
+  const top: Vec3[] = [];
+  for (let j = 0; j < segments; j++) {
+    const a = (j / segments) * Math.PI * 2;
+    bottom.push({ x: radiusBottom * Math.cos(a), y: 0, z: radiusBottom * Math.sin(a) });
+    if (!pointed) top.push({ x: radiusTop * Math.cos(a), y: height, z: radiusTop * Math.sin(a) });
+  }
+  const apex: Vec3 = { x: 0, y: height, z: 0 };
+  vertices.push(...bottom, ...top, apex);
+
+  // Bottom cap (faces down).
+  faces.push({ id: genId('face'), vertices: [...bottom].reverse(), normal: { x: 0, y: -1, z: 0 } });
+  // Top cap (frustum only).
+  if (!pointed) faces.push({ id: genId('face'), vertices: [...top], normal: { x: 0, y: 1, z: 0 } });
+
+  // Side faces, normals oriented radially outward.
+  const orientOut = (verts: Vec3[]): Vec3 => {
+    const n = computeFaceNormal(verts[0]!, verts[1]!, verts[2]!);
+    const c = verts.reduce((s, v) => ({ x: s.x + v.x, y: s.y + v.y, z: s.z + v.z }), { x: 0, y: 0, z: 0 });
+    const cx = c.x / verts.length;
+    const cz = c.z / verts.length;
+    // Radial direction in XZ from the axis to the face centroid.
+    if (n.x * cx + n.z * cz < 0) return { x: -n.x, y: -n.y, z: -n.z };
+    return n;
+  };
+
+  for (let j = 0; j < segments; j++) {
+    const next = (j + 1) % segments;
+    if (pointed) {
+      const verts = [bottom[j]!, bottom[next]!, apex];
+      faces.push({ id: genId('face'), vertices: verts, normal: orientOut(verts) });
+    } else {
+      const verts = [bottom[j]!, bottom[next]!, top[next]!, top[j]!];
+      faces.push({ id: genId('face'), vertices: verts, normal: orientOut(verts) });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Cone', vertices, faces, edges: buildEdgesFromFaces(faces) };
+}
+
+/** Ring torus around the +Y axis, lying in the XZ plane. */
+export function createTorus(
+  majorRadius: number,
+  minorRadius: number,
+  segments = 32,
+  sides = 16,
+): SolidBody {
+  if (majorRadius <= 0 || minorRadius <= 0) throw new Error('Radius must be positive');
+  if (minorRadius > majorRadius) throw new Error('minorRadius must not exceed majorRadius');
+  if (segments < 3 || sides < 3) throw new Error('Torus needs at least 3 segments and sides');
+
+  const vertices: Vec3[] = [];
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+
+  // Grid of segments × sides vertices, plus their normals.
+  const grid: Vec3[][] = [];
+  for (let i = 0; i < segments; i++) {
+    const u = (i / segments) * Math.PI * 2;
+    const cu = Math.cos(u);
+    const su = Math.sin(u);
+    const ring: Vec3[] = [];
+    for (let j = 0; j < sides; j++) {
+      const v = (j / sides) * Math.PI * 2;
+      const cv = Math.cos(v);
+      const sv = Math.sin(v);
+      const p = {
+        x: (majorRadius + minorRadius * cv) * cu,
+        y: minorRadius * sv,
+        z: (majorRadius + minorRadius * cv) * su,
+      };
+      ring.push(p);
+      vertices.push(p);
+    }
+    grid.push(ring);
+  }
+
+  const normalAt = (i: number, j: number): Vec3 => {
+    const u = (i / segments) * Math.PI * 2;
+    const v = (j / sides) * Math.PI * 2;
+    return { x: Math.cos(v) * Math.cos(u), y: Math.sin(v), z: Math.cos(v) * Math.sin(u) };
+  };
+
+  for (let i = 0; i < segments; i++) {
+    const ni = (i + 1) % segments;
+    for (let j = 0; j < sides; j++) {
+      const nj = (j + 1) % sides;
+      faces.push({
+        id: genId('face'),
+        vertices: [grid[i]![j]!, grid[ni]![j]!, grid[ni]![nj]!, grid[i]![nj]!],
+        normal: normalAt(i, j),
+      });
+      edges.push({ id: genId('edge'), start: grid[i]![j]!, end: grid[ni]![j]! });
+      edges.push({ id: genId('edge'), start: grid[i]![j]!, end: grid[i]![nj]! });
+    }
+  }
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Torus', vertices, faces, edges };
+}
+
+/** Right-triangular-prism wedge: full height at -x, sloping to 0 at +x. */
+export function createWedge(width: number, height: number, depth: number): SolidBody {
+  if (width <= 0 || height <= 0 || depth <= 0) throw new Error('Dimensions must be positive');
+  const hw = width / 2;
+  const hd = depth / 2;
+  // Front triangle (z = -hd) and back triangle (z = +hd).
+  const A = { x: -hw, y: 0, z: -hd };
+  const B = { x: hw, y: 0, z: -hd };
+  const C = { x: -hw, y: height, z: -hd };
+  const D = { x: -hw, y: 0, z: hd };
+  const E = { x: hw, y: 0, z: hd };
+  const F = { x: -hw, y: height, z: hd };
+  const vertices: Vec3[] = [A, B, C, D, E, F];
+
+  const center = { x: 0, y: 0, z: 0 };
+  for (const v of vertices) {
+    center.x += v.x / 6;
+    center.y += v.y / 6;
+    center.z += v.z / 6;
+  }
+
+  const faceLoops: Vec3[][] = [
+    [A, B, E, D], // bottom (y = 0)
+    [C, A, D, F], // vertical back (x = -hw)
+    [B, E, F, C], // slope (hypotenuse)
+    [A, C, B], // front triangle (z = -hd)
+    [D, E, F], // back triangle (z = +hd)
+  ];
+
+  const faces: Face[] = faceLoops.map((loop) => {
+    const gn = computeFaceNormal(loop[0]!, loop[1]!, loop[2]!);
+    const fc = { x: 0, y: 0, z: 0 };
+    for (const v of loop) {
+      fc.x += v.x / loop.length;
+      fc.y += v.y / loop.length;
+      fc.z += v.z / loop.length;
+    }
+    const outward = gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z) < 0
+      ? { x: -gn.x, y: -gn.y, z: -gn.z }
+      : gn;
+    return { id: genId('face'), vertices: loop, normal: outward };
   });
+
+  const edges = buildEdgesFromFaces(faces);
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Wedge', vertices, faces, edges };
+}
+
+/**
+ * Regular n-sided prism: a regular polygon (circumradius `radius`, `sides`
+ * corners) extruded `height` along +Y. Useful for nuts, standoffs, knobs and
+ * other faceted parts. The base sits on y = 0.
+ */
+export function createPrism(sides: number, radius: number, height: number): SolidBody {
+  if (!Number.isInteger(sides) || sides < 3) throw new Error('Prism must have at least 3 sides');
+  if (![radius, height].every((d) => Number.isFinite(d) && d > 0)) {
+    throw new Error('Prism radius and height must be positive');
+  }
+  const profile: Vec3[] = [];
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2;
+    profile.push({ x: radius * Math.cos(a), y: 0, z: radius * Math.sin(a) });
+  }
+  return {
+    ...createExtrude({ profile, direction: { x: 0, y: 1, z: 0 }, distance: height, symmetric: false }),
+    name: `Prism${sides}`,
+  };
+}
+
+/**
+ * Loft a solid between two closed profiles with the same number of points,
+ * connecting corresponding vertices into side faces and capping both ends.
+ * The profiles are positioned in 3D by the caller (e.g. at different heights).
+ * Foundation for sketch-based transitions, adapters and tapered shapes.
+ */
+export function createLoft(profileA: Vec3[], profileB: Vec3[]): SolidBody {
+  const n = profileA.length;
+  if (n < 3) throw new Error('Loft profiles need at least 3 points');
+  if (profileB.length !== n) throw new Error('Loft profiles must have the same number of points');
+
+  const a = profileA.map((p) => ({ ...p }));
+  const b = profileB.map((p) => ({ ...p }));
+  const vertices: Vec3[] = [...a, ...b];
+
+  const center = vertices.reduce(
+    (s, v) => ({ x: s.x + v.x / vertices.length, y: s.y + v.y / vertices.length, z: s.z + v.z / vertices.length }),
+    { x: 0, y: 0, z: 0 },
+  );
+  const outward = (verts: Vec3[]): Vec3 => {
+    const gn = computeFaceNormal(verts[0]!, verts[1]!, verts[2]!);
+    const fc = verts.reduce((s, v) => ({ x: s.x + v.x / verts.length, y: s.y + v.y / verts.length, z: s.z + v.z / verts.length }), { x: 0, y: 0, z: 0 });
+    const d = gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z);
+    return d < 0 ? { x: -gn.x, y: -gn.y, z: -gn.z } : gn;
+  };
+
+  const faces: Face[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const quad = [a[i]!, a[j]!, b[j]!, b[i]!];
+    faces.push({ id: genId('face'), vertices: quad, normal: outward(quad) });
+  }
+  faces.push({ id: genId('face'), vertices: a, normal: outward(a) });
+  faces.push({ id: genId('face'), vertices: b, normal: outward(b) });
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Loft', vertices, faces, edges: buildEdgesFromFaces(faces) };
+}
+
+/**
+ * Hollow truncated cone (funnel / nozzle / vase wall): a frustum with outer
+ * radii `bottomRadius`→`topRadius` and a constant `wallThickness`, `height`
+ * tall along +Y, base on y = 0. Watertight, with annular top/bottom caps.
+ */
+export function createFrustumTube(
+  bottomRadius: number,
+  topRadius: number,
+  wallThickness: number,
+  height: number,
+  segments = 32,
+): SolidBody {
+  if (!(bottomRadius > 0) || !(topRadius > 0) || !(wallThickness > 0) || !(height > 0)) {
+    throw new Error('Frustum tube radii, wall thickness and height must be positive');
+  }
+  if (wallThickness >= Math.min(bottomRadius, topRadius)) {
+    throw new Error('Wall thickness must be smaller than the smaller radius');
+  }
+  if (segments < 3) throw new Error('Frustum tube needs at least 3 segments');
+
+  const ob: Vec3[] = [];
+  const ot: Vec3[] = [];
+  const ib: Vec3[] = [];
+  const it: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    ob.push({ x: c * bottomRadius, y: 0, z: s * bottomRadius });
+    ot.push({ x: c * topRadius, y: height, z: s * topRadius });
+    ib.push({ x: c * (bottomRadius - wallThickness), y: 0, z: s * (bottomRadius - wallThickness) });
+    it.push({ x: c * (topRadius - wallThickness), y: height, z: s * (topRadius - wallThickness) });
+  }
+  const vertices: Vec3[] = [...ob, ...ot, ...ib, ...it];
+
+  // True outward/inward face normal from the quad geometry, oriented by a radial
+  // reference so the sloped walls report accurate normals (matters for overhang).
+  const geoNormal = (quad: Vec3[], refRadialX: number, refRadialZ: number, outward: boolean): Vec3 => {
+    const gn = computeFaceNormal(quad[0]!, quad[1]!, quad[2]!);
+    const dotRef = gn.x * refRadialX + gn.z * refRadialZ;
+    const sign = (outward ? dotRef < 0 : dotRef > 0) ? -1 : 1;
+    return { x: gn.x * sign, y: gn.y * sign, z: gn.z * sign };
+  };
+
+  const faces: Face[] = [];
+  for (let i = 0; i < segments; i++) {
+    const j = (i + 1) % segments;
+    const am = ((i + 0.5) / segments) * Math.PI * 2;
+    const rx = Math.cos(am);
+    const rz = Math.sin(am);
+    const outerQuad = [ob[i]!, ob[j]!, ot[j]!, ot[i]!];
+    const innerQuad = [ib[i]!, ib[j]!, it[j]!, it[i]!];
+    faces.push({ id: genId('face'), vertices: outerQuad, normal: geoNormal(outerQuad, rx, rz, true) });
+    faces.push({ id: genId('face'), vertices: innerQuad, normal: geoNormal(innerQuad, rx, rz, false) });
+    faces.push({ id: genId('face'), vertices: [ob[i]!, ob[j]!, ib[j]!, ib[i]!], normal: { x: 0, y: -1, z: 0 } });
+    faces.push({ id: genId('face'), vertices: [ot[i]!, ot[j]!, it[j]!, it[i]!], normal: { x: 0, y: 1, z: 0 } });
+  }
+
+  const edges = buildEdgesFromFaces(faces);
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'FrustumTube', vertices, faces, edges };
+}
+
+/**
+ * Hollow cylinder (tube/pipe): an annular ring of outer radius `outerRadius`
+ * and inner radius `innerRadius`, `height` tall along +Y, base on y = 0.
+ * Watertight (outer wall, inner wall, and top/bottom annular caps). Common for
+ * rings, bushings, spacers and nozzles.
+ */
+export function createTube(outerRadius: number, innerRadius: number, height: number, segments = 32): SolidBody {
+  if (!(outerRadius > 0) || !(innerRadius > 0) || !(height > 0)) {
+    throw new Error('Tube radii and height must be positive');
+  }
+  if (innerRadius >= outerRadius) throw new Error('Inner radius must be smaller than outer radius');
+  if (segments < 3) throw new Error('Tube needs at least 3 segments');
+
+  const ob: Vec3[] = [];
+  const ot: Vec3[] = [];
+  const ib: Vec3[] = [];
+  const it: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    ob.push({ x: c * outerRadius, y: 0, z: s * outerRadius });
+    ot.push({ x: c * outerRadius, y: height, z: s * outerRadius });
+    ib.push({ x: c * innerRadius, y: 0, z: s * innerRadius });
+    it.push({ x: c * innerRadius, y: height, z: s * innerRadius });
+  }
+  const vertices: Vec3[] = [...ob, ...ot, ...ib, ...it];
+
+  const faces: Face[] = [];
+  for (let i = 0; i < segments; i++) {
+    const j = (i + 1) % segments;
+    const am = ((i + 0.5) / segments) * Math.PI * 2;
+    const nx = Math.cos(am);
+    const nz = Math.sin(am);
+    // Outer wall (normal points out), inner wall (points into the hole),
+    // bottom and top annular caps. Winding is fixed by alignWindingToNormal.
+    faces.push({ id: genId('face'), vertices: [ob[i]!, ob[j]!, ot[j]!, ot[i]!], normal: { x: nx, y: 0, z: nz } });
+    faces.push({ id: genId('face'), vertices: [ib[i]!, ib[j]!, it[j]!, it[i]!], normal: { x: -nx, y: 0, z: -nz } });
+    faces.push({ id: genId('face'), vertices: [ob[i]!, ob[j]!, ib[j]!, ib[i]!], normal: { x: 0, y: -1, z: 0 } });
+    faces.push({ id: genId('face'), vertices: [ot[i]!, ot[j]!, it[j]!, it[i]!], normal: { x: 0, y: 1, z: 0 } });
+  }
+
+  const edges = buildEdgesFromFaces(faces);
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Tube', vertices, faces, edges };
+}
+
+/**
+ * Helical coil / spring: sweep a circular wire (radius `wireRadius`, `sides`
+ * facets) along a helix of radius `coilRadius`, advancing `pitch` mm per turn
+ * for `turns` turns, about the +Y axis. Watertight, with end caps. Useful for
+ * springs, coils and as the basis for threads.
+ */
+export function createCoil(
+  coilRadius: number,
+  wireRadius: number,
+  pitch: number,
+  turns: number,
+  segmentsPerTurn = 32,
+  sides = 12,
+): SolidBody {
+  if (!(coilRadius > 0) || !(wireRadius > 0) || !(pitch > 0) || !(turns > 0)) {
+    throw new Error('Coil radius, wire radius, pitch and turns must be positive');
+  }
+  if (segmentsPerTurn < 3 || sides < 3) throw new Error('Coil needs >= 3 segments per turn and >= 3 sides');
+
+  const ringCount = Math.max(2, Math.round(turns * segmentsPerTurn)) + 1;
+  const dy = pitch / (2 * Math.PI);
+
+  const rings: Vec3[][] = [];
+  const ringNormals: Vec3[][] = [];
+  for (let r = 0; r < ringCount; r++) {
+    const theta = (r / (ringCount - 1)) * turns * 2 * Math.PI;
+    const cosT = Math.cos(theta);
+    const sinT = Math.sin(theta);
+    // Center curve and its analytic Frenet frame.
+    const center = { x: coilRadius * cosT, y: dy * theta, z: coilRadius * sinT };
+    const tangent = normalize({ x: -coilRadius * sinT, y: dy, z: coilRadius * cosT });
+    const nrm = { x: -cosT, y: 0, z: -sinT }; // principal normal (toward axis)
+    const binorm = {
+      x: tangent.y * nrm.z - tangent.z * nrm.y,
+      y: tangent.z * nrm.x - tangent.x * nrm.z,
+      z: tangent.x * nrm.y - tangent.y * nrm.x,
+    };
+    const ring: Vec3[] = [];
+    const rn: Vec3[] = [];
+    for (let j = 0; j < sides; j++) {
+      const phi = (j / sides) * 2 * Math.PI;
+      const c = Math.cos(phi);
+      const s = Math.sin(phi);
+      const radial = { x: nrm.x * c + binorm.x * s, y: nrm.y * c + binorm.y * s, z: nrm.z * c + binorm.z * s };
+      ring.push({ x: center.x + radial.x * wireRadius, y: center.y + radial.y * wireRadius, z: center.z + radial.z * wireRadius });
+      rn.push(radial);
+    }
+    rings.push(ring);
+    ringNormals.push(rn);
+  }
+
+  const vertices: Vec3[] = [];
+  for (const ring of rings) vertices.push(...ring);
+
+  const faces: Face[] = [];
+  for (let r = 0; r < ringCount - 1; r++) {
+    for (let j = 0; j < sides; j++) {
+      const jn = (j + 1) % sides;
+      const a = rings[r]![j]!;
+      const b = rings[r]![jn]!;
+      const c = rings[r + 1]![jn]!;
+      const d = rings[r + 1]![j]!;
+      const rn = ringNormals[r]![j]!;
+      faces.push({ id: genId('face'), vertices: [a, b, c, d], normal: rn });
+    }
+  }
+  // End caps (open ends of the wire): start faces backward along the path, end forward.
+  const startT = normalize({ x: rings[1]![0]!.x - rings[0]![0]!.x, y: rings[1]![0]!.y - rings[0]![0]!.y, z: rings[1]![0]!.z - rings[0]![0]!.z });
+  faces.push({ id: genId('face'), vertices: [...rings[0]!], normal: { x: -startT.x, y: -startT.y, z: -startT.z } });
+  const last = ringCount - 1;
+  const endT = normalize({ x: rings[last]![0]!.x - rings[last - 1]![0]!.x, y: rings[last]![0]!.y - rings[last - 1]![0]!.y, z: rings[last]![0]!.z - rings[last - 1]![0]!.z });
+  faces.push({ id: genId('face'), vertices: [...rings[last]!], normal: endT });
+
+  const edges = buildEdgesFromFaces(faces);
+
+  alignWindingToNormal(faces);
+  return { id: genId('body'), name: 'Coil', vertices, faces, edges };
 }
 
 export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
@@ -235,6 +859,24 @@ export function computeBoundingBox(body: SolidBody): { min: Vec3; max: Vec3 } {
   }
 
   return { min, max };
+}
+
+/** Enclosing sphere centered at the bounding-box center (exact for symmetric shapes). */
+export function computeBoundingSphere(body: SolidBody): { center: Vec3; radius: number } {
+  const bb = computeBoundingBox(body);
+  const center: Vec3 = {
+    x: (bb.min.x + bb.max.x) / 2,
+    y: (bb.min.y + bb.max.y) / 2,
+    z: (bb.min.z + bb.max.z) / 2,
+  };
+  let radius = 0;
+  for (const v of body.vertices) {
+    const dx = v.x - center.x;
+    const dy = v.y - center.y;
+    const dz = v.z - center.z;
+    radius = Math.max(radius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+  }
+  return { center, radius };
 }
 
 export function computeBoundingBoxCenter(body: SolidBody): Vec3 {
@@ -258,6 +900,37 @@ export function computeCentroid(body: SolidBody): Vec3 {
   return { x: cx / n, y: cy / n, z: cz / n };
 }
 
+/**
+ * Volume-weighted centroid (true center of mass for a uniform-density solid),
+ * via signed tetrahedra from the origin. Falls back to the vertex centroid for
+ * degenerate (near-zero-volume) meshes.
+ */
+export function computeVolumetricCentroid(body: SolidBody): Vec3 {
+  let vol = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 1; i < verts.length - 1; i++) {
+      const a = verts[0]!;
+      const b = verts[i]!;
+      const c = verts[i + 1]!;
+      const tv =
+        (a.x * (b.y * c.z - b.z * c.y) -
+          a.y * (b.x * c.z - b.z * c.x) +
+          a.z * (b.x * c.y - b.y * c.x)) /
+        6;
+      vol += tv;
+      cx += (tv * (a.x + b.x + c.x)) / 4;
+      cy += (tv * (a.y + b.y + c.y)) / 4;
+      cz += (tv * (a.z + b.z + c.z)) / 4;
+    }
+  }
+  if (Math.abs(vol) < 1e-9) return computeCentroid(body);
+  return { x: cx / vol, y: cy / vol, z: cz / vol };
+}
+
 export function computeVolume(body: SolidBody): number {
   // Signed volume using divergence theorem
   let volume = 0;
@@ -279,6 +952,135 @@ function signedTriangleVolume(a: Vec3, b: Vec3, c: Vec3): number {
     b.x * (a.y * c.z - c.y * a.z) +
     c.x * (a.y * b.z - b.y * a.z)
   );
+}
+
+export interface MassProperties {
+  density: number;
+  volume: number;
+  mass: number;
+  centerOfMass: Vec3;
+  /**
+   * Mass-weighted inertia tensor about the center of mass (symmetric):
+   * ixx = ∫ρ(y²+z²)dV, etc.; products of inertia ixy = -∫ρ·xy·dV, etc.
+   */
+  inertia: { ixx: number; iyy: number; izz: number; ixy: number; iyz: number; ixz: number };
+}
+
+/**
+ * Rigid-body mass properties of a closed mesh: volume, mass, center of mass,
+ * and the inertia tensor about the center of mass (for the given uniform
+ * density). Uses the canonical-tetrahedron covariance method — each triangle
+ * forms a tetrahedron with the origin, and the covariance of the canonical
+ * simplex C = (1/120)[[2,1,1],[1,2,1],[1,1,2]] is mapped through the tet's
+ * vertex matrix; signed contributions cancel the interior automatically.
+ */
+export function computeMassProperties(body: SolidBody, density = 1): MassProperties {
+  // Canonical simplex second-moment matrix (times 120).
+  const M = [
+    [2, 1, 1],
+    [1, 2, 1],
+    [1, 1, 2],
+  ];
+
+  let det6 = 0; // Σ det = 6·volume
+  let comX = 0;
+  let comY = 0;
+  let comZ = 0;
+  // Covariance about the origin (unit density), accumulated ×120.
+  const c = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+
+  for (const face of body.faces) {
+    const verts = face.vertices;
+    for (let i = 1; i < verts.length - 1; i++) {
+      const a = verts[0]!;
+      const b = verts[i]!;
+      const cc = verts[i + 1]!;
+      const det = signedTriangleVolume(a, b, cc); // det[a b c] = 6·V_tet
+      det6 += det;
+      comX += det * (a.x + b.x + cc.x);
+      comY += det * (a.y + b.y + cc.y);
+      comZ += det * (a.z + b.z + cc.z);
+
+      // A has columns a, b, cc. Accumulate det · (A · M · Aᵀ).
+      const A = [
+        [a.x, b.x, cc.x],
+        [a.y, b.y, cc.y],
+        [a.z, b.z, cc.z],
+      ];
+      // AM = A · M
+      const AM = [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+      ];
+      for (let r = 0; r < 3; r++) {
+        for (let k = 0; k < 3; k++) {
+          AM[r]![k] = A[r]![0]! * M[0]![k]! + A[r]![1]! * M[1]![k]! + A[r]![2]! * M[2]![k]!;
+        }
+      }
+      // C += det · (AM · Aᵀ)
+      for (let r = 0; r < 3; r++) {
+        for (let s = 0; s < 3; s++) {
+          const amat = AM[r]![0]! * A[s]![0]! + AM[r]![1]! * A[s]![1]! + AM[r]![2]! * A[s]![2]!;
+          c[r]![s]! += det * amat;
+        }
+      }
+    }
+  }
+
+  const volume = Math.abs(det6) / 6;
+  if (volume < 1e-12) {
+    const centroid = computeCentroid(body);
+    return {
+      density,
+      volume: 0,
+      mass: 0,
+      centerOfMass: centroid,
+      inertia: { ixx: 0, iyy: 0, izz: 0, ixy: 0, iyz: 0, ixz: 0 },
+    };
+  }
+
+  // Center of mass: Σ(V_tet · tetCentroid) / V, tetCentroid = (a+b+cc+0)/4.
+  const com: Vec3 = { x: comX / (4 * det6), y: comY / (4 * det6), z: comZ / (4 * det6) };
+
+  // Covariance about origin, mass-weighted. Sign tracks winding so the
+  // diagonal stays positive regardless of inward/outward orientation.
+  const sign = det6 >= 0 ? 1 : -1;
+  const k = (sign * density) / 120;
+  const cxx = c[0]![0]! * k;
+  const cyy = c[1]![1]! * k;
+  const czz = c[2]![2]! * k;
+  const cxy = c[0]![1]! * k;
+  const cyz = c[1]![2]! * k;
+  const cxz = c[0]![2]! * k;
+
+  const mass = volume * density;
+  // Shift covariance to the center of mass (parallel-axis theorem).
+  const dxx = cxx - mass * com.x * com.x;
+  const dyy = cyy - mass * com.y * com.y;
+  const dzz = czz - mass * com.z * com.z;
+  const dxy = cxy - mass * com.x * com.y;
+  const dyz = cyz - mass * com.y * com.z;
+  const dxz = cxz - mass * com.x * com.z;
+
+  return {
+    density,
+    volume,
+    mass,
+    centerOfMass: com,
+    inertia: {
+      ixx: dyy + dzz,
+      iyy: dxx + dzz,
+      izz: dxx + dyy,
+      ixy: -dxy,
+      iyz: -dyz,
+      ixz: -dxz,
+    },
+  };
 }
 
 function normalize(v: Vec3): Vec3 {
@@ -331,8 +1133,11 @@ export function computeEdgeLength(edge: Edge): number {
 }
 
 export function computeTotalEdgeLength(body: SolidBody): number {
+  // Derive edges from faces (unique, deduplicated) rather than body.edges,
+  // which some primitives under- or over-count; this keeps the total correct
+  // for every mesh.
   let total = 0;
-  for (const edge of body.edges) {
+  for (const edge of buildEdgesFromFaces(body.faces)) {
     total += computeEdgeLength(edge);
   }
   return total;
@@ -384,7 +1189,10 @@ export function computeMeshStatistics(body: SolidBody): MeshStatistics {
   let maxEdgeLength = 0;
   let triangleCount = 0;
 
-  for (const edge of body.edges) {
+  // Use the unique edges implied by the faces; body.edges is inconsistent
+  // across primitives (some under-count, some duplicate).
+  const edges = buildEdgesFromFaces(body.faces);
+  for (const edge of edges) {
     const len = computeEdgeLength(edge);
     totalEdgeLength += len;
     minEdgeLength = Math.min(minEdgeLength, len);
@@ -399,10 +1207,10 @@ export function computeMeshStatistics(body: SolidBody): MeshStatistics {
   return {
     vertexCount: body.vertices.length,
     faceCount: body.faces.length,
-    edgeCount: body.edges.length,
+    edgeCount: edges.length,
     triangleCount,
-    averageEdgeLength: body.edges.length > 0 ? totalEdgeLength / body.edges.length : 0,
-    minEdgeLength: body.edges.length > 0 ? minEdgeLength : 0,
+    averageEdgeLength: edges.length > 0 ? totalEdgeLength / edges.length : 0,
+    minEdgeLength: edges.length > 0 ? minEdgeLength : 0,
     maxEdgeLength,
   };
 }
@@ -492,11 +1300,12 @@ export function checkManifold(body: SolidBody): ManifoldCheck {
     if (count > 2) nonManifoldEdges++;
   }
 
-  // Count isolated vertices (vertices not used by any edge)
+  // Count isolated vertices (vertices used by no face). Checking faces — not the
+  // edge list — avoids false positives for apex/pole vertices whose cap-face
+  // edges aren't enumerated in body.edges.
   const usedVertices = new Set<string>();
-  for (const edge of body.edges) {
-    usedVertices.add(`${edge.start.x},${edge.start.y},${edge.start.z}`);
-    usedVertices.add(`${edge.end.x},${edge.end.y},${edge.end.z}`);
+  for (const face of body.faces) {
+    for (const v of face.vertices) usedVertices.add(`${v.x},${v.y},${v.z}`);
   }
   const isolatedVertices = body.vertices.filter(
     (v) => !usedVertices.has(`${v.x},${v.y},${v.z}`),
@@ -517,10 +1326,29 @@ export interface TopologyInfo {
 }
 
 export function computeTopology(body: SolidBody): TopologyInfo {
-  // Euler characteristic: V - E + F
-  const v = body.vertices.length;
-  const e = body.edges.length;
-  const f = body.faces.length;
+  // Euler characteristic χ = V − E + F, derived from the FACES so it's correct
+  // regardless of how body.edges was populated. Some primitives store one edge
+  // per face-side (shared edges double-counted), which would otherwise inflate
+  // E and produce a nonsense genus. Count unique vertices and unique undirected
+  // edges by coordinate key.
+  const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
+  const vkey = (vert: Vec3) => `${q(vert.x)},${q(vert.y)},${q(vert.z)}`;
+  const verts = new Set<string>();
+  const edges = new Set<string>();
+  let f = 0;
+  for (const face of body.faces) {
+    const vs = face.vertices;
+    if (vs.length < 3) continue;
+    f += 1;
+    for (let i = 0; i < vs.length; i++) {
+      const ka = vkey(vs[i]!);
+      const kb = vkey(vs[(i + 1) % vs.length]!);
+      verts.add(ka);
+      edges.add(ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+    }
+  }
+  const v = verts.size;
+  const e = edges.size;
   const chi = v - e + f;
 
   // For a closed orientable surface: chi = 2 - 2g
@@ -955,52 +1783,48 @@ export interface NormalConsistency {
 }
 
 export function checkNormalConsistency(body: SolidBody): NormalConsistency {
-  // Check if normals consistently point outward by comparing with face centroid direction
-  const bodyCentroid = computeCentroid(body);
-  let outward = 0;
-  let inward = 0;
-  let flipped = 0;
+  // Orientation is consistent iff no directed edge is traversed the same way by
+  // two faces (a properly oriented closed mesh shares each edge in opposite
+  // directions). This is correct for non-convex shapes too — unlike a
+  // centroid-based heuristic, which mislabels e.g. a torus's inner walls.
+  const q = (n: number) => Math.round(n / 1e-6) * 1e-6;
+  const key = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
+  const directed = new Map<string, number>();
+  let degenerate = 0;
 
   for (const face of body.faces) {
-    const verts = face.vertices;
-    if (verts.length < 3) {
-      flipped++;
+    const vs = face.vertices;
+    if (vs.length < 3) {
+      degenerate++;
       continue;
     }
-
-    // Compute face centroid
-    let fx = 0, fy = 0, fz = 0;
-    for (const v of verts) {
-      fx += v.x;
-      fy += v.y;
-      fz += v.z;
-    }
-    fx /= verts.length;
-    fy /= verts.length;
-    fz /= verts.length;
-
-    // Direction from body centroid to face centroid
-    const dx = fx - bodyCentroid.x;
-    const dy = fy - bodyCentroid.y;
-    const dz = fz - bodyCentroid.z;
-
-    // Dot product with face normal
-    const dot = dx * face.normal.x + dy * face.normal.y + dz * face.normal.z;
-
-    if (Math.abs(dot) < 1e-10) {
-      flipped++;
-    } else if (dot > 0) {
-      outward++;
-    } else {
-      inward++;
+    for (let i = 0; i < vs.length; i++) {
+      const dk = `${key(vs[i]!)}>${key(vs[(i + 1) % vs.length]!)}`;
+      directed.set(dk, (directed.get(dk) ?? 0) + 1);
     }
   }
 
+  let sameDirectionEdges = 0;
+  for (const count of directed.values()) if (count > 1) sameDirectionEdges += count - 1;
+  const consistent = sameDirectionEdges === 0;
+
+  // Signed volume sign tells whether the consistent winding faces outward.
+  let signed = 0;
+  for (const face of body.faces) {
+    const vs = face.vertices;
+    for (let i = 1; i < vs.length - 1; i++) {
+      signed += signedTriangleVolume(vs[0]!, vs[i]!, vs[i + 1]!);
+    }
+  }
+  const faceCount = body.faces.length - degenerate;
+  const outward = signed >= 0 ? faceCount : 0;
+  const inward = signed >= 0 ? 0 : faceCount;
+
   return {
-    consistent: inward === 0 || outward === 0,
+    consistent,
     inwardFaces: inward,
     outwardFaces: outward,
-    flippedFaces: flipped,
+    flippedFaces: degenerate,
   };
 }
 
@@ -1478,30 +2302,26 @@ export interface SymmetryInfo {
 export function computeSymmetry(body: SolidBody): SymmetryInfo {
   const center = computeCentroid(body);
 
-  // Check symmetry by comparing vertices on opposite sides
+  // Mirror symmetry across the centre plane perpendicular to `axis`: every
+  // vertex should have a partner whose `axis` coordinate is reflected and whose
+  // other two coordinates match.
+  const others: Array<'x' | 'y' | 'z'> = ['x', 'y', 'z'];
   const checkAxisSymmetry = (axis: 'x' | 'y' | 'z'): boolean => {
     const tolerance = 1e-3;
+    const rest = others.filter((a) => a !== axis);
     let symmetricCount = 0;
-    let totalCount = 0;
 
     for (const v of body.vertices) {
-      const coord = v[axis];
-      const distFromCenter = coord - center[axis];
-
-      // Find a matching vertex on the opposite side
-      const hasMatch = body.vertices.some((other) => {
-        const otherDist = other[axis] - center[axis];
-        return Math.abs(distFromCenter + otherDist) < tolerance &&
-               Math.abs(v.x - other.x) < tolerance &&
-               Math.abs(v.y - other.y) < tolerance &&
-               Math.abs(v.z - other.z) < tolerance;
-      });
-
+      const mirrored = 2 * center[axis] - v[axis];
+      const hasMatch = body.vertices.some(
+        (o) =>
+          Math.abs(o[axis] - mirrored) < tolerance &&
+          rest.every((a) => Math.abs(o[a] - v[a]) < tolerance),
+      );
       if (hasMatch) symmetricCount++;
-      totalCount++;
     }
 
-    return totalCount > 0 && symmetricCount / totalCount > 0.95;
+    return body.vertices.length > 0 && symmetricCount / body.vertices.length > 0.95;
   };
 
   const hasX = checkAxisSymmetry('x');
@@ -1578,37 +2398,63 @@ export function computeElongation(body: SolidBody): ElongationInfo {
     flatness,
     principalAxes: { x: dx, y: dy, z: dz },
     isElongated: elongation > 3,
-    isFlat: flatness < 1.5 && elongation > 2,
+    // Flat = one dimension much smaller than the other two, i.e. a high
+    // middle/shortest ratio (a plate/slab). A square-section rod has flatness 1.
+    isFlat: flatness > 3,
   };
 }
 
 export interface ConvexityInfo {
-  convexity: number; // Convex hull volume / actual volume
+  convexity: number; // Fraction of faces whose plane keeps all vertices on the inner side
   isConvex: boolean;
   concavity: number; // 1 - convexity
-  convexDefect: number; // Volume difference
+  convexDefect: number; // Number of faces violated by some vertex (0 = convex)
 }
 
 export function computeConvexity(body: SolidBody): ConvexityInfo {
-  const volume = computeVolume(body);
-  if (volume < 1e-10) {
+  // A polyhedron is convex iff it equals the intersection of its face
+  // half-spaces — i.e. every vertex lies on the inner side of every (outward)
+  // face plane. This needs no convex-hull construction, only correct normals.
+  const faces = body.faces;
+  if (faces.length === 0 || body.vertices.length === 0) {
     return { convexity: 0, isConvex: false, concavity: 1, convexDefect: 0 };
   }
 
-  // Approximate convex hull volume using bounding box
   const bb = computeBoundingBox(body);
-  const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+  const scale = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1;
+  const tol = scale * 1e-4;
 
-  // Convexity ratio (actual volume / convex hull volume)
-  const convexity = hullVolume > 1e-10 ? volume / hullVolume : 0;
-  const concavity = 1 - convexity;
-  const convexDefect = hullVolume - volume;
+  let convexFaces = 0;
+  for (const f of faces) {
+    if (f.vertices.length < 3) {
+      convexFaces++;
+      continue;
+    }
+    const p = f.vertices[0]!;
+    // Use the geometric (true) face-plane normal, oriented to match the stored
+    // outward normal — stored normals can be per-vertex approximations (sphere).
+    const gn = computeFaceNormal(p, f.vertices[1]!, f.vertices[2]!);
+    const sign = gn.x * f.normal.x + gn.y * f.normal.y + gn.z * f.normal.z < 0 ? -1 : 1;
+    const nx = gn.x * sign;
+    const ny = gn.y * sign;
+    const nz = gn.z * sign;
+    let convex = true;
+    for (const v of body.vertices) {
+      // Distance in front of the outward face plane; > tol means it protrudes.
+      if ((v.x - p.x) * nx + (v.y - p.y) * ny + (v.z - p.z) * nz > tol) {
+        convex = false;
+        break;
+      }
+    }
+    if (convex) convexFaces++;
+  }
 
+  const convexity = convexFaces / faces.length;
   return {
     convexity,
-    isConvex: convexity > 0.95,
-    concavity,
-    convexDefect,
+    isConvex: convexity > 0.999,
+    concavity: 1 - convexity,
+    convexDefect: faces.length - convexFaces,
   };
 }
 
@@ -1619,21 +2465,87 @@ export interface SolidityInfo {
   internalCavities: number; // Estimated number of internal voids
 }
 
+/** Number of connected surface shells (face components joined by shared edges). */
+function countShells(body: SolidBody): number {
+  const faces = body.faces;
+  const n = faces.length;
+  if (n === 0) return 0;
+  const q = (v: Vec3) => `${Math.round(v.x * 1e5)},${Math.round(v.y * 1e5)},${Math.round(v.z * 1e5)}`;
+  const edgeKey = (a: Vec3, b: Vec3) => {
+    const ka = q(a);
+    const kb = q(b);
+    return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+  };
+  const edgeFaces = new Map<string, number[]>();
+  faces.forEach((f, fi) => {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const k = edgeKey(vs[i]!, vs[(i + 1) % vs.length]!);
+      const l = edgeFaces.get(k);
+      if (l) l.push(fi);
+      else edgeFaces.set(k, [fi]);
+    }
+  });
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (const fis of edgeFaces.values()) {
+    for (let i = 0; i < fis.length; i++) {
+      for (let j = i + 1; j < fis.length; j++) {
+        adj[fis[i]!]!.push(fis[j]!);
+        adj[fis[j]!]!.push(fis[i]!);
+      }
+    }
+  }
+  const seen = new Array<boolean>(n).fill(false);
+  let comps = 0;
+  for (let s = 0; s < n; s++) {
+    if (seen[s]) continue;
+    comps++;
+    const stack = [s];
+    seen[s] = true;
+    while (stack.length) {
+      const c = stack.pop()!;
+      for (const nb of adj[c]!) {
+        if (!seen[nb]) {
+          seen[nb] = true;
+          stack.push(nb);
+        }
+      }
+    }
+  }
+  return comps;
+}
+
 export function computeSolidity(body: SolidBody): SolidityInfo {
   const volume = computeVolume(body);
   if (volume < 1e-10) {
     return { solidity: 0, isSolid: false, voidRatio: 1, internalCavities: 0 };
   }
 
-  // Approximate convex hull volume using bounding box
-  const bb = computeBoundingBox(body);
-  const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+  // Solidity is volume / convex-hull volume. A convex solid equals its own
+  // hull, so its solidity is exactly 1 — short-circuit those (a sphere/
+  // cylinder/cone otherwise read ~0.5 against a bounding-box hull proxy and
+  // were wrongly flagged as full of voids).
+  if (computeConvexity(body).isConvex) {
+    return { solidity: 1, isSolid: true, voidRatio: 0, internalCavities: 0 };
+  }
 
-  const solidity = hullVolume > 1e-10 ? volume / hullVolume : 0;
+  // Non-convex: use the true convex-hull volume (volume / hull). Fall back to
+  // the bounding-box volume only if the hull is degenerate (flat/empty input).
+  const hull = computeConvexHull(body.vertices);
+  let hullVolume: number;
+  if (hull && hull.volume > 1e-10) {
+    hullVolume = hull.volume;
+  } else {
+    const bb = computeBoundingBox(body);
+    hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+  }
+
+  const solidity = hullVolume > 1e-10 ? Math.min(1, volume / hullVolume) : 0;
   const voidRatio = 1 - solidity;
 
-  // Estimate internal cavities based on void ratio
-  const internalCavities = voidRatio > 0.3 ? Math.ceil(voidRatio * 5) : 0;
+  // Real internal cavities = enclosed shells beyond the outer surface. A single
+  // connected surface (torus, L-shape) has none; an interior bubble adds one.
+  const internalCavities = Math.max(0, countShells(body) - 1);
 
   return {
     solidity,
@@ -1721,51 +2633,229 @@ export interface ThicknessInfo {
   thinRegions: number;
 }
 
+/** Möller–Trumbore ray/triangle intersection; returns the positive hit distance or null. */
+function rayTriangleDistance(orig: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3): number | null {
+  const ex1 = b.x - a.x, ey1 = b.y - a.y, ez1 = b.z - a.z;
+  const ex2 = c.x - a.x, ey2 = c.y - a.y, ez2 = c.z - a.z;
+  const px = dir.y * ez2 - dir.z * ey2;
+  const py = dir.z * ex2 - dir.x * ez2;
+  const pz = dir.x * ey2 - dir.y * ex2;
+  const det = ex1 * px + ey1 * py + ez1 * pz;
+  if (Math.abs(det) < 1e-12) return null; // parallel
+  const inv = 1 / det;
+  const tx = orig.x - a.x, ty = orig.y - a.y, tz = orig.z - a.z;
+  const u = (tx * px + ty * py + tz * pz) * inv;
+  if (u < -1e-9 || u > 1 + 1e-9) return null;
+  const qx = ty * ez1 - tz * ey1;
+  const qy = tz * ex1 - tx * ez1;
+  const qz = tx * ey1 - ty * ex1;
+  const v = (dir.x * qx + dir.y * qy + dir.z * qz) * inv;
+  if (v < -1e-9 || u + v > 1 + 1e-9) return null;
+  const t = (ex2 * qx + ey2 * qy + ez2 * qz) * inv;
+  return t > 1e-9 ? t : null;
+}
+
+/**
+ * Wall thickness by inward ray casting: from each face, shoot a ray along the
+ * inward normal and measure the distance to the opposite wall (the standard
+ * thickness probe used by slicers). Unlike a bounding-box proxy this reports the
+ * true wall thickness of hollow/shelled parts — the case that actually matters
+ * for printability. O(faces × triangles); faces are sampled when the mesh is
+ * large to bound the cost.
+ */
 export function computeThickness(body: SolidBody): ThicknessInfo {
   const bb = computeBoundingBox(body);
-  const dx = bb.max.x - bb.min.x;
-  const dy = bb.max.y - bb.min.y;
-  const dz = bb.max.z - bb.min.z;
+  const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1;
+  const eps = diag * 1e-5;
 
-  // Approximate thickness as minimum bounding box dimension
-  const minThickness = Math.min(dx, dy, dz);
-  const maxThickness = Math.max(dx, dy, dz);
-  const avgThickness = (dx + dy + dz) / 3;
-
-  // Count thin regions (faces with small bounding box)
-  let thinRegions = 0;
-  for (const face of body.faces) {
-    const verts = face.vertices;
-    if (verts.length < 3) continue;
-
-    let faceMinX = Infinity, faceMaxX = -Infinity;
-    let faceMinY = Infinity, faceMaxY = -Infinity;
-    let faceMinZ = Infinity, faceMaxZ = -Infinity;
-
-    for (const v of verts) {
-      faceMinX = Math.min(faceMinX, v.x);
-      faceMaxX = Math.max(faceMaxX, v.x);
-      faceMinY = Math.min(faceMinY, v.y);
-      faceMaxY = Math.max(faceMaxY, v.y);
-      faceMinZ = Math.min(faceMinZ, v.z);
-      faceMaxZ = Math.max(faceMaxZ, v.z);
+  // Pre-triangulate all faces once for ray targets.
+  const tris: [Vec3, Vec3, Vec3][] = [];
+  for (const f of body.faces) {
+    for (let i = 1; i < f.vertices.length - 1; i++) {
+      tris.push([f.vertices[0]!, f.vertices[i]!, f.vertices[i + 1]!]);
     }
-
-    const faceDx = faceMaxX - faceMinX;
-    const faceDy = faceMaxY - faceMinY;
-    const faceDz = faceMaxZ - faceMinZ;
-    const faceThickness = Math.min(faceDx, faceDy, faceDz);
-
-    if (faceThickness < minThickness * 0.5) thinRegions++;
   }
+
+  // Sample faces to keep the O(F²) probe bounded on large meshes.
+  const faces = body.faces.filter((f) => f.vertices.length >= 3);
+  const step = Math.max(1, Math.floor(faces.length / 400));
+
+  const samples: number[] = [];
+  for (let fi = 0; fi < faces.length; fi += step) {
+    const face = faces[fi]!;
+    const n = normalize(face.normal);
+    if (n.x === 0 && n.y === 0 && n.z === 0) continue;
+    // Centroid, nudged just inside the surface so we don't hit our own face.
+    let cx = 0, cy = 0, cz = 0;
+    for (const v of face.vertices) {
+      cx += v.x / face.vertices.length;
+      cy += v.y / face.vertices.length;
+      cz += v.z / face.vertices.length;
+    }
+    const dir = { x: -n.x, y: -n.y, z: -n.z }; // inward
+    const orig = { x: cx + dir.x * eps, y: cy + dir.y * eps, z: cz + dir.z * eps };
+
+    let nearest = Infinity;
+    for (const [a, b, c] of tris) {
+      const t = rayTriangleDistance(orig, dir, a, b, c);
+      if (t !== null && t < nearest) nearest = t;
+    }
+    if (nearest < Infinity) samples.push(nearest + eps);
+  }
+
+  if (samples.length === 0) {
+    const fallback = Math.min(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+    return { minThickness: fallback, maxThickness: fallback, avgThickness: fallback, isThin: false, thinRegions: 0 };
+  }
+
+  const minThickness = Math.min(...samples);
+  const maxThickness = Math.max(...samples);
+  const avgThickness = samples.reduce((s, t) => s + t, 0) / samples.length;
+  // Thin if the minimum wall is a small fraction of the part's overall size.
+  const thinLimit = diag * 0.02;
+  const thinRegions = samples.filter((t) => t < thinLimit).length;
 
   return {
     minThickness,
     maxThickness,
     avgThickness,
-    isThin: minThickness < avgThickness * 0.2,
+    isThin: minThickness < thinLimit,
     thinRegions,
   };
+}
+
+/**
+ * Eigenvalues of a symmetric 3×3 matrix, returned in descending order. Uses
+ * the closed-form trigonometric solution (Smith 1961); falls back to the
+ * diagonal when the off-diagonal terms vanish.
+ */
+function symmetricEigenvalues3(a: number[][]): [number, number, number] {
+  const a11 = a[0]![0]!;
+  const a22 = a[1]![1]!;
+  const a33 = a[2]![2]!;
+  const a12 = a[0]![1]!;
+  const a13 = a[0]![2]!;
+  const a23 = a[1]![2]!;
+
+  const p1 = a12 * a12 + a13 * a13 + a23 * a23;
+  if (p1 < 1e-18) {
+    const e = [a11, a22, a33].sort((x, y) => y - x);
+    return [e[0]!, e[1]!, e[2]!];
+  }
+
+  const q = (a11 + a22 + a33) / 3;
+  const p2 = (a11 - q) ** 2 + (a22 - q) ** 2 + (a33 - q) ** 2 + 2 * p1;
+  const p = Math.sqrt(p2 / 6);
+
+  // B = (1/p)(A - qI); r = det(B)/2.
+  const b11 = (a11 - q) / p;
+  const b22 = (a22 - q) / p;
+  const b33 = (a33 - q) / p;
+  const b12 = a12 / p;
+  const b13 = a13 / p;
+  const b23 = a23 / p;
+  const detB =
+    b11 * (b22 * b33 - b23 * b23) -
+    b12 * (b12 * b33 - b23 * b13) +
+    b13 * (b12 * b23 - b22 * b13);
+  let r = detB / 2;
+  r = Math.max(-1, Math.min(1, r));
+
+  const phi = Math.acos(r) / 3;
+  const eig1 = q + 2 * p * Math.cos(phi); // largest
+  const eig3 = q + 2 * p * Math.cos(phi + (2 * Math.PI) / 3); // smallest
+  const eig2 = 3 * q - eig1 - eig3;
+  return [eig1, eig2, eig3];
+}
+
+export interface PrincipalMoments {
+  /** Principal moments of inertia about the center of mass, descending. */
+  moments: [number, number, number];
+  /** Radii of gyration k = sqrt(I / mass) for each principal moment. */
+  radiiOfGyration: [number, number, number];
+}
+
+/**
+ * Principal moments of inertia (eigenvalues of the inertia tensor about the
+ * center of mass) and the corresponding radii of gyration. These are the
+ * body's natural rotation axes — the smallest principal moment is the axis it
+ * most readily spins about.
+ */
+export function computePrincipalMoments(body: SolidBody, density = 1): PrincipalMoments {
+  const mp = computeMassProperties(body, density);
+  const i = mp.inertia;
+  const tensor = [
+    [i.ixx, i.ixy, i.ixz],
+    [i.ixy, i.iyy, i.iyz],
+    [i.ixz, i.iyz, i.izz],
+  ];
+  const moments = symmetricEigenvalues3(tensor);
+  const m = mp.mass;
+  const k = (v: number): number => (m > 1e-12 ? Math.sqrt(Math.max(0, v) / m) : 0);
+  return { moments, radiiOfGyration: [k(moments[0]), k(moments[1]), k(moments[2])] };
+}
+
+/**
+ * Scalar moment of inertia about an arbitrary axis. With no `point` the axis
+ * passes through the center of mass and I = n̂ᵀ·I·n̂. Pass a `point` on the axis
+ * (e.g. a hinge or pivot) to apply the parallel-axis theorem: I = I_cm + m·d²,
+ * where d is the perpendicular distance from the CoM to the axis line. Use for
+ * flywheels, shafts, hinges and pendulums. Returns 0 for a zero-length axis.
+ */
+export function computeMomentOfInertiaAboutAxis(body: SolidBody, axis: Vec3, density = 1, point?: Vec3): number {
+  const len = Math.hypot(axis.x, axis.y, axis.z);
+  if (len < 1e-12) return 0;
+  const nx = axis.x / len;
+  const ny = axis.y / len;
+  const nz = axis.z / len;
+  const mp = computeMassProperties(body, density);
+  const i = mp.inertia;
+  // nᵀ I n with the symmetric tensor (products of inertia doubled).
+  const iCom =
+    i.ixx * nx * nx +
+    i.iyy * ny * ny +
+    i.izz * nz * nz +
+    2 * (i.ixy * nx * ny + i.iyz * ny * nz + i.ixz * nx * nz);
+  if (!point) return iCom;
+  // Perpendicular distance from the CoM to the axis line through `point`.
+  const rx = mp.centerOfMass.x - point.x;
+  const ry = mp.centerOfMass.y - point.y;
+  const rz = mp.centerOfMass.z - point.z;
+  const along = rx * nx + ry * ny + rz * nz;
+  const px = rx - along * nx;
+  const py = ry - along * ny;
+  const pz = rz - along * nz;
+  const d2 = px * px + py * py + pz * pz;
+  return iCom + mp.mass * d2;
+}
+
+/**
+ * Small-amplitude oscillation period (seconds) of the body as a physical
+ * pendulum: hung on a frictionless pin at `pivot` with rotation axis `axis`,
+ * swinging under gravity. T = 2π·√( (I_pivot/m) / (g·d) ), where d is the
+ * horizontal-ish lever arm (perpendicular distance from the CoM to the axis)
+ * and g is `gravity` in mm/s² (default 9810). Density-independent (I/m cancels
+ * it). Returns Infinity when the CoM lies on the axis (no restoring torque).
+ */
+export function computePendulumPeriod(body: SolidBody, pivot: Vec3, axis: Vec3, gravity = 9810): number {
+  const len = Math.hypot(axis.x, axis.y, axis.z);
+  if (len < 1e-12) return Infinity;
+  const nx = axis.x / len;
+  const ny = axis.y / len;
+  const nz = axis.z / len;
+  const mp = computeMassProperties(body, 1);
+  if (mp.mass < 1e-12) return Infinity;
+
+  // Lever arm d: perpendicular distance from the CoM to the axis line.
+  const rx = mp.centerOfMass.x - pivot.x;
+  const ry = mp.centerOfMass.y - pivot.y;
+  const rz = mp.centerOfMass.z - pivot.z;
+  const along = rx * nx + ry * ny + rz * nz;
+  const d = Math.hypot(rx - along * nx, ry - along * ny, rz - along * nz);
+  if (d < 1e-9 || gravity <= 0) return Infinity;
+
+  const iPivotPerMass = computeMomentOfInertiaAboutAxis(body, axis, 1, pivot) / mp.mass; // mm²
+  return 2 * Math.PI * Math.sqrt(iPivotPerMass / (gravity * d));
 }
 
 export interface CenterOfMassInfo {
@@ -1777,7 +2867,8 @@ export interface CenterOfMassInfo {
 }
 
 export function computeCenterOfMassOffset(body: SolidBody): CenterOfMassInfo {
-  const centroid = computeCentroid(body);
+  // Use the true (volume-weighted) center of mass, not the vertex average.
+  const centroid = computeVolumetricCentroid(body);
   const bbCenter = computeBoundingBoxCenter(body);
 
   const offset = {
@@ -2975,57 +4066,73 @@ export function computeVertexValencePercentiles(body: SolidBody): VertexValenceP
   };
 }
 
-export interface VertexDistancePercentiles {
-  p5: number;
-  p10: number;
-  p25: number;
-  p50: number;
-  p75: number;
-  p90: number;
-  p95: number;
-  iqr: number;
-  whiskerLow: number;
-  whiskerHigh: number;
+export interface BoundaryLoops {
+  /** Number of closed boundary loops (holes). */
+  holeCount: number;
+  /** Total number of boundary edges (edges used by only one face). */
+  boundaryEdgeCount: number;
+  /** The vertices of each boundary loop, in order. */
+  loops: Vec3[][];
 }
 
-export function computeVertexDistancePercentiles(body: SolidBody): VertexDistancePercentiles {
-  const centroid = computeCentroid(body);
-  const distances: number[] = [];
+/**
+ * Find the open boundary loops ("holes") of a mesh: edges used by exactly one
+ * face, chained into loops. A watertight mesh has none. Useful for diagnosing
+ * and repairing imported STLs before printing.
+ */
+export function findBoundaryLoops(body: SolidBody, tolerance = 1e-6): BoundaryLoops {
+  const q = (n: number) => Math.round(n / tolerance) * tolerance;
+  const key = (v: Vec3) => `${q(v.x)},${q(v.y)},${q(v.z)}`;
 
-  for (const v of body.vertices) {
-    const dx = v.x - centroid.x;
-    const dy = v.y - centroid.y;
-    const dz = v.z - centroid.z;
-    distances.push(Math.sqrt(dx * dx + dy * dy + dz * dz));
+  // Count how many faces use each undirected edge.
+  const undirected = new Map<string, number>();
+  const undirectedKey = (ka: string, kb: string) => (ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+  for (const f of body.faces) {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const ka = key(vs[i]!);
+      const kb = key(vs[(i + 1) % vs.length]!);
+      const uk = undirectedKey(ka, kb);
+      undirected.set(uk, (undirected.get(uk) ?? 0) + 1);
+    }
   }
 
-  distances.sort((a, b) => a - b);
-
-  if (distances.length === 0) {
-    return { p5: 0, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0, iqr: 0, whiskerLow: 0, whiskerHigh: 0 };
+  // Collect directed boundary edges and index them by start key.
+  interface DirEdge { a: Vec3; kb: string; used: boolean }
+  const dirEdges: DirEdge[] = [];
+  const startMap = new Map<string, number[]>();
+  for (const f of body.faces) {
+    const vs = f.vertices;
+    for (let i = 0; i < vs.length; i++) {
+      const a = vs[i]!;
+      const b = vs[(i + 1) % vs.length]!;
+      const ka = key(a);
+      const kb = key(b);
+      if (undirected.get(undirectedKey(ka, kb)) === 1) {
+        const idx = dirEdges.length;
+        dirEdges.push({ a, kb, used: false });
+        const list = startMap.get(ka);
+        if (list) list.push(idx);
+        else startMap.set(ka, [idx]);
+      }
+    }
   }
 
-  const getPercentile = (p: number) => {
-    const idx = Math.floor(distances.length * p / 100);
-    return distances[Math.min(idx, distances.length - 1)]!;
-  };
+  const loops: Vec3[][] = [];
+  for (let s = 0; s < dirEdges.length; s++) {
+    if (dirEdges[s]!.used) continue;
+    const loop: Vec3[] = [];
+    let cur = s;
+    let guard = 0;
+    while (cur !== -1 && !dirEdges[cur]!.used && guard++ <= dirEdges.length) {
+      const e = dirEdges[cur]!;
+      e.used = true;
+      loop.push(e.a);
+      const cands = startMap.get(e.kb) ?? [];
+      cur = cands.find((ci) => !dirEdges[ci]!.used) ?? -1;
+    }
+    if (loop.length > 0) loops.push(loop);
+  }
 
-  const p5 = getPercentile(5);
-  const p10 = getPercentile(10);
-  const p25 = getPercentile(25);
-  const p50 = getPercentile(50);
-  const p75 = getPercentile(75);
-  const p90 = getPercentile(90);
-  const p95 = getPercentile(95);
-
-  const iqr = p75 - p25;
-  const whiskerLow = p25 - 1.5 * iqr;
-  const whiskerHigh = p75 + 1.5 * iqr;
-
-  return {
-    p5, p10, p25, p50, p75, p90, p95,
-    iqr,
-    whiskerLow: Math.max(whiskerLow, distances[0]!),
-    whiskerHigh: Math.min(whiskerHigh, distances[distances.length - 1]!),
-  };
+  return { holeCount: loops.length, boundaryEdgeCount: dirEdges.length, loops };
 }

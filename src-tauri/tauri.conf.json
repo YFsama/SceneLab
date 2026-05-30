@@ -9,9 +9,9 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "title": "SceneLab",
     "windows": [
       {
+        "label": "main",
         "title": "SceneLab — AI-first 3D CAD",
         "width": 1280,
         "height": 800,

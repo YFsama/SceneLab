@@ -12,9 +12,14 @@ import {
   generateGCode,
   generateMultiToolGCode,
   estimateMachiningTime,
+  computeFeedsAndSpeeds,
 } from '../../lib/cam';
-import type { CAMParameters, Toolpath } from '../../lib/cam';
-import { Cog, Play, Download, Clock, Wrench } from 'lucide-react';
+import type { CAMParameters, Toolpath, WorkMaterial } from '../../lib/cam';
+import { Cog, Play, Download, Clock, Wrench, Gauge } from 'lucide-react';
+
+const WORK_MATERIALS: WorkMaterial[] = [
+  'aluminum', 'brass', 'softwood', 'hardwood', 'mdf', 'acrylic', 'steel', 'pcb',
+];
 
 const defaultParams: CAMParameters = {
   feedRate: 1000,
@@ -33,9 +38,24 @@ export function CAMPanel() {
   const [operation, setOperation] = useState<'pocket' | 'contour' | 'drill' | 'face'>('pocket');
   const [params, setParams] = useState<CAMParameters>(defaultParams);
   const [toolpaths, setToolpaths] = useState<Toolpath[]>([]);
+  const [workMaterial, setWorkMaterial] = useState<WorkMaterial>('aluminum');
 
   const tools = useMemo(() => getAllTools(), []);
   const activeTool = tools.find((t) => t.id === selectedTool);
+  const suggestedFeeds = useMemo(
+    () => (activeTool ? computeFeedsAndSpeeds(activeTool, workMaterial) : null),
+    [activeTool, workMaterial],
+  );
+
+  const applySuggestedFeeds = () => {
+    if (!suggestedFeeds) return;
+    setParams((p) => ({
+      ...p,
+      feedRate: suggestedFeeds.feedRate,
+      plungeRate: suggestedFeeds.plungeRate,
+      spindleSpeed: suggestedFeeds.spindleRpm,
+    }));
+  };
 
   const handleGenerate = () => {
     if (!activeTool) return;
@@ -127,6 +147,35 @@ export function CAMPanel() {
               </option>
             ))}
           </select>
+        </div>
+
+        {/* Work material + suggested feeds & speeds */}
+        <div>
+          <label htmlFor="cam-material" className="block text-text-muted mb-1">{t('cam.workMaterial')}</label>
+          <select
+            id="cam-material"
+            value={workMaterial}
+            onChange={(e) => setWorkMaterial(e.target.value as WorkMaterial)}
+            className="w-full px-2 py-1.5 bg-surface border border-panel-border rounded text-text-primary"
+          >
+            {WORK_MATERIALS.map((m) => (
+              <option key={m} value={m}>{t(`cam.mat.${m}`)}</option>
+            ))}
+          </select>
+          {suggestedFeeds && (
+            <div className="mt-1.5 flex items-center justify-between gap-2 rounded bg-surface px-2 py-1.5 text-[10px] text-text-secondary">
+              <span className="flex items-center gap-1">
+                <Gauge size={11} />
+                {suggestedFeeds.spindleRpm} RPM · {suggestedFeeds.feedRate} mm/min
+              </span>
+              <button
+                onClick={applySuggestedFeeds}
+                className="px-2 py-0.5 rounded bg-accent text-white hover:bg-accent-hover"
+              >
+                {t('cam.applyFeeds')}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Operation selection */}

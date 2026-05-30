@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
 import { createSketch } from '../../lib/sketch/engine';
+import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -52,30 +53,46 @@ export function ViewportCanvas() {
   const dirtyRef = useRef(true);
   const frameIdRef2 = useRef<number>(0);
 
-  const animate = useCallback(() => {
-    frameIdRef2.current = requestAnimationFrame(animate);
-    const controls = controlsRef.current;
-    if (controls) {
-      const moved = controls.update();
-      if (moved) dirtyRef.current = true;
-    }
-    if (dirtyRef.current) {
-      const renderer = rendererRef.current;
-      const scene = sceneRef.current;
-      const camera = cameraRef.current;
-      if (renderer && scene && camera) {
-        renderer.render(scene, camera);
-      }
-      dirtyRef.current = false;
-    }
-  }, []);
-
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    const animate = () => {
+      frameIdRef2.current = requestAnimationFrame(animate);
+      const controls = controlsRef.current;
+      if (controls) {
+        const moved = controls.update();
+        if (moved) dirtyRef.current = true;
+      }
+      if (dirtyRef.current) {
+        const renderer = rendererRef.current;
+        const scene = sceneRef.current;
+        const camera = cameraRef.current;
+        if (renderer && scene && camera) {
+          renderer.render(scene, camera);
+        }
+        dirtyRef.current = false;
+      }
+    };
+
+    // Capture the shared sketch materials so the cleanup disposes the exact
+    // instances this effect set up (refs are stable across the component life).
+    const lineMat = sketchLineMatRef.current;
+    const pointMat = sketchPointMatRef.current;
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      // Ask the OS to pick the discrete GPU on dual-GPU machines.
+      powerPreference: 'high-performance',
+      // Keep the last frame readable so screenshots / AI-vision capture
+      // (canvas.toDataURL) return the rendered image instead of a black frame.
+      preserveDrawingBuffer: true,
+    });
+    // Clamp the device pixel ratio: above 2x the extra fragments cost a lot of
+    // GPU time for no visible gain on a CAD viewport.
+    const pixelRatio = Math.min(window.devicePixelRatio, 2);
+    renderer.setPixelRatio(pixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setClearColor(0x1e1e2e);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -137,24 +154,41 @@ export function ViewportCanvas() {
       const h = container.clientHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      // Re-clamp in case the window moved to a monitor with a different DPR.
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w, h);
+      dirtyRef.current = true;
     };
     const ro = new ResizeObserver(onResize);
     ro.observe(container);
 
+    // Stop the render loop entirely while the window is hidden so a
+    // backgrounded app draws nothing and consumes no GPU.
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(frameIdRef2.current);
+        frameIdRef2.current = 0;
+      } else if (frameIdRef2.current === 0) {
+        dirtyRef.current = true;
+        animate();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
       cancelAnimationFrame(frameIdRef2.current);
       ro.disconnect();
       controls.dispose();
       // Dispose shared sketch materials
-      sketchLineMatRef.current.dispose();
-      sketchPointMatRef.current.dispose();
+      lineMat.dispose();
+      pointMat.dispose();
       renderer.dispose();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [animate]);
+  }, []);
 
   useEffect(() => {
     const camera = cameraRef.current;
@@ -166,6 +200,9 @@ export function ViewportCanvas() {
     camera.up.copy(dir.up);
     controls.target.set(0, 0, 0);
     controls.update();
+    // Snapping the camera is an instant jump; mark dirty so the on-demand loop
+    // repaints even if OrbitControls reports no incremental movement.
+    dirtyRef.current = true;
   }, [viewDirection]);
 
   useEffect(() => {
@@ -304,18 +341,7 @@ export function ViewportCanvas() {
 
     for (const body of bodies) {
       const geo = new THREE.BufferGeometry();
-      const positions: number[] = [];
-      const indices: number[] = [];
-
-      for (const face of body.faces) {
-        const baseIdx = positions.length / 3;
-        for (const v of face.vertices) {
-          positions.push(v.x, v.y, v.z);
-        }
-        for (let i = 1; i < face.vertices.length - 1; i++) {
-          indices.push(baseIdx, baseIdx + i, baseIdx + i + 1);
-        }
-      }
+      const { positions, indices } = buildBodyMeshArrays(body);
 
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setIndex(indices);

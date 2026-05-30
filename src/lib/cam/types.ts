@@ -24,6 +24,8 @@ export interface ToolpathPoint {
   y: number;
   z: number;
   feedRate?: number;
+  /** True for a G0 rapid positioning move, false/undefined for a G1 cut. */
+  rapid?: boolean;
 }
 
 export interface Toolpath {

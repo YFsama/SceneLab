@@ -1,22 +1,25 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { serializeProject, saveToFile, loadFromFile, downloadFile, readFileAsText, exportSTLBinary, export3MF } from '../../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
-import { Save, FolderOpen, Download, FileBox, Image } from 'lucide-react';
+import { Save, FolderOpen, Download, FileBox, Image, Upload } from 'lucide-react';
 
 export function ProjectMenu() {
   const { t } = useT();
   const projectName = useStore((s) => s.projectName);
-  const setProjectName = useStore((s) => s.setProjectName);
   const featureTree = useStore((s) => s.featureTree);
   const bodies = useStore((s) => s.bodies);
+  const directBodies = useStore((s) => s.directBodies);
   const setProjectDirty = useStore((s) => s.setProjectDirty);
+  const loadProject = useStore((s) => s.loadProject);
+  const addDirectBody = useStore((s) => s.addDirectBody);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const meshInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
     try {
-      const project = serializeProject(projectName, featureTree.features, bodies);
+      const project = serializeProject(projectName, featureTree.features, bodies, directBodies);
       const json = saveToFile(project);
       downloadFile(json, `${projectName}.studio3d`);
       setProjectDirty(false);
@@ -33,14 +36,31 @@ export function ProjectMenu() {
     try {
       const json = await readFileAsText(file);
       const project = loadFromFile(json);
-      setProjectName(project.name);
+      // Rebuild the parametric model, not just the name.
+      loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project));
       showToast(`${t('toast.loaded')} "${project.name}"`, 'success');
-      setProjectDirty(false);
     } catch (err) {
       showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
     }
 
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleImportMesh = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const isObj = file.name.toLowerCase().endsWith('.obj');
+      const body = isObj
+        ? importOBJ(await readFileAsText(file))
+        : importSTL(await readFileAsArrayBuffer(file));
+      if (body.faces.length === 0) throw new Error('No faces parsed');
+      addDirectBody(body);
+      showToast(`${t('toast.loaded')} "${file.name}"`, 'success');
+    } catch (err) {
+      showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+    if (meshInputRef.current) meshInputRef.current.value = '';
   };
 
   const handleExportSTL = () => {
@@ -60,6 +80,21 @@ export function ProjectMenu() {
         URL.revokeObjectURL(url);
       }
       showToast(t('toast.stlExported'), 'success');
+    } catch (e) {
+      showToast(`${t('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  };
+
+  const handleExportOBJ = () => {
+    if (bodies.length === 0) {
+      showToast(t('toast.noBodies'), 'warning');
+      return;
+    }
+    try {
+      for (const body of bodies) {
+        downloadFile(exportOBJ(body), `${body.name}.obj`);
+      }
+      showToast(t('toast.objExported'), 'success');
     } catch (e) {
       showToast(`${t('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
     }
@@ -125,6 +160,16 @@ export function ProjectMenu() {
         <span className="hidden sm:inline">{t('project.open')}</span>
       </button>
 
+      <button
+        onClick={() => meshInputRef.current?.click()}
+        className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+        aria-label={t('project.import')}
+        title={t('project.import') + ' STL / OBJ'}
+      >
+        <Upload size={14} />
+        <span className="hidden sm:inline">{t('project.import')}</span>
+      </button>
+
       <div className="w-px h-4 bg-panel-border mx-0.5" />
 
       <button
@@ -135,6 +180,16 @@ export function ProjectMenu() {
       >
         <Download size={14} />
         <span className="hidden md:inline">STL</span>
+      </button>
+
+      <button
+        onClick={handleExportOBJ}
+        className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+        aria-label={t('export.obj')}
+        title={t('export.obj')}
+      >
+        <Download size={14} />
+        <span className="hidden md:inline">OBJ</span>
       </button>
 
       <button
@@ -162,6 +217,15 @@ export function ProjectMenu() {
         type="file"
         accept=".studio3d,.json"
         onChange={handleLoad}
+        className="hidden"
+        aria-hidden="true"
+      />
+
+      <input
+        ref={meshInputRef}
+        type="file"
+        accept=".stl,.obj"
+        onChange={handleImportMesh}
         className="hidden"
         aria-hidden="true"
       />
