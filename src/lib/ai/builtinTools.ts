@@ -4,6 +4,7 @@ import { createSketch } from '../sketch/engine';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { booleanOp } from '../geometry/boolean';
+import { listFaces } from '../geometry/query';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
@@ -754,6 +755,36 @@ export function registerBuiltinTools(): void {
       if (body.faces.length === 0) throw new Error('No faces parsed from the mesh');
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id, faces: body.faces.length, vertices: body.vertices.length };
+    },
+  });
+
+  registerTool({
+    name: 'list_faces',
+    description: 'List a body\'s faces with id, area, outward normal and centroid — use the ids to target fillet/chamfer/shell. Optionally sorted by area.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        largestFirst: { type: 'boolean', description: 'Sort by descending area' },
+        limit: { type: 'number', description: 'Max faces to return (default 50)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      let faces = listFaces(body);
+      if (args.largestFirst) faces = [...faces].sort((a, b) => b.area - a.area);
+      const limit = args.limit !== undefined ? assertNumber(args.limit, 'limit') : 50;
+      const r3 = (n: number) => Number(n.toFixed(3));
+      return {
+        bodyId: body.id,
+        faceCount: faces.length,
+        faces: faces.slice(0, limit).map((f) => ({
+          id: f.id,
+          area: r3(f.area),
+          normal: { x: r3(f.normal.x), y: r3(f.normal.y), z: r3(f.normal.z) },
+          centroid: { x: r3(f.centroid.x), y: r3(f.centroid.y), z: r3(f.centroid.z) },
+        })),
+      };
     },
   });
 
