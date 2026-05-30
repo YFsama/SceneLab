@@ -1,7 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity } from './brep';
+
+describe('computeConvexity', () => {
+  it('convex primitives are convex, the torus is not', () => {
+    for (const make of [
+      () => createBox(10, 10, 10),
+      () => createSphere(5, 24),
+      () => createCylinder(5, 10, 32),
+      () => createCone(5, 0, 10, 32),
+      () => createWedge(10, 6, 4),
+    ]) {
+      expect(computeConvexity(make()).isConvex).toBe(true);
+    }
+    expect(computeConvexity(createTorus(10, 3, 32, 16)).isConvex).toBe(false);
+  });
+});
 
 describe('computeElongation', () => {
   it('a plate is flat, a rod is elongated (not flat), a cube is neither', () => {

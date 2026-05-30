@@ -1978,32 +1978,56 @@ export function computeElongation(body: SolidBody): ElongationInfo {
 }
 
 export interface ConvexityInfo {
-  convexity: number; // Convex hull volume / actual volume
+  convexity: number; // Fraction of faces whose plane keeps all vertices on the inner side
   isConvex: boolean;
   concavity: number; // 1 - convexity
-  convexDefect: number; // Volume difference
+  convexDefect: number; // Number of faces violated by some vertex (0 = convex)
 }
 
 export function computeConvexity(body: SolidBody): ConvexityInfo {
-  const volume = computeVolume(body);
-  if (volume < 1e-10) {
+  // A polyhedron is convex iff it equals the intersection of its face
+  // half-spaces — i.e. every vertex lies on the inner side of every (outward)
+  // face plane. This needs no convex-hull construction, only correct normals.
+  const faces = body.faces;
+  if (faces.length === 0 || body.vertices.length === 0) {
     return { convexity: 0, isConvex: false, concavity: 1, convexDefect: 0 };
   }
 
-  // Approximate convex hull volume using bounding box
   const bb = computeBoundingBox(body);
-  const hullVolume = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z);
+  const scale = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1;
+  const tol = scale * 1e-4;
 
-  // Convexity ratio (actual volume / convex hull volume)
-  const convexity = hullVolume > 1e-10 ? volume / hullVolume : 0;
-  const concavity = 1 - convexity;
-  const convexDefect = hullVolume - volume;
+  let convexFaces = 0;
+  for (const f of faces) {
+    if (f.vertices.length < 3) {
+      convexFaces++;
+      continue;
+    }
+    const p = f.vertices[0]!;
+    // Use the geometric (true) face-plane normal, oriented to match the stored
+    // outward normal — stored normals can be per-vertex approximations (sphere).
+    const gn = computeFaceNormal(p, f.vertices[1]!, f.vertices[2]!);
+    const sign = gn.x * f.normal.x + gn.y * f.normal.y + gn.z * f.normal.z < 0 ? -1 : 1;
+    const nx = gn.x * sign;
+    const ny = gn.y * sign;
+    const nz = gn.z * sign;
+    let convex = true;
+    for (const v of body.vertices) {
+      // Distance in front of the outward face plane; > tol means it protrudes.
+      if ((v.x - p.x) * nx + (v.y - p.y) * ny + (v.z - p.z) * nz > tol) {
+        convex = false;
+        break;
+      }
+    }
+    if (convex) convexFaces++;
+  }
 
+  const convexity = convexFaces / faces.length;
   return {
     convexity,
-    isConvex: convexity > 0.95,
-    concavity,
-    convexDefect,
+    isConvex: convexity > 0.999,
+    concavity: 1 - convexity,
+    convexDefect: faces.length - convexFaces,
   };
 }
 
