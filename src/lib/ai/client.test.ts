@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sendMessageWithTools, DEFAULT_MODEL } from './client';
+import { sendMessageWithTools, DEFAULT_MODEL, SYSTEM_PROMPT } from './client';
 import type { FetchFn } from './client';
 import type { AIMessage, AIToolCall, AIToolResult } from './types';
 
@@ -13,6 +13,16 @@ function mockFetch(responses: unknown[], capturedBodies: unknown[]): FetchFn {
 }
 
 const userMsg = (content: string): AIMessage => ({ role: 'user', content, timestamp: 0 });
+
+describe('SYSTEM_PROMPT', () => {
+  it('grounds units and points at the key workflows', () => {
+    expect(SYSTEM_PROMPT).toMatch(/millimet/i);
+    expect(SYSTEM_PROMPT).toMatch(/\+Y/); // build axis
+    expect(SYSTEM_PROMPT).toContain('add_constraint'); // parametric sketches
+    expect(SYSTEM_PROMPT).toContain('lay_flat'); // print prep
+    expect(SYSTEM_PROMPT).toContain('compute_mass_properties'); // simulation
+  });
+});
 
 describe('sendMessageWithTools', () => {
   it('feeds tool results back and returns the final text', async () => {
