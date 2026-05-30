@@ -472,6 +472,24 @@ describe('builtin analysis tools', () => {
     expect(result.dimensions.x).toBeCloseTo(10, 3);
   });
 
+  it('end-to-end workflow: create → analyze → orient → export', async () => {
+    useStore.getState().clearScene();
+    const created = (await getTool('create_box')!.execute({ width: 50, height: 80, depth: 50 })) as { bodyId: string };
+    expect(useStore.getState().bodies).toHaveLength(1);
+
+    const ready = (await getTool('check_print_readiness')!.execute({
+      bodyId: created.bodyId,
+      buildVolume: { x: 200, y: 200, z: 200 },
+    })) as { ready: boolean };
+    expect(ready.ready).toBe(true);
+
+    await getTool('orient_for_print')!.execute({});
+    expect(useStore.getState().bodies).toHaveLength(1);
+
+    const exported = (await getTool('export_body')!.execute({ format: 'stl' })) as { content: string };
+    expect(exported.content).toMatch(/^solid /);
+  });
+
   it('throws a clear error when the body is missing', async () => {
     const tool = getTool('estimate_mass')!;
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');
