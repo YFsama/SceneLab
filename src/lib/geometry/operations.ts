@@ -1,5 +1,6 @@
 import type { Vec3, SolidBody, Face, Edge } from './types';
 import { computeConvexHull } from './convexHull';
+import { localToWorld, type CoordinateSystemDefinition } from './referenceGeometry';
 
 let nextId = 1;
 function genId(prefix: string): string {
@@ -470,6 +471,31 @@ export function applyMirror(
     vertices: newVertices,
     faces: newFaces,
     edges: newEdges,
+  };
+}
+
+/**
+ * Place a body into a coordinate system's frame: the body's current coordinates
+ * are taken as local (CSYS-frame) coordinates and mapped to world space — the
+ * rigid transform SolidWorks applies when inserting a part at a coordinate
+ * system. The frame is orthonormal, so this is a pure rotation + translation:
+ * lengths, volume and winding are preserved. Normals rotate with the frame (no
+ * translation).
+ */
+export function placeBodyInFrame(body: SolidBody, cs: CoordinateSystemDefinition): SolidBody {
+  const mapV = (v: Vec3): Vec3 => localToWorld(cs, v);
+  // Rotate a direction by the frame basis only (no origin offset).
+  const rotD = (d: Vec3): Vec3 => ({
+    x: cs.xAxis.x * d.x + cs.yAxis.x * d.y + cs.zAxis.x * d.z,
+    y: cs.xAxis.y * d.x + cs.yAxis.y * d.y + cs.zAxis.y * d.z,
+    z: cs.xAxis.z * d.x + cs.yAxis.z * d.y + cs.zAxis.z * d.z,
+  });
+  return {
+    id: genId('body'),
+    name: `${body.name} (placed)`,
+    vertices: body.vertices.map(mapV),
+    faces: body.faces.map((f) => ({ id: genId('face'), vertices: f.vertices.map(mapV), normal: rotD(f.normal) })),
+    edges: body.edges.map((e) => ({ id: genId('edge'), start: mapV(e.start), end: mapV(e.end) })),
   };
 }
 

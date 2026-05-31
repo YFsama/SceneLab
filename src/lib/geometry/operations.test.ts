@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
+import { makeCoordinateSystem } from './referenceGeometry';
 import type { SolidBody, Vec3 } from './types';
 
 describe('translateBody', () => {
@@ -408,5 +409,36 @@ describe('applyGridArray', () => {
     expect(xs[xs.length - 1]! - xs[0]!).toBeCloseTo(4, 5); // 4mm gap, not 20
     expect(() => applyGridArray(createBox(1, 1, 1), { x: 0, y: 0, z: 0 }, 2, 4, { x: 0, y: 1, z: 0 }, 2, 4)).toThrow();
     expect(() => applyGridArray(createBox(1, 1, 1), { x: 1, y: 0, z: 0 }, 0, 4, { x: 0, y: 1, z: 0 }, 2, 4)).toThrow();
+  });
+});
+
+describe('placeBodyInFrame', () => {
+  const box = createBox(10, 10, 10); // x,z ∈ [-5,5], y ∈ [0,10], vol 1000
+
+  it('the identity frame leaves the body unchanged', () => {
+    const cs = makeCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const placed = placeBodyInFrame(box, cs);
+    const bb0 = computeBoundingBox(box);
+    const bb1 = computeBoundingBox(placed);
+    expect(bb1.min.x).toBeCloseTo(bb0.min.x, 6);
+    expect(bb1.max.y).toBeCloseTo(bb0.max.y, 6);
+    expect(Math.abs(computeVolume(placed))).toBeCloseTo(1000, 4);
+  });
+
+  it('a translated frame shifts the body and preserves volume', () => {
+    const cs = makeCoordinateSystem({ x: 10, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const placed = placeBodyInFrame(box, cs);
+    const bb = computeBoundingBox(placed);
+    expect(bb.min.x).toBeCloseTo(5, 5); // -5 + 10
+    expect(bb.max.x).toBeCloseTo(15, 5);
+    expect(Math.abs(computeVolume(placed))).toBeCloseTo(1000, 4);
+  });
+
+  it('a rotated frame is a rigid transform (volume + watertightness preserved)', () => {
+    // Primary +Y, secondary -X → a 90° rotation about Z.
+    const cs = makeCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: -1, y: 0, z: 0 });
+    const placed = placeBodyInFrame(box, cs);
+    expect(Math.abs(computeVolume(placed))).toBeCloseTo(1000, 4);
+    expect(checkManifold(placed).boundaryEdges).toBe(0);
   });
 });

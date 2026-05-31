@@ -541,5 +541,21 @@ describe('app store — direct bodies', () => {
       useStore.getState().removeCoordinateSystem(id);
       expect(useStore.getState().coordSystems).toHaveLength(0);
     });
+
+    it('placeBodyInCoordinateSystem rigidly relocates a body in place', () => {
+      const box = createBox(10, 10, 10);
+      useStore.getState().addDirectBody(box);
+      const csId = useStore.getState().addCoordinateSystem({ x: 20, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 })!;
+      const newId = useStore.getState().placeBodyInCoordinateSystem(box.id, csId);
+      expect(newId).toBeTruthy();
+      const placed = useStore.getState().bodies.find((b) => b.id === newId)!;
+      expect(Math.abs(computeVolume(placed))).toBeCloseTo(1000, 3); // rigid: volume preserved
+      const minX = Math.min(...placed.vertices.map((v) => v.x));
+      expect(minX).toBeCloseTo(15, 4); // -5 shifted by +20
+    });
+
+    it('placeBodyInCoordinateSystem returns null for a missing body or csys', () => {
+      expect(useStore.getState().placeBodyInCoordinateSystem('nope', 'nope')).toBeNull();
+    });
   });
 });

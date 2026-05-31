@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
-import { applyCircularArray } from '../lib/geometry/operations';
+import { applyCircularArray, placeBodyInFrame } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -130,6 +130,8 @@ interface AppState {
   /** Add a coordinate system (origin + primary/secondary directions); null if the directions are parallel. */
   addCoordinateSystem: (origin: Vec3, primary: Vec3, secondary: Vec3, name?: string) => string | null;
   removeCoordinateSystem: (id: string) => void;
+  /** Place a body into a coordinate system's frame (rigid transform), replacing it; null if missing. */
+  placeBodyInCoordinateSystem: (bodyId: string, csId: string) => string | null;
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
 
@@ -532,6 +534,14 @@ export const useStore = create<AppState>((set, get) => {
     return cs.id;
   },
   removeCoordinateSystem: (id) => set((s) => ({ coordSystems: s.coordSystems.filter((c) => c.id !== id), projectDirty: true })),
+  placeBodyInCoordinateSystem: (bodyId, csId) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    const cs = get().coordSystems.find((c) => c.id === csId);
+    if (!body || !cs) return null;
+    const placed = placeBodyInFrame(body, cs);
+    get().replaceBody(bodyId, placed);
+    return placed.id;
+  },
 
   splitBodyByPlane: (bodyId, planeId) => {
     const body = get().bodies.find((b) => b.id === bodyId);

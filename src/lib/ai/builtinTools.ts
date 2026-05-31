@@ -1008,6 +1008,25 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'place_body_in_coordinate_system',
+    description: 'Place a body into a reference coordinate system\'s frame — a rigid transform that treats the body\'s coordinates as local to the CSYS (SolidWorks part placement). Use list_coordinate_systems for ids; the body is replaced by the placed copy.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        coordinateSystemId: { type: 'string', description: 'Coordinate system id from list_coordinate_systems' },
+      },
+      required: ['coordinateSystemId'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const id = useStore.getState().placeBodyInCoordinateSystem(body.id, assertString(args.coordinateSystemId, 'coordinateSystemId'));
+      if (!id) throw new Error('Body or coordinate system not found');
+      return { success: true, bodyId: id };
+    },
+  });
+
+  registerTool({
     name: 'create_point_at_axis_plane',
     description: 'Create a datum point where a datum axis pierces a datum plane (SolidWorks point at axis/plane intersection). Use list_axes and list_planes for ids; null if the axis is parallel to the plane.',
     parameters: {
