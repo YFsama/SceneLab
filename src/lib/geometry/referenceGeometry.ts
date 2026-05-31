@@ -219,3 +219,48 @@ export function pointAtAxisPlaneIntersection(axis: AxisDefinition, plane: PlaneD
     name,
   );
 }
+
+// --- Coordinate systems ---
+
+let nextCsId = 1;
+const genCsId = () => `cs_${nextCsId++}`;
+
+/** A reference coordinate system: an origin and a right-handed orthonormal frame. */
+export interface CoordinateSystemDefinition {
+  id: string;
+  name: string;
+  origin: Vec3;
+  xAxis: Vec3;
+  yAxis: Vec3;
+  zAxis: Vec3;
+}
+
+/**
+ * Build a coordinate system from an origin, a primary direction (becomes +X) and
+ * a secondary direction defining the XY plane. Gram–Schmidt makes the frame
+ * right-handed and orthonormal. Throws if the two directions are parallel (no
+ * plane to orient against).
+ */
+export function makeCoordinateSystem(origin: Vec3, primary: Vec3, secondary: Vec3, name = 'Coordinate system'): CoordinateSystemDefinition {
+  const x = normalize(primary);
+  const zRaw = cross(x, secondary);
+  if (len(zRaw) < 1e-9) throw new Error('Primary and secondary directions must not be parallel');
+  const z = normalize(zRaw);
+  const y = cross(z, x); // unit length: z ⟂ x, both unit
+  return { id: genCsId(), name, origin: { ...origin }, xAxis: x, yAxis: y, zAxis: z };
+}
+
+/** Express a world-space point in a coordinate system's local frame. */
+export function worldToLocal(cs: CoordinateSystemDefinition, point: Vec3): Vec3 {
+  const w = { x: point.x - cs.origin.x, y: point.y - cs.origin.y, z: point.z - cs.origin.z };
+  return { x: dot(w, cs.xAxis), y: dot(w, cs.yAxis), z: dot(w, cs.zAxis) };
+}
+
+/** Map a point given in a coordinate system's local frame back to world space. */
+export function localToWorld(cs: CoordinateSystemDefinition, local: Vec3): Vec3 {
+  return {
+    x: cs.origin.x + cs.xAxis.x * local.x + cs.yAxis.x * local.y + cs.zAxis.x * local.z,
+    y: cs.origin.y + cs.xAxis.y * local.x + cs.yAxis.y * local.y + cs.zAxis.y * local.z,
+    z: cs.origin.z + cs.xAxis.z * local.x + cs.yAxis.z * local.y + cs.zAxis.z * local.z,
+  };
+}

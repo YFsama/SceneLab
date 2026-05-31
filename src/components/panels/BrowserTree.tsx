@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Layers, History, Frame, Slash, Dot, X } from 'lucide-react';
+import { Box, Layers, History, Frame, Slash, Dot, Axis3d, X } from 'lucide-react';
 import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
@@ -19,9 +19,11 @@ export function BrowserTree() {
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
   const points = useStore((s) => s.points);
+  const coordSystems = useStore((s) => s.coordSystems);
   const removePlane = useStore((s) => s.removePlane);
   const removeAxis = useStore((s) => s.removeAxis);
   const removePoint = useStore((s) => s.removePoint);
+  const removeCoordinateSystem = useStore((s) => s.removeCoordinateSystem);
   const featureTree = useStore((s) => s.featureTree);
   const [menu, setMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
 
@@ -106,7 +108,7 @@ export function BrowserTree() {
         </div>
 
         {/* Reference geometry section */}
-        {(planes.length > 0 || axes.length > 0 || points.length > 0) && (
+        {(planes.length > 0 || axes.length > 0 || points.length > 0 || coordSystems.length > 0) && (
           <div className="border-t border-panel-border p-1">
             <p className="px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider">
               {t('panel.referenceGeometry')}
@@ -119,6 +121,9 @@ export function BrowserTree() {
             ))}
             {points.map((p) => (
               <RefRow key={p.id} icon={<Dot size={12} />} name={p.name} onDelete={() => removePoint(p.id)} deleteLabel={t('menu.delete')} />
+            ))}
+            {coordSystems.map((c) => (
+              <RefRow key={c.id} icon={<Axis3d size={12} />} name={c.name} onDelete={() => removeCoordinateSystem(c.id)} deleteLabel={t('menu.delete')} />
             ))}
           </div>
         )}

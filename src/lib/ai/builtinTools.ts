@@ -970,6 +970,44 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'list_coordinate_systems',
+    description: 'List the scene\'s reference coordinate systems with id, name, origin and the X/Y/Z axis directions.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const r3 = (n: number) => Number(n.toFixed(3));
+      const v = (p: { x: number; y: number; z: number }) => ({ x: r3(p.x), y: r3(p.y), z: r3(p.z) });
+      return {
+        coordinateSystems: useStore.getState().coordSystems.map((c) => ({
+          id: c.id, name: c.name, origin: v(c.origin), xAxis: v(c.xAxis), yAxis: v(c.yAxis), zAxis: v(c.zAxis),
+        })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'create_coordinate_system',
+    description: 'Create a reference coordinate system from an origin, a primary direction (+X) and a secondary direction defining the XY plane (Gram–Schmidt makes it orthonormal). Fails if the directions are parallel.',
+    parameters: {
+      type: 'object',
+      properties: {
+        origin: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+        primary: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, description: 'Becomes the +X axis' },
+        secondary: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, description: 'Defines the XY plane' },
+      },
+      required: ['origin', 'primary', 'secondary'],
+    },
+    execute: async (args) => {
+      const id = useStore.getState().addCoordinateSystem(
+        assertVec3(args.origin, 'origin'),
+        assertVec3(args.primary, 'primary'),
+        assertVec3(args.secondary, 'secondary'),
+      );
+      if (!id) throw new Error('Primary and secondary directions must not be parallel');
+      return { success: true, coordinateSystemId: id };
+    },
+  });
+
+  registerTool({
     name: 'create_point_at_axis_plane',
     description: 'Create a datum point where a datum axis pierces a datum plane (SolidWorks point at axis/plane intersection). Use list_axes and list_planes for ids; null if the axis is parallel to the plane.',
     parameters: {

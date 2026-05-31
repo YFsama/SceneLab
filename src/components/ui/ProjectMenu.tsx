@@ -14,6 +14,7 @@ export function ProjectMenu() {
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
   const points = useStore((s) => s.points);
+  const coordSystems = useStore((s) => s.coordSystems);
   const setProjectDirty = useStore((s) => s.setProjectDirty);
   const loadProject = useStore((s) => s.loadProject);
   const addDirectBody = useStore((s) => s.addDirectBody);
@@ -22,7 +23,7 @@ export function ProjectMenu() {
 
   const handleSave = () => {
     try {
-      const project = serializeProject(projectName, featureTree.features, bodies, directBodies, { planes, axes, points });
+      const project = serializeProject(projectName, featureTree.features, bodies, directBodies, { planes, axes, points, coordSystems });
       const json = saveToFile(project);
       downloadFile(json, `${projectName}.studio3d`);
       setProjectDirty(false);

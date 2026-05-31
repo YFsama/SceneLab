@@ -15,6 +15,9 @@ import {
   makePoint,
   midpoint,
   pointAtAxisPlaneIntersection,
+  makeCoordinateSystem,
+  worldToLocal,
+  localToWorld,
 } from './referenceGeometry';
 import { createBox } from './brep';
 import { listFaces } from './query';
@@ -208,5 +211,51 @@ describe('reference points', () => {
     const xAxis = makeAxis({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 });
     const plane = makePlane({ x: 0, y: 0, z: 5 }, { x: 0, y: 0, z: 1 }); // axis runs in z=0, parallel
     expect(pointAtAxisPlaneIntersection(xAxis, plane)).toBeNull();
+  });
+});
+
+describe('coordinate systems', () => {
+  const dot = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) =>
+    a.x * b.x + a.y * b.y + a.z * b.z;
+
+  it('builds a right-handed orthonormal frame (x × y = z)', () => {
+    const cs = makeCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, { x: 1, y: 3, z: 0 });
+    for (const v of [cs.xAxis, cs.yAxis, cs.zAxis]) {
+      expect(Math.hypot(v.x, v.y, v.z)).toBeCloseTo(1, 6);
+    }
+    expect(dot(cs.xAxis, cs.yAxis)).toBeCloseTo(0, 6);
+    expect(dot(cs.xAxis, cs.zAxis)).toBeCloseTo(0, 6);
+    expect(dot(cs.yAxis, cs.zAxis)).toBeCloseTo(0, 6);
+    // x × y = z
+    const cxy = {
+      x: cs.xAxis.y * cs.yAxis.z - cs.xAxis.z * cs.yAxis.y,
+      y: cs.xAxis.z * cs.yAxis.x - cs.xAxis.x * cs.yAxis.z,
+      z: cs.xAxis.x * cs.yAxis.y - cs.xAxis.y * cs.yAxis.x,
+    };
+    expect(cxy.x).toBeCloseTo(cs.zAxis.x, 6);
+    expect(cxy.y).toBeCloseTo(cs.zAxis.y, 6);
+    expect(cxy.z).toBeCloseTo(cs.zAxis.z, 6);
+  });
+
+  it('throws when primary and secondary directions are parallel', () => {
+    expect(() => makeCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 2, y: 0, z: 0 })).toThrow();
+  });
+
+  it('worldToLocal / localToWorld round-trip', () => {
+    const cs = makeCoordinateSystem({ x: 10, y: -5, z: 2 }, { x: 0, y: 1, z: 0 }, { x: 1, y: 0, z: 0 });
+    const p = { x: 3, y: 7, z: -4 };
+    const local = worldToLocal(cs, p);
+    const back = localToWorld(cs, local);
+    expect(back.x).toBeCloseTo(p.x, 6);
+    expect(back.y).toBeCloseTo(p.y, 6);
+    expect(back.z).toBeCloseTo(p.z, 6);
+  });
+
+  it('the origin maps to the local zero', () => {
+    const cs = makeCoordinateSystem({ x: 4, y: 4, z: 4 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const local = worldToLocal(cs, cs.origin);
+    expect(local.x).toBeCloseTo(0, 6);
+    expect(local.y).toBeCloseTo(0, 6);
+    expect(local.z).toBeCloseTo(0, 6);
   });
 });

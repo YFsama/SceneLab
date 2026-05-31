@@ -3,7 +3,7 @@ import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, sa
 import { createBox, computeVolume } from '../geometry/brep';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
-import { standardPlanes, makeAxis, makePoint } from '../geometry/referenceGeometry';
+import { standardPlanes, makeAxis, makePoint, makeCoordinateSystem } from '../geometry/referenceGeometry';
 
 describe('project round-trip (parametric)', () => {
   it('rebuilds the feature tree and geometry from a saved project', () => {
@@ -81,6 +81,7 @@ describe('saveToFile / loadFromFile', () => {
       planes: standardPlanes(),
       axes: [makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 'Z')],
       points: [makePoint({ x: 1, y: 2, z: 3 }, 'P')],
+      coordSystems: [makeCoordinateSystem({ x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 'CS')],
     };
     const json = saveToFile(serializeProject('Ref', tree.features, [], [], refGeo));
     const loaded = loadFromFile(json);
@@ -90,11 +91,13 @@ describe('saveToFile / loadFromFile', () => {
     expect(rg.axes[0].direction.z).toBeCloseTo(1, 6);
     expect(rg.points).toHaveLength(1);
     expect(rg.points[0].position).toEqual({ x: 1, y: 2, z: 3 });
+    expect(rg.coordSystems).toHaveLength(1);
+    expect(rg.coordSystems[0].origin).toEqual({ x: 1, y: 0, z: 0 });
   });
 
   it('deserializeReferenceGeometry defaults to empty arrays for old files', () => {
     const rg = deserializeReferenceGeometry({ version: 1, name: 'x', features: [], bodies: [], metadata: { created: '', modified: '', appVersion: '' } });
-    expect(rg).toEqual({ planes: [], axes: [], points: [] });
+    expect(rg).toEqual({ planes: [], axes: [], points: [], coordSystems: [] });
   });
 
   it('should throw on invalid JSON', () => {

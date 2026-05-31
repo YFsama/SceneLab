@@ -31,6 +31,7 @@ export function ViewportCanvas() {
   const datumGroupRef = useRef<THREE.Group | null>(null);
   const axisGroupRef = useRef<THREE.Group | null>(null);
   const pointGroupRef = useRef<THREE.Group | null>(null);
+  const csGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -46,6 +47,7 @@ export function ViewportCanvas() {
   const datumPlanes = useStore((s) => s.planes);
   const datumAxes = useStore((s) => s.axes);
   const datumPoints = useStore((s) => s.points);
+  const coordSystems = useStore((s) => s.coordSystems);
   const deselectAll = useStore((s) => s.deselectAll);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -168,6 +170,11 @@ export function ViewportCanvas() {
     pointGroup.name = 'datum-points';
     scene.add(pointGroup);
     pointGroupRef.current = pointGroup;
+
+    const csGroup = new THREE.Group();
+    csGroup.name = 'coordinate-systems';
+    scene.add(csGroup);
+    csGroupRef.current = csGroup;
 
     animate();
 
@@ -477,6 +484,41 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [datumPoints]);
+
+  // Render the store's coordinate systems as an RGB axis triad at each origin.
+  useEffect(() => {
+    const csGroup = csGroupRef.current;
+    if (!csGroup) return;
+
+    while (csGroup.children.length > 0) {
+      const child = csGroup.children[0]!;
+      csGroup.remove(child);
+      if (child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+
+    const len = 3;
+    for (const cs of coordSystems) {
+      const o = cs.origin;
+      const triad: [THREE.Vector3, number][] = [
+        [new THREE.Vector3(cs.xAxis.x, cs.xAxis.y, cs.xAxis.z), 0xf38ba8], // X red
+        [new THREE.Vector3(cs.yAxis.x, cs.yAxis.y, cs.yAxis.z), 0xa6e3a1], // Y green
+        [new THREE.Vector3(cs.zAxis.x, cs.zAxis.y, cs.zAxis.z), 0x89b4fa], // Z blue
+      ];
+      for (const [dir, color] of triad) {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(o.x, o.y, o.z),
+          new THREE.Vector3(o.x + dir.x * len, o.y + dir.y * len, o.z + dir.z * len),
+        ]);
+        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color }));
+        line.name = `cs-${cs.id}`;
+        csGroup.add(line);
+      }
+    }
+    dirtyRef.current = true;
+  }, [coordSystems]);
 
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;

@@ -5,7 +5,7 @@ import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
-import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, type AxisDefinition, type PointDefinition } from '../lib/geometry/referenceGeometry';
+import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
 import { applyCircularArray } from '../lib/geometry/operations';
 
@@ -124,6 +124,12 @@ interface AppState {
   /** Datum point where a datum axis pierces a datum plane; null if missing or parallel. */
   addPointAtAxisPlane: (axisId: string, planeId: string) => string | null;
   removePoint: (id: string) => void;
+
+  // Reference geometry — coordinate systems.
+  coordSystems: CoordinateSystemDefinition[];
+  /** Add a coordinate system (origin + primary/secondary directions); null if the directions are parallel. */
+  addCoordinateSystem: (origin: Vec3, primary: Vec3, secondary: Vec3, name?: string) => string | null;
+  removeCoordinateSystem: (id: string) => void;
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
 
@@ -395,6 +401,7 @@ export const useStore = create<AppState>((set, get) => {
       planes: [],
       axes: [],
       points: [],
+      coordSystems: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -413,6 +420,7 @@ export const useStore = create<AppState>((set, get) => {
       planes: referenceGeometry?.planes ?? [],
       axes: referenceGeometry?.axes ?? [],
       points: referenceGeometry?.points ?? [],
+      coordSystems: referenceGeometry?.coordSystems ?? [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -512,6 +520,19 @@ export const useStore = create<AppState>((set, get) => {
   },
   removePoint: (id) => set((s) => ({ points: s.points.filter((p) => p.id !== id), projectDirty: true })),
 
+  coordSystems: [],
+  addCoordinateSystem: (origin, primary, secondary, name) => {
+    let cs: CoordinateSystemDefinition;
+    try {
+      cs = makeCoordinateSystem(origin, primary, secondary, name);
+    } catch {
+      return null;
+    }
+    set((s) => ({ coordSystems: [...s.coordSystems, cs], projectDirty: true }));
+    return cs.id;
+  },
+  removeCoordinateSystem: (id) => set((s) => ({ coordSystems: s.coordSystems.filter((c) => c.id !== id), projectDirty: true })),
+
   splitBodyByPlane: (bodyId, planeId) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     const plane = get().planes.find((p) => p.id === planeId);
@@ -608,10 +629,10 @@ export const useStore = create<AppState>((set, get) => {
 
   autosave: () => {
     if (typeof localStorage === 'undefined') return false;
-    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points } = get();
+    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points, coordSystems } = get();
     if (!projectDirty) return false;
     try {
-      const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points });
+      const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points, coordSystems });
       localStorage.setItem(AUTOSAVE_KEY, saveToFile(project));
       return true;
     } catch {

@@ -502,11 +502,12 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().points).toHaveLength(0);
     });
 
-    it('autosave + restoreAutosave preserves datum planes, axes and points', () => {
+    it('autosave + restoreAutosave preserves datum planes, axes, points and coordinate systems', () => {
       useStore.getState().clearScene();
       useStore.getState().ensureStandardPlanes();
       useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
       useStore.getState().addPoint({ x: 5, y: 6, z: 7 });
+      useStore.getState().addCoordinateSystem({ x: 1, y: 1, z: 1 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
       expect(useStore.getState().autosave()).toBe(true);
       useStore.getState().clearScene();
       expect(useStore.getState().planes).toHaveLength(0);
@@ -515,6 +516,30 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().axes).toHaveLength(1);
       expect(useStore.getState().points).toHaveLength(1);
       expect(useStore.getState().points[0].position).toEqual({ x: 5, y: 6, z: 7 });
+      expect(useStore.getState().coordSystems).toHaveLength(1);
+    });
+  });
+
+  describe('coordinate systems', () => {
+    beforeEach(() => useStore.getState().clearScene());
+
+    it('addCoordinateSystem stores an orthonormal frame; clearScene wipes it', () => {
+      const id = useStore.getState().addCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, { x: 0, y: 5, z: 0 });
+      expect(id).toBeTruthy();
+      const cs = useStore.getState().coordSystems.find((c) => c.id === id)!;
+      expect(Math.hypot(cs.xAxis.x, cs.xAxis.y, cs.xAxis.z)).toBeCloseTo(1, 6);
+      useStore.getState().clearScene();
+      expect(useStore.getState().coordSystems).toHaveLength(0);
+    });
+
+    it('addCoordinateSystem returns null for parallel directions', () => {
+      expect(useStore.getState().addCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 3, y: 0, z: 0 })).toBeNull();
+    });
+
+    it('removeCoordinateSystem removes by id', () => {
+      const id = useStore.getState().addCoordinateSystem({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 })!;
+      useStore.getState().removeCoordinateSystem(id);
+      expect(useStore.getState().coordSystems).toHaveLength(0);
     });
   });
 });
