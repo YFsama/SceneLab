@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
-import { applyCircularArray, placeBodyInFrame } from '../lib/geometry/operations';
+import { applyCircularArray, placeBodyInFrame, resizeBody } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -76,6 +76,8 @@ interface AppState {
   /** Create a default-sized primitive of `kind`, add it, and return its id. */
   addPrimitive: (kind: PrimitiveKind) => string;
   replaceBody: (oldId: string, newBody: SolidBody) => void;
+  /** Resize a body to exact X/Y/Z extents (mm), keeping it selected; false if missing or invalid. */
+  resizeBodyTo: (bodyId: string, target: Vec3) => boolean;
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
@@ -335,6 +337,20 @@ export const useStore = create<AppState>((set, get) => {
       set({ directBodies: [...directBodies, newBody], projectDirty: true });
     }
     recombine();
+  },
+  resizeBodyTo: (bodyId, target) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    if (!body) return false;
+    let resized: SolidBody;
+    try {
+      resized = resizeBody(body, target);
+    } catch {
+      return false;
+    }
+    get().replaceBody(bodyId, resized);
+    // Keep the selection on the resized body so the properties panel follows it.
+    set((s) => ({ selectedIds: s.selectedIds.map((sid) => (sid === bodyId ? resized.id : sid)) }));
+    return true;
   },
   removeDirectBody: (id) => {
     pushUndo();

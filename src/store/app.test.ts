@@ -316,6 +316,29 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().redo()).toBe(false);
   });
 
+  it('resizeBodyTo resizes a body to exact extents and keeps it selected', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    const ok = useStore.getState().resizeBodyTo(box.id, { x: 40, y: 5, z: 20 });
+    expect(ok).toBe(true);
+    const sel = useStore.getState().selectedIds;
+    expect(sel).toHaveLength(1);
+    const resized = useStore.getState().bodies.find((b) => b.id === sel[0])!;
+    const xs = resized.vertices.map((v) => v.x);
+    const ys = resized.vertices.map((v) => v.y);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(40, 4);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(5, 4);
+  });
+
+  it('resizeBodyTo rejects a missing body or non-positive dims', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().resizeBodyTo('nope', { x: 1, y: 1, z: 1 })).toBe(false);
+    expect(useStore.getState().resizeBodyTo(box.id, { x: 0, y: 1, z: 1 })).toBe(false);
+  });
+
   it('removeDirectBody clears its selection and marks the project dirty', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);

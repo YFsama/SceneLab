@@ -32,6 +32,7 @@ export function ViewportCanvas() {
   const axisGroupRef = useRef<THREE.Group | null>(null);
   const pointGroupRef = useRef<THREE.Group | null>(null);
   const csGroupRef = useRef<THREE.Group | null>(null);
+  const gridRef = useRef<THREE.GridHelper | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -51,6 +52,7 @@ export function ViewportCanvas() {
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
   const deselectAll = useStore((s) => s.deselectAll);
+  const theme = useStore((s) => s.theme);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
   const setSketchPlaneId = useStore((s) => s.setSketchPlaneId);
@@ -133,6 +135,7 @@ export function ViewportCanvas() {
     grid.material.opacity = 0.5;
     grid.material.transparent = true;
     scene.add(grid);
+    gridRef.current = grid;
 
     const axes = new THREE.AxesHelper(2);
     scene.add(axes);
@@ -527,6 +530,21 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [coordSystems]);
+
+  // Theme the 3D viewport so light/high-contrast modes change the scene too —
+  // the canvas background and grid follow the active theme, not just the panels.
+  useEffect(() => {
+    const palette: Record<string, { bg: number; grid: number }> = {
+      dark: { bg: 0x1e1e2e, grid: 0x313244 },
+      light: { bg: 0xeff1f5, grid: 0xccd0da },
+      'high-contrast': { bg: 0x000000, grid: 0x666666 },
+    };
+    const p = palette[theme] ?? palette.dark!;
+    rendererRef.current?.setClearColor(p.bg);
+    const grid = gridRef.current;
+    if (grid) (grid.material as THREE.LineBasicMaterial).color.setHex(p.grid);
+    dirtyRef.current = true;
+  }, [theme]);
 
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;

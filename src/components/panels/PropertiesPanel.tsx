@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import type { SolidBody } from '../../lib/geometry/types';
 import { Settings, Box, Ruler, Beaker, Weight, Layers, RulerIcon, Move, BarChart, Network, Maximize, Shield, Torus, Gauge, Crosshair, RefreshCw, GitBranch, Hash, TrendingUp, CornerDownRight, AlertTriangle, Zap, ArrowUpDown, Triangle, CheckCircle, Activity, Proportions, Ratio, Shapes, Minus, Diamond, Orbit, FlipHorizontal, Circle, ArrowRight, Pentagon, Hexagon, Waves, Columns, Anchor, Percent, Sliders, ArrowDownUp, Grid3X3, Network as NetworkIcon, Sigma, AreaChart, Target, Compass, Navigation, TrendingDown, Waypoints, BoxSelect, Layers as LayersIcon, MapPin, GitCommit, GitBranch as GitBranchIcon, GitMerge, GitPullRequest, Spline, Crosshair as CrosshairIcon, Ruler as RulerIcon2, CircleDot, Waypoints as WaypointsIcon, ArrowUpRight, TrendingUp as TrendingUpIcon, Waves as WavesIcon, Move as MoveIcon, Layers as LayersIcon2, Waypoints as WaypointsIcon2, Circle as CircleIcon, ArrowDown as ArrowDownIcon, ArrowRight as ArrowRightIcon, Spline as SplineIcon, Move as MoveIcon2, Square as SquareIcon, Diamond as DiamondIcon, CornerDownLeft, Move as MoveIcon3, ArrowRightLeft, Spline as SplineIcon2, Move as MoveIcon4, Square as SquareIcon2, Diamond as DiamondIcon2, Triangle as TriangleIcon, ArrowDown as ArrowDownIcon2, ArrowRightLeft as ArrowRightLeftIcon, Spline as SplineIcon3, Move as MoveIcon5, Square as SquareIcon3, Diamond as DiamondIcon3, Triangle as TriangleIcon2, ArrowDown as ArrowDownIcon3, ArrowRightLeft as ArrowRightLeftIcon2, Spline as SplineIcon4, Move as MoveIcon6, Square as SquareIcon4, Diamond as DiamondIcon4, Triangle as TriangleIcon3, ArrowDown as ArrowDownIcon4, ArrowRightLeft as ArrowRightLeftIcon3, Spline as SplineIcon5 } from 'lucide-react';
 import { analyzeOverhangs, analyzeStability, recommendOrientation, estimatePrintJob, estimateSupportVolume, analyzeBedContact } from '../../lib/print';
 import { computeBoundingBox, computeBoundingBoxCenter, computeCentroid, computeVolume, computeSurfaceArea, computeTotalEdgeLength, computeBoundingBoxDiagonal, computeMeshStatistics, computeAverageVertexDegree, computeLargestFace, checkManifold, computeTopology, computeMeshQuality, checkWindingOrder, computeAdjacency, computeValenceDistribution, computeCurvature, computeDihedralAngles, computeWorstFaceAspectRatio, computeMaxEdgeCurvature, checkNormalConsistency, computeEdgeAngleDistribution, computeRegularFaceCount, computeEdgeLengthDistribution, computeFaceAngleDistribution, computeEdgeLengthRatio, computeFaceTypeCount, computeEdgeTypeCount, computeVertexTypeCount, computeMeshGenus, computeSymmetry, computeCompactness, computeElongation, computeConvexity, computeSolidity, computeRoughness, computeThickness, computeCenterOfMassOffset, computePrincipalMoments, computeVolumeRatios, computeAspectRatioDistribution, computeSkewnessDistribution, computeFaceEdgeCountDistribution, computeVertexValenceDistribution, computeEdgeLengthStatistics, computeFaceAreaStatistics, computeVertexDistanceStatistics, computeEdgeAngleStatistics, computeFaceNormalStatistics, computeEdgeNormalStatistics, computeEdgeDihedralStatistics, computeEdgeLengthPercentiles, computeFaceAreaPercentiles, computeVertexDistancePercentiles, computeEdgeDihedralPercentiles, computeEdgeAnglePercentiles, computeFaceNormalPercentiles, computeEdgeTangentPercentiles, computeEdgeCurvaturePercentiles, computeVertexValencePercentiles } from '../../lib/geometry/brep';
@@ -20,6 +21,7 @@ export function PropertiesPanel() {
   const { t } = useT();
   const selectedIds = useStore((s) => s.selectedIds);
   const bodies = useStore((s) => s.bodies);
+  const resizeBodyTo = useStore((s) => s.resizeBodyTo);
   const [material, setMaterial] = useState('steel');
 
   const selectedBody = selectedIds.length === 1
@@ -52,18 +54,17 @@ export function PropertiesPanel() {
                 <span>{t('panel.dimensions')}</span>
               </div>
               {(() => {
-                const bb = computeBoundingBox(selectedBody);
-                const dx = (bb.max.x - bb.min.x).toFixed(2);
-                const dy = (bb.max.y - bb.min.y).toFixed(2);
-                const dz = (bb.max.z - bb.min.z).toFixed(2);
                 const diag = computeBoundingBoxDiagonal(selectedBody).toFixed(2);
                 const center = computeBoundingBoxCenter(selectedBody);
                 const centroid = computeCentroid(selectedBody);
                 return (
                   <div className="pl-4 text-xs text-text-secondary space-y-0.5">
-                    <p>X: {dx} mm</p>
-                    <p>Y: {dy} mm</p>
-                    <p>Z: {dz} mm</p>
+                    <DimensionEditor
+                      key={selectedBody.id}
+                      body={selectedBody}
+                      onResize={(dims) => resizeBodyTo(selectedBody.id, dims)}
+                      hint={t('panel.resizeHint')}
+                    />
                     <p className="flex items-center gap-1">
                       <Move size={10} />
                       {t('panel.diagonal')}: {diag} mm
@@ -1767,5 +1768,63 @@ export function PropertiesPanel() {
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * Editable X/Y/Z bounding-box dimensions (mm). Type a value and press Enter (or
+ * blur) to resize the body to that exact extent. Seeded from the body's current
+ * size; remount via a `key` on the body id resets it after an external change.
+ */
+function DimensionEditor({ body, onResize, hint }: { body: SolidBody; onResize: (dims: { x: number; y: number; z: number }) => void; hint: string }) {
+  const bb = computeBoundingBox(body);
+  const init = {
+    x: (bb.max.x - bb.min.x).toFixed(2),
+    y: (bb.max.y - bb.min.y).toFixed(2),
+    z: (bb.max.z - bb.min.z).toFixed(2),
+  };
+  const [vals, setVals] = useState(init);
+
+  const commit = () => {
+    const x = parseFloat(vals.x);
+    const y = parseFloat(vals.y);
+    const z = parseFloat(vals.z);
+    if ([x, y, z].every((n) => Number.isFinite(n) && n > 0)) {
+      // Only resize if something actually changed (avoid churn on a blur).
+      if (x.toFixed(2) !== init.x || y.toFixed(2) !== init.y || z.toFixed(2) !== init.z) {
+        onResize({ x, y, z });
+      }
+    } else {
+      setVals(init); // revert invalid input
+    }
+  };
+
+  const axes: { key: 'x' | 'y' | 'z'; label: string }[] = [
+    { key: 'x', label: 'X' },
+    { key: 'y', label: 'Y' },
+    { key: 'z', label: 'Z' },
+  ];
+
+  return (
+    <div className="space-y-0.5">
+      {axes.map(({ key, label }) => (
+        <div key={key} className="flex items-center gap-1">
+          <span className="w-3 text-text-muted">{label}</span>
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={vals[key]}
+            onChange={(e) => setVals((v) => ({ ...v, [key]: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            onBlur={commit}
+            className="w-16 px-1 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
+            aria-label={`${label} mm`}
+          />
+          <span className="text-text-muted">mm</span>
+        </div>
+      ))}
+      <p className="text-[10px] text-text-muted">{hint}</p>
+    </div>
   );
 }
