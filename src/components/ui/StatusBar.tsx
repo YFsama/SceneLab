@@ -55,20 +55,21 @@ export function StatusBar() {
       <div className="flex items-center gap-1">
         <button
           onClick={toggleLocale}
-          className="flex items-center gap-0.5 px-1.5 py-0.5 text-text-muted hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+          className="flex items-center gap-1 px-2 py-0.5 text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
           aria-label={`Switch to ${locale === 'en' ? '中文' : 'English'}`}
           title={`Switch to ${locale === 'en' ? '中文' : 'English'}`}
         >
           <Globe size={12} />
-          <span className="uppercase">{locale}</span>
+          <span>{locale === 'en' ? '中文' : 'English'}</span>
         </button>
         <button
           onClick={cycleTheme}
-          className="p-0.5 text-text-muted hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+          className="flex items-center gap-1 px-2 py-0.5 text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
           aria-label={`${t('status.theme')}: ${theme}`}
           title={`${t('status.theme')}: ${theme}`}
         >
           {theme === 'dark' ? <Moon size={12} /> : <Sun size={12} />}
+          <span>{t(`theme.${theme}`)}</span>
         </button>
         <ProjectMenu />
       </div>
