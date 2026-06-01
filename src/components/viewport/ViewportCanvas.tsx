@@ -194,11 +194,18 @@ export function ViewportCanvas() {
     axisLabels.add(xl, yl, zl);
     scene.add(axisLabels);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    // Soft, even studio lighting: a sky/ground hemisphere for ambient fill plus
+    // a key and a dimmer back light so parts read as solid from any angle.
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444455, 0.55);
+    scene.add(hemi);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.35);
     scene.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
     dirLight.position.set(5, 10, 7);
     scene.add(dirLight);
+    const backLight = new THREE.DirectionalLight(0xffffff, 0.25);
+    backLight.position.set(-6, 4, -8);
+    scene.add(backLight);
 
     const planesGroup = new THREE.Group();
     planesGroup.name = 'sketch-planes';
