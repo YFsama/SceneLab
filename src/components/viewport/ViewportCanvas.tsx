@@ -48,6 +48,8 @@ export function ViewportCanvas() {
   const datumAxes = useStore((s) => s.axes);
   const datumPoints = useStore((s) => s.points);
   const coordSystems = useStore((s) => s.coordSystems);
+  const selectedIds = useStore((s) => s.selectedIds);
+  const selectObject = useStore((s) => s.selectObject);
   const deselectAll = useStore((s) => s.deselectAll);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -376,8 +378,13 @@ export function ViewportCanvas() {
       geo.setIndex(indices);
       geo.computeVertexNormals();
 
+      // Selected bodies render in orange with an emissive glow so the pick is
+      // obvious; unselected stay the default blue.
+      const selected = selectedIds.includes(body.id);
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x89b4fa,
+        color: selected ? 0xfab387 : 0x89b4fa,
+        emissive: selected ? 0xf38800 : 0x000000,
+        emissiveIntensity: selected ? 0.35 : 0,
         roughness: 0.4,
         metalness: 0.1,
         side: THREE.DoubleSide,
@@ -385,10 +392,11 @@ export function ViewportCanvas() {
 
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = body.name;
+      mesh.userData = { bodyId: body.id };
       bodiesGroup.add(mesh);
     }
     dirtyRef.current = true;
-  }, [bodies]);
+  }, [bodies, selectedIds]);
 
   // Render the store's datum/reference planes as translucent outlined quads.
   useEffect(() => {
@@ -560,6 +568,18 @@ export function ViewportCanvas() {
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
+      // 1) A body under the cursor takes priority — clicking it selects it.
+      const bodiesGroup = bodiesGroupRef.current;
+      if (bodiesGroup) {
+        const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
+        const bodyId = bodyHits[0]?.object.userData.bodyId as string | undefined;
+        if (bodyId) {
+          selectObject(bodyId);
+          return;
+        }
+      }
+
+      // 2) Otherwise a datum sketch plane starts a sketch.
       const planesGroup = planesGroupRef.current;
       if (!planesGroup) return;
 
@@ -571,10 +591,11 @@ export function ViewportCanvas() {
         setWorkspace('sketch');
         setCurrentSketch(createSketch(planeId));
       } else {
+        // 3) Empty space clears the selection.
         deselectAll();
       }
     },
-    [sketchActive, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, selectObject, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
   );
 
   const handleMouseMove = useCallback(
