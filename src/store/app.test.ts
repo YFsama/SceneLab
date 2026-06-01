@@ -357,7 +357,7 @@ describe('app store — direct bodies', () => {
 
     it('addOffsetPlane offsets an existing plane', () => {
       useStore.getState().ensureStandardPlanes();
-      const front = useStore.getState().planes[0];
+      const front = useStore.getState().planes[0]!;
       const id = useStore.getState().addOffsetPlane(front.id, 5);
       const off = useStore.getState().planes.find((p) => p.id === id)!;
       expect(off.origin.z).toBeCloseTo(front.origin.z + 5, 6);
@@ -394,7 +394,7 @@ describe('app store — direct bodies', () => {
 
     it('removePlane removes by id and clearScene wipes all planes', () => {
       useStore.getState().ensureStandardPlanes();
-      const id = useStore.getState().planes[0].id;
+      const id = useStore.getState().planes[0]!.id;
       useStore.getState().removePlane(id);
       expect(useStore.getState().planes.find((p) => p.id === id)).toBeUndefined();
       expect(useStore.getState().planes).toHaveLength(2);
@@ -409,7 +409,7 @@ describe('app store — direct bodies', () => {
     it('addAxisFromPlanes builds the intersection axis of two standard planes', () => {
       useStore.getState().ensureStandardPlanes();
       const [front, top] = useStore.getState().planes;
-      const id = useStore.getState().addAxisFromPlanes(front.id, top.id);
+      const id = useStore.getState().addAxisFromPlanes(front!.id, top!.id);
       expect(id).toBeTruthy();
       const axis = useStore.getState().axes.find((a) => a.id === id)!;
       expect(Math.abs(axis.direction.x)).toBeCloseTo(1, 6); // Front ∩ Top = X axis
@@ -417,7 +417,7 @@ describe('app store — direct bodies', () => {
 
     it('addAxisFromPlanes returns null for parallel or missing planes', () => {
       useStore.getState().ensureStandardPlanes();
-      const front = useStore.getState().planes[0];
+      const front = useStore.getState().planes[0]!;
       const offsetId = useStore.getState().addOffsetPlane(front.id, 5)!;
       expect(useStore.getState().addAxisFromPlanes(front.id, offsetId)).toBeNull(); // parallel
       expect(useStore.getState().addAxisFromPlanes('nope', front.id)).toBeNull();
@@ -475,7 +475,7 @@ describe('app store — direct bodies', () => {
       // Z axis at (3,4) and the offset of the Top (XZ) plane... use a Z=7 plane via offset.
       const axisId = useStore.getState().addAxisFromPoints({ x: 3, y: 4, z: 0 }, { x: 3, y: 4, z: 1 })!;
       useStore.getState().ensureStandardPlanes();
-      const front = useStore.getState().planes[0]; // Front (XY), normal +Z, origin z=0
+      const front = useStore.getState().planes[0]!; // Front (XY), normal +Z, origin z=0
       const z7 = useStore.getState().addOffsetPlane(front.id, 7)!; // plane z=7
       const id = useStore.getState().addPointAtAxisPlane(axisId, z7);
       expect(id).toBeTruthy();
@@ -488,7 +488,7 @@ describe('app store — direct bodies', () => {
     it('addPointAtAxisPlane returns null for missing ids or a parallel axis', () => {
       const xAxis = useStore.getState().addAxisFromPoints({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })!;
       useStore.getState().ensureStandardPlanes();
-      const front = useStore.getState().planes[0]; // z=0 plane; X axis lies in it → parallel
+      const front = useStore.getState().planes[0]!; // z=0 plane; X axis lies in it → parallel
       expect(useStore.getState().addPointAtAxisPlane(xAxis, front.id)).toBeNull();
       expect(useStore.getState().addPointAtAxisPlane('nope', front.id)).toBeNull();
     });
@@ -515,7 +515,7 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().planes).toHaveLength(3);
       expect(useStore.getState().axes).toHaveLength(1);
       expect(useStore.getState().points).toHaveLength(1);
-      expect(useStore.getState().points[0].position).toEqual({ x: 5, y: 6, z: 7 });
+      expect(useStore.getState().points[0]!.position).toEqual({ x: 5, y: 6, z: 7 });
       expect(useStore.getState().coordSystems).toHaveLength(1);
     });
   });

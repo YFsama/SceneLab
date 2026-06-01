@@ -88,11 +88,11 @@ describe('saveToFile / loadFromFile', () => {
     const rg = deserializeReferenceGeometry(loaded);
     expect(rg.planes).toHaveLength(3);
     expect(rg.axes).toHaveLength(1);
-    expect(rg.axes[0].direction.z).toBeCloseTo(1, 6);
+    expect(rg.axes[0]!.direction.z).toBeCloseTo(1, 6);
     expect(rg.points).toHaveLength(1);
-    expect(rg.points[0].position).toEqual({ x: 1, y: 2, z: 3 });
+    expect(rg.points[0]!.position).toEqual({ x: 1, y: 2, z: 3 });
     expect(rg.coordSystems).toHaveLength(1);
-    expect(rg.coordSystems[0].origin).toEqual({ x: 1, y: 0, z: 0 });
+    expect(rg.coordSystems[0]!.origin).toEqual({ x: 1, y: 0, z: 0 });
   });
 
   it('deserializeReferenceGeometry defaults to empty arrays for old files', () => {

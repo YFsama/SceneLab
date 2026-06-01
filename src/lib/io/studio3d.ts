@@ -12,7 +12,8 @@ import type {
 } from '../features/types';
 import type { SolidBody } from '../geometry/types';
 import type { SketchEntity, SketchConstraint } from '../sketch/types';
-import type { PlaneDefinition, AxisDefinition, PointDefinition, CoordinateSystemDefinition } from '../geometry/referenceGeometry';
+import type { PlaneDefinition } from '../geometry/types';
+import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition } from '../geometry/referenceGeometry';
 
 /** Datum planes/axes/points/coordinate systems — plain serializable reference geometry. */
 export interface SerializedReferenceGeometry {

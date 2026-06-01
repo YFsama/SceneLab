@@ -57,10 +57,10 @@ describe('makePlane', () => {
 describe('standardPlanes', () => {
   it('returns three orthogonal planes through the origin', () => {
     const [front, top, right] = standardPlanes();
-    expect(front.normal).toMatchObject({ x: 0, y: 0, z: 1 });
-    expect(top.normal).toMatchObject({ x: 0, y: 1, z: 0 });
-    expect(right.normal).toMatchObject({ x: 1, y: 0, z: 0 });
-    for (const p of [front, top, right]) expect(p.origin).toMatchObject({ x: 0, y: 0, z: 0 });
+    expect(front!.normal).toMatchObject({ x: 0, y: 0, z: 1 });
+    expect(top!.normal).toMatchObject({ x: 0, y: 1, z: 0 });
+    expect(right!.normal).toMatchObject({ x: 1, y: 0, z: 0 });
+    for (const p of [front!, top!, right!]) expect(p.origin).toMatchObject({ x: 0, y: 0, z: 0 });
   });
 });
 
@@ -146,7 +146,7 @@ describe('reference axes', () => {
 
   it('intersection of the Front (XY) and Top (XZ) planes is the X axis', () => {
     const [front, top] = standardPlanes();
-    const axis = axisFromPlanes(front, top)!;
+    const axis = axisFromPlanes(front!, top!)!;
     expect(axis).not.toBeNull();
     // Direction is ±X.
     expect(Math.abs(axis.direction.x)).toBeCloseTo(1, 6);
