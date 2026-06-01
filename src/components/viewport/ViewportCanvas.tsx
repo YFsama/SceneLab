@@ -34,6 +34,7 @@ export function ViewportCanvas() {
   const csGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
+  const previewGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
@@ -155,6 +156,11 @@ export function ViewportCanvas() {
     sketchGroup.name = 'sketch-drawing';
     scene.add(sketchGroup);
     sketchGroupRef.current = sketchGroup;
+
+    const previewGroup = new THREE.Group();
+    previewGroup.name = 'sketch-preview';
+    scene.add(previewGroup);
+    previewGroupRef.current = previewGroup;
 
     const bodiesGroup = new THREE.Group();
     bodiesGroup.name = 'bodies';
@@ -359,6 +365,59 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [currentSketch, sketchActive]);
+
+  // Live rubber-band preview of the shape being drawn (from the mouse-down point
+  // to the current cursor) so you can see the line/rect/circle/arc before
+  // releasing, instead of clicking two points blind.
+  useEffect(() => {
+    const previewGroup = previewGroupRef.current;
+    if (!previewGroup) return;
+
+    while (previewGroup.children.length > 0) {
+      const child = previewGroup.children[0]!;
+      previewGroup.remove(child);
+      if (child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+
+    if (sketchActive && drawStart && mousePos && sketchTool !== 'select') {
+      const v = (x: number, y: number) => new THREE.Vector3(x, 0, y);
+      const s = drawStart;
+      const m = mousePos;
+      let pts: THREE.Vector3[] = [];
+      switch (sketchTool) {
+        case 'line':
+          pts = [v(s.x, s.y), v(m.x, m.y)];
+          break;
+        case 'rect':
+          pts = [v(s.x, s.y), v(m.x, s.y), v(m.x, m.y), v(s.x, m.y), v(s.x, s.y)];
+          break;
+        case 'circle': {
+          const r = Math.hypot(m.x - s.x, m.y - s.y);
+          const curve = new THREE.EllipseCurve(s.x, s.y, r, r, 0, Math.PI * 2, false, 0);
+          pts = curve.getPoints(64).map((p) => v(p.x, p.y));
+          break;
+        }
+        case 'arc': {
+          const r = Math.hypot(m.x - s.x, m.y - s.y);
+          const end = Math.atan2(m.y - s.y, m.x - s.x);
+          const curve = new THREE.EllipseCurve(s.x, s.y, r, r, 0, end, false, 0);
+          pts = curve.getPoints(64).map((p) => v(p.x, p.y));
+          break;
+        }
+      }
+      if (pts.length >= 2) {
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = new THREE.LineDashedMaterial({ color: 0xf9e2af, dashSize: 0.4, gapSize: 0.2 });
+        const line = new THREE.Line(geo, mat);
+        line.computeLineDistances();
+        previewGroup.add(line);
+      }
+    }
+    dirtyRef.current = true;
+  }, [drawStart, mousePos, sketchTool, sketchActive]);
 
   useEffect(() => {
     const bodiesGroup = bodiesGroupRef.current;
@@ -688,6 +747,16 @@ export function ViewportCanvas() {
           aria-hidden="true"
         >
           X: {mousePos.x.toFixed(2)} Y: {mousePos.y.toFixed(2)}
+          {drawStart && sketchTool !== 'select' && (() => {
+            const dx = Math.abs(mousePos.x - drawStart.x);
+            const dy = Math.abs(mousePos.y - drawStart.y);
+            const r = Math.hypot(mousePos.x - drawStart.x, mousePos.y - drawStart.y);
+            const extra =
+              sketchTool === 'rect' ? ` · ${dx.toFixed(2)} × ${dy.toFixed(2)} mm`
+              : sketchTool === 'line' ? ` · L ${r.toFixed(2)} mm`
+              : ` · R ${r.toFixed(2)} mm`;
+            return <span className="text-accent">{extra}</span>;
+          })()}
         </div>
       )}
     </div>
