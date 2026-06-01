@@ -22,6 +22,39 @@ const PLANE_COLORS: Record<SketchPlaneId, number> = {
   yz: 0xf38ba8,
 };
 
+/**
+ * Build a camera-facing text label as a THREE.Sprite (canvas texture). Used for
+ * sketch dimensions and the X/Y/Z axis gnomon. `worldHeight` sets the label's
+ * height in scene units; it always faces the camera and ignores depth so it
+ * stays readable.
+ */
+function makeTextSprite(text: string, hex: number, worldHeight = 0.8): THREE.Sprite {
+  const fontPx = 64;
+  const pad = 10;
+  const measure = document.createElement('canvas').getContext('2d')!;
+  measure.font = `bold ${fontPx}px sans-serif`;
+  const textW = Math.ceil(measure.measureText(text).width);
+  const canvas = document.createElement('canvas');
+  canvas.width = textW + pad * 2;
+  canvas.height = fontPx + pad * 2;
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = `#${hex.toString(16).padStart(6, '0')}`;
+  ctx.fillText(text, pad, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sprite.scale.set((canvas.width / canvas.height) * worldHeight, worldHeight, 1);
+  return sprite;
+}
+
+function disposeSprite(s: THREE.Sprite) {
+  const mat = s.material as THREE.SpriteMaterial;
+  mat.map?.dispose();
+  mat.dispose();
+}
+
 export function ViewportCanvas() {
   const { t } = useT();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -36,6 +69,7 @@ export function ViewportCanvas() {
   const csGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
+  const sketchDimGroupRef = useRef<THREE.Group | null>(null);
   const previewGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -151,6 +185,15 @@ export function ViewportCanvas() {
     const axes = new THREE.AxesHelper(2);
     scene.add(axes);
 
+    // X/Y/Z gnomon labels at the axis tips (red/green/blue) for orientation.
+    const axisLabels = new THREE.Group();
+    axisLabels.name = 'axis-labels';
+    const xl = makeTextSprite('X', 0xf38ba8, 0.5); xl.position.set(2.3, 0, 0);
+    const yl = makeTextSprite('Y', 0xa6e3a1, 0.5); yl.position.set(0, 2.3, 0);
+    const zl = makeTextSprite('Z', 0x89b4fa, 0.5); zl.position.set(0, 0, 2.3);
+    axisLabels.add(xl, yl, zl);
+    scene.add(axisLabels);
+
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambient);
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -171,6 +214,11 @@ export function ViewportCanvas() {
     previewGroup.name = 'sketch-preview';
     scene.add(previewGroup);
     previewGroupRef.current = previewGroup;
+
+    const sketchDimGroup = new THREE.Group();
+    sketchDimGroup.name = 'sketch-dimensions';
+    scene.add(sketchDimGroup);
+    sketchDimGroupRef.current = sketchDimGroup;
 
     const measureGroup = new THREE.Group();
     measureGroup.name = 'measure';
@@ -433,6 +481,42 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [drawStart, mousePos, sketchTool, sketchActive]);
+
+  // Dimension labels on the sketch: each line shows its length, each circle/arc
+  // its radius — drawn as camera-facing text sprites at the entity.
+  useEffect(() => {
+    const group = sketchDimGroupRef.current;
+    if (!group) return;
+    while (group.children.length > 0) {
+      const child = group.children[0]!;
+      group.remove(child);
+      if (child instanceof THREE.Sprite) disposeSprite(child);
+    }
+    if (currentSketch && sketchActive) {
+      const pt = (id: string) => { const e = currentSketch.entities.get(id); return e?.type === 'point' ? e : null; };
+      for (const e of currentSketch.entities.values()) {
+        if (e.type === 'line') {
+          const a = pt(e.p1Id); const b = pt(e.p2Id);
+          if (a && b) {
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            if (len > 1e-6) {
+              const s = makeTextSprite(`${len.toFixed(1)}`, 0xf9e2af, 0.6);
+              s.position.set((a.x + b.x) / 2, 0.05, (a.y + b.y) / 2);
+              group.add(s);
+            }
+          }
+        } else if (e.type === 'circle' || e.type === 'arc') {
+          const c = pt(e.centerId);
+          if (c) {
+            const s = makeTextSprite(`R${e.radius.toFixed(1)}`, 0xf9e2af, 0.6);
+            s.position.set(c.x, 0.05, c.y);
+            group.add(s);
+          }
+        }
+      }
+    }
+    dirtyRef.current = true;
+  }, [currentSketch, sketchActive]);
 
   useEffect(() => {
     const bodiesGroup = bodiesGroupRef.current;
