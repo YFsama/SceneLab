@@ -5,6 +5,8 @@ import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/ap
 import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
+import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
+import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -53,7 +55,11 @@ export function ViewportCanvas() {
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
   const deselectAll = useStore((s) => s.deselectAll);
+  const replaceBody = useStore((s) => s.replaceBody);
+  const removeDirectBody = useStore((s) => s.removeDirectBody);
+  const addDirectBodies = useStore((s) => s.addDirectBodies);
   const theme = useStore((s) => s.theme);
+  const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
   const setSketchPlaneId = useStore((s) => s.setSketchPlaneId);
@@ -687,6 +693,48 @@ export function ViewportCanvas() {
     [sketchActive, getSketchPoint],
   );
 
+  // Right-click a body in the 3D view → select it and open its context menu.
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (sketchActive) return;
+      const container = containerRef.current;
+      const camera = cameraRef.current;
+      const bodiesGroup = bodiesGroupRef.current;
+      if (!container || !camera || !bodiesGroup) return;
+      const rect = container.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycasterRef.current.setFromCamera(mouseRef.current, camera);
+      const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+      const bodyId = hit?.object.userData.bodyId as string | undefined;
+      if (bodyId) {
+        e.preventDefault();
+        selectObject(bodyId);
+        setBodyMenu({ x: e.clientX, y: e.clientY, bodyId });
+      }
+    },
+    [sketchActive, selectObject],
+  );
+
+  const bodyMenuItems = useCallback(
+    (bodyId: string): ContextMenuItem[] => {
+      const body = () => bodies.find((b) => b.id === bodyId);
+      const mirror = (axis: Axis) => { const b = body(); if (b) { const r = mirrorAcrossAxis(b, axis); if (r) replaceBody(bodyId, r); } };
+      const split = (axis: Axis) => { const b = body(); if (b) { const h = splitAcrossAxis(b, axis); if (h.length) { removeDirectBody(bodyId); addDirectBodies(h); } } };
+      return [
+        { label: t('menu.center'), onClick: () => { const b = body(); if (b) replaceBody(bodyId, centerBody(b)); } },
+        { label: t('menu.mirrorX'), onClick: () => mirror('x'), separatorBefore: true },
+        { label: t('menu.mirrorY'), onClick: () => mirror('y') },
+        { label: t('menu.mirrorZ'), onClick: () => mirror('z') },
+        { label: t('menu.splitX'), onClick: () => split('x'), separatorBefore: true },
+        { label: t('menu.splitY'), onClick: () => split('y') },
+        { label: t('menu.splitZ'), onClick: () => split('z') },
+        { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
+      ];
+    },
+    [bodies, t, replaceBody, removeDirectBody, addDirectBodies],
+  );
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (!sketchActive || sketchTool === 'select') return;
@@ -738,9 +786,13 @@ export function ViewportCanvas() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onContextMenu={handleContextMenu}
         role="img"
         aria-label={t('viewport.title')}
       />
+      {bodyMenu && (
+        <ContextMenu x={bodyMenu.x} y={bodyMenu.y} items={bodyMenuItems(bodyMenu.bodyId)} onClose={() => setBodyMenu(null)} />
+      )}
       {sketchActive && mousePos && (
         <div
           className="absolute bottom-2 left-2 px-2 py-1 bg-panel/80 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-muted font-mono pointer-events-none"
