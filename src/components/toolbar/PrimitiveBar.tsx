@@ -17,8 +17,7 @@ const primitives: { kind: PrimitiveKind; icon: typeof Box }[] = [
 /** Floating bar in the model workspace for inserting default-sized primitives. */
 export function PrimitiveBar() {
   const { t } = useT();
-  const addPrimitive = useStore((s) => s.addPrimitive);
-  const selectObject = useStore((s) => s.selectObject);
+  const setPendingPrimitive = useStore((s) => s.setPendingPrimitive);
   const ensureStandardPlanes = useStore((s) => s.ensureStandardPlanes);
 
   return (
@@ -30,7 +29,7 @@ export function PrimitiveBar() {
       {primitives.map(({ kind, icon: Icon }) => (
         <button
           key={kind}
-          onClick={() => selectObject(addPrimitive(kind))}
+          onClick={() => setPendingPrimitive(kind)}
           className="w-9 h-9 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
           aria-label={t(`primitive.${kind}`)}
           title={t(`primitive.${kind}`)}

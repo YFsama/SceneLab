@@ -19,6 +19,7 @@ import { useKeyboardShortcuts, initShortcuts } from './lib/hooks/useKeyboardShor
 import { useAutosave } from './lib/hooks/useAutosave';
 import { SkipLink } from './components/ui/SkipLink';
 import { CommandPalette } from './components/ui/CommandPalette';
+import { PrimitiveDialog } from './components/ui/PrimitiveDialog';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -85,6 +86,7 @@ export default function App() {
       <ExtrudeDialog />
       <RevolveDialog />
       <CommandPalette />
+      <PrimitiveDialog />
       <AIPanel />
     </div>
   );

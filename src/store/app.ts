@@ -144,6 +144,9 @@ interface AppState {
   setShowRevolveDialog: (v: boolean) => void;
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (v: boolean) => void;
+  /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
+  pendingPrimitive: PrimitiveKind | null;
+  setPendingPrimitive: (k: PrimitiveKind | null) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
 
@@ -582,6 +585,8 @@ export const useStore = create<AppState>((set, get) => {
   setShowRevolveDialog: (showRevolveDialog) => set({ showRevolveDialog }),
   commandPaletteOpen: false,
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
+  pendingPrimitive: null,
+  setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
