@@ -59,7 +59,11 @@ export function ViewportCanvas() {
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
   const theme = useStore((s) => s.theme);
+  const measureActive = useStore((s) => s.measureActive);
+  const measurePts = useStore((s) => s.measurePts);
+  const addMeasurePoint = useStore((s) => s.addMeasurePoint);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
+  const measureGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
   const setSketchPlaneId = useStore((s) => s.setSketchPlaneId);
@@ -167,6 +171,11 @@ export function ViewportCanvas() {
     previewGroup.name = 'sketch-preview';
     scene.add(previewGroup);
     previewGroupRef.current = previewGroup;
+
+    const measureGroup = new THREE.Group();
+    measureGroup.name = 'measure';
+    scene.add(measureGroup);
+    measureGroupRef.current = measureGroup;
 
     const bodiesGroup = new THREE.Group();
     bodiesGroup.name = 'bodies';
@@ -611,6 +620,33 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [theme]);
 
+  // Render measure points and the segment between them.
+  useEffect(() => {
+    const measureGroup = measureGroupRef.current;
+    if (!measureGroup) return;
+    while (measureGroup.children.length > 0) {
+      const child = measureGroup.children[0]!;
+      measureGroup.remove(child);
+      if (child instanceof THREE.Points || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+    for (const pt of measurePts) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute([pt.x, pt.y, pt.z], 3));
+      measureGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xf38ba8, size: 10, sizeAttenuation: false })));
+    }
+    if (measurePts.length === 2) {
+      const [a, b] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }];
+      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z)]);
+      const line = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xf38ba8, dashSize: 0.5, gapSize: 0.25 }));
+      line.computeLineDistances();
+      measureGroup.add(line);
+    }
+    dirtyRef.current = true;
+  }, [measurePts]);
+
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;
     const camera = cameraRef.current;
@@ -651,8 +687,18 @@ export function ViewportCanvas() {
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
-      // 1) A body under the cursor takes priority — clicking it selects it.
       const bodiesGroup = bodiesGroupRef.current;
+
+      // Measure mode: each click drops a point on the surface under the cursor;
+      // after two points the readout shows the distance. A third click restarts.
+      if (measureActive) {
+        if (!bodiesGroup) return;
+        const p = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.point;
+        if (p) addMeasurePoint({ x: p.x, y: p.y, z: p.z });
+        return;
+      }
+
+      // 1) A body under the cursor takes priority — clicking it selects it.
       if (bodiesGroup) {
         const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
         const bodyId = bodyHits[0]?.object.userData.bodyId as string | undefined;
@@ -678,7 +724,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, selectObject, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, measureActive, addMeasurePoint, selectObject, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
   );
 
   const handleMouseMove = useCallback(
@@ -792,6 +838,23 @@ export function ViewportCanvas() {
       />
       {bodyMenu && (
         <ContextMenu x={bodyMenu.x} y={bodyMenu.y} items={bodyMenuItems(bodyMenu.bodyId)} onClose={() => setBodyMenu(null)} />
+      )}
+      {measureActive && (
+        <div className="absolute top-2 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono pointer-events-none space-y-0.5">
+          {measurePts.length < 2 ? (
+            <span className="text-accent">{t('measure.hint')} ({measurePts.length}/2)</span>
+          ) : (() => {
+            const [a, b] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }];
+            const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+            const dist = Math.hypot(dx, dy, dz);
+            return (
+              <>
+                <div className="text-accent">{t('measure.distance')}: {dist.toFixed(2)} mm</div>
+                <div>ΔX: {dx.toFixed(2)} ΔY: {dy.toFixed(2)} ΔZ: {dz.toFixed(2)}</div>
+              </>
+            );
+          })()}
+        </div>
       )}
       {sketchActive && mousePos && (
         <div

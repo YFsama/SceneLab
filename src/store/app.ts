@@ -147,6 +147,12 @@ interface AppState {
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
+  /** Measure tool: when on, clicking points in the viewport measures distance. */
+  measureActive: boolean;
+  setMeasureActive: (v: boolean) => void;
+  /** Points picked by the measure tool (0–2); a third pick restarts. */
+  measurePts: Vec3[];
+  addMeasurePoint: (p: Vec3) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
 
@@ -587,6 +593,10 @@ export const useStore = create<AppState>((set, get) => {
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
+  measureActive: false,
+  setMeasureActive: (measureActive) => set({ measureActive, measurePts: [] }),
+  measurePts: [],
+  addMeasurePoint: (p) => set((s) => ({ measurePts: s.measurePts.length >= 2 ? [p] : [...s.measurePts, p] })),
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;

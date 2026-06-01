@@ -332,6 +332,17 @@ describe('app store — direct bodies', () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(5, 4);
   });
 
+  it('measure tool: points accumulate to 2 then restart, and toggling off clears', () => {
+    useStore.getState().setMeasureActive(true);
+    useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
+    useStore.getState().addMeasurePoint({ x: 3, y: 4, z: 0 });
+    expect(useStore.getState().measurePts).toHaveLength(2);
+    useStore.getState().addMeasurePoint({ x: 9, y: 9, z: 9 }); // third pick restarts
+    expect(useStore.getState().measurePts).toEqual([{ x: 9, y: 9, z: 9 }]);
+    useStore.getState().setMeasureActive(false);
+    expect(useStore.getState().measurePts).toHaveLength(0);
+  });
+
   it('resizeBodyTo rejects a missing body or non-positive dims', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);

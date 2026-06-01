@@ -1,6 +1,6 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline, Frame } from 'lucide-react';
+import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline, Frame, Ruler } from 'lucide-react';
 
 const primitives: { kind: PrimitiveKind; icon: typeof Box }[] = [
   { kind: 'box', icon: Box },
@@ -19,6 +19,8 @@ export function PrimitiveBar() {
   const { t } = useT();
   const setPendingPrimitive = useStore((s) => s.setPendingPrimitive);
   const ensureStandardPlanes = useStore((s) => s.ensureStandardPlanes);
+  const measureActive = useStore((s) => s.measureActive);
+  const setMeasureActive = useStore((s) => s.setMeasureActive);
 
   return (
     <div
@@ -45,6 +47,17 @@ export function PrimitiveBar() {
         title={t('reference.standardPlanes')}
       >
         <Frame size={18} />
+      </button>
+      <button
+        onClick={() => setMeasureActive(!measureActive)}
+        className={`w-9 h-9 flex items-center justify-center rounded transition-colors ${
+          measureActive ? 'bg-accent/20 text-accent' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+        }`}
+        aria-label={t('measure.tool')}
+        aria-pressed={measureActive}
+        title={t('measure.tool')}
+      >
+        <Ruler size={18} />
       </button>
     </div>
   );
