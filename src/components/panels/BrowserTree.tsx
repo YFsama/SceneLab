@@ -17,6 +17,8 @@ export function BrowserTree() {
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
+  const renameBody = useStore((s) => s.renameBody);
+  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
   const points = useStore((s) => s.points);
@@ -52,7 +54,8 @@ export function BrowserTree() {
   };
 
   const menuItems = (bodyId: string): ContextMenuItem[] => [
-    { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat) },
+    { label: t('menu.rename'), onClick: () => { const b = bodies.find((x) => x.id === bodyId); if (b) setEditing({ id: bodyId, value: b.name }); } },
+    { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat), separatorBefore: true },
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
     { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
@@ -84,27 +87,46 @@ export function BrowserTree() {
           {bodies.length === 0 ? (
             <p className="text-xs text-text-muted p-2">{t('panel.noObjects')}</p>
           ) : (
-            bodies.map((body) => (
-              <button
-                key={body.id}
-                onClick={(e) => (e.ctrlKey || e.metaKey || e.shiftKey ? toggleSelect(body.id) : selectObject(body.id))}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  selectObject(body.id);
-                  setMenu({ x: e.clientX, y: e.clientY, bodyId: body.id });
-                }}
-                className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors
-                  ${selectedIds.includes(body.id)
-                    ? 'bg-accent/20 text-accent'
-                    : 'text-text-secondary hover:bg-surface-hover'
-                  }`}
-                role="treeitem"
-                aria-selected={selectedIds.includes(body.id)}
-              >
-                <Box size={14} />
-                <span className="truncate">{body.name}</span>
-              </button>
-            ))
+            bodies.map((body) =>
+              editing?.id === body.id ? (
+                <div key={body.id} className="w-full flex items-center gap-2 px-2 py-1">
+                  <Box size={14} className="text-text-muted" />
+                  <input
+                    autoFocus
+                    value={editing.value}
+                    onChange={(e) => setEditing({ id: body.id, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { renameBody(body.id, editing.value); setEditing(null); }
+                      else if (e.key === 'Escape') setEditing(null);
+                    }}
+                    onBlur={() => { renameBody(body.id, editing.value); setEditing(null); }}
+                    className="flex-1 min-w-0 px-1 py-0.5 bg-surface border border-accent rounded text-xs text-text-primary"
+                  />
+                </div>
+              ) : (
+                <button
+                  key={body.id}
+                  onClick={(e) => (e.ctrlKey || e.metaKey || e.shiftKey ? toggleSelect(body.id) : selectObject(body.id))}
+                  onDoubleClick={() => setEditing({ id: body.id, value: body.name })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    selectObject(body.id);
+                    setMenu({ x: e.clientX, y: e.clientY, bodyId: body.id });
+                  }}
+                  className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors
+                    ${selectedIds.includes(body.id)
+                      ? 'bg-accent/20 text-accent'
+                      : 'text-text-secondary hover:bg-surface-hover'
+                    }`}
+                  role="treeitem"
+                  aria-selected={selectedIds.includes(body.id)}
+                  title={t('menu.rename')}
+                >
+                  <Box size={14} />
+                  <span className="truncate">{body.name}</span>
+                </button>
+              ),
+            )
           )}
         </div>
 

@@ -341,6 +341,16 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().workspace).toBe('model');
   });
 
+  it('renameBody updates a direct body name; rejects blank or unknown id', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().renameBody(box.id, '  Bracket  ')).toBe(true);
+    expect(useStore.getState().bodies.find((b) => b.id === box.id)!.name).toBe('Bracket'); // trimmed
+    expect(useStore.getState().renameBody(box.id, '   ')).toBe(false); // blank rejected
+    expect(useStore.getState().renameBody('nope', 'X')).toBe(false);
+  });
+
   it('toggleSelect adds and removes ids for multi-select', () => {
     useStore.getState().deselectAll();
     useStore.getState().toggleSelect('a');

@@ -80,6 +80,8 @@ interface AppState {
   replaceBody: (oldId: string, newBody: SolidBody) => void;
   /** Resize a body to exact X/Y/Z extents (mm), keeping it selected; false if missing or invalid. */
   resizeBodyTo: (bodyId: string, target: Vec3) => boolean;
+  /** Rename a (direct) body; returns false if the id isn't a direct body or the name is blank. */
+  renameBody: (id: string, name: string) => boolean;
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
@@ -364,6 +366,14 @@ export const useStore = create<AppState>((set, get) => {
     get().replaceBody(bodyId, resized);
     // Keep the selection on the resized body so the properties panel follows it.
     set((s) => ({ selectedIds: s.selectedIds.map((sid) => (sid === bodyId ? resized.id : sid)) }));
+    return true;
+  },
+  renameBody: (id, name) => {
+    const trimmed = name.trim();
+    const { directBodies } = get();
+    if (!trimmed || !directBodies.some((b) => b.id === id)) return false;
+    set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, name: trimmed } : b)), projectDirty: true });
+    recombine();
     return true;
   },
   removeDirectBody: (id) => {
