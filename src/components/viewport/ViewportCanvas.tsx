@@ -8,7 +8,8 @@ import { buildEdgePositions } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { snapToPoints, inferLineEnd, nearestVertexWithin } from '../../lib/sketch/snap';
-import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
+import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
+import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
 import { useT } from '../../lib/i18n';
@@ -1021,20 +1022,64 @@ export function ViewportCanvas() {
         ];
       }
       const body = () => bodies.find((b) => b.id === bodyId);
+      const apply = (op: (b: import('../../lib/geometry/types').SolidBody) => import('../../lib/geometry/types').SolidBody) => { const b = body(); if (b) replaceBody(bodyId, op(b)); };
       const mirror = (axis: Axis) => { const b = body(); if (b) { const r = mirrorAcrossAxis(b, axis); if (r) replaceBody(bodyId, r); } };
       const split = (axis: Axis) => { const b = body(); if (b) { const h = splitAcrossAxis(b, axis); if (h.length) { removeDirectBody(bodyId); addDirectBodies(h); } } };
+      const st = () => useStore.getState();
+      const pre = (fn: () => void) => () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fn(); };
+      // Grouped flyouts, matching the browser-tree menu.
       return [
-        { label: t('menu.center'), onClick: () => { const b = body(); if (b) replaceBody(bodyId, centerBody(b)); } },
-        { label: t('menu.mirrorX'), onClick: () => mirror('x'), separatorBefore: true },
-        { label: t('menu.mirrorY'), onClick: () => mirror('y') },
-        { label: t('menu.mirrorZ'), onClick: () => mirror('z') },
-        { label: t('menu.splitX'), onClick: () => split('x'), separatorBefore: true },
-        { label: t('menu.splitY'), onClick: () => split('y') },
-        { label: t('menu.splitZ'), onClick: () => split('z') },
+        { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); st().duplicateSelected(); } },
+        {
+          label: t('menu.transform'),
+          separatorBefore: true,
+          submenu: [
+            { label: t('menu.rotateX'), onClick: pre(() => st().rotateSelected('x', 90)) },
+            { label: t('menu.rotateY'), onClick: pre(() => st().rotateSelected('y', 90)) },
+            { label: t('menu.rotateZ'), onClick: pre(() => st().rotateSelected('z', 90)) },
+            { label: t('menu.scaleUp'), onClick: pre(() => st().scaleSelected(2)), separatorBefore: true },
+            { label: t('menu.scaleDown'), onClick: pre(() => st().scaleSelected(0.5)) },
+            { label: t('menu.mirrorX'), onClick: () => mirror('x'), separatorBefore: true },
+            { label: t('menu.mirrorY'), onClick: () => mirror('y') },
+            { label: t('menu.mirrorZ'), onClick: () => mirror('z') },
+          ],
+        },
+        {
+          label: t('menu.pattern'),
+          submenu: [
+            { label: t('menu.linearPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'linear' }) },
+            { label: t('menu.circularPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'circular' }) },
+          ],
+        },
+        {
+          label: t('menu.modify'),
+          submenu: [
+            { label: t('menu.splitX'), onClick: () => split('x') },
+            { label: t('menu.splitY'), onClick: () => split('y') },
+            { label: t('menu.splitZ'), onClick: () => split('z') },
+            { label: t('menu.center'), onClick: () => apply(centerBody), separatorBefore: true },
+            { label: t('menu.convexHull'), onClick: () => apply((b) => convexHullBody(b)) },
+          ],
+        },
+        {
+          label: t('menu.placement'),
+          submenu: [
+            { label: t('menu.layFlat'), onClick: () => apply(layFlat) },
+            { label: t('menu.seatOnBed'), onClick: () => apply((b) => seatOnBed(b)) },
+            { label: t('menu.dropFloor'), onClick: pre(() => st().dropSelectedToFloor()) },
+          ],
+        },
+        {
+          label: t('menu.visibility'),
+          submenu: [
+            { label: t('menu.isolate'), onClick: () => { selectObject(bodyId); st().isolateSelected(); } },
+            ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => st().showAllBodies() }] : []),
+          ],
+        },
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll],
+    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll],
   );
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
