@@ -83,6 +83,8 @@ export function ViewportCanvas() {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
+  // Lets the (earlier-declared) context menu call fitView without a TDZ.
+  const fitViewRef = useRef<((selectionOnly?: boolean) => void) | null>(null);
 
   const viewDirection = useStore((s) => s.viewDirection);
   const sketchActive = useStore((s) => s.sketchActive);
@@ -1087,12 +1089,24 @@ export function ViewportCanvas() {
       // Empty-space menu: quick insert + scene actions.
       if (!bodyId) {
         const kinds = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube', 'coil'] as const;
+        const setView = (d: import('../../store/app').ViewDirection) => useStore.getState().setViewDirection(d);
         return [
           {
             label: t('dialog.insert'),
             submenu: kinds.map((k) => ({ label: t(`primitive.${k}`), onClick: () => setPendingPrimitive(k) })),
           },
+          { label: t('viewport.fit'), onClick: () => fitViewRef.current?.(false), separatorBefore: true },
+          {
+            label: t('menu.views'),
+            submenu: [
+              { label: t('viewport.front'), onClick: () => setView('front') },
+              { label: t('viewport.top'), onClick: () => setView('top') },
+              { label: t('viewport.right'), onClick: () => setView('right') },
+              { label: t('viewport.iso'), onClick: () => setView('iso') },
+            ],
+          },
           { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
+          { label: t('menu.selectAll'), onClick: () => useStore.getState().selectAll() },
           { label: t('menu.deselectAll'), onClick: () => deselectAll() },
         ];
       }
@@ -1202,6 +1216,7 @@ export function ViewportCanvas() {
     controls.update();
     dirtyRef.current = true;
   }, [bodies, selectedIds]);
+  useEffect(() => { fitViewRef.current = fitView; }, [fitView]);
 
   // Double-click a body to select and frame it (SolidWorks/Fusion zoom-to-part).
   const handleDoubleClick = useCallback(
