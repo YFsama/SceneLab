@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies, weldVertices } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -121,6 +121,8 @@ interface AppState {
   scaleSelected: (factor: number) => number;
   /** Reflect the selected direct bodies in place about their own centre plane (keeps ids); returns count. */
   flipSelected: (axis: 'x' | 'y' | 'z') => number;
+  /** Weld near-coincident vertices of the selected direct bodies (mesh cleanup, keeps ids); returns count. */
+  weldSelected: () => number;
   /** Add a box enclosing the selected bodies' combined bounding box; returns its id or null. */
   makeBoundingBoxOfSelection: (margin?: number) => string | null;
   /** Align selected direct bodies along an axis by min/center/max (keeps ids); returns how many moved. */
@@ -619,6 +621,19 @@ export const useStore = create<AppState>((set, get) => {
         const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
         return { ...applyMirror(b, { origin, normal }), id: b.id, color: b.color };
       }),
+      projectDirty: true,
+    }));
+    recombine();
+    return n;
+  },
+  weldSelected: () => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const n = directBodies.filter((b) => sel.has(b.id)).length;
+    if (n === 0) return 0;
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => (sel.has(b.id) ? { ...weldVertices(b), id: b.id, color: b.color } : b)),
       projectDirty: true,
     }));
     recombine();

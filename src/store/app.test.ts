@@ -617,6 +617,24 @@ describe('app store — direct bodies', () => {
     expect(ext('x')).toBeCloseTo(10, 4); // same size (in place)
   });
 
+  it('weldSelected cleans a body keeping id and volume', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    const vol0 = Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(useStore.getState().weldSelected()).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === box.id)!; // id kept
+    expect(Math.abs(computeVolume(r))).toBeCloseTo(vol0, 4);
+  });
+
+  it('weldSelected is a no-op with nothing selected', () => {
+    useStore.getState().clearScene();
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    useStore.getState().deselectAll();
+    expect(useStore.getState().weldSelected()).toBe(0);
+  });
+
   it('rotateSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));
