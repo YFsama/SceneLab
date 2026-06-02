@@ -1141,6 +1141,20 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().measurePts).toHaveLength(0);
   });
 
+  it('removeLastMeasurePoint drops the most recent pick (re-pick a mis-click)', () => {
+    useStore.getState().setMeasureActive(true);
+    useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
+    useStore.getState().addMeasurePoint({ x: 5, y: 0, z: 0 });
+    useStore.getState().removeLastMeasurePoint();
+    expect(useStore.getState().measurePts).toEqual([{ x: 0, y: 0, z: 0 }]);
+    useStore.getState().removeLastMeasurePoint();
+    expect(useStore.getState().measurePts).toHaveLength(0);
+    // Safe with nothing left.
+    useStore.getState().removeLastMeasurePoint();
+    expect(useStore.getState().measurePts).toHaveLength(0);
+    useStore.getState().setMeasureActive(false);
+  });
+
   it('resizeBodyTo rejects a missing body or non-positive dims', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);

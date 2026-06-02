@@ -270,6 +270,8 @@ interface AppState {
   /** Points picked by the measure tool (0–3); a fourth pick restarts. */
   measurePts: Vec3[];
   addMeasurePoint: (p: Vec3) => void;
+  /** Drop the most recent measure point (Backspace), to re-pick a mis-click. */
+  removeLastMeasurePoint: () => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
 
@@ -1231,6 +1233,7 @@ export const useStore = create<AppState>((set, get) => {
   setMeasureActive: (measureActive) => set({ measureActive, measurePts: [] }),
   measurePts: [],
   addMeasurePoint: (p) => set((s) => ({ measurePts: s.measurePts.length >= 3 ? [p] : [...s.measurePts, p] })),
+  removeLastMeasurePoint: () => set((s) => ({ measurePts: s.measurePts.slice(0, -1) })),
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;

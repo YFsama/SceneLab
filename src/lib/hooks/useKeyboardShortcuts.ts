@@ -88,9 +88,15 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+b', () => store.toggleBrowserTree());
   registerShortcut('ctrl+p', () => store.toggleProperties());
 
-  // Actions
-  registerShortcut('delete', () => store.deleteSelected());
-  registerShortcut('backspace', () => store.deleteSelected());
+  // Actions. While measuring, Delete/Backspace drops the last picked point
+  // (re-pick a mis-click) instead of deleting the selected bodies.
+  const deleteOrUnpick = () => {
+    const s = useStore.getState();
+    if (s.measureActive) s.removeLastMeasurePoint();
+    else s.deleteSelected();
+  };
+  registerShortcut('delete', deleteOrUnpick);
+  registerShortcut('backspace', deleteOrUnpick);
   registerShortcut('ctrl+d', () => store.duplicateSelected());
   registerShortcut('ctrl+a', () => store.selectAll());
   registerShortcut('ctrl+shift+i', () => store.invertSelection());
