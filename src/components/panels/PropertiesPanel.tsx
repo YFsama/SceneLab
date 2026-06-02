@@ -68,6 +68,7 @@ export function PropertiesPanel() {
   const resizeBodyTo = useStore((s) => s.resizeBodyTo);
   const setBodyColor = useStore((s) => s.setBodyColor);
   const setSelectionColor = useStore((s) => s.setSelectionColor);
+  const setBodyOpacity = useStore((s) => s.setBodyOpacity);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const selectedBody = selectedIds.length === 1
@@ -111,6 +112,23 @@ export function PropertiesPanel() {
                       aria-label={`#${hex.toString(16).padStart(6, '0')}`}
                       title={`#${hex.toString(16).padStart(6, '0')}`}
                     />
+                  );
+                })}
+              </div>
+              {/* Opacity presets (SolidWorks-style transparency control). */}
+              <div className="pl-4 flex items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] text-text-muted w-12">{t('panel.opacity')}</span>
+                {[1, 0.7, 0.4, 0.15].map((op) => {
+                  const active = (selectedBody.opacity ?? 1) === op;
+                  return (
+                    <button
+                      key={op}
+                      onClick={() => setBodyOpacity(selectedBody.id, op)}
+                      className={`px-1.5 py-0.5 text-[10px] rounded border ${active ? 'border-accent text-accent' : 'border-panel-border text-text-secondary hover:text-text-primary'}`}
+                      aria-pressed={active}
+                    >
+                      {Math.round(op * 100)}%
+                    </button>
                   );
                 })}
               </div>

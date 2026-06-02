@@ -112,6 +112,8 @@ interface AppState {
   reorderBody: (id: string, direction: 'up' | 'down') => boolean;
   /** Toggle a (direct) body between opaque and semi-transparent; returns false if missing. */
   toggleBodyTransparency: (id: string) => boolean;
+  /** Set a (direct) body's opacity (0.05–1) in one undoable step; false if unchanged/missing. */
+  setBodyOpacity: (id: string, opacity: number) => boolean;
   /** Ids of bodies hidden from the viewport (still listed in the tree). */
   hiddenIds: string[];
   /** Show/hide a body in the viewport. */
@@ -576,6 +578,16 @@ export const useStore = create<AppState>((set, get) => {
     const next = (body.opacity ?? 1) < 1 ? 1 : 0.4;
     pushUndo();
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, opacity: next } : b)), projectDirty: true });
+    recombine();
+    return true;
+  },
+  setBodyOpacity: (id, opacity) => {
+    const { directBodies } = get();
+    const body = directBodies.find((b) => b.id === id);
+    const clamped = Math.max(0.05, Math.min(1, opacity));
+    if (!body || (body.opacity ?? 1) === clamped) return false;
+    pushUndo();
+    set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, opacity: clamped } : b)), projectDirty: true });
     recombine();
     return true;
   },

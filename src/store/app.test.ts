@@ -329,6 +329,25 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().hiddenIds).toEqual([]);
   });
 
+  it('setBodyOpacity sets opacity, clamps, no-ops when unchanged, and is undoable', () => {
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    const op = () => useStore.getState().bodies.find((b) => b.id === a.id)?.opacity ?? 1;
+
+    expect(useStore.getState().setBodyOpacity(a.id, 0.4)).toBe(true);
+    expect(op()).toBe(0.4);
+    // Out-of-range is clamped to [0.05, 1].
+    useStore.getState().setBodyOpacity(a.id, 5);
+    expect(op()).toBe(1);
+    useStore.getState().setBodyOpacity(a.id, 0);
+    expect(op()).toBe(0.05);
+    // Re-applying the same value is a no-op.
+    expect(useStore.getState().setBodyOpacity(a.id, 0.05)).toBe(false);
+    // Undoable.
+    useStore.getState().undo();
+    expect(op()).toBe(1);
+  });
+
   it('visibility changes are undoable', () => {
     const a = createBox(5, 5, 5);
     const b = createBox(5, 5, 5);
