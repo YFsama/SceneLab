@@ -1132,6 +1132,14 @@ export function ViewportCanvas() {
         role="img"
         aria-label={t('viewport.title')}
       />
+      {bodies.length === 0 && !sketchActive && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
+          <div className="px-4 py-3 rounded-lg bg-panel/70 backdrop-blur-sm border border-panel-border text-center max-w-xs">
+            <p className="text-sm font-medium text-text-primary mb-1">{t('empty.title')}</p>
+            <p className="text-xs text-text-muted leading-relaxed">{t('empty.body')}</p>
+          </div>
+        </div>
+      )}
       <button
         onClick={() => fitView(false)}
         className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
