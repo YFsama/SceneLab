@@ -6,7 +6,7 @@ import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
-import { snapToPoints } from '../../lib/sketch/snap';
+import { snapToPoints, inferLineEnd } from '../../lib/sketch/snap';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
@@ -494,9 +494,11 @@ export function ViewportCanvas() {
         previewGroup.add(marker(s.x, s.y, 0xa6e3a1, 11)); // green start point
         let pts: THREE.Vector3[] = [];
         switch (sketchTool) {
-          case 'line':
-            pts = [v(s.x, s.y), v(m.x, m.y)];
+          case 'line': {
+            const end = inferLineEnd(s, m).point; // honour H/V inference in the preview
+            pts = [v(s.x, s.y), v(end.x, end.y)];
             break;
+          }
           case 'rect':
             pts = [v(s.x, s.y), v(m.x, s.y), v(m.x, m.y), v(s.x, m.y), v(s.x, s.y)];
             break;
@@ -1014,9 +1016,11 @@ export function ViewportCanvas() {
       if (!pt) return;
 
       switch (sketchTool) {
-        case 'line':
-          addSketchLine(drawStart.x, drawStart.y, pt.x, pt.y);
+        case 'line': {
+          const end = inferLineEnd(drawStart, pt).point; // commit with H/V inference
+          addSketchLine(drawStart.x, drawStart.y, end.x, end.y);
           break;
+        }
         case 'rect':
           addSketchRect(drawStart.x, drawStart.y, pt.x, pt.y);
           break;
@@ -1102,11 +1106,17 @@ export function ViewportCanvas() {
             const dx = Math.abs(mousePos.x - drawStart.x);
             const dy = Math.abs(mousePos.y - drawStart.y);
             const r = Math.hypot(mousePos.x - drawStart.x, mousePos.y - drawStart.y);
+            const constraint = sketchTool === 'line' ? inferLineEnd(drawStart, mousePos).constraint : null;
             const extra =
               sketchTool === 'rect' ? ` · ${dx.toFixed(2)} × ${dy.toFixed(2)} mm`
               : sketchTool === 'line' ? ` · L ${r.toFixed(2)} mm`
               : ` · R ${r.toFixed(2)} mm`;
-            return <span className="text-accent">{extra}</span>;
+            return (
+              <span className="text-accent">
+                {extra}
+                {constraint && <span className="ml-1 px-1 rounded bg-accent/20">{constraint === 'horizontal' ? 'H' : 'V'}</span>}
+              </span>
+            );
           })()}
         </div>
       )}
