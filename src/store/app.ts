@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -20,6 +20,7 @@ import {
   createPrism,
   createTube,
   createCoil,
+  createBoundingBoxBody,
 } from '../lib/geometry/brep';
 
 export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | 'wedge' | 'prism' | 'tube' | 'coil';
@@ -116,6 +117,8 @@ interface AppState {
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Uniformly scale the selected direct bodies about their own centre (keeps ids); returns how many scaled. */
   scaleSelected: (factor: number) => number;
+  /** Add a box enclosing the selected bodies' combined bounding box; returns its id or null. */
+  makeBoundingBoxOfSelection: (margin?: number) => string | null;
   /** Align selected direct bodies along an axis by min/center/max (keeps ids); returns how many moved. */
   alignSelected: (axis: 'x' | 'y' | 'z', mode: 'min' | 'center' | 'max') => number;
   /** Evenly space selected direct bodies along an axis (by centre, ends fixed); needs >=3. Returns count. */
@@ -751,6 +754,21 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return copies.map((c) => c.id);
+  },
+  makeBoundingBoxOfSelection: (margin = 0) => {
+    const { selectedIds, bodies } = get();
+    const sel = bodies.filter((b) => selectedIds.includes(b.id));
+    if (sel.length === 0) return null;
+    let box: SolidBody;
+    try {
+      box = createBoundingBoxBody(sel.length === 1 ? sel[0]! : mergeBodies(sel), margin);
+    } catch {
+      return null;
+    }
+    box.name = 'Bounding box';
+    get().addDirectBody(box);
+    get().selectObject(box.id);
+    return box.id;
   },
   scaleSelected: (factor) => {
     const { selectedIds, directBodies } = get();

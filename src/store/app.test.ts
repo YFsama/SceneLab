@@ -501,6 +501,25 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().bodies).toHaveLength(6);
   });
 
+  it('makeBoundingBoxOfSelection adds a box enclosing the selected bodies', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10); // x ∈ [-5,5]
+    const b = translateBody(createBox(10, 10, 10), { x: 20, y: 0, z: 0 }); // x ∈ [15,25]
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    const id = useStore.getState().makeBoundingBoxOfSelection();
+    expect(id).toBeTruthy();
+    const bbox = useStore.getState().bodies.find((x) => x.id === id)!;
+    const xs = bbox.vertices.map((v) => v.x);
+    expect(Math.min(...xs)).toBeCloseTo(-5, 4);
+    expect(Math.max(...xs)).toBeCloseTo(25, 4);
+  });
+
+  it('makeBoundingBoxOfSelection returns null with nothing selected', () => {
+    useStore.getState().clearScene();
+    expect(useStore.getState().makeBoundingBoxOfSelection()).toBeNull();
+  });
+
   it('gridPatternBody returns [] for bad params', () => {
     useStore.getState().clearScene();
     const box = createBox(4, 4, 4);

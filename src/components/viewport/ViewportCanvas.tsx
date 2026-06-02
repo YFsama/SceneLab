@@ -1116,6 +1116,7 @@ export function ViewportCanvas() {
             { label: t('menu.hollow'), onClick: () => st().setHollowDialogBody(bodyId), separatorBefore: true },
             { label: t('menu.center'), onClick: () => apply(centerBody), separatorBefore: true },
             { label: t('menu.convexHull'), onClick: () => apply((b) => convexHullBody(b)) },
+            { label: t('menu.boundingBox'), onClick: () => st().makeBoundingBoxOfSelection() },
           ],
         },
         {
