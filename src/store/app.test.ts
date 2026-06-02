@@ -958,6 +958,23 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds.sort()).toEqual([a.id, b.id].sort());
   });
 
+  it('selectAll and invertSelection skip hidden bodies', () => {
+    useStore.getState().clearScene();
+    const a = createBox(2, 2, 2); const b = createBox(3, 3, 3); const c = createBox(4, 4, 4);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().addDirectBody(c);
+    useStore.getState().toggleBodyVisibility(b.id); // hide b
+
+    useStore.getState().selectAll();
+    expect(useStore.getState().selectedIds.sort()).toEqual([a.id, c.id].sort());
+
+    // Invert from {a}: should yield {c} only (b hidden, never auto-selected).
+    useStore.getState().selectObject(a.id);
+    useStore.getState().invertSelection();
+    expect(useStore.getState().selectedIds).toEqual([c.id]);
+  });
+
   it('isolateSelected hides all but the selection; showAllBodies restores', () => {
     useStore.getState().clearScene();
     const a = createBox(2, 2, 2); const b = createBox(3, 3, 3);

@@ -1299,7 +1299,9 @@ export const useStore = create<AppState>((set, get) => {
         ? s.selectedIds.filter((sid) => sid !== id)
         : [...s.selectedIds, id],
     })),
-  selectAll: () => set((s) => ({ selectedIds: s.bodies.map((b) => b.id) })),
+  // Select all *visible* bodies — hidden bodies stay out of the selection, as
+  // in SolidWorks (Ctrl+A doesn't grab what you can't see).
+  selectAll: () => set((s) => ({ selectedIds: s.bodies.filter((b) => !s.hiddenIds.includes(b.id)).map((b) => b.id) })),
   deselectAll: () => set({ selectedIds: [] }),
   hoveredId: null,
   // Guarded so a mousemove over the same body doesn't churn subscribers.
@@ -1307,7 +1309,8 @@ export const useStore = create<AppState>((set, get) => {
   invertSelection: () =>
     set((s) => {
       const sel = new Set(s.selectedIds);
-      return { selectedIds: s.bodies.filter((b) => !sel.has(b.id)).map((b) => b.id) };
+      // Invert among visible bodies only; hidden ones are never auto-selected.
+      return { selectedIds: s.bodies.filter((b) => !s.hiddenIds.includes(b.id) && !sel.has(b.id)).map((b) => b.id) };
     }),
   selectRange: (fromId, toId) =>
     set((s) => {
