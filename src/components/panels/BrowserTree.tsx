@@ -87,7 +87,8 @@ export function BrowserTree() {
           { label: t('menu.distributeZ'), onClick: () => distributeSelected('z') },
         ]
       : []),
-    { label: t('menu.linearPattern'), onClick: () => setPendingPattern(bodyId), separatorBefore: true },
+    { label: t('menu.linearPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'linear' }), separatorBefore: true },
+    { label: t('menu.circularPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'circular' }) },
     { label: t('menu.rotateX'), onClick: () => { selectObject(bodyId); rotateSelected('x', 90); }, separatorBefore: true },
     { label: t('menu.rotateY'), onClick: () => { selectObject(bodyId); rotateSelected('y', 90); } },
     { label: t('menu.rotateZ'), onClick: () => { selectObject(bodyId); rotateSelected('z', 90); } },

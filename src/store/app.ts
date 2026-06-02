@@ -110,11 +110,13 @@ interface AppState {
   distributeSelected: (axis: 'x' | 'y' | 'z') => number;
   /** Drop each selected direct body onto the build plate (its min Y to 0); returns how many moved. */
   dropSelectedToFloor: () => number;
-  /** Body awaiting the linear-pattern dialog (null = closed). */
-  pendingPattern: string | null;
-  setPendingPattern: (bodyId: string | null) => void;
+  /** Body + mode awaiting the pattern dialog (null = closed). */
+  pendingPattern: { bodyId: string; mode: 'linear' | 'circular' } | null;
+  setPendingPattern: (p: { bodyId: string; mode: 'linear' | 'circular' } | null) => void;
   /** Linear-pattern a body along an axis, replacing it with the copies; returns the new ids. */
   linearPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number, spacing: number) => string[];
+  /** Circular-pattern a body around the world axis through the origin; returns the new ids. */
+  circularPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number) => string[];
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
@@ -633,6 +635,21 @@ export const useStore = create<AppState>((set, get) => {
     if (!body || !(count >= 1) || !(spacing > 0)) return [];
     const dir: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
     const copies = applyLinearArray(body, dir, Math.floor(count), spacing).map((c) => ({ ...c, color: body.color }));
+    if (copies.length === 0) return [];
+    pushUndo();
+    set((s) => ({
+      directBodies: [...s.directBodies.filter((b) => b.id !== bodyId), ...copies],
+      selectedIds: copies.map((c) => c.id),
+      projectDirty: true,
+    }));
+    recombine();
+    return copies.map((c) => c.id);
+  },
+  circularPatternBody: (bodyId, axis, count) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    if (!body || !(count >= 1)) return [];
+    const dir: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+    const copies = applyCircularArray(body, { origin: { x: 0, y: 0, z: 0 }, direction: dir }, Math.floor(count)).map((c) => ({ ...c, color: body.color }));
     if (copies.length === 0) return [];
     pushUndo();
     set((s) => ({
