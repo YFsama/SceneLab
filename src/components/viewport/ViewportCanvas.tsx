@@ -1035,6 +1035,7 @@ export function ViewportCanvas() {
           separatorBefore: true,
           submenu: [
             { label: t('menu.move'), onClick: pre(() => st().setMoveDialogOpen(true)) },
+            { label: t('menu.rotateDlg'), onClick: pre(() => st().setRotateDialogOpen(true)) },
             { label: t('menu.rotateX'), onClick: pre(() => st().rotateSelected('x', 90)), separatorBefore: true },
             { label: t('menu.rotateY'), onClick: pre(() => st().rotateSelected('y', 90)) },
             { label: t('menu.rotateZ'), onClick: pre(() => st().rotateSelected('z', 90)) },

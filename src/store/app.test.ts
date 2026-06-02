@@ -631,6 +631,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().moveDialogOpen).toBe(false);
   });
 
+  it('setRotateDialogOpen toggles the rotate dialog flag', () => {
+    expect(useStore.getState().rotateDialogOpen).toBe(false);
+    useStore.getState().setRotateDialogOpen(true);
+    expect(useStore.getState().rotateDialogOpen).toBe(true);
+    useStore.getState().setRotateDialogOpen(false);
+    expect(useStore.getState().rotateDialogOpen).toBe(false);
+  });
+
   it('setShowGrid toggles the grid visibility flag (default on)', () => {
     expect(useStore.getState().showGrid).toBe(true);
     useStore.getState().setShowGrid(false);

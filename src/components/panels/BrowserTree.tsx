@@ -26,6 +26,7 @@ export function BrowserTree() {
   const rotateSelected = useStore((s) => s.rotateSelected);
   const scaleSelected = useStore((s) => s.scaleSelected);
   const setMoveDialogOpen = useStore((s) => s.setMoveDialogOpen);
+  const setRotateDialogOpen = useStore((s) => s.setRotateDialogOpen);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
@@ -92,6 +93,7 @@ export function BrowserTree() {
         separatorBefore: true,
         submenu: [
           { label: t('menu.move'), onClick: pre(() => setMoveDialogOpen(true)) },
+          { label: t('menu.rotateDlg'), onClick: pre(() => setRotateDialogOpen(true)) },
           { label: t('menu.rotateX'), onClick: pre(() => rotateSelected('x', 90)), separatorBefore: true },
           { label: t('menu.rotateY'), onClick: pre(() => rotateSelected('y', 90)) },
           { label: t('menu.rotateZ'), onClick: pre(() => rotateSelected('z', 90)) },
