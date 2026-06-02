@@ -1319,14 +1319,17 @@ export function ViewportCanvas() {
       else if (e.key === 'Home') { e.preventDefault(); resetView(); }
       else if (e.key === 'g' || e.key === 'G') { e.preventDefault(); useStore.getState().setShowGrid(!useStore.getState().showGrid); }
       // Arrow keys nudge the selection on the ground plane (top-view mapping):
-      // ←/→ = X, ↑/↓ = Z. Shift = 10mm coarse step, else 1mm. Skipped in sketch.
-      if (!sketchActive && e.key.startsWith('Arrow')) {
+      // ←/→ = X, ↑/↓ = Z; PageUp/PageDown = vertical (Y). Shift = 10mm coarse
+      // step, else 1mm. Skipped in sketch.
+      if (!sketchActive && (e.key.startsWith('Arrow') || e.key === 'PageUp' || e.key === 'PageDown')) {
         const step = e.shiftKey ? 10 : 1;
         const move =
           e.key === 'ArrowLeft' ? [-step, 0, 0]
           : e.key === 'ArrowRight' ? [step, 0, 0]
           : e.key === 'ArrowUp' ? [0, 0, -step]
           : e.key === 'ArrowDown' ? [0, 0, step]
+          : e.key === 'PageUp' ? [0, step, 0]
+          : e.key === 'PageDown' ? [0, -step, 0]
           : null;
         if (move && nudgeSelected(move[0]!, move[1]!, move[2]!) > 0) e.preventDefault();
       }
