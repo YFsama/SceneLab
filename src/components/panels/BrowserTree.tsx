@@ -31,6 +31,7 @@ export function BrowserTree() {
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
   const combineSelected = useStore((s) => s.combineSelected);
+  const setHollowDialogBody = useStore((s) => s.setHollowDialogBody);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
   const setPendingPattern = useStore((s) => s.setPendingPattern);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
@@ -131,6 +132,7 @@ export function BrowserTree() {
           { label: t('menu.splitX'), onClick: () => split(bodyId, 'x') },
           { label: t('menu.splitY'), onClick: () => split(bodyId, 'y') },
           { label: t('menu.splitZ'), onClick: () => split(bodyId, 'z') },
+          { label: t('menu.hollow'), onClick: () => setHollowDialogBody(bodyId), separatorBefore: true },
           { label: t('menu.center'), onClick: () => apply(bodyId, centerBody), separatorBefore: true },
           { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
         ],

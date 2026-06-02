@@ -671,6 +671,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
   });
 
+  it('hollowBodyById replaces a body with a lighter shell, keeping it selected', () => {
+    useStore.getState().clearScene();
+    const box = createBox(20, 20, 20); // vol 8000
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    const id = useStore.getState().hollowBodyById(box.id, 2);
+    expect(id).toBeTruthy();
+    expect(useStore.getState().selectedIds).toEqual([id]);
+    const shell = useStore.getState().bodies.find((b) => b.id === id)!;
+    expect(Math.abs(computeVolume(shell))).toBeLessThan(8000 * 0.75); // material removed
+  });
+
+  it('hollowBodyById returns null for a missing body or non-positive thickness', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().hollowBodyById('nope', 2)).toBeNull();
+    expect(useStore.getState().hollowBodyById(box.id, 0)).toBeNull();
+  });
+
   it('combineSelected unions the first two selected bodies into one', () => {
     useStore.getState().clearScene();
     const a = createBox(10, 10, 10);

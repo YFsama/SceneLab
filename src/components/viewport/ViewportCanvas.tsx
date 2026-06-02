@@ -1070,6 +1070,7 @@ export function ViewportCanvas() {
             { label: t('menu.splitX'), onClick: () => split('x') },
             { label: t('menu.splitY'), onClick: () => split('y') },
             { label: t('menu.splitZ'), onClick: () => split('z') },
+            { label: t('menu.hollow'), onClick: () => st().setHollowDialogBody(bodyId), separatorBefore: true },
             { label: t('menu.center'), onClick: () => apply(centerBody), separatorBefore: true },
             { label: t('menu.convexHull'), onClick: () => apply((b) => convexHullBody(b)) },
           ],

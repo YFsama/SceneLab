@@ -6,7 +6,7 @@ import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFe
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
-import { splitByPlane, booleanOp, type BooleanOp } from '../lib/geometry/boolean';
+import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
 import { applyCircularArray, applyLinearArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
@@ -124,6 +124,11 @@ interface AppState {
   /** Whether the scale-by-factor dialog is open. */
   scaleDialogOpen: boolean;
   setScaleDialogOpen: (v: boolean) => void;
+  /** Body awaiting the hollow (shell) dialog (null = closed). */
+  hollowDialogBody: string | null;
+  setHollowDialogBody: (bodyId: string | null) => void;
+  /** Hollow a body into a shell of the given wall thickness, replacing it; null if it failed. */
+  hollowBodyById: (bodyId: string, wallThickness: number) => string | null;
   /** Linear-pattern a body along an axis, replacing it with the copies; returns the new ids. */
   linearPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number, spacing: number) => string[];
   /** Circular-pattern a body around the world axis through the origin; returns the new ids. */
@@ -652,6 +657,23 @@ export const useStore = create<AppState>((set, get) => {
   setRotateDialogOpen: (rotateDialogOpen) => set({ rotateDialogOpen }),
   scaleDialogOpen: false,
   setScaleDialogOpen: (scaleDialogOpen) => set({ scaleDialogOpen }),
+  hollowDialogBody: null,
+  setHollowDialogBody: (hollowDialogBody) => set({ hollowDialogBody }),
+  hollowBodyById: (bodyId, wallThickness) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    if (!body || !(wallThickness > 0)) return null;
+    let result: SolidBody | null = null;
+    try {
+      result = hollowBody(body, wallThickness);
+    } catch {
+      return null;
+    }
+    if (!result) return null;
+    result.color = body.color;
+    get().replaceBody(bodyId, result);
+    set((s) => ({ selectedIds: s.selectedIds.map((sid) => (sid === bodyId ? result!.id : sid)) }));
+    return result.id;
+  },
   linearPatternBody: (bodyId, axis, count, spacing) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(count >= 1) || !(spacing > 0)) return [];

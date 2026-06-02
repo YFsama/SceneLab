@@ -25,6 +25,7 @@ import { PatternDialog } from './components/ui/PatternDialog';
 import { MoveDialog } from './components/ui/MoveDialog';
 import { RotateDialog } from './components/ui/RotateDialog';
 import { ScaleDialog } from './components/ui/ScaleDialog';
+import { HollowDialog } from './components/ui/HollowDialog';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -97,6 +98,7 @@ export default function App() {
       <MoveDialog />
       <RotateDialog />
       <ScaleDialog />
+      <HollowDialog />
       <AIPanel />
     </div>
   );
