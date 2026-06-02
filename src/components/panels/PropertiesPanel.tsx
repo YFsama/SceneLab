@@ -21,6 +21,46 @@ const materials: Record<string, { name: string; density: number }> = {
   wood: { name: 'Wood (Oak)', density: 0.75 },
 };
 
+/**
+ * Mass / inertia readout with its own material selector. Split out so changing
+ * the material only re-renders this section, not the panel's ~50 mesh analyses.
+ */
+function MassProperties({ body, t }: { body: SolidBody; t: (k: string) => string }) {
+  const [material, setMaterial] = useState('steel');
+  const volume = computeVolume(body);
+  const density = materials[material]?.density ?? 7.85;
+  const mass = (volume / 1000) * density; // mm³ to cm³, then * density
+  // Principal moments of inertia about the CoM (g·mm²); density converted
+  // g/cm³ → g/mm³ so the units come out as g·mm².
+  const pm = computePrincipalMoments(body, density / 1000);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1 text-xs text-text-muted">
+        <Weight size={12} />
+        <span>{t('panel.mass')}</span>
+      </div>
+      <div className="pl-4 space-y-1">
+        <select
+          value={material}
+          onChange={(e) => setMaterial(e.target.value)}
+          className="w-full px-1.5 py-0.5 text-xs bg-surface border border-panel-border rounded text-text-primary"
+          aria-label={t('panel.material')}
+        >
+          {Object.entries(materials).map(([key, mat]) => (
+            <option key={key} value={key}>{mat.name} ({mat.density} g/cm³)</option>
+          ))}
+        </select>
+        <p className="text-xs text-text-secondary">
+          {mass.toFixed(2)} g ({(mass / 1000).toFixed(4)} kg)
+        </p>
+        <p className="text-xs text-text-secondary">
+          {t('panel.inertia')}: {pm.moments.map((m) => m.toExponential(2)).join(' / ')} g·mm²
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function PropertiesPanel() {
   const { t } = useT();
   const selectedIds = useStore((s) => s.selectedIds);
@@ -28,7 +68,6 @@ export function PropertiesPanel() {
   const resizeBodyTo = useStore((s) => s.resizeBodyTo);
   const setBodyColor = useStore((s) => s.setBodyColor);
   const setSelectionColor = useStore((s) => s.setSelectionColor);
-  const [material, setMaterial] = useState('steel');
 
   const selectedBody = selectedIds.length === 1
     ? bodies.find((b) => b.id === selectedIds[0])
@@ -140,42 +179,7 @@ export function PropertiesPanel() {
               </div>
             </div>
 
-            <div className="space-y-1">
-              <div className="flex items-center gap-1 text-xs text-text-muted">
-                <Weight size={12} />
-                <span>{t('panel.mass')}</span>
-              </div>
-              <div className="pl-4 space-y-1">
-                <select
-                  value={material}
-                  onChange={(e) => setMaterial(e.target.value)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-surface border border-panel-border rounded text-text-primary"
-                  aria-label={t('panel.material')}
-                >
-                  {Object.entries(materials).map(([key, mat]) => (
-                    <option key={key} value={key}>{mat.name} ({mat.density} g/cm³)</option>
-                  ))}
-                </select>
-                {(() => {
-                  const volume = computeVolume(selectedBody);
-                  const density = materials[material]?.density ?? 7.85;
-                  const mass = (volume / 1000) * density; // mm³ to cm³, then * density
-                  // Principal moments of inertia about the CoM (g·mm²); density
-                  // converted g/cm³ → g/mm³ so the units come out as g·mm².
-                  const pm = computePrincipalMoments(selectedBody, density / 1000);
-                  return (
-                    <>
-                      <p className="text-xs text-text-secondary">
-                        {mass.toFixed(2)} g ({(mass / 1000).toFixed(4)} kg)
-                      </p>
-                      <p className="text-xs text-text-secondary">
-                        {t('panel.inertia')}: {pm.moments.map((m) => m.toExponential(2)).join(' / ')} g·mm²
-                      </p>
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
+            <MassProperties body={selectedBody} t={t} />
 
             <div className="space-y-1">
               <div className="flex items-center gap-1 text-xs text-text-muted">
