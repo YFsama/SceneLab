@@ -360,6 +360,41 @@ describe('app store — direct bodies', () => {
     useStore.getState().cancelRename();
   });
 
+  it('rename, colour and transparency edits are undoable', () => {
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    const originalName = a.name;
+
+    useStore.getState().renameBody(a.id, 'Flange');
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.name).toBe('Flange');
+    useStore.getState().undo();
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.name).toBe(originalName);
+
+    useStore.getState().setBodyColor(a.id, 0xff0000);
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.color).toBe(0xff0000);
+    useStore.getState().undo();
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.color).not.toBe(0xff0000);
+
+    useStore.getState().toggleBodyTransparency(a.id);
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.opacity).toBe(0.4);
+    useStore.getState().undo();
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.opacity ?? 1).toBe(1);
+  });
+
+  it('no-op rename/colour edits create no undo entry', () => {
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    // Establish a known name/colour first.
+    useStore.getState().renameBody(a.id, 'Plate');
+    useStore.getState().setBodyColor(a.id, 0x00ff00);
+    const depth = useStore.getState().undoStack.length;
+
+    // Re-applying the identical name/colour is rejected, no undo pushed.
+    expect(useStore.getState().renameBody(a.id, 'Plate')).toBe(false);
+    expect(useStore.getState().setBodyColor(a.id, 0x00ff00)).toBe(false);
+    expect(useStore.getState().undoStack.length).toBe(depth);
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();

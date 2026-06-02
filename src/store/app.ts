@@ -500,7 +500,9 @@ export const useStore = create<AppState>((set, get) => {
   renameBody: (id, name) => {
     const trimmed = name.trim();
     const { directBodies } = get();
-    if (!trimmed || !directBodies.some((b) => b.id === id)) return false;
+    const target = directBodies.find((b) => b.id === id);
+    if (!trimmed || !target || target.name === trimmed) return false;
+    pushUndo();
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, name: trimmed } : b)), projectDirty: true });
     recombine();
     return true;
@@ -526,7 +528,9 @@ export const useStore = create<AppState>((set, get) => {
   cancelRename: () => set({ renaming: null }),
   setBodyColor: (id, color) => {
     const { directBodies } = get();
-    if (!directBodies.some((b) => b.id === id)) return false;
+    const target = directBodies.find((b) => b.id === id);
+    if (!target || target.color === color) return false;
+    pushUndo();
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, color } : b)), projectDirty: true });
     recombine();
     return true;
@@ -536,6 +540,7 @@ export const useStore = create<AppState>((set, get) => {
     const body = directBodies.find((b) => b.id === id);
     if (!body) return false;
     const next = (body.opacity ?? 1) < 1 ? 1 : 0.4;
+    pushUndo();
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, opacity: next } : b)), projectDirty: true });
     recombine();
     return true;
