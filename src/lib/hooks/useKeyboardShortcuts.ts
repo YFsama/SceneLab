@@ -77,6 +77,7 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+d', () => store.duplicateSelected());
   registerShortcut('ctrl+a', () => store.selectAll());
   registerShortcut('ctrl+shift+i', () => store.invertSelection());
+  registerShortcut('f2', () => store.beginRenameSelected());
   // Tab hides the current selection; Shift+Tab brings every hidden body back.
   registerShortcut('tab', () => store.hideSelected());
   registerShortcut('shift+tab', () => store.showAllBodies());

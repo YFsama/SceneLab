@@ -96,6 +96,14 @@ interface AppState {
   resizeBodyTo: (bodyId: string, target: Vec3) => boolean;
   /** Rename a (direct) body; returns false if the id isn't a direct body or the name is blank. */
   renameBody: (id: string, name: string) => boolean;
+  /** In-progress tree rename ({ id, draft value }); null when not renaming. */
+  renaming: { id: string; value: string } | null;
+  beginRename: (id: string) => void;
+  /** Start renaming the single selected body (F2); no-op unless exactly one is selected. */
+  beginRenameSelected: () => void;
+  setRenameValue: (value: string) => void;
+  commitRename: () => void;
+  cancelRename: () => void;
   /** Set a (direct) body's display colour (0xRRGGBB); returns false if the id isn't a direct body. */
   setBodyColor: (id: string, color: number) => boolean;
   /** Toggle a (direct) body between opaque and semi-transparent; returns false if missing. */
@@ -497,6 +505,25 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return true;
   },
+  renaming: null,
+  beginRename: (id) => {
+    const body = get().bodies.find((b) => b.id === id);
+    if (body) set({ renaming: { id, value: body.name } });
+  },
+  beginRenameSelected: () => {
+    const { selectedIds, bodies } = get();
+    if (selectedIds.length !== 1) return;
+    const id = selectedIds[0]!;
+    const body = bodies.find((b) => b.id === id);
+    if (body) set({ renaming: { id, value: body.name } });
+  },
+  setRenameValue: (value) => set((s) => (s.renaming ? { renaming: { ...s.renaming, value } } : {})),
+  commitRename: () => {
+    const { renaming } = get();
+    if (renaming) get().renameBody(renaming.id, renaming.value);
+    set({ renaming: null });
+  },
+  cancelRename: () => set({ renaming: null }),
   setBodyColor: (id, color) => {
     const { directBodies } = get();
     if (!directBodies.some((b) => b.id === id)) return false;
@@ -930,6 +957,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedIds: [],
       hiddenIds: [],
       clipboard: [],
+      renaming: null,
       planes: [],
       axes: [],
       points: [],
@@ -955,6 +983,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedIds: [],
       hiddenIds: [],
       clipboard: [],
+      renaming: null,
       planes: referenceGeometry?.planes ?? [],
       axes: referenceGeometry?.axes ?? [],
       points: referenceGeometry?.points ?? [],

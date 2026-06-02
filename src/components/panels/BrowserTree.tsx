@@ -18,7 +18,11 @@ export function BrowserTree() {
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
-  const renameBody = useStore((s) => s.renameBody);
+  const renaming = useStore((s) => s.renaming);
+  const beginRename = useStore((s) => s.beginRename);
+  const setRenameValue = useStore((s) => s.setRenameValue);
+  const commitRename = useStore((s) => s.commitRename);
+  const cancelRename = useStore((s) => s.cancelRename);
   const duplicateSelected = useStore((s) => s.duplicateSelected);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
@@ -41,7 +45,6 @@ export function BrowserTree() {
   const makeBoundingBoxOfSelection = useStore((s) => s.makeBoundingBoxOfSelection);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
   const setPendingPattern = useStore((s) => s.setPendingPattern);
-  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
   const points = useStore((s) => s.points);
@@ -116,7 +119,7 @@ export function BrowserTree() {
           ]
         : [];
     return [
-      { label: t('menu.rename'), onClick: () => { const b = bodies.find((x) => x.id === bodyId); if (b) setEditing({ id: bodyId, value: b.name }); } },
+      { label: t('menu.rename'), onClick: () => beginRename(bodyId) },
       { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
       {
         label: t('menu.transform'),
@@ -212,18 +215,18 @@ export function BrowserTree() {
             <p className="text-xs text-text-muted p-2">{t('panel.noObjects')}</p>
           ) : (
             bodies.map((body) =>
-              editing?.id === body.id ? (
+              renaming?.id === body.id ? (
                 <div key={body.id} className="w-full flex items-center gap-2 px-2 py-1">
                   <Box size={14} className="text-text-muted" />
                   <input
                     autoFocus
-                    value={editing.value}
-                    onChange={(e) => setEditing({ id: body.id, value: e.target.value })}
+                    value={renaming.value}
+                    onChange={(e) => setRenameValue(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') { renameBody(body.id, editing.value); setEditing(null); }
-                      else if (e.key === 'Escape') setEditing(null);
+                      if (e.key === 'Enter') commitRename();
+                      else if (e.key === 'Escape') cancelRename();
                     }}
-                    onBlur={() => { renameBody(body.id, editing.value); setEditing(null); }}
+                    onBlur={() => commitRename()}
                     className="flex-1 min-w-0 px-1 py-0.5 bg-surface border border-accent rounded text-xs text-text-primary"
                   />
                 </div>
@@ -231,7 +234,7 @@ export function BrowserTree() {
                 <div key={body.id} className="group flex items-center">
                   <button
                     onClick={(e) => handleRowClick(e, body.id)}
-                    onDoubleClick={() => setEditing({ id: body.id, value: body.name })}
+                    onDoubleClick={() => beginRename(body.id)}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       // Keep an existing multi-selection if right-clicking one of its members.

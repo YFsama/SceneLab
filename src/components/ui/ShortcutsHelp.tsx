@@ -50,6 +50,7 @@ const GROUPS: Group[] = [
       { keys: 'Ctrl+D', labelKey: 'menu.duplicate' },
       { keys: 'Ctrl+A', labelKey: 'shortcuts.selectAll' },
       { keys: 'Ctrl+Shift+I', labelKey: 'shortcuts.invertSelection' },
+      { keys: 'F2', labelKey: 'menu.rename' },
       { keys: 'Del', labelKey: 'menu.delete' },
       { keys: 'Ctrl+K', labelKey: 'shortcuts.palette' },
       { keys: 'Ctrl+B / Ctrl+P', labelKey: 'shortcuts.panels' },

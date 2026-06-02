@@ -321,6 +321,45 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().hiddenIds).toEqual([]);
   });
 
+  it('rename editing flow: begin/setValue/commit updates the body name', () => {
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+
+    useStore.getState().beginRename(a.id);
+    expect(useStore.getState().renaming?.id).toBe(a.id);
+    expect(useStore.getState().renaming?.value).toBe(a.name);
+
+    useStore.getState().setRenameValue('Bracket');
+    useStore.getState().commitRename();
+    expect(useStore.getState().renaming).toBeNull();
+    expect(useStore.getState().bodies.find((b) => b.id === a.id)?.name).toBe('Bracket');
+  });
+
+  it('cancelRename discards the draft; F2 only fires with one selected', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+
+    useStore.getState().beginRename(a.id);
+    useStore.getState().setRenameValue('Discarded');
+    useStore.getState().cancelRename();
+    expect(useStore.getState().renaming).toBeNull();
+    expect(useStore.getState().bodies.find((x) => x.id === a.id)?.name).toBe(a.name);
+
+    // Two selected → beginRenameSelected is a no-op.
+    useStore.getState().selectObject(a.id);
+    useStore.getState().toggleSelect(b.id);
+    useStore.getState().beginRenameSelected();
+    expect(useStore.getState().renaming).toBeNull();
+
+    // Exactly one selected → starts editing that body.
+    useStore.getState().selectObject(b.id);
+    useStore.getState().beginRenameSelected();
+    expect(useStore.getState().renaming?.id).toBe(b.id);
+    useStore.getState().cancelRename();
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();
