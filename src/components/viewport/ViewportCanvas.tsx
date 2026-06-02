@@ -1322,7 +1322,12 @@ export function ViewportCanvas() {
       {measureActive && (
         <div className="absolute top-2 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono pointer-events-none space-y-0.5">
           {measurePts.length < 2 ? (
-            <span className="text-accent">{t('measure.hint')} ({measurePts.length}/3)</span>
+            <>
+              <span className="text-accent">{t('measure.hint')} ({measurePts.length}/3)</span>
+              {measurePts.length === 1 && (
+                <div>P1: ({measurePts[0]!.x.toFixed(2)}, {measurePts[0]!.y.toFixed(2)}, {measurePts[0]!.z.toFixed(2)})</div>
+              )}
+            </>
           ) : measurePts.length === 2 ? (() => {
             const [a, b] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }];
             const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
