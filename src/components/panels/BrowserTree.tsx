@@ -26,6 +26,7 @@ export function BrowserTree() {
   const rotateSelected = useStore((s) => s.rotateSelected);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
+  const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -68,6 +69,7 @@ export function BrowserTree() {
     ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => showAllBodies() }] : []),
     { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat), separatorBefore: true },
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
+    { label: t('menu.dropFloor'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); dropSelectedToFloor(); } },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
     { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
     ...(selectedIds.length > 1

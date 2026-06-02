@@ -464,6 +464,23 @@ describe('app store — direct bodies', () => {
     expect(cx(rb)).toBeCloseTo(5, 4); // midpoint between ends 0 and 10
   });
 
+  it('dropSelectedToFloor moves a body so its min Y is 0', () => {
+    useStore.getState().clearScene();
+    const box = translateBody(createBox(10, 10, 10), { x: 0, y: 5, z: 0 }); // y ∈ [5,15]
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().dropSelectedToFloor()).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === box.id)!;
+    expect(Math.min(...r.vertices.map((v) => v.y))).toBeCloseTo(0, 5);
+  });
+
+  it('dropSelectedToFloor is a no-op with nothing selected', () => {
+    useStore.getState().clearScene();
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    useStore.getState().deselectAll();
+    expect(useStore.getState().dropSelectedToFloor()).toBe(0);
+  });
+
   it('distributeSelected needs at least three bodies', () => {
     useStore.getState().clearScene();
     const a = createBox(2, 2, 2);

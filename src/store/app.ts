@@ -108,6 +108,8 @@ interface AppState {
   alignSelected: (axis: 'x' | 'y' | 'z', mode: 'min' | 'center' | 'max') => number;
   /** Evenly space selected direct bodies along an axis (by centre, ends fixed); needs >=3. Returns count. */
   distributeSelected: (axis: 'x' | 'y' | 'z') => number;
+  /** Drop each selected direct body onto the build plate (its min Y to 0); returns how many moved. */
+  dropSelectedToFloor: () => number;
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
@@ -582,6 +584,31 @@ export const useStore = create<AppState>((set, get) => {
         const d = deltas.get(b.id);
         if (d === undefined || Math.abs(d) < 1e-12) return b;
         const move = (v: Vec3): Vec3 => ({ ...v, [axis]: v[axis] + d });
+        return {
+          ...b,
+          vertices: b.vertices.map(move),
+          faces: b.faces.map((f) => ({ ...f, vertices: f.vertices.map(move) })),
+          edges: b.edges.map((e) => ({ ...e, start: move(e.start), end: move(e.end) })),
+        };
+      }),
+      projectDirty: true,
+    }));
+    recombine();
+    return targets.length;
+  },
+  dropSelectedToFloor: () => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const targets = directBodies.filter((b) => sel.has(b.id));
+    if (targets.length === 0) return 0;
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => {
+        if (!sel.has(b.id)) return b;
+        let minY = Infinity;
+        for (const v of b.vertices) minY = Math.min(minY, v.y);
+        if (Math.abs(minY) < 1e-12) return b; // already on the plate
+        const move = (v: Vec3): Vec3 => ({ ...v, y: v.y - minY });
         return {
           ...b,
           vertices: b.vertices.map(move),
