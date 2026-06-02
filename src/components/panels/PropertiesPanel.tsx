@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import type { SolidBody } from '../../lib/geometry/types';
+import { selectionSummary } from '../../lib/selectionSummary';
 import { Settings, Box, Ruler, Beaker, Weight, Layers, RulerIcon, Move, BarChart, Network, Maximize, Shield, Torus, Gauge, Crosshair, RefreshCw, GitBranch, Hash, TrendingUp, CornerDownRight, AlertTriangle, Zap, ArrowUpDown, Triangle, CheckCircle, Activity, Proportions, Ratio, Shapes, Minus, Diamond, Orbit, FlipHorizontal, Circle, ArrowRight, Pentagon, Hexagon, Waves, Columns, Anchor, Percent, Sliders, ArrowDownUp, Grid3X3, Network as NetworkIcon, Sigma, AreaChart, Target, Compass, Navigation, TrendingDown, Waypoints, BoxSelect, Layers as LayersIcon, MapPin, GitCommit, GitBranch as GitBranchIcon, GitMerge, GitPullRequest, Spline, Crosshair as CrosshairIcon, Ruler as RulerIcon2, CircleDot, Waypoints as WaypointsIcon, ArrowUpRight, TrendingUp as TrendingUpIcon, Waves as WavesIcon, Move as MoveIcon, Layers as LayersIcon2, Waypoints as WaypointsIcon2, Circle as CircleIcon, ArrowDown as ArrowDownIcon, ArrowRight as ArrowRightIcon, Spline as SplineIcon, Move as MoveIcon2, Square as SquareIcon, Diamond as DiamondIcon, CornerDownLeft, Move as MoveIcon3, ArrowRightLeft, Spline as SplineIcon2, Move as MoveIcon4, Square as SquareIcon2, Diamond as DiamondIcon2, Triangle as TriangleIcon, ArrowDown as ArrowDownIcon2, ArrowRightLeft as ArrowRightLeftIcon, Spline as SplineIcon3, Move as MoveIcon5, Square as SquareIcon3, Diamond as DiamondIcon3, Triangle as TriangleIcon2, ArrowDown as ArrowDownIcon3, ArrowRightLeft as ArrowRightLeftIcon2, Spline as SplineIcon4, Move as MoveIcon6, Square as SquareIcon4, Diamond as DiamondIcon4, Triangle as TriangleIcon3, ArrowDown as ArrowDownIcon4, ArrowRightLeft as ArrowRightLeftIcon3, Spline as SplineIcon5, Palette } from 'lucide-react';
 import { analyzeOverhangs, analyzeStability, recommendOrientation, estimatePrintJob, estimateSupportVolume, analyzeBedContact } from '../../lib/print';
 import { computeBoundingBox, computeBoundingBoxCenter, computeCentroid, computeVolume, computeSurfaceArea, computeTotalEdgeLength, computeBoundingBoxDiagonal, computeMeshStatistics, computeAverageVertexDegree, computeLargestFace, checkManifold, computeTopology, computeMeshQuality, checkWindingOrder, computeAdjacency, computeValenceDistribution, computeCurvature, computeDihedralAngles, computeWorstFaceAspectRatio, computeMaxEdgeCurvature, checkNormalConsistency, computeEdgeAngleDistribution, computeRegularFaceCount, computeEdgeLengthDistribution, computeFaceAngleDistribution, computeEdgeLengthRatio, computeFaceTypeCount, computeEdgeTypeCount, computeVertexTypeCount, computeMeshGenus, computeSymmetry, computeCompactness, computeElongation, computeConvexity, computeSolidity, computeRoughness, computeThickness, computeCenterOfMassOffset, computePrincipalMoments, computeVolumeRatios, computeAspectRatioDistribution, computeSkewnessDistribution, computeFaceEdgeCountDistribution, computeVertexValenceDistribution, computeEdgeLengthStatistics, computeFaceAreaStatistics, computeVertexDistanceStatistics, computeEdgeAngleStatistics, computeFaceNormalStatistics, computeEdgeNormalStatistics, computeEdgeDihedralStatistics, computeEdgeLengthPercentiles, computeFaceAreaPercentiles, computeVertexDistancePercentiles, computeEdgeDihedralPercentiles, computeEdgeAnglePercentiles, computeFaceNormalPercentiles, computeEdgeTangentPercentiles, computeEdgeCurvaturePercentiles, computeVertexValencePercentiles } from '../../lib/geometry/brep';
@@ -1786,11 +1787,36 @@ export function PropertiesPanel() {
             </div>
           </div>
         ) : (
-          <div className="space-y-1">
-            <p className="text-xs text-text-secondary">
-              {t('panel.selected')}: {selectedIds.join(', ')}
-            </p>
-          </div>
+          (() => {
+            const summary = selectionSummary(bodies.filter((b) => selectedIds.includes(b.id)));
+            if (!summary) return <p className="text-xs text-text-muted">{t('panel.selectObject')}</p>;
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Box size={14} className="text-accent" />
+                  <span className="text-sm font-medium text-text-primary">{summary.count} {t('panel.bodiesSelected')}</span>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 text-xs text-text-muted">
+                    <Ruler size={12} />
+                    <span>{t('panel.dimensions')}</span>
+                  </div>
+                  <div className="pl-4 text-xs text-text-secondary space-y-0.5">
+                    <p>X: {summary.size.x.toFixed(2)} mm</p>
+                    <p>Y: {summary.size.y.toFixed(2)} mm</p>
+                    <p>Z: {summary.size.z.toFixed(2)} mm</p>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 text-xs text-text-muted">
+                    <Beaker size={12} />
+                    <span>{t('panel.volume')}</span>
+                  </div>
+                  <p className="pl-4 text-xs text-text-secondary">{summary.totalVolume.toFixed(2)} mm³</p>
+                </div>
+              </div>
+            );
+          })()
         )}
       </div>
     </aside>
