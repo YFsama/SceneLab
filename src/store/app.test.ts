@@ -417,6 +417,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().paste()).toEqual([]);
   });
 
+  it('rotateSelected rotates in place keeping id (90° about Z swaps X/Y extents)', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 20, 10); // x extent 10, y extent 20
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().rotateSelected('z', 90)).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === box.id)!; // id preserved
+    const xs = r.vertices.map((v) => v.x);
+    const ys = r.vertices.map((v) => v.y);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 4); // swapped
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(10, 4);
+  });
+
+  it('rotateSelected is a no-op with nothing selected', () => {
+    useStore.getState().clearScene();
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    useStore.getState().deselectAll();
+    expect(useStore.getState().rotateSelected('z', 90)).toBe(0);
+  });
+
   it('nudgeSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));

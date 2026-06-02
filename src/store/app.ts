@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
-import { applyCircularArray, placeBodyInFrame, resizeBody, translateBody } from '../lib/geometry/operations';
+import { applyCircularArray, placeBodyInFrame, resizeBody, translateBody, rotateBody } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -102,6 +102,8 @@ interface AppState {
   duplicateSelected: () => string[];
   /** Translate the selected direct bodies by an offset in place (keeps ids); returns how many moved. */
   nudgeSelected: (dx: number, dy: number, dz: number) => number;
+  /** Rotate the selected direct bodies about their own centre (keeps ids); returns how many rotated. */
+  rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
@@ -482,6 +484,31 @@ export const useStore = create<AppState>((set, get) => {
             }
           : b,
       ),
+      projectDirty: true,
+    }));
+    recombine();
+    return n;
+  },
+  rotateSelected: (axis, degrees) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const n = directBodies.filter((b) => sel.has(b.id)).length;
+    if (n === 0) return 0;
+    const angle = (degrees * Math.PI) / 180;
+    const dir: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => {
+        if (!sel.has(b.id)) return b;
+        const min = { x: Infinity, y: Infinity, z: Infinity };
+        const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+        for (const v of b.vertices) {
+          min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+          max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+        }
+        const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
+        return { ...rotateBody(b, { origin, direction: dir }, angle), id: b.id, color: b.color };
+      }),
       projectDirty: true,
     }));
     recombine();

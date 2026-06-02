@@ -23,6 +23,7 @@ export function BrowserTree() {
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
   const isolateSelected = useStore((s) => s.isolateSelected);
   const showAllBodies = useStore((s) => s.showAllBodies);
+  const rotateSelected = useStore((s) => s.rotateSelected);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -67,6 +68,9 @@ export function BrowserTree() {
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
     { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
+    { label: t('menu.rotateX'), onClick: () => { selectObject(bodyId); rotateSelected('x', 90); }, separatorBefore: true },
+    { label: t('menu.rotateY'), onClick: () => { selectObject(bodyId); rotateSelected('y', 90); } },
+    { label: t('menu.rotateZ'), onClick: () => { selectObject(bodyId); rotateSelected('z', 90); } },
     { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
     { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },
     { label: t('menu.mirrorZ'), onClick: () => mirror(bodyId, 'z') },
