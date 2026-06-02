@@ -115,6 +115,9 @@ interface AppState {
   /** Body + mode awaiting the pattern dialog (null = closed). */
   pendingPattern: { bodyId: string; mode: 'linear' | 'circular' } | null;
   setPendingPattern: (p: { bodyId: string; mode: 'linear' | 'circular' } | null) => void;
+  /** Whether the precise-move (ΔX/ΔY/ΔZ) dialog is open. */
+  moveDialogOpen: boolean;
+  setMoveDialogOpen: (v: boolean) => void;
   /** Linear-pattern a body along an axis, replacing it with the copies; returns the new ids. */
   linearPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number, spacing: number) => string[];
   /** Circular-pattern a body around the world axis through the origin; returns the new ids. */
@@ -635,6 +638,8 @@ export const useStore = create<AppState>((set, get) => {
   },
   pendingPattern: null,
   setPendingPattern: (pendingPattern) => set({ pendingPattern }),
+  moveDialogOpen: false,
+  setMoveDialogOpen: (moveDialogOpen) => set({ moveDialogOpen }),
   linearPatternBody: (bodyId, axis, count, spacing) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(count >= 1) || !(spacing > 0)) return [];

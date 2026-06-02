@@ -22,6 +22,7 @@ import { CommandPalette } from './components/ui/CommandPalette';
 import { PrimitiveDialog } from './components/ui/PrimitiveDialog';
 import { ShortcutsHelp } from './components/ui/ShortcutsHelp';
 import { PatternDialog } from './components/ui/PatternDialog';
+import { MoveDialog } from './components/ui/MoveDialog';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -91,6 +92,7 @@ export default function App() {
       <PrimitiveDialog />
       <ShortcutsHelp />
       <PatternDialog />
+      <MoveDialog />
       <AIPanel />
     </div>
   );

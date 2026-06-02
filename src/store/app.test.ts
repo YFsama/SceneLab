@@ -623,6 +623,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().hiddenIds).toEqual([]);
   });
 
+  it('setMoveDialogOpen toggles the move dialog flag', () => {
+    expect(useStore.getState().moveDialogOpen).toBe(false);
+    useStore.getState().setMoveDialogOpen(true);
+    expect(useStore.getState().moveDialogOpen).toBe(true);
+    useStore.getState().setMoveDialogOpen(false);
+    expect(useStore.getState().moveDialogOpen).toBe(false);
+  });
+
   it('setShowGrid toggles the grid visibility flag (default on)', () => {
     expect(useStore.getState().showGrid).toBe(true);
     useStore.getState().setShowGrid(false);

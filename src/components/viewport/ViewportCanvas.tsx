@@ -1034,7 +1034,8 @@ export function ViewportCanvas() {
           label: t('menu.transform'),
           separatorBefore: true,
           submenu: [
-            { label: t('menu.rotateX'), onClick: pre(() => st().rotateSelected('x', 90)) },
+            { label: t('menu.move'), onClick: pre(() => st().setMoveDialogOpen(true)) },
+            { label: t('menu.rotateX'), onClick: pre(() => st().rotateSelected('x', 90)), separatorBefore: true },
             { label: t('menu.rotateY'), onClick: pre(() => st().rotateSelected('y', 90)) },
             { label: t('menu.rotateZ'), onClick: pre(() => st().rotateSelected('z', 90)) },
             { label: t('menu.scaleUp'), onClick: pre(() => st().scaleSelected(2)), separatorBefore: true },
