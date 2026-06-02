@@ -1359,31 +1359,37 @@ export function ViewportCanvas() {
       const pt = getSketchPoint(e);
       if (!pt) return;
 
+      // Ignore a click-without-drag (or a drag that snaps back to the start):
+      // committing a zero-size shape just litters the sketch with junk.
+      const EPS = 1e-6;
       switch (sketchTool) {
         case 'line': {
           const end = inferLineEnd(drawStart, pt).point; // commit with H/V inference
-          addSketchLine(drawStart.x, drawStart.y, end.x, end.y);
+          if (Math.hypot(end.x - drawStart.x, end.y - drawStart.y) > EPS) {
+            addSketchLine(drawStart.x, drawStart.y, end.x, end.y);
+          }
           break;
         }
         case 'rect':
-          addSketchRect(drawStart.x, drawStart.y, pt.x, pt.y);
+          if (Math.abs(pt.x - drawStart.x) > EPS && Math.abs(pt.y - drawStart.y) > EPS) {
+            addSketchRect(drawStart.x, drawStart.y, pt.x, pt.y);
+          }
           break;
         case 'circle': {
-          const dx = pt.x - drawStart.x;
-          const dy = pt.y - drawStart.y;
-          addSketchCircle(drawStart.x, drawStart.y, Math.sqrt(dx * dx + dy * dy));
+          const r = Math.hypot(pt.x - drawStart.x, pt.y - drawStart.y);
+          if (r > EPS) addSketchCircle(drawStart.x, drawStart.y, r);
           break;
         }
         case 'arc': {
           const dx = pt.x - drawStart.x;
           const dy = pt.y - drawStart.y;
           const radius = Math.sqrt(dx * dx + dy * dy);
-          addSketchArc(drawStart.x, drawStart.y, radius, 0, Math.atan2(dy, dx));
+          if (radius > EPS) addSketchArc(drawStart.x, drawStart.y, radius, 0, Math.atan2(dy, dx));
           break;
         }
         case 'polygon': {
           const r = Math.hypot(pt.x - drawStart.x, pt.y - drawStart.y);
-          if (r > 1e-6) addSketchPolygon(drawStart.x, drawStart.y, r, polygonSides);
+          if (r > EPS) addSketchPolygon(drawStart.x, drawStart.y, r, polygonSides);
           break;
         }
       }
