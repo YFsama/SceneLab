@@ -26,6 +26,7 @@ export function BrowserTree() {
   const duplicateSelected = useStore((s) => s.duplicateSelected);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
+  const copySelected = useStore((s) => s.copySelected);
   const isolateSelected = useStore((s) => s.isolateSelected);
   const showAllBodies = useStore((s) => s.showAllBodies);
   const rotateSelected = useStore((s) => s.rotateSelected);
@@ -120,6 +121,7 @@ export function BrowserTree() {
         : [];
     return [
       { label: t('menu.rename'), onClick: () => beginRename(bodyId) },
+      { label: t('menu.copy'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); copySelected(); } },
       { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
       {
         label: t('menu.transform'),
@@ -187,6 +189,7 @@ export function BrowserTree() {
       {
         label: t('menu.visibility'),
         submenu: [
+          { label: t('menu.hide'), onClick: () => toggleBodyVisibility(bodyId) },
           { label: t('menu.isolate'), onClick: () => { selectObject(bodyId); isolateSelected(); } },
           ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => showAllBodies() }] : []),
         ],

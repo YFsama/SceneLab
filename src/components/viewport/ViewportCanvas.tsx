@@ -1127,6 +1127,9 @@ export function ViewportCanvas() {
               { label: t('viewport.iso'), onClick: () => setView('iso') },
             ],
           },
+          ...(useStore.getState().clipboard.length > 0
+            ? [{ label: t('menu.paste'), onClick: () => useStore.getState().paste(), separatorBefore: true }]
+            : []),
           { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
           { label: t('menu.selectAll'), onClick: () => useStore.getState().selectAll() },
           { label: t('menu.deselectAll'), onClick: () => deselectAll() },
@@ -1140,6 +1143,7 @@ export function ViewportCanvas() {
       const pre = (fn: () => void) => () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fn(); };
       // Grouped flyouts, matching the browser-tree menu.
       return [
+        { label: t('menu.copy'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); st().copySelected(); } },
         { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); st().duplicateSelected(); } },
         {
           label: t('menu.transform'),
@@ -1206,6 +1210,7 @@ export function ViewportCanvas() {
         {
           label: t('menu.visibility'),
           submenu: [
+            { label: t('menu.hide'), onClick: () => st().toggleBodyVisibility(bodyId) },
             { label: t('menu.isolate'), onClick: () => { selectObject(bodyId); st().isolateSelected(); } },
             ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => st().showAllBodies() }] : []),
           ],
