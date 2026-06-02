@@ -704,6 +704,27 @@ describe('app store — direct bodies', () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(10, 4);
   });
 
+  it('rotateSelected rotates a multi-selection rigidly about its combined centre', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10); // centre origin
+    const b = translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }); // centre (30,0,0)
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    // Combined centre is (15,5,0); a 90° Z rotation keeps it fixed but swings
+    // the two boxes onto the Y axis around it.
+    expect(useStore.getState().rotateSelected('z', 90)).toBe(2);
+    const all = useStore.getState().bodies;
+    const xs = all.flatMap((bd) => bd.vertices.map((v) => v.x));
+    const ys = all.flatMap((bd) => bd.vertices.map((v) => v.y));
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    expect(cx).toBeCloseTo(15, 4); // combined centre unmoved
+    expect(cy).toBeCloseTo(5, 4);
+    // The pair now spans ~40 in Y (was ~10 in X), i.e. it rotated as a group.
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(40, 4);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(10, 4);
+  });
+
   it('alignSelected centers selected bodies on an axis (keeps ids)', () => {
     useStore.getState().clearScene();
     const a = createBox(10, 10, 10); // x ∈ [-5,5], center 0
