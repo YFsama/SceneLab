@@ -8,6 +8,7 @@ import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
+import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
@@ -88,6 +89,7 @@ export function ViewportCanvas() {
   const currentSketch = useStore((s) => s.currentSketch);
   const drawStart = useStore((s) => s.drawStart);
   const gridSize = useStore((s) => s.gridSize);
+  const selectedSketchId = useStore((s) => s.selectedSketchId);
   const bodies = useStore((s) => s.bodies);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const wireframe = useStore((s) => s.wireframe);
@@ -397,6 +399,7 @@ export function ViewportCanvas() {
   // Shared materials for sketch rendering (created once, disposed on unmount)
   const sketchLineMatRef = useRef(new THREE.LineBasicMaterial({ color: 0xcdd6f4 }));
   const sketchPointMatRef = useRef(new THREE.PointsMaterial({ color: 0x89b4fa, size: 6, sizeAttenuation: false }));
+  const sketchHlMatRef = useRef(new THREE.LineBasicMaterial({ color: 0xfab387 }));
 
   useEffect(() => {
     const sketchGroup = sketchGroupRef.current;
@@ -415,8 +418,9 @@ export function ViewportCanvas() {
 
     if (!currentSketch || !sketchActive) return;
 
-    const lineMat = sketchLineMatRef.current;
     const pointMat = sketchPointMatRef.current;
+    // Selected entity draws in the highlight colour.
+    const matFor = (id: string) => (id === selectedSketchId ? sketchHlMatRef.current : sketchLineMatRef.current);
 
     for (const entity of currentSketch.entities.values()) {
       switch (entity.type) {
@@ -434,7 +438,7 @@ export function ViewportCanvas() {
               new THREE.Vector3(p1.x, 0, p1.y),
               new THREE.Vector3(p2.x, 0, p2.y),
             ]);
-            sketchGroup.add(new THREE.Line(geo, lineMat));
+            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
           }
           break;
         }
@@ -444,7 +448,7 @@ export function ViewportCanvas() {
             const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, 0, Math.PI * 2, false, 0);
             const pts = curve.getPoints(64);
             const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, 0, p.y)));
-            sketchGroup.add(new THREE.Line(geo, lineMat));
+            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
           }
           break;
         }
@@ -454,7 +458,7 @@ export function ViewportCanvas() {
             const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, entity.startAngle, entity.endAngle, false, 0);
             const pts = curve.getPoints(64);
             const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, 0, p.y)));
-            sketchGroup.add(new THREE.Line(geo, lineMat));
+            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
           }
           break;
         }
@@ -466,14 +470,14 @@ export function ViewportCanvas() {
             .map((e) => new THREE.Vector3(e.x, 0, e.y));
           if (pts.length >= 5) {
             const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            sketchGroup.add(new THREE.Line(geo, lineMat));
+            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
           }
           break;
         }
       }
     }
     dirtyRef.current = true;
-  }, [currentSketch, sketchActive]);
+  }, [currentSketch, sketchActive, selectedSketchId]);
 
   // Live rubber-band preview of the shape being drawn (from the mouse-down point
   // to the current cursor) so you can see the line/rect/circle/arc before
@@ -581,7 +585,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [currentSketch, sketchActive]);
+  }, [currentSketch, sketchActive, selectedSketchId]);
 
   useEffect(() => {
     const bodiesGroup = bodiesGroupRef.current;
@@ -906,7 +910,15 @@ export function ViewportCanvas() {
       const scene = sceneRef.current;
       if (!container || !camera || !scene) return;
 
-      if (sketchActive) return;
+      if (sketchActive) {
+        // In the select tool, clicking near an entity selects it (for deletion).
+        if (sketchTool === 'select' && currentSketch) {
+          const p = getSketchPoint(e);
+          const id = p ? pickSketchEntity(currentSketch, p, Math.max(gridSize, 0.4)) : null;
+          useStore.getState().setSelectedSketchId(id);
+        }
+        return;
+      }
 
       const rect = container.getBoundingClientRect();
       mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -965,7 +977,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, measureActive, addMeasurePoint, bodies, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, sketchTool, currentSketch, gridSize, getSketchPoint, measureActive, addMeasurePoint, bodies, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
   );
 
   const handleMouseMove = useCallback(
@@ -1162,6 +1174,11 @@ export function ViewportCanvas() {
           : e.key === 'ArrowDown' ? [0, 0, step]
           : null;
         if (move && nudgeSelected(move[0]!, move[1]!, move[2]!) > 0) e.preventDefault();
+      }
+      // Delete the selected sketch entity while sketching.
+      if (sketchActive && (e.key === 'Delete' || e.key === 'Backspace')) {
+        const id = useStore.getState().selectedSketchId;
+        if (id) { e.preventDefault(); useStore.getState().removeSketchEntity(id); }
       }
     };
     window.addEventListener('keydown', onKey);

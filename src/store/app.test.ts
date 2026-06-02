@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody } from '../lib/geometry';
-import { createSketch, addRectangle } from '../lib/sketch/engine';
+import { createSketch, addRectangle, addLine } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
 describe('app store', () => {
@@ -661,6 +661,16 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().wireframe).toBe(true);
     useStore.getState().setWireframe(false);
     expect(useStore.getState().wireframe).toBe(false);
+  });
+
+  it('removeSketchEntity deletes the entity and clears its selection', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(line.id);
+    useStore.getState().removeSketchEntity(line.id);
+    expect(useStore.getState().currentSketch!.entities.has(line.id)).toBe(false);
+    expect(useStore.getState().selectedSketchId).toBeNull();
   });
 
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {

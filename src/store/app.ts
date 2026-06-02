@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addConstraint } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addConstraint, removeEntity } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -65,6 +65,11 @@ interface AppState {
   addSketchCircle: (cx: number, cy: number, radius: number) => string;
   addSketchArc: (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => string;
   addSketchConstraint: (type: import('../lib/sketch/types').ConstraintType, entityIds: string[], value?: number) => void;
+  /** Currently-selected sketch entity (for highlight/deletion); null if none. */
+  selectedSketchId: string | null;
+  setSelectedSketchId: (id: string | null) => void;
+  /** Remove a sketch entity from the current sketch. */
+  removeSketchEntity: (id: string) => void;
 
   // Feature tree
   featureTree: FeatureTree;
@@ -304,7 +309,7 @@ export const useStore = create<AppState>((set, get) => {
   setSketchTool: (sketchTool) => set({ sketchTool }),
   sketchActive: false,
   setSketchActive: (sketchActive) => set({ sketchActive }),
-  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, workspace: 'model' }),
+  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, selectedSketchId: null, workspace: 'model' }),
   currentSketch: null,
   setCurrentSketch: (currentSketch) => set({ currentSketch }),
   sketchPlaneId: 'xy',
@@ -353,6 +358,14 @@ export const useStore = create<AppState>((set, get) => {
     if (!sketch) return;
     addConstraint(sketch, type, entityIds, value);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+  },
+  selectedSketchId: null,
+  setSelectedSketchId: (selectedSketchId) => set({ selectedSketchId }),
+  removeSketchEntity: (id) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return;
+    removeEntity(sketch, id);
+    set((s) => ({ currentSketch: { ...sketch }, selectedSketchId: s.selectedSketchId === id ? null : s.selectedSketchId, projectDirty: true }));
   },
 
   featureTree: new FeatureTree(),
