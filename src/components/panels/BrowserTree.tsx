@@ -30,6 +30,7 @@ export function BrowserTree() {
   const setScaleDialogOpen = useStore((s) => s.setScaleDialogOpen);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
+  const combineSelected = useStore((s) => s.combineSelected);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
   const setPendingPattern = useStore((s) => s.setPendingPattern);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
@@ -114,6 +115,16 @@ export function BrowserTree() {
         ],
       },
       ...(align.length > 0 ? [{ label: t('menu.alignGroup'), submenu: align }] : []),
+      ...(selectedIds.length >= 2
+        ? [{
+            label: t('menu.combine'),
+            submenu: [
+              { label: t('menu.union'), onClick: () => combineSelected('union') },
+              { label: t('menu.subtract'), onClick: () => combineSelected('difference') },
+              { label: t('menu.intersect'), onClick: () => combineSelected('intersect') },
+            ],
+          }]
+        : []),
       {
         label: t('menu.modify'),
         submenu: [

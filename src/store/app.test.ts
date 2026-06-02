@@ -671,6 +671,27 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
   });
 
+  it('combineSelected unions the first two selected bodies into one', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 }); // overlapping
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectObject(a.id);
+    useStore.getState().toggleSelect(b.id);
+    const id = useStore.getState().combineSelected('union');
+    expect(id).toBeTruthy();
+    expect(useStore.getState().bodies).toHaveLength(1); // a and b replaced by the union
+    expect(useStore.getState().selectedIds).toEqual([id]);
+  });
+
+  it('combineSelected returns null with fewer than two selected', () => {
+    useStore.getState().clearScene();
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().selectObject(a.id);
+    expect(useStore.getState().combineSelected('union')).toBeNull();
+  });
+
   it('toggleSelect adds and removes ids for multi-select', () => {
     useStore.getState().deselectAll();
     useStore.getState().toggleSelect('a');

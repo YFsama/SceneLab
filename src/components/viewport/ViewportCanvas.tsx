@@ -1054,6 +1054,16 @@ export function ViewportCanvas() {
             { label: t('menu.circularPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'circular' }) },
           ],
         },
+        ...(selectedIds.length >= 2
+          ? [{
+              label: t('menu.combine'),
+              submenu: [
+                { label: t('menu.union'), onClick: () => st().combineSelected('union') },
+                { label: t('menu.subtract'), onClick: () => st().combineSelected('difference') },
+                { label: t('menu.intersect'), onClick: () => st().combineSelected('intersect') },
+              ],
+            }]
+          : []),
         {
           label: t('menu.modify'),
           submenu: [

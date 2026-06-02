@@ -6,7 +6,7 @@ import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFe
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
-import { splitByPlane } from '../lib/geometry/boolean';
+import { splitByPlane, booleanOp, type BooleanOp } from '../lib/geometry/boolean';
 import { applyCircularArray, applyLinearArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
@@ -189,6 +189,8 @@ interface AppState {
   placeBodyInCoordinateSystem: (bodyId: string, csId: string) => string | null;
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
+  /** Boolean-combine the first two selected direct bodies (a op b), replacing them; null if it failed. */
+  combineSelected: (op: BooleanOp) => string | null;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -904,6 +906,28 @@ export const useStore = create<AppState>((set, get) => {
     return placed.id;
   },
 
+  combineSelected: (op) => {
+    const { selectedIds, directBodies } = get();
+    // Operate on the first two selected direct bodies, in selection order
+    // (difference is a − b).
+    const sel = selectedIds
+      .map((id) => directBodies.find((b) => b.id === id))
+      .filter((b): b is SolidBody => !!b);
+    if (sel.length < 2) return null;
+    const [a, b] = sel as [SolidBody, SolidBody];
+    const result = booleanOp(a, b, op);
+    if (!result) return null;
+    result.color = a.color;
+    result.name = `${a.name} ${op === 'union' ? '+' : op === 'difference' ? '−' : '∩'} ${b.name}`;
+    pushUndo();
+    set((s) => ({
+      directBodies: [...s.directBodies.filter((x) => x.id !== a.id && x.id !== b.id), result],
+      selectedIds: [result.id],
+      projectDirty: true,
+    }));
+    recombine();
+    return result.id;
+  },
   splitBodyByPlane: (bodyId, planeId) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     const plane = get().planes.find((p) => p.id === planeId);
