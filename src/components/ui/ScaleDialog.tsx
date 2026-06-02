@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 
 /** Scale the selection uniformly by an arbitrary factor about each body's centre. */
 export function ScaleDialog() {
@@ -13,6 +14,7 @@ export function ScaleDialog() {
 function Form({ t }: { t: (k: string) => string }) {
   const [factor, setFactor] = useState('1');
   const close = () => useStore.getState().setScaleDialogOpen(false);
+  useEscapeClose(close);
 
   const apply = () => {
     const f = parseFloat(factor);

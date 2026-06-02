@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 
 /** Precise rotate: rotate the selection by an arbitrary angle about X/Y/Z. */
 export function RotateDialog() {
@@ -14,6 +15,7 @@ function Form({ t }: { t: (k: string) => string }) {
   const [axis, setAxis] = useState<'x' | 'y' | 'z'>('y');
   const [angle, setAngle] = useState('45');
   const close = () => useStore.getState().setRotateDialogOpen(false);
+  useEscapeClose(close);
 
   const apply = () => {
     const deg = parseFloat(angle);

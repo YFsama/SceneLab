@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 import { computeBoundingBox } from '../../lib/geometry';
 
 /** Pattern dialog: linear (axis/count/spacing) or circular (axis/count). */
@@ -21,6 +22,7 @@ function Form({ bodyId, mode, t }: { bodyId: string; mode: 'linear' | 'circular'
   const [countZ, setCountZ] = useState('3');
   const [spacingZ, setSpacingZ] = useState(defSpacing.toFixed(1));
   const close = () => useStore.getState().setPendingPattern(null);
+  useEscapeClose(close);
 
   const create = () => {
     const n = parseInt(count, 10);

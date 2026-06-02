@@ -6,6 +6,7 @@ import {
   createBox, createCylinder, createSphere, createCone, createTorus,
   createWedge, createPrism, createTube, createCoil,
 } from '../../lib/geometry/brep';
+import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 
 interface Field { key: string; labelKey: string; def: number; min?: number; step?: number }
 
@@ -99,6 +100,7 @@ function Form({ kind, spec, t, onClose }: { kind: PrimitiveKind; spec: Spec; t: 
   const [vals, setVals] = useState<Record<string, string>>(
     Object.fromEntries(spec.fields.map((f) => [f.key, String(remembered?.[f.key] ?? f.def)])),
   );
+  useEscapeClose(onClose);
 
   const create = () => {
     const nums: Record<string, number> = {};

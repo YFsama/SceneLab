@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 
 /** Precise move: translate the current selection by exact ΔX/ΔY/ΔZ (mm). */
 export function MoveDialog() {
@@ -15,6 +16,7 @@ function Form({ t }: { t: (k: string) => string }) {
   const [dy, setDy] = useState('0');
   const [dz, setDz] = useState('0');
   const close = () => useStore.getState().setMoveDialogOpen(false);
+  useEscapeClose(close);
 
   const apply = () => {
     const x = parseFloat(dx) || 0;

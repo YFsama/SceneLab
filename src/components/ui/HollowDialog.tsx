@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 
 /** Hollow the chosen body into a closed shell of a given wall thickness (mm). */
 export function HollowDialog() {
@@ -13,6 +14,7 @@ export function HollowDialog() {
 function Form({ bodyId, t }: { bodyId: string; t: (k: string) => string }) {
   const [thickness, setThickness] = useState('2');
   const close = () => useStore.getState().setHollowDialogBody(null);
+  useEscapeClose(close);
 
   const apply = () => {
     const w = parseFloat(thickness);
