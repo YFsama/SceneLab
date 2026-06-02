@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Layers, History, Frame, Slash, Dot, Axis3d, X } from 'lucide-react';
+import { Box, Layers, History, Frame, Slash, Dot, Axis3d, X, Eye, EyeOff } from 'lucide-react';
 import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
@@ -18,6 +18,8 @@ export function BrowserTree() {
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
   const renameBody = useStore((s) => s.renameBody);
+  const hiddenIds = useStore((s) => s.hiddenIds);
+  const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -104,27 +106,36 @@ export function BrowserTree() {
                   />
                 </div>
               ) : (
-                <button
-                  key={body.id}
-                  onClick={(e) => (e.ctrlKey || e.metaKey || e.shiftKey ? toggleSelect(body.id) : selectObject(body.id))}
-                  onDoubleClick={() => setEditing({ id: body.id, value: body.name })}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    selectObject(body.id);
-                    setMenu({ x: e.clientX, y: e.clientY, bodyId: body.id });
-                  }}
-                  className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors
-                    ${selectedIds.includes(body.id)
-                      ? 'bg-accent/20 text-accent'
-                      : 'text-text-secondary hover:bg-surface-hover'
-                    }`}
-                  role="treeitem"
-                  aria-selected={selectedIds.includes(body.id)}
-                  title={t('menu.rename')}
-                >
-                  <Box size={14} />
-                  <span className="truncate">{body.name}</span>
-                </button>
+                <div key={body.id} className="group flex items-center">
+                  <button
+                    onClick={(e) => (e.ctrlKey || e.metaKey || e.shiftKey ? toggleSelect(body.id) : selectObject(body.id))}
+                    onDoubleClick={() => setEditing({ id: body.id, value: body.name })}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      selectObject(body.id);
+                      setMenu({ x: e.clientX, y: e.clientY, bodyId: body.id });
+                    }}
+                    className={`flex-1 min-w-0 flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors
+                      ${selectedIds.includes(body.id)
+                        ? 'bg-accent/20 text-accent'
+                        : 'text-text-secondary hover:bg-surface-hover'
+                      } ${hiddenIds.includes(body.id) ? 'opacity-40' : ''}`}
+                    role="treeitem"
+                    aria-selected={selectedIds.includes(body.id)}
+                    title={t('menu.rename')}
+                  >
+                    <Box size={14} />
+                    <span className="truncate">{body.name}</span>
+                  </button>
+                  <button
+                    onClick={() => toggleBodyVisibility(body.id)}
+                    className={`px-1 text-text-muted hover:text-text-primary transition-opacity ${hiddenIds.includes(body.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                    aria-label={t(hiddenIds.includes(body.id) ? 'menu.show' : 'menu.hide')}
+                    title={t(hiddenIds.includes(body.id) ? 'menu.show' : 'menu.hide')}
+                  >
+                    {hiddenIds.includes(body.id) ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
               ),
             )
           )}

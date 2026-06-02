@@ -85,6 +85,7 @@ export function ViewportCanvas() {
   const currentSketch = useStore((s) => s.currentSketch);
   const drawStart = useStore((s) => s.drawStart);
   const bodies = useStore((s) => s.bodies);
+  const hiddenIds = useStore((s) => s.hiddenIds);
   const datumPlanes = useStore((s) => s.planes);
   const datumAxes = useStore((s) => s.axes);
   const datumPoints = useStore((s) => s.points);
@@ -575,6 +576,7 @@ export function ViewportCanvas() {
     }
 
     for (const body of bodies) {
+      if (hiddenIds.includes(body.id)) continue; // hidden bodies aren't rendered
       const geo = new THREE.BufferGeometry();
       const { positions, indices } = buildBodyMeshArrays(body);
 
@@ -597,7 +599,7 @@ export function ViewportCanvas() {
       bodiesGroup.add(mesh);
     }
     dirtyRef.current = true;
-  }, [bodies]);
+  }, [bodies, hiddenIds]);
 
   // Apply selection / hover styling by tweaking materials (no geometry rebuild):
   // selected → orange glow, hovered (unselected) → a lighter blue preselect.

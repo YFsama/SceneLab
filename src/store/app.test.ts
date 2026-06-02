@@ -368,6 +368,19 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().lastPrimitiveParams.cylinder).toBeUndefined();
   });
 
+  it('toggleBodyVisibility hides and shows a body; clearScene resets', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().toggleBodyVisibility(box.id);
+    expect(useStore.getState().hiddenIds).toContain(box.id);
+    useStore.getState().toggleBodyVisibility(box.id);
+    expect(useStore.getState().hiddenIds).not.toContain(box.id);
+    useStore.getState().toggleBodyVisibility(box.id);
+    useStore.getState().clearScene();
+    expect(useStore.getState().hiddenIds).toEqual([]);
+  });
+
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
     useStore.getState().setShowShortcuts(true);

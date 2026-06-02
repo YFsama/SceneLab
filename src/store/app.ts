@@ -84,6 +84,10 @@ interface AppState {
   renameBody: (id: string, name: string) => boolean;
   /** Set a (direct) body's display colour (0xRRGGBB); returns false if the id isn't a direct body. */
   setBodyColor: (id: string, color: number) => boolean;
+  /** Ids of bodies hidden from the viewport (still listed in the tree). */
+  hiddenIds: string[];
+  /** Show/hide a body in the viewport. */
+  toggleBodyVisibility: (id: string) => void;
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
@@ -391,6 +395,11 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return true;
   },
+  hiddenIds: [],
+  toggleBodyVisibility: (id) =>
+    set((s) => ({
+      hiddenIds: s.hiddenIds.includes(id) ? s.hiddenIds.filter((h) => h !== id) : [...s.hiddenIds, id],
+    })),
   removeDirectBody: (id) => {
     pushUndo();
     set((s) => ({
@@ -455,6 +464,7 @@ export const useStore = create<AppState>((set, get) => {
       bodies: [],
       objectIds: [],
       selectedIds: [],
+      hiddenIds: [],
       planes: [],
       axes: [],
       points: [],
@@ -474,6 +484,7 @@ export const useStore = create<AppState>((set, get) => {
       featureTree: tree,
       directBodies,
       selectedIds: [],
+      hiddenIds: [],
       planes: referenceGeometry?.planes ?? [],
       axes: referenceGeometry?.axes ?? [],
       points: referenceGeometry?.points ?? [],
