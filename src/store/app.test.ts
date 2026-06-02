@@ -448,6 +448,31 @@ describe('app store — direct bodies', () => {
     expect(center(rb)).toBeCloseTo(10, 4);
   });
 
+  it('distributeSelected evenly spaces middle bodies, ends fixed', () => {
+    useStore.getState().clearScene();
+    const a = createBox(2, 2, 2); // center 0 (x ∈ [-1,1])
+    const b = translateBody(createBox(2, 2, 2), { x: 3, y: 0, z: 0 }); // center 3
+    const c = translateBody(createBox(2, 2, 2), { x: 10, y: 0, z: 0 }); // center 10
+    useStore.getState().addDirectBodies([a, b, c]);
+    useStore.getState().selectAll();
+    expect(useStore.getState().distributeSelected('x')).toBe(3);
+    const cx = (body: { vertices: { x: number }[] }) => {
+      const xs = body.vertices.map((v) => v.x);
+      return (Math.min(...xs) + Math.max(...xs)) / 2;
+    };
+    const rb = useStore.getState().bodies.find((x) => x.id === b.id)!;
+    expect(cx(rb)).toBeCloseTo(5, 4); // midpoint between ends 0 and 10
+  });
+
+  it('distributeSelected needs at least three bodies', () => {
+    useStore.getState().clearScene();
+    const a = createBox(2, 2, 2);
+    const b = translateBody(createBox(2, 2, 2), { x: 5, y: 0, z: 0 });
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    expect(useStore.getState().distributeSelected('x')).toBe(0);
+  });
+
   it('alignSelected needs at least two bodies', () => {
     useStore.getState().clearScene();
     const box = createBox(2, 2, 2);

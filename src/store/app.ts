@@ -106,6 +106,8 @@ interface AppState {
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Align selected direct bodies along an axis by min/center/max (keeps ids); returns how many moved. */
   alignSelected: (axis: 'x' | 'y' | 'z', mode: 'min' | 'center' | 'max') => number;
+  /** Evenly space selected direct bodies along an axis (by centre, ends fixed); needs >=3. Returns count. */
+  distributeSelected: (axis: 'x' | 'y' | 'z') => number;
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
@@ -541,6 +543,44 @@ export const useStore = create<AppState>((set, get) => {
         const current = mode === 'min' ? r.lo : mode === 'max' ? r.hi : (r.lo + r.hi) / 2;
         const d = target - current;
         if (Math.abs(d) < 1e-12) return b;
+        const move = (v: Vec3): Vec3 => ({ ...v, [axis]: v[axis] + d });
+        return {
+          ...b,
+          vertices: b.vertices.map(move),
+          faces: b.faces.map((f) => ({ ...f, vertices: f.vertices.map(move) })),
+          edges: b.edges.map((e) => ({ ...e, start: move(e.start), end: move(e.end) })),
+        };
+      }),
+      projectDirty: true,
+    }));
+    recombine();
+    return targets.length;
+  },
+  distributeSelected: (axis) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const targets = directBodies.filter((b) => sel.has(b.id));
+    if (targets.length < 3) return 0; // ends + at least one middle body
+    const centerOf = (b: SolidBody) => {
+      let lo = Infinity, hi = -Infinity;
+      for (const v of b.vertices) { lo = Math.min(lo, v[axis]); hi = Math.max(hi, v[axis]); }
+      return (lo + hi) / 2;
+    };
+    const sorted = targets.map((b) => ({ b, c: centerOf(b) })).sort((p, q) => p.c - q.c);
+    const first = sorted[0]!.c;
+    const last = sorted[sorted.length - 1]!.c;
+    const span = last - first;
+    const deltas = new Map<string, number>();
+    for (let i = 1; i < sorted.length - 1; i++) {
+      const targetC = first + (span * i) / (sorted.length - 1);
+      deltas.set(sorted[i]!.b.id, targetC - sorted[i]!.c);
+    }
+    if (deltas.size === 0) return 0;
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => {
+        const d = deltas.get(b.id);
+        if (d === undefined || Math.abs(d) < 1e-12) return b;
         const move = (v: Vec3): Vec3 => ({ ...v, [axis]: v[axis] + d });
         return {
           ...b,
