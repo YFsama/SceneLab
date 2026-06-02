@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export interface ContextMenuItem {
   label: string;
@@ -9,6 +9,25 @@ export interface ContextMenuItem {
   separatorBefore?: boolean;
   danger?: boolean;
   disabled?: boolean;
+}
+
+/**
+ * A submenu flyout that opens to the right by default but flips to the left if
+ * it would overflow the viewport's right edge — so deeply-nested menus near the
+ * screen edge stay on-screen (SolidWorks-style).
+ */
+function Flyout({ items, onClose }: { items: ContextMenuItem[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [side, setSide] = useState<'right' | 'left'>('right');
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && el.getBoundingClientRect().right > window.innerWidth) setSide('left');
+  }, []);
+  return (
+    <div ref={ref} className={`absolute top-0 z-10 ${side === 'right' ? 'left-full -ml-1' : 'right-full -mr-1'}`}>
+      <MenuList items={items} onClose={onClose} />
+    </div>
+  );
 }
 
 /** Recursively rendered list of menu items, with hover flyouts for submenus. */
@@ -30,9 +49,7 @@ function MenuList({ items, onClose }: { items: ContextMenuItem[]; onClose: () =>
             {item.submenu && <span className="text-text-muted">▸</span>}
           </button>
           {item.submenu && openIdx === i && (
-            <div className="absolute left-full top-0 -ml-1 z-10">
-              <MenuList items={item.submenu} onClose={onClose} />
-            </div>
+            <Flyout items={item.submenu} onClose={onClose} />
           )}
         </div>
       ))}
