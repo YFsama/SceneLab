@@ -287,6 +287,9 @@ interface AppState {
   /** Select every body in the scene (Ctrl+A). */
   selectAll: () => void;
   deselectAll: () => void;
+  /** Body currently under the cursor (viewport or tree), for shared pre-highlight. */
+  hoveredId: string | null;
+  setHoveredId: (id: string | null) => void;
   invertSelection: () => void;
   selectRange: (fromId: string, toId: string) => void;
 
@@ -1295,6 +1298,9 @@ export const useStore = create<AppState>((set, get) => {
     })),
   selectAll: () => set((s) => ({ selectedIds: s.bodies.map((b) => b.id) })),
   deselectAll: () => set({ selectedIds: [] }),
+  hoveredId: null,
+  // Guarded so a mousemove over the same body doesn't churn subscribers.
+  setHoveredId: (id) => { if (get().hoveredId !== id) set({ hoveredId: id }); },
   invertSelection: () =>
     set((s) => {
       const sel = new Set(s.selectedIds);

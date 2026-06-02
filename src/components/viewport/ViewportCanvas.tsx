@@ -123,7 +123,8 @@ export function ViewportCanvas() {
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const hoveredId = useStore((s) => s.hoveredId);
+  const setHoveredId = useStore((s) => s.setHoveredId);
   const [measureHover, setMeasureHover] = useState<{ x: number; y: number; z: number; snapped: boolean } | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
@@ -1083,13 +1084,13 @@ export function ViewportCanvas() {
         }
         // Hover-highlight the body under the cursor (preselect).
         const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
-        setHoveredId((prev) => (prev === id ? prev : id));
+        setHoveredId(id);
         return;
       }
       const pt = getSketchPoint(e);
       setMousePos(pt);
     },
-    [sketchActive, measureActive, bodies, getSketchPoint],
+    [sketchActive, measureActive, bodies, getSketchPoint, setHoveredId],
   );
 
   // Right-click a body in the 3D view → select it and open its context menu.

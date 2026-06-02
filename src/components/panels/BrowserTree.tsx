@@ -29,6 +29,8 @@ export function BrowserTree() {
   const copySelected = useStore((s) => s.copySelected);
   const directBodies = useStore((s) => s.directBodies);
   const reorderBody = useStore((s) => s.reorderBody);
+  const hoveredId = useStore((s) => s.hoveredId);
+  const setHoveredId = useStore((s) => s.setHoveredId);
   const isolateSelected = useStore((s) => s.isolateSelected);
   const showAllBodies = useStore((s) => s.showAllBodies);
   const rotateSelected = useStore((s) => s.rotateSelected);
@@ -248,6 +250,8 @@ export function BrowserTree() {
                   <button
                     onClick={(e) => handleRowClick(e, body.id)}
                     onDoubleClick={() => beginRename(body.id)}
+                    onMouseEnter={() => setHoveredId(body.id)}
+                    onMouseLeave={() => setHoveredId(null)}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       // Keep an existing multi-selection if right-clicking one of its members.
@@ -257,7 +261,9 @@ export function BrowserTree() {
                     className={`flex-1 min-w-0 flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors
                       ${selectedIds.includes(body.id)
                         ? 'bg-accent/20 text-accent'
-                        : 'text-text-secondary hover:bg-surface-hover'
+                        : hoveredId === body.id
+                          ? 'bg-surface-hover text-text-primary'
+                          : 'text-text-secondary hover:bg-surface-hover'
                       } ${hiddenIds.includes(body.id) ? 'opacity-40' : ''}`}
                     role="treeitem"
                     aria-selected={selectedIds.includes(body.id)}
