@@ -41,15 +41,16 @@ export function useKeyboardShortcuts() {
 export function initShortcuts(): void {
   const store = useStore.getState();
 
-  // View shortcuts
-  registerShortcut('1', () => store.setViewDirection('top'));
-  registerShortcut('2', () => store.setViewDirection('front'));
+  // Standard-view shortcuts (CAD convention): 1 front, 2 top, 3 right, 4 iso.
+  registerShortcut('1', () => store.setViewDirection('front'));
+  registerShortcut('2', () => store.setViewDirection('top'));
   registerShortcut('3', () => store.setViewDirection('right'));
+  registerShortcut('4', () => store.setViewDirection('iso'));
   registerShortcut('0', () => store.setViewDirection('iso'));
 
-  // Workspace shortcuts
+  // Workspace shortcuts (read fresh state — initShortcuts runs once at startup).
   registerShortcut('s', () => {
-    if (!store.sketchActive) {
+    if (!useStore.getState().sketchActive) {
       store.setWorkspace('sketch');
       store.setSketchActive(true);
     }
@@ -77,11 +78,9 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+y', () => store.redo());
   registerShortcut('ctrl+k', () => store.setCommandPaletteOpen(true));
   registerShortcut('escape', () => {
-    if (store.sketchActive) {
-      store.setSketchActive(false);
-      store.setCurrentSketch(null);
-      store.setWorkspace('model');
-    }
-    store.deselectAll();
+    // Esc exits sketch mode if drawing (keeping the sketch), otherwise clears
+    // the current selection.
+    if (useStore.getState().sketchActive) store.exitSketch();
+    else store.deselectAll();
   });
 }
