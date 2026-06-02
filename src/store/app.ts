@@ -82,6 +82,8 @@ interface AppState {
   resizeBodyTo: (bodyId: string, target: Vec3) => boolean;
   /** Rename a (direct) body; returns false if the id isn't a direct body or the name is blank. */
   renameBody: (id: string, name: string) => boolean;
+  /** Set a (direct) body's display colour (0xRRGGBB); returns false if the id isn't a direct body. */
+  setBodyColor: (id: string, color: number) => boolean;
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
@@ -373,6 +375,13 @@ export const useStore = create<AppState>((set, get) => {
     const { directBodies } = get();
     if (!trimmed || !directBodies.some((b) => b.id === id)) return false;
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, name: trimmed } : b)), projectDirty: true });
+    recombine();
+    return true;
+  },
+  setBodyColor: (id, color) => {
+    const { directBodies } = get();
+    if (!directBodies.some((b) => b.id === id)) return false;
+    set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, color } : b)), projectDirty: true });
     recombine();
     return true;
   },

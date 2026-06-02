@@ -351,6 +351,15 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().renameBody('nope', 'X')).toBe(false);
   });
 
+  it('setBodyColor stores a colour on a direct body; rejects unknown id', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().setBodyColor(box.id, 0xf38ba8)).toBe(true);
+    expect(useStore.getState().bodies.find((b) => b.id === box.id)!.color).toBe(0xf38ba8);
+    expect(useStore.getState().setBodyColor('nope', 0x000000)).toBe(false);
+  });
+
   it('toggleSelect adds and removes ids for multi-select', () => {
     useStore.getState().deselectAll();
     useStore.getState().toggleSelect('a');

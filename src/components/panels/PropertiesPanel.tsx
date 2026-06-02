@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import type { SolidBody } from '../../lib/geometry/types';
-import { Settings, Box, Ruler, Beaker, Weight, Layers, RulerIcon, Move, BarChart, Network, Maximize, Shield, Torus, Gauge, Crosshair, RefreshCw, GitBranch, Hash, TrendingUp, CornerDownRight, AlertTriangle, Zap, ArrowUpDown, Triangle, CheckCircle, Activity, Proportions, Ratio, Shapes, Minus, Diamond, Orbit, FlipHorizontal, Circle, ArrowRight, Pentagon, Hexagon, Waves, Columns, Anchor, Percent, Sliders, ArrowDownUp, Grid3X3, Network as NetworkIcon, Sigma, AreaChart, Target, Compass, Navigation, TrendingDown, Waypoints, BoxSelect, Layers as LayersIcon, MapPin, GitCommit, GitBranch as GitBranchIcon, GitMerge, GitPullRequest, Spline, Crosshair as CrosshairIcon, Ruler as RulerIcon2, CircleDot, Waypoints as WaypointsIcon, ArrowUpRight, TrendingUp as TrendingUpIcon, Waves as WavesIcon, Move as MoveIcon, Layers as LayersIcon2, Waypoints as WaypointsIcon2, Circle as CircleIcon, ArrowDown as ArrowDownIcon, ArrowRight as ArrowRightIcon, Spline as SplineIcon, Move as MoveIcon2, Square as SquareIcon, Diamond as DiamondIcon, CornerDownLeft, Move as MoveIcon3, ArrowRightLeft, Spline as SplineIcon2, Move as MoveIcon4, Square as SquareIcon2, Diamond as DiamondIcon2, Triangle as TriangleIcon, ArrowDown as ArrowDownIcon2, ArrowRightLeft as ArrowRightLeftIcon, Spline as SplineIcon3, Move as MoveIcon5, Square as SquareIcon3, Diamond as DiamondIcon3, Triangle as TriangleIcon2, ArrowDown as ArrowDownIcon3, ArrowRightLeft as ArrowRightLeftIcon2, Spline as SplineIcon4, Move as MoveIcon6, Square as SquareIcon4, Diamond as DiamondIcon4, Triangle as TriangleIcon3, ArrowDown as ArrowDownIcon4, ArrowRightLeft as ArrowRightLeftIcon3, Spline as SplineIcon5 } from 'lucide-react';
+import { Settings, Box, Ruler, Beaker, Weight, Layers, RulerIcon, Move, BarChart, Network, Maximize, Shield, Torus, Gauge, Crosshair, RefreshCw, GitBranch, Hash, TrendingUp, CornerDownRight, AlertTriangle, Zap, ArrowUpDown, Triangle, CheckCircle, Activity, Proportions, Ratio, Shapes, Minus, Diamond, Orbit, FlipHorizontal, Circle, ArrowRight, Pentagon, Hexagon, Waves, Columns, Anchor, Percent, Sliders, ArrowDownUp, Grid3X3, Network as NetworkIcon, Sigma, AreaChart, Target, Compass, Navigation, TrendingDown, Waypoints, BoxSelect, Layers as LayersIcon, MapPin, GitCommit, GitBranch as GitBranchIcon, GitMerge, GitPullRequest, Spline, Crosshair as CrosshairIcon, Ruler as RulerIcon2, CircleDot, Waypoints as WaypointsIcon, ArrowUpRight, TrendingUp as TrendingUpIcon, Waves as WavesIcon, Move as MoveIcon, Layers as LayersIcon2, Waypoints as WaypointsIcon2, Circle as CircleIcon, ArrowDown as ArrowDownIcon, ArrowRight as ArrowRightIcon, Spline as SplineIcon, Move as MoveIcon2, Square as SquareIcon, Diamond as DiamondIcon, CornerDownLeft, Move as MoveIcon3, ArrowRightLeft, Spline as SplineIcon2, Move as MoveIcon4, Square as SquareIcon2, Diamond as DiamondIcon2, Triangle as TriangleIcon, ArrowDown as ArrowDownIcon2, ArrowRightLeft as ArrowRightLeftIcon, Spline as SplineIcon3, Move as MoveIcon5, Square as SquareIcon3, Diamond as DiamondIcon3, Triangle as TriangleIcon2, ArrowDown as ArrowDownIcon3, ArrowRightLeft as ArrowRightLeftIcon2, Spline as SplineIcon4, Move as MoveIcon6, Square as SquareIcon4, Diamond as DiamondIcon4, Triangle as TriangleIcon3, ArrowDown as ArrowDownIcon4, ArrowRightLeft as ArrowRightLeftIcon3, Spline as SplineIcon5, Palette } from 'lucide-react';
 import { analyzeOverhangs, analyzeStability, recommendOrientation, estimatePrintJob, estimateSupportVolume, analyzeBedContact } from '../../lib/print';
 import { computeBoundingBox, computeBoundingBoxCenter, computeCentroid, computeVolume, computeSurfaceArea, computeTotalEdgeLength, computeBoundingBoxDiagonal, computeMeshStatistics, computeAverageVertexDegree, computeLargestFace, checkManifold, computeTopology, computeMeshQuality, checkWindingOrder, computeAdjacency, computeValenceDistribution, computeCurvature, computeDihedralAngles, computeWorstFaceAspectRatio, computeMaxEdgeCurvature, checkNormalConsistency, computeEdgeAngleDistribution, computeRegularFaceCount, computeEdgeLengthDistribution, computeFaceAngleDistribution, computeEdgeLengthRatio, computeFaceTypeCount, computeEdgeTypeCount, computeVertexTypeCount, computeMeshGenus, computeSymmetry, computeCompactness, computeElongation, computeConvexity, computeSolidity, computeRoughness, computeThickness, computeCenterOfMassOffset, computePrincipalMoments, computeVolumeRatios, computeAspectRatioDistribution, computeSkewnessDistribution, computeFaceEdgeCountDistribution, computeVertexValenceDistribution, computeEdgeLengthStatistics, computeFaceAreaStatistics, computeVertexDistanceStatistics, computeEdgeAngleStatistics, computeFaceNormalStatistics, computeEdgeNormalStatistics, computeEdgeDihedralStatistics, computeEdgeLengthPercentiles, computeFaceAreaPercentiles, computeVertexDistancePercentiles, computeEdgeDihedralPercentiles, computeEdgeAnglePercentiles, computeFaceNormalPercentiles, computeEdgeTangentPercentiles, computeEdgeCurvaturePercentiles, computeVertexValencePercentiles } from '../../lib/geometry/brep';
+
+// Appearance swatches (Catppuccin-ish) for quick per-body colouring.
+const APPEARANCE_COLORS = [0x89b4fa, 0xa6e3a1, 0xf9e2af, 0xfab387, 0xf38ba8, 0xcba6f7, 0x94e2d5, 0xeff1f5, 0x9399b2];
 
 const materials: Record<string, { name: string; density: number }> = {
   steel: { name: 'Steel', density: 7.85 },
@@ -22,6 +25,7 @@ export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
   const bodies = useStore((s) => s.bodies);
   const resizeBodyTo = useStore((s) => s.resizeBodyTo);
+  const setBodyColor = useStore((s) => s.setBodyColor);
   const [material, setMaterial] = useState('steel');
 
   const selectedBody = selectedIds.length === 1
@@ -46,6 +50,28 @@ export function PropertiesPanel() {
             <div className="flex items-center gap-2">
               <Box size={14} className="text-accent" />
               <span className="text-sm font-medium text-text-primary">{selectedBody.name}</span>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-1 text-xs text-text-muted">
+                <Palette size={12} />
+                <span>{t('panel.appearance')}</span>
+              </div>
+              <div className="pl-4 flex flex-wrap gap-1.5">
+                {APPEARANCE_COLORS.map((hex) => {
+                  const active = (selectedBody.color ?? 0x89b4fa) === hex;
+                  return (
+                    <button
+                      key={hex}
+                      onClick={() => setBodyColor(selectedBody.id, hex)}
+                      className={`w-5 h-5 rounded border ${active ? 'border-text-primary ring-1 ring-text-primary' : 'border-panel-border'}`}
+                      style={{ backgroundColor: `#${hex.toString(16).padStart(6, '0')}` }}
+                      aria-label={`#${hex.toString(16).padStart(6, '0')}`}
+                      title={`#${hex.toString(16).padStart(6, '0')}`}
+                    />
+                  );
+                })}
+              </div>
             </div>
 
             <div className="space-y-1">

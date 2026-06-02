@@ -22,6 +22,8 @@ export interface SolidBody {
   vertices: Vec3[];
   faces: Face[];
   edges: Edge[];
+  /** Optional display colour (0xRRGGBB). Undefined renders with the default. */
+  color?: number;
 }
 
 export interface ExtrudeParams {

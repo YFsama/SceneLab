@@ -602,6 +602,7 @@ export function ViewportCanvas() {
   useEffect(() => {
     const bodiesGroup = bodiesGroupRef.current;
     if (!bodiesGroup) return;
+    const colorOf = new Map(bodies.map((b) => [b.id, b.color ?? 0x89b4fa]));
     for (const child of bodiesGroup.children) {
       if (!(child instanceof THREE.Mesh)) continue;
       const id = child.userData.bodyId as string | undefined;
@@ -615,7 +616,7 @@ export function ViewportCanvas() {
       } else if (hovered) {
         mat.color.setHex(0xb4befe); mat.emissive.setHex(0x232a52);
       } else {
-        mat.color.setHex(0x89b4fa); mat.emissive.setHex(0x000000);
+        mat.color.setHex((id && colorOf.get(id)) || 0x89b4fa); mat.emissive.setHex(0x000000);
       }
     }
     dirtyRef.current = true;
