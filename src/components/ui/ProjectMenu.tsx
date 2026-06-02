@@ -4,12 +4,14 @@ import { useT } from '../../lib/i18n';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
+import { framingBodies } from '../../lib/render/fitView';
 
 export function ProjectMenu() {
   const { t } = useT();
   const projectName = useStore((s) => s.projectName);
   const featureTree = useStore((s) => s.featureTree);
   const bodies = useStore((s) => s.bodies);
+  const selectedIds = useStore((s) => s.selectedIds);
   const directBodies = useStore((s) => s.directBodies);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -67,13 +69,17 @@ export function ProjectMenu() {
     if (meshInputRef.current) meshInputRef.current.value = '';
   };
 
+  // Export the selection when something is selected, otherwise the whole scene.
+  const exportBodies = () => framingBodies(bodies, selectedIds, true);
+
   const handleExportSTL = () => {
-    if (bodies.length === 0) {
+    const targets = exportBodies();
+    if (targets.length === 0) {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
     try {
-      for (const body of bodies) {
+      for (const body of targets) {
         const buffer = exportSTLBinary(body);
         const blob = new Blob([buffer], { type: 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
@@ -90,12 +96,13 @@ export function ProjectMenu() {
   };
 
   const handleExportOBJ = () => {
-    if (bodies.length === 0) {
+    const targets = exportBodies();
+    if (targets.length === 0) {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
     try {
-      for (const body of bodies) {
+      for (const body of targets) {
         downloadFile(exportOBJ(body), `${body.name}.obj`);
       }
       showToast(t('toast.objExported'), 'success');
@@ -105,12 +112,13 @@ export function ProjectMenu() {
   };
 
   const handleExport3MF = () => {
-    if (bodies.length === 0) {
+    const targets = exportBodies();
+    if (targets.length === 0) {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
     try {
-      const xml = export3MF(bodies);
+      const xml = export3MF(targets);
       const blob = new Blob([xml], { type: 'application/xml' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
