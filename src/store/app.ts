@@ -53,6 +53,9 @@ interface AppState {
   setCurrentSketch: (s: Sketch | null) => void;
   sketchPlaneId: SketchPlaneId;
   setSketchPlaneId: (p: SketchPlaneId) => void;
+  /** Grid/snap step in mm for sketch drawing. */
+  gridSize: number;
+  setGridSize: (mm: number) => void;
 
   // Sketch drawing
   drawStart: { x: number; y: number } | null;
@@ -261,6 +264,8 @@ export const useStore = create<AppState>((set, get) => {
   setCurrentSketch: (currentSketch) => set({ currentSketch }),
   sketchPlaneId: 'xy',
   setSketchPlaneId: (sketchPlaneId) => set({ sketchPlaneId }),
+  gridSize: 0.5,
+  setGridSize: (gridSize) => set({ gridSize: gridSize > 0 ? gridSize : 0.5 }),
 
   drawStart: null,
   setDrawStart: (drawStart) => set({ drawStart }),

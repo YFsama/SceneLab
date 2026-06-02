@@ -409,6 +409,13 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().duplicateSelected()).toEqual([]);
   });
 
+  it('setGridSize updates the snap step and rejects non-positive values', () => {
+    useStore.getState().setGridSize(5);
+    expect(useStore.getState().gridSize).toBe(5);
+    useStore.getState().setGridSize(0); // invalid → falls back to 0.5
+    expect(useStore.getState().gridSize).toBe(0.5);
+  });
+
   it('selectAll selects every body', () => {
     useStore.getState().clearScene();
     const a = createBox(2, 2, 2); const b = createBox(3, 3, 3);

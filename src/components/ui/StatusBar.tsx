@@ -12,6 +12,8 @@ export function StatusBar() {
   const selectedCount = useStore((s) => s.selectedIds.length);
   const sketchActive = useStore((s) => s.sketchActive);
   const currentSketch = useStore((s) => s.currentSketch);
+  const gridSize = useStore((s) => s.gridSize);
+  const setGridSize = useStore((s) => s.setGridSize);
   const viewDirection = useStore((s) => s.viewDirection);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
@@ -41,7 +43,17 @@ export function StatusBar() {
         {sketchActive && (
           <span className="flex items-center gap-1">
             <Grid3X3 size={10} />
-            {t('status.gridSnap')}: 0.5mm
+            {t('status.gridSnap')}:
+            <select
+              value={gridSize}
+              onChange={(e) => setGridSize(Number(e.target.value))}
+              className="bg-surface border border-panel-border rounded px-1 py-0 text-[10px] text-text-primary"
+              aria-label={t('status.gridSnap')}
+            >
+              {[0.1, 0.5, 1, 5, 10].map((s) => (
+                <option key={s} value={s}>{s}mm</option>
+              ))}
+            </select>
           </span>
         )}
         {sketchActive && currentSketch && (

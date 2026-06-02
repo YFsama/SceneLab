@@ -86,6 +86,7 @@ export function ViewportCanvas() {
   const sketchTool = useStore((s) => s.sketchTool);
   const currentSketch = useStore((s) => s.currentSketch);
   const drawStart = useStore((s) => s.drawStart);
+  const gridSize = useStore((s) => s.gridSize);
   const bodies = useStore((s) => s.bodies);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const datumPlanes = useStore((s) => s.planes);
@@ -862,10 +863,9 @@ export function ViewportCanvas() {
       if (snap.snapped) return snap.point;
     }
 
-    // Otherwise snap to the 0.5mm grid.
-    const gridSize = 0.5;
+    // Otherwise snap to the configurable grid step.
     return { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize };
-  }, [currentSketch]);
+  }, [currentSketch, gridSize]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
