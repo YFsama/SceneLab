@@ -113,6 +113,7 @@ export function BrowserTree() {
         submenu: [
           { label: t('menu.linearPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'linear' }) },
           { label: t('menu.circularPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'circular' }) },
+          { label: t('menu.gridPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'grid' }) },
         ],
       },
       ...(align.length > 0 ? [{ label: t('menu.alignGroup'), submenu: align }] : []),

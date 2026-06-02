@@ -1094,6 +1094,7 @@ export function ViewportCanvas() {
           submenu: [
             { label: t('menu.linearPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'linear' }) },
             { label: t('menu.circularPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'circular' }) },
+            { label: t('menu.gridPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'grid' }) },
           ],
         },
         ...(selectedIds.length >= 2

@@ -491,6 +491,24 @@ describe('app store — direct bodies', () => {
     expect(centers[centers.length - 1]! - centers[0]!).toBeCloseTo(30, 4);
   });
 
+  it('gridPatternBody replaces a body with countX×countZ copies', () => {
+    useStore.getState().clearScene();
+    const box = createBox(4, 4, 4);
+    useStore.getState().addDirectBody(box);
+    const ids = useStore.getState().gridPatternBody(box.id, 3, 10, 2, 10);
+    expect(ids).toHaveLength(6); // 3 × 2
+    expect(useStore.getState().bodies.find((b) => b.id === box.id)).toBeUndefined();
+    expect(useStore.getState().bodies).toHaveLength(6);
+  });
+
+  it('gridPatternBody returns [] for bad params', () => {
+    useStore.getState().clearScene();
+    const box = createBox(4, 4, 4);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().gridPatternBody(box.id, 0, 10, 2, 10)).toEqual([]);
+    expect(useStore.getState().gridPatternBody(box.id, 2, 0, 2, 10)).toEqual([]);
+  });
+
   it('circularPatternBody replaces a body with count copies around an axis', () => {
     useStore.getState().clearScene();
     const box = translateBody(createBox(4, 4, 4), { x: 20, y: 0, z: 0 }); // offset from origin

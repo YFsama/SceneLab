@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -123,8 +123,8 @@ interface AppState {
   /** Drop each selected direct body onto the build plate (its min Y to 0); returns how many moved. */
   dropSelectedToFloor: () => number;
   /** Body + mode awaiting the pattern dialog (null = closed). */
-  pendingPattern: { bodyId: string; mode: 'linear' | 'circular' } | null;
-  setPendingPattern: (p: { bodyId: string; mode: 'linear' | 'circular' } | null) => void;
+  pendingPattern: { bodyId: string; mode: 'linear' | 'circular' | 'grid' } | null;
+  setPendingPattern: (p: { bodyId: string; mode: 'linear' | 'circular' | 'grid' } | null) => void;
   /** Whether the precise-move (ΔX/ΔY/ΔZ) dialog is open. */
   moveDialogOpen: boolean;
   setMoveDialogOpen: (v: boolean) => void;
@@ -143,6 +143,8 @@ interface AppState {
   linearPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number, spacing: number) => string[];
   /** Circular-pattern a body around the world axis through the origin; returns the new ids. */
   circularPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number) => string[];
+  /** 2D grid-pattern a body on the ground plane (X × Z), replacing it; returns the new ids. */
+  gridPatternBody: (bodyId: string, countX: number, spacingX: number, countZ: number, spacingZ: number) => string[];
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
@@ -722,6 +724,24 @@ export const useStore = create<AppState>((set, get) => {
     if (!body || !(count >= 1)) return [];
     const dir: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
     const copies = applyCircularArray(body, { origin: { x: 0, y: 0, z: 0 }, direction: dir }, Math.floor(count)).map((c) => ({ ...c, color: body.color }));
+    if (copies.length === 0) return [];
+    pushUndo();
+    set((s) => ({
+      directBodies: [...s.directBodies.filter((b) => b.id !== bodyId), ...copies],
+      selectedIds: copies.map((c) => c.id),
+      projectDirty: true,
+    }));
+    recombine();
+    return copies.map((c) => c.id);
+  },
+  gridPatternBody: (bodyId, countX, spacingX, countZ, spacingZ) => {
+    const body = get().bodies.find((b) => b.id === bodyId);
+    if (!body || !(countX >= 1) || !(countZ >= 1) || !(spacingX > 0) || !(spacingZ > 0)) return [];
+    const copies = applyGridArray(
+      body,
+      { x: 1, y: 0, z: 0 }, Math.floor(countX), spacingX,
+      { x: 0, y: 0, z: 1 }, Math.floor(countZ), spacingZ,
+    ).map((c) => ({ ...c, color: body.color }));
     if (copies.length === 0) return [];
     pushUndo();
     set((s) => ({
