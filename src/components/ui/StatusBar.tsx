@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useStore, type ThemeMode } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
@@ -17,6 +18,16 @@ export function StatusBar() {
   const sketchTool = useStore((s) => s.sketchTool);
   const projectName = useStore((s) => s.projectName);
   const projectDirty = useStore((s) => s.projectDirty);
+  const setProjectName = useStore((s) => s.setProjectName);
+  const [editingName, setEditingName] = useState<string | null>(null);
+
+  const commitName = () => {
+    if (editingName !== null) {
+      const trimmed = editingName.trim();
+      if (trimmed) setProjectName(trimmed);
+      setEditingName(null);
+    }
+  };
   const polygonSides = useStore((s) => s.polygonSides);
   const setPolygonSides = useStore((s) => s.setPolygonSides);
   const wireframe = useStore((s) => s.wireframe);
@@ -44,9 +55,25 @@ export function StatusBar() {
       role="status"
     >
       <div className="flex items-center gap-4">
-        <span className="text-text-secondary font-medium" title={projectDirty ? t('status.unsaved') : undefined}>
-          {projectName}{projectDirty && <span className="text-warning"> •</span>}
-        </span>
+        {editingName !== null ? (
+          <input
+            autoFocus
+            value={editingName}
+            onChange={(e) => setEditingName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitName(); else if (e.key === 'Escape') setEditingName(null); }}
+            onBlur={commitName}
+            className="w-32 px-1 py-0 bg-surface border border-accent rounded text-xs text-text-primary"
+            aria-label={t('project.rename')}
+          />
+        ) : (
+          <button
+            onDoubleClick={() => setEditingName(projectName)}
+            className="text-text-secondary font-medium hover:text-text-primary"
+            title={projectDirty ? t('status.unsaved') : t('project.rename')}
+          >
+            {projectName}{projectDirty && <span className="text-warning"> •</span>}
+          </button>
+        )}
         <span>{t(`toolbar.${workspace}`)}</span>
         <span className="flex items-center gap-1">
           <Eye size={10} />
