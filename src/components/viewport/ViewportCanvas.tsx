@@ -6,6 +6,7 @@ import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
+import { snapToPoints } from '../../lib/sketch/snap';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
@@ -785,16 +786,25 @@ export function ViewportCanvas() {
     raycasterRef.current.ray.intersectPlane(plane, intersection);
     if (!intersection) return null;
 
-    // Grid snapping (hold Shift to disable)
-    const gridSize = 0.5;
-    let x = intersection.x;
-    let y = intersection.z;
-    if (!e.shiftKey) {
-      x = Math.round(x / gridSize) * gridSize;
-      y = Math.round(y / gridSize) * gridSize;
+    const raw = { x: intersection.x, y: intersection.z };
+    // Hold Shift to draw freely (no snapping at all).
+    if (e.shiftKey) return raw;
+
+    // Endpoint snapping takes priority over the grid so new geometry connects
+    // precisely to existing sketch points (SolidWorks-style inference).
+    if (currentSketch) {
+      const endpoints: { x: number; y: number }[] = [];
+      for (const ent of currentSketch.entities.values()) {
+        if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
+      }
+      const snap = snapToPoints(raw, endpoints, 0.4);
+      if (snap.snapped) return snap.point;
     }
-    return { x, y };
-  }, []);
+
+    // Otherwise snap to the 0.5mm grid.
+    const gridSize = 0.5;
+    return { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize };
+  }, [currentSketch]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
