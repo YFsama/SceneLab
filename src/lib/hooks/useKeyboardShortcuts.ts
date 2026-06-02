@@ -8,14 +8,15 @@ export function registerShortcut(key: string, handler: () => void): void {
 }
 
 /**
- * What the Escape key should cancel, in priority order: an active sketch first
- * (so you leave drawing mode keeping the sketch), then the measure tool, then
- * the current selection — mirroring how Esc backs out of the active tool in
- * SolidWorks.
+ * What the Escape key should cancel, in priority order: an in-progress sketch
+ * drag first (cancel the current shape, staying in the sketch), then exit the
+ * sketch, then the measure tool, then the selection — mirroring how Esc backs
+ * out one step at a time in SolidWorks.
  */
 export function escapeAction(
-  s: { sketchActive: boolean; measureActive: boolean },
-): 'exitSketch' | 'exitMeasure' | 'deselect' {
+  s: { sketchActive: boolean; measureActive: boolean; drawing?: boolean },
+): 'cancelDraw' | 'exitSketch' | 'exitMeasure' | 'deselect' {
+  if (s.sketchActive && s.drawing) return 'cancelDraw';
   if (s.sketchActive) return 'exitSketch';
   if (s.measureActive) return 'exitMeasure';
   return 'deselect';
@@ -113,10 +114,11 @@ export function initShortcuts(): void {
   registerShortcut('shift+?', () => store.setShowShortcuts(true));
   registerShortcut('shift+/', () => store.setShowShortcuts(true));
   registerShortcut('escape', () => {
-    // Esc cancels the active tool in priority order: exit sketch (keeping the
-    // sketch), then leave the measure tool, then clear the selection.
+    // Esc backs out one step at a time: cancel an in-progress sketch shape,
+    // then exit the sketch, then leave measure, then clear the selection.
     const s = useStore.getState();
-    switch (escapeAction(s)) {
+    switch (escapeAction({ sketchActive: s.sketchActive, measureActive: s.measureActive, drawing: s.drawStart !== null })) {
+      case 'cancelDraw': s.setDrawStart(null); break;
       case 'exitSketch': s.exitSketch(); break;
       case 'exitMeasure': s.setMeasureActive(false); break;
       case 'deselect': s.deselectAll(); break;

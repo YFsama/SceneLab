@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { registerShortcut, escapeAction } from './useKeyboardShortcuts';
 
 describe('escapeAction', () => {
-  it('exits the sketch first when one is active', () => {
-    expect(escapeAction({ sketchActive: true, measureActive: true })).toBe('exitSketch');
+  it('cancels an in-progress draw before exiting the sketch', () => {
+    expect(escapeAction({ sketchActive: true, measureActive: false, drawing: true })).toBe('cancelDraw');
+  });
+  it('exits the sketch when active but not mid-draw', () => {
+    expect(escapeAction({ sketchActive: true, measureActive: true, drawing: false })).toBe('exitSketch');
   });
   it('leaves the measure tool when measuring (and not sketching)', () => {
     expect(escapeAction({ sketchActive: false, measureActive: true })).toBe('exitMeasure');
