@@ -711,18 +711,20 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [bodies, hiddenIds, wireframe]);
 
-  // Recolour edges on selection without rebuilding geometry — selecting a body
-  // shouldn't regenerate every edge buffer (only the colours change).
+  // Recolour edges on selection/hover without rebuilding geometry — selecting or
+  // hovering a body shouldn't regenerate every edge buffer (only the colours
+  // change). Selected = orange, hovered = brighter grey, otherwise dim.
   useEffect(() => {
     const edgesGroup = edgesGroupRef.current;
     if (!edgesGroup) return;
     for (const child of edgesGroup.children) {
       if (!(child instanceof THREE.LineSegments)) continue;
-      const selected = selectedIds.includes(child.userData.bodyId as string);
-      (child.material as THREE.LineBasicMaterial).color.setHex(selected ? 0xfab387 : 0x45475a);
+      const id = child.userData.bodyId as string;
+      const color = selectedIds.includes(id) ? 0xfab387 : (!sketchActive && id === hoveredId ? 0x9399b2 : 0x45475a);
+      (child.material as THREE.LineBasicMaterial).color.setHex(color);
     }
     dirtyRef.current = true;
-  }, [selectedIds, bodies, hiddenIds, wireframe]);
+  }, [selectedIds, hoveredId, sketchActive, bodies, hiddenIds, wireframe]);
 
   // Center-of-mass markers for selected bodies (when enabled).
   useEffect(() => {
