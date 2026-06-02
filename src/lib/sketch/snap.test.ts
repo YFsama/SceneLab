@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { snapToPoints, inferLineEnd, nearestVertexWithin } from './snap';
+import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from './snap';
 
 describe('snapToPoints', () => {
   const pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
@@ -70,5 +70,20 @@ describe('nearestVertexWithin', () => {
 
   it('returns null with no vertices', () => {
     expect(nearestVertexWithin({ x: 0, y: 0, z: 0 }, [], 1)).toBeNull();
+  });
+});
+
+describe('angleAtVertex', () => {
+  it('measures a right angle', () => {
+    // arms along +X and +Z from the origin → 90°.
+    expect(angleAtVertex({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 })).toBeCloseTo(90, 6);
+  });
+
+  it('measures a straight angle', () => {
+    expect(angleAtVertex({ x: -1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBeCloseTo(180, 6);
+  });
+
+  it('returns 0 for a degenerate arm', () => {
+    expect(angleAtVertex({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBe(0);
   });
 });

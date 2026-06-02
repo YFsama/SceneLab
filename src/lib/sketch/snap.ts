@@ -2,6 +2,20 @@ export interface P2 { x: number; y: number }
 export interface P3 { x: number; y: number; z: number }
 
 /**
+ * Angle in degrees at vertex `b` formed by points a-b-c (0–180). Returns 0 if
+ * either arm is degenerate. Used by the measure tool's 3-point angle mode.
+ */
+export function angleAtVertex(a: P3, b: P3, c: P3): number {
+  const u = { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+  const v = { x: c.x - b.x, y: c.y - b.y, z: c.z - b.z };
+  const lu = Math.hypot(u.x, u.y, u.z);
+  const lv = Math.hypot(v.x, v.y, v.z);
+  if (lu < 1e-12 || lv < 1e-12) return 0;
+  const d = Math.max(-1, Math.min(1, (u.x * v.x + u.y * v.y + u.z * v.z) / (lu * lv)));
+  return (Math.acos(d) * 180) / Math.PI;
+}
+
+/**
  * Nearest vertex to a 3D point within `tol`, or null. Used by the measure tool
  * to snap a surface pick onto a corner so distances are exact (SolidWorks-style
  * vertex snapping).

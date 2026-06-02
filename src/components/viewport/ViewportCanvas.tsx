@@ -7,7 +7,7 @@ import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
-import { snapToPoints, inferLineEnd, nearestVertexWithin } from '../../lib/sketch/snap';
+import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
@@ -848,9 +848,9 @@ export function ViewportCanvas() {
       g.setAttribute('position', new THREE.Float32BufferAttribute([pt.x, pt.y, pt.z], 3));
       measureGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xf38ba8, size: 10, sizeAttenuation: false })));
     }
-    if (measurePts.length === 2) {
-      const [a, b] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }];
-      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z)]);
+    if (measurePts.length >= 2) {
+      // Polyline through the picks (1→2→3) — a segment for distance, two for angle.
+      const g = new THREE.BufferGeometry().setFromPoints(measurePts.map((p) => new THREE.Vector3(p.x, p.y, p.z)));
       const line = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xf38ba8, dashSize: 0.5, gapSize: 0.25 }));
       line.computeLineDistances();
       measureGroup.add(line);
@@ -1225,8 +1225,8 @@ export function ViewportCanvas() {
       {measureActive && (
         <div className="absolute top-2 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono pointer-events-none space-y-0.5">
           {measurePts.length < 2 ? (
-            <span className="text-accent">{t('measure.hint')} ({measurePts.length}/2)</span>
-          ) : (() => {
+            <span className="text-accent">{t('measure.hint')} ({measurePts.length}/3)</span>
+          ) : measurePts.length === 2 ? (() => {
             const [a, b] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }];
             const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
             const dist = Math.hypot(dx, dy, dz);
@@ -1234,6 +1234,18 @@ export function ViewportCanvas() {
               <>
                 <div className="text-accent">{t('measure.distance')}: {dist.toFixed(2)} mm</div>
                 <div>ΔX: {dx.toFixed(2)} ΔY: {dy.toFixed(2)} ΔZ: {dz.toFixed(2)}</div>
+                <div className="text-text-muted">{t('measure.angleHint')}</div>
+              </>
+            );
+          })() : (() => {
+            const [a, b, c] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }, { x: number; y: number; z: number }];
+            const ang = angleAtVertex(a, b, c);
+            const d1 = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+            const d2 = Math.hypot(c.x - b.x, c.y - b.y, c.z - b.z);
+            return (
+              <>
+                <div className="text-accent">{t('measure.angle')}: {ang.toFixed(1)}°</div>
+                <div>{d1.toFixed(2)} mm · {d2.toFixed(2)} mm</div>
               </>
             );
           })()}

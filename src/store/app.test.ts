@@ -682,12 +682,13 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).toEqual(['c']);
   });
 
-  it('measure tool: points accumulate to 2 then restart, and toggling off clears', () => {
+  it('measure tool: points accumulate to 3 then restart, and toggling off clears', () => {
     useStore.getState().setMeasureActive(true);
     useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
     useStore.getState().addMeasurePoint({ x: 3, y: 4, z: 0 });
-    expect(useStore.getState().measurePts).toHaveLength(2);
-    useStore.getState().addMeasurePoint({ x: 9, y: 9, z: 9 }); // third pick restarts
+    useStore.getState().addMeasurePoint({ x: 6, y: 0, z: 0 });
+    expect(useStore.getState().measurePts).toHaveLength(3);
+    useStore.getState().addMeasurePoint({ x: 9, y: 9, z: 9 }); // fourth pick restarts
     expect(useStore.getState().measurePts).toEqual([{ x: 9, y: 9, z: 9 }]);
     useStore.getState().setMeasureActive(false);
     expect(useStore.getState().measurePts).toHaveLength(0);
