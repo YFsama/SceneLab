@@ -687,12 +687,19 @@ export function ViewportCanvas() {
         if (pos.length === 0) continue;
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        const seg = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x45475a }));
+        // Selected bodies get bright (orange) edges that draw on top, so the
+        // selection reads clearly even against the face tint (SolidWorks-style).
+        const selected = selectedIds.includes(body.id);
+        const seg = new THREE.LineSegments(
+          geo,
+          new THREE.LineBasicMaterial({ color: selected ? 0xfab387 : 0x45475a, depthTest: !selected }),
+        );
+        seg.renderOrder = selected ? 1 : 0;
         edgesGroup.add(seg);
       }
     }
     dirtyRef.current = true;
-  }, [bodies, hiddenIds, wireframe]);
+  }, [bodies, hiddenIds, wireframe, selectedIds]);
 
   // Center-of-mass markers for selected bodies (when enabled).
   useEffect(() => {
