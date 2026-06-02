@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
 import { createSketch, polygonPoints } from '../../lib/sketch/engine';
+import { previewDimensionLabel } from '../../lib/sketch/dimensions';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
@@ -507,6 +508,8 @@ export function ViewportCanvas() {
       if (child instanceof THREE.Line || child instanceof THREE.Points) {
         child.geometry.dispose();
         (child.material as THREE.Material).dispose();
+      } else if (child instanceof THREE.Sprite) {
+        disposeSprite(child);
       }
     }
 
@@ -566,6 +569,15 @@ export function ViewportCanvas() {
           // Solid, bright, always-on-top line — far more visible than a dashed one.
           const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false }));
           previewGroup.add(line);
+        }
+        // Live size readout next to the cursor so you can see the dimensions
+        // while dragging (SolidWorks shows W×H / radius as you draw).
+        const labelEnd = sketchTool === 'line' ? inferLineEnd(s, m).point : m;
+        const label = previewDimensionLabel(sketchTool, s, labelEnd, polygonSides);
+        if (label) {
+          const sprite = makeTextSprite(label, 0xf9e2af, 0.35);
+          sprite.position.set(m.x + 0.5, 0.06, m.y + 0.5);
+          previewGroup.add(sprite);
         }
       }
     }

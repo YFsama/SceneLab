@@ -6,7 +6,28 @@ import {
   measureRadius,
   measureAngleBetweenLines,
   listDimensions,
+  previewDimensionLabel,
 } from './dimensions';
+
+describe('previewDimensionLabel', () => {
+  const o = { x: 0, y: 0 };
+  it('shows a line length', () => {
+    expect(previewDimensionLabel('line', o, { x: 3, y: 4 })).toBe('5.0');
+  });
+  it('shows width × height for a rectangle (absolute, any drag direction)', () => {
+    expect(previewDimensionLabel('rect', o, { x: -10, y: 5 })).toBe('10.0 × 5.0');
+  });
+  it('shows radius for circles and arcs', () => {
+    expect(previewDimensionLabel('circle', o, { x: 6, y: 8 })).toBe('R10.0');
+    expect(previewDimensionLabel('arc', o, { x: 6, y: 8 })).toBe('R10.0');
+  });
+  it('shows radius and side count for a polygon', () => {
+    expect(previewDimensionLabel('polygon', o, { x: 3, y: 4 }, 5)).toBe('R5.0 · 5');
+  });
+  it('returns empty for the select tool', () => {
+    expect(previewDimensionLabel('select', o, { x: 1, y: 1 })).toBe('');
+  });
+});
 
 describe('sketch dimensions', () => {
   it('measures a line length', () => {

@@ -19,6 +19,35 @@ export interface Dimension {
   label: string;
 }
 
+/**
+ * Live size readout for the shape currently being dragged in a sketch — shown
+ * next to the cursor (SolidWorks shows W×H / radius / length as you draw). The
+ * `end` should already reflect any inference (e.g. a line's H/V snap). Returns
+ * an empty string for tools without a meaningful drag dimension.
+ */
+export function previewDimensionLabel(
+  tool: string,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  sides = 6,
+): string {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  switch (tool) {
+    case 'line':
+      return Math.hypot(dx, dy).toFixed(1);
+    case 'rect':
+      return `${Math.abs(dx).toFixed(1)} × ${Math.abs(dy).toFixed(1)}`;
+    case 'circle':
+    case 'arc':
+      return `R${Math.hypot(dx, dy).toFixed(1)}`;
+    case 'polygon':
+      return `R${Math.hypot(dx, dy).toFixed(1)} · ${sides}`;
+    default:
+      return '';
+  }
+}
+
 function point(sketch: Sketch, id: string): SketchPoint | null {
   const e = sketch.entities.get(id);
   return e?.type === 'point' ? e : null;
