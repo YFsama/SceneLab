@@ -66,6 +66,39 @@ export function sketchSnapPoints(endpoints: P2[]): P2[] {
   return out;
 }
 
+export interface AlignResult {
+  /** The point adjusted onto any shared axis. */
+  point: P2;
+  /** Candidate we now share an X with (defines a vertical guide), or null. */
+  guideX: P2 | null;
+  /** Candidate we now share a Y with (defines a horizontal guide), or null. */
+  guideY: P2 | null;
+}
+
+/**
+ * Inference alignment (SolidWorks dashed guides): if a candidate's x is within
+ * `tol` of `p.x`, snap `p.x` onto it so the new point lines up vertically with
+ * that candidate; likewise for y (horizontal). Each axis is handled
+ * independently and the nearest candidate within tol wins.
+ */
+export function inferAlignment(p: P2, candidates: P2[], tol: number): AlignResult {
+  let guideX: P2 | null = null;
+  let guideY: P2 | null = null;
+  let bestDX = tol;
+  let bestDY = tol;
+  for (const c of candidates) {
+    const dx = Math.abs(c.x - p.x);
+    if (dx <= bestDX) { bestDX = dx; guideX = c; }
+    const dy = Math.abs(c.y - p.y);
+    if (dy <= bestDY) { bestDY = dy; guideY = c; }
+  }
+  return {
+    point: { x: guideX ? guideX.x : p.x, y: guideY ? guideY.y : p.y },
+    guideX,
+    guideY,
+  };
+}
+
 export function snapToPoints(p: P2, candidates: P2[], tol: number): { point: P2; snapped: boolean } {
   let best: P2 | null = null;
   let bestD = tol;

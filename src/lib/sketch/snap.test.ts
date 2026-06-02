@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { snapToPoints, sketchSnapPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from './snap';
+import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from './snap';
+
+describe('inferAlignment', () => {
+  it('snaps x to a vertically-aligned candidate, leaving y free', () => {
+    const r = inferAlignment({ x: 10.1, y: 0 }, [{ x: 10, y: 5 }], 0.3);
+    expect(r.point).toEqual({ x: 10, y: 0 });
+    expect(r.guideX).toEqual({ x: 10, y: 5 });
+    expect(r.guideY).toBeNull();
+  });
+
+  it('snaps both axes when candidates align on each', () => {
+    const r = inferAlignment({ x: 10.1, y: 4.9 }, [{ x: 10, y: 5 }], 0.3);
+    expect(r.point).toEqual({ x: 10, y: 5 });
+    expect(r.guideX).toEqual({ x: 10, y: 5 });
+    expect(r.guideY).toEqual({ x: 10, y: 5 });
+  });
+
+  it('leaves the point unchanged when nothing is within tol', () => {
+    const r = inferAlignment({ x: 1, y: 1 }, [{ x: 10, y: 5 }], 0.3);
+    expect(r.point).toEqual({ x: 1, y: 1 });
+    expect(r.guideX).toBeNull();
+    expect(r.guideY).toBeNull();
+  });
+});
 
 describe('sketchSnapPoints', () => {
   it('always includes the origin first, even with no endpoints', () => {

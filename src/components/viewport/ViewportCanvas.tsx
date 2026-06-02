@@ -9,7 +9,7 @@ import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { pickCycle, distinctInOrder } from '../../lib/render/pickCycle';
-import { snapToPoints, sketchSnapPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
+import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
@@ -538,6 +538,20 @@ export function ViewportCanvas() {
       }
       const onPoint = snapToPoints(m, sketchSnapPoints(endpoints), 1e-6).snapped;
       previewGroup.add(marker(m.x, m.y, onPoint ? 0xa6e3a1 : 0x89b4fa, onPoint ? 12 : 9));
+      // Inference guide lines: when the cursor lines up (but isn't exactly on)
+      // an existing point's X or Y, draw a faint line to that point.
+      if (!onPoint) {
+        const align = inferAlignment(m, sketchSnapPoints(endpoints), 1e-6);
+        const guideMat = () => new THREE.LineBasicMaterial({ color: 0x6c7086, depthTest: false });
+        if (align.guideX) {
+          const g = new THREE.BufferGeometry().setFromPoints([v(align.guideX.x, align.guideX.y), v(m.x, m.y)]);
+          previewGroup.add(new THREE.Line(g, guideMat()));
+        }
+        if (align.guideY) {
+          const g = new THREE.BufferGeometry().setFromPoints([v(align.guideY.x, align.guideY.y), v(m.x, m.y)]);
+          previewGroup.add(new THREE.Line(g, guideMat()));
+        }
+      }
       if (s) {
         previewGroup.add(marker(s.x, s.y, 0xa6e3a1, 11)); // green start point
         let pts: THREE.Vector3[] = [];
@@ -964,8 +978,20 @@ export function ViewportCanvas() {
         if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
       }
     }
-    const snap = snapToPoints(raw, sketchSnapPoints(endpoints), 0.4);
+    const candidates = sketchSnapPoints(endpoints);
+    const snap = snapToPoints(raw, candidates, 0.4);
     if (snap.snapped) return snap.point;
+
+    // Inference: line up with an existing point's X or Y (SolidWorks dashed
+    // guides). A snapped axis takes priority over the grid; the free axis still
+    // snaps to the grid so the point stays tidy.
+    const align = inferAlignment(raw, candidates, 0.3);
+    if (align.guideX || align.guideY) {
+      return {
+        x: align.guideX ? align.guideX.x : Math.round(raw.x / gridSize) * gridSize,
+        y: align.guideY ? align.guideY.y : Math.round(raw.y / gridSize) * gridSize,
+      };
+    }
 
     // Otherwise snap to the configurable grid step.
     return { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize };
