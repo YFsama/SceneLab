@@ -156,6 +156,9 @@ interface AppState {
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
+  /** Last dimensions used per primitive kind, so the insert dialog reuses them. */
+  lastPrimitiveParams: Partial<Record<PrimitiveKind, Record<string, number>>>;
+  rememberPrimitiveParams: (kind: PrimitiveKind, params: Record<string, number>) => void;
   /** Measure tool: when on, clicking points in the viewport measures distance. */
   measureActive: boolean;
   setMeasureActive: (v: boolean) => void;
@@ -622,6 +625,9 @@ export const useStore = create<AppState>((set, get) => {
   setShowShortcuts: (showShortcuts) => set({ showShortcuts }),
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
+  lastPrimitiveParams: {},
+  rememberPrimitiveParams: (kind, params) =>
+    set((s) => ({ lastPrimitiveParams: { ...s.lastPrimitiveParams, [kind]: params } })),
   measureActive: false,
   setMeasureActive: (measureActive) => set({ measureActive, measurePts: [] }),
   measurePts: [],

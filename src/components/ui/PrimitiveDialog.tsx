@@ -94,8 +94,10 @@ export function PrimitiveDialog() {
 }
 
 function Form({ kind, spec, t, onClose }: { kind: PrimitiveKind; spec: Spec; t: (k: string) => string; onClose: () => void }) {
+  // Seed from the last values used for this kind, falling back to the defaults.
+  const remembered = useStore.getState().lastPrimitiveParams[kind];
   const [vals, setVals] = useState<Record<string, string>>(
-    Object.fromEntries(spec.fields.map((f) => [f.key, String(f.def)])),
+    Object.fromEntries(spec.fields.map((f) => [f.key, String(remembered?.[f.key] ?? f.def)])),
   );
 
   const create = () => {
@@ -107,6 +109,7 @@ function Form({ kind, spec, t, onClose }: { kind: PrimitiveKind; spec: Spec; t: 
       nums[f.key] = n;
     }
     const body = spec.build(nums);
+    useStore.getState().rememberPrimitiveParams(kind, nums);
     useStore.getState().addDirectBody(body);
     useStore.getState().selectObject(body.id);
     onClose();

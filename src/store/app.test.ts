@@ -360,6 +360,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setBodyColor('nope', 0x000000)).toBe(false);
   });
 
+  it('rememberPrimitiveParams stores last dimensions per kind', () => {
+    useStore.getState().rememberPrimitiveParams('box', { w: 30, h: 12, d: 8 });
+    expect(useStore.getState().lastPrimitiveParams.box).toEqual({ w: 30, h: 12, d: 8 });
+    useStore.getState().rememberPrimitiveParams('box', { w: 5, h: 5, d: 5 }); // overwrites
+    expect(useStore.getState().lastPrimitiveParams.box).toEqual({ w: 5, h: 5, d: 5 });
+    expect(useStore.getState().lastPrimitiveParams.cylinder).toBeUndefined();
+  });
+
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
     useStore.getState().setShowShortcuts(true);
