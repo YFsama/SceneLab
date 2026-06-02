@@ -1,6 +1,6 @@
 import { useStore, type WorkspaceMode } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Pen, Cog, Ruler, Settings } from 'lucide-react';
+import { Box, Pen, Cog, Ruler, Settings, Undo2, Redo2 } from 'lucide-react';
 
 const workspaces: { mode: WorkspaceMode; icon: typeof Box; shortcut: string }[] = [
   { mode: 'sketch', icon: Pen, shortcut: 'S' },
@@ -14,6 +14,10 @@ export function Toolbar() {
   const { t } = useT();
   const current = useStore((s) => s.workspace);
   const setWorkspace = useStore((s) => s.setWorkspace);
+  const canUndo = useStore((s) => s.undoStack.length > 0);
+  const canRedo = useStore((s) => s.redoStack.length > 0);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
 
   return (
     <aside
@@ -42,6 +46,28 @@ export function Toolbar() {
           )}
         </button>
       ))}
+
+      <div className="mt-auto flex flex-col gap-1">
+        <div className="w-6 h-px self-center bg-panel-border" aria-hidden="true" />
+        <button
+          onClick={() => undo()}
+          disabled={!canUndo}
+          className="w-10 h-10 flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          aria-label={t('toolbar.undo')}
+          title={`${t('toolbar.undo')} (Ctrl+Z)`}
+        >
+          <Undo2 size={18} />
+        </button>
+        <button
+          onClick={() => redo()}
+          disabled={!canRedo}
+          className="w-10 h-10 flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          aria-label={t('toolbar.redo')}
+          title={`${t('toolbar.redo')} (Ctrl+Y)`}
+        >
+          <Redo2 size={18} />
+        </button>
+      </div>
     </aside>
   );
 }
