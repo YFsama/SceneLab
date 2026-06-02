@@ -599,6 +599,19 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().rotateSelected('z', 90)).toBe(0);
   });
 
+  it('moveSelectionToOrigin centres the selection at the world origin', () => {
+    useStore.getState().clearScene();
+    const box = translateBody(createBox(10, 10, 10), { x: 20, y: 6, z: 0 }); // centre (20, 11, 0)
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().moveSelectionToOrigin()).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === box.id)!;
+    const c = (axis: 'x' | 'y' | 'z') => { const a = r.vertices.map((v) => v[axis]); return (Math.min(...a) + Math.max(...a)) / 2; };
+    expect(c('x')).toBeCloseTo(0, 4);
+    expect(c('y')).toBeCloseTo(0, 4);
+    expect(c('z')).toBeCloseTo(0, 4);
+  });
+
   it('nudgeSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));

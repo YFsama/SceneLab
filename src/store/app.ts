@@ -113,6 +113,8 @@ interface AppState {
   duplicateSelected: () => string[];
   /** Translate the selected direct bodies by an offset in place (keeps ids); returns how many moved. */
   nudgeSelected: (dx: number, dy: number, dz: number) => number;
+  /** Move the selection so its combined bounding-box centre sits at the world origin; returns count. */
+  moveSelectionToOrigin: () => number;
   /** Rotate the selected direct bodies about their own centre (keeps ids); returns how many rotated. */
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Uniformly scale the selected direct bodies about their own centre (keeps ids); returns how many scaled. */
@@ -558,6 +560,18 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return n;
+  },
+  moveSelectionToOrigin: () => {
+    const { selectedIds, bodies } = get();
+    const sel = bodies.filter((b) => selectedIds.includes(b.id));
+    if (sel.length === 0) return 0;
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (const b of sel) for (const v of b.vertices) {
+      min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+      max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+    }
+    return get().nudgeSelected(-(min.x + max.x) / 2, -(min.y + max.y) / 2, -(min.z + max.z) / 2);
   },
   rotateSelected: (axis, degrees) => {
     const { selectedIds, directBodies } = get();
