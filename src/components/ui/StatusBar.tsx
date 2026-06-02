@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore, type ThemeMode } from '../../store/app';
 import { computeBoundingBox } from '../../lib/geometry';
+import { selectionSummary } from '../../lib/selectionSummary';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
 import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard, Box, Target } from 'lucide-react';
@@ -21,6 +22,14 @@ export function StatusBar() {
     if (!b || b.vertices.length === 0) return null;
     const bb = computeBoundingBox(b);
     return `${(bb.max.x - bb.min.x).toFixed(1)} × ${(bb.max.y - bb.min.y).toFixed(1)} × ${(bb.max.z - bb.min.z).toFixed(1)} mm`;
+  })();
+  // Combined bounding-box size of a multi-selection (SolidWorks shows the
+  // selection's overall extents in the status bar).
+  const multiDims = (() => {
+    if (selectedIds.length < 2) return null;
+    const summary = selectionSummary(bodies.filter((b) => selectedIds.includes(b.id)));
+    if (!summary) return null;
+    return `${summary.size.x.toFixed(1)} × ${summary.size.y.toFixed(1)} × ${summary.size.z.toFixed(1)} mm`;
   })();
   const sketchActive = useStore((s) => s.sketchActive);
   const currentSketch = useStore((s) => s.currentSketch);
@@ -132,6 +141,7 @@ export function StatusBar() {
         <span>{t('status.objects')}: {objectCount}</span>
         <span>{t('status.selected')}: {selectedCount}</span>
         {oneBodyDims && <span className="font-mono text-text-secondary">{oneBodyDims}</span>}
+        {multiDims && <span className="font-mono text-text-secondary">{multiDims}</span>}
       </div>
       <div className="flex items-center gap-1">
         <button
