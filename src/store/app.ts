@@ -29,7 +29,7 @@ export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
 export type WorkspaceMode = 'sketch' | 'model' | 'assembly' | 'drawing' | 'cam';
 export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'constraint';
-export type ViewDirection = 'top' | 'front' | 'right' | 'iso';
+export type ViewDirection = 'top' | 'front' | 'right' | 'iso' | 'back' | 'bottom' | 'left';
 export type SketchPlaneId = 'xy' | 'xz' | 'yz';
 
 interface AppState {

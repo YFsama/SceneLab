@@ -19,8 +19,11 @@ import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
   top: { pos: new THREE.Vector3(0, 10, 0), up: new THREE.Vector3(0, 0, -1) },
+  bottom: { pos: new THREE.Vector3(0, -10, 0), up: new THREE.Vector3(0, 0, 1) },
   front: { pos: new THREE.Vector3(0, 0, 10), up: new THREE.Vector3(0, 1, 0) },
+  back: { pos: new THREE.Vector3(0, 0, -10), up: new THREE.Vector3(0, 1, 0) },
   right: { pos: new THREE.Vector3(10, 0, 0), up: new THREE.Vector3(0, 1, 0) },
+  left: { pos: new THREE.Vector3(-10, 0, 0), up: new THREE.Vector3(0, 1, 0) },
   iso: { pos: new THREE.Vector3(5, 5, 5), up: new THREE.Vector3(0, 1, 0) },
 };
 
@@ -1122,9 +1125,12 @@ export function ViewportCanvas() {
             label: t('menu.views'),
             submenu: [
               { label: t('viewport.front'), onClick: () => setView('front') },
-              { label: t('viewport.top'), onClick: () => setView('top') },
+              { label: t('viewport.back'), onClick: () => setView('back') },
+              { label: t('viewport.left'), onClick: () => setView('left') },
               { label: t('viewport.right'), onClick: () => setView('right') },
-              { label: t('viewport.iso'), onClick: () => setView('iso') },
+              { label: t('viewport.top'), onClick: () => setView('top') },
+              { label: t('viewport.bottom'), onClick: () => setView('bottom') },
+              { label: t('viewport.iso'), onClick: () => setView('iso'), separatorBefore: true },
             ],
           },
           ...(useStore.getState().clipboard.length > 0

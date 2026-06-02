@@ -1,12 +1,17 @@
 import { useStore, type ViewDirection } from '../../store/app';
 import { useT } from '../../lib/i18n';
 
-// Order and shortcut badges match the central hotkeys (initShortcuts):
-// 1 front, 2 top, 3 right, 4 iso.
-const views: { dir: ViewDirection; shortcut: string }[] = [
+// The six standard orthographic views plus isometric. Shortcut badges match the
+// central hotkeys (initShortcuts): 1 front, 2 top, 3 right, 4 iso; the remaining
+// views are reachable here, via the right-click View Orientation menu, or the
+// command palette.
+const views: { dir: ViewDirection; shortcut?: string }[] = [
   { dir: 'front', shortcut: '1' },
-  { dir: 'top', shortcut: '2' },
+  { dir: 'back' },
+  { dir: 'left' },
   { dir: 'right', shortcut: '3' },
+  { dir: 'top', shortcut: '2' },
+  { dir: 'bottom' },
   { dir: 'iso', shortcut: '4' },
 ];
 
@@ -32,12 +37,14 @@ export function ViewCube() {
             }`}
           aria-label={t('viewport.switchTo', { view: t(`viewport.${dir}`) })}
           aria-pressed={current === dir}
-          title={`${t('viewport.switchTo', { view: t(`viewport.${dir}`) })} (${shortcut})`}
+          title={`${t('viewport.switchTo', { view: t(`viewport.${dir}`) })}${shortcut ? ` (${shortcut})` : ''}`}
         >
           {t(`viewport.${dir}`)}
-          <span className="absolute -top-1 -right-1 text-[7px] opacity-40 font-mono">
-            {shortcut}
-          </span>
+          {shortcut && (
+            <span className="absolute -top-1 -right-1 text-[7px] opacity-40 font-mono">
+              {shortcut}
+            </span>
+          )}
         </button>
       ))}
     </div>

@@ -118,7 +118,7 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'reference.midplaneFromSelection', label: 'Midplane from selected body (largest opposite faces)', category: 'Reference', run: () => addMidplaneFromSelection() });
   registerCommand({ id: 'project.save', label: 'Autosave now', category: 'Project', run: () => s().autosave() });
   registerCommand({ id: 'project.restore', label: 'Restore autosave', category: 'Project', run: () => s().restoreAutosave() });
-  for (const dir of ['top', 'front', 'right', 'iso'] as const) {
+  for (const dir of ['top', 'bottom', 'front', 'back', 'left', 'right', 'iso'] as const) {
     registerCommand({ id: `view.${dir}`, label: `View: ${dir}`, category: 'View', run: () => s().setViewDirection(dir) });
   }
   for (const kind of PRIMITIVES) {

@@ -54,6 +54,14 @@ describe('app store', () => {
     useStore.getState().setViewDirection('iso');
   });
 
+  it('supports the full set of standard orthographic views', () => {
+    for (const dir of ['top', 'bottom', 'front', 'back', 'left', 'right', 'iso'] as const) {
+      useStore.getState().setViewDirection(dir);
+      expect(useStore.getState().viewDirection).toBe(dir);
+    }
+    useStore.getState().setViewDirection('iso');
+  });
+
   it('should toggle browser tree', () => {
     const initial = useStore.getState().showBrowserTree;
     useStore.getState().toggleBrowserTree();
