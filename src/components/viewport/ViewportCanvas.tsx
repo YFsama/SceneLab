@@ -7,6 +7,7 @@ import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
 import { snapToPoints } from '../../lib/sketch/snap';
+import { keyToView } from '../../lib/viewKeys';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
@@ -80,6 +81,7 @@ export function ViewportCanvas() {
   const mouseRef = useRef(new THREE.Vector2());
 
   const viewDirection = useStore((s) => s.viewDirection);
+  const setViewDirection = useStore((s) => s.setViewDirection);
   const sketchActive = useStore((s) => s.sketchActive);
   const sketchTool = useStore((s) => s.sketchTool);
   const currentSketch = useStore((s) => s.currentSketch);
@@ -957,10 +959,16 @@ export function ViewportCanvas() {
       if (e.key === 'f' || e.key === 'F') { e.preventDefault(); fitView(); }
       // Esc leaves sketch mode (like clicking "Exit sketch").
       if (e.key === 'Escape' && sketchActive) { e.preventDefault(); exitSketch(); }
+      // Number keys snap to a standard view (disabled while sketching, which
+      // locks the camera to the sketch plane).
+      if (!sketchActive) {
+        const view = keyToView(e.key);
+        if (view) { e.preventDefault(); setViewDirection(view); }
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView, sketchActive, exitSketch]);
+  }, [fitView, sketchActive, exitSketch, setViewDirection]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
