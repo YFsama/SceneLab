@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane } from '../lib/geometry/boolean';
-import { applyCircularArray, placeBodyInFrame, resizeBody } from '../lib/geometry/operations';
+import { applyCircularArray, placeBodyInFrame, resizeBody, translateBody } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -91,6 +91,8 @@ interface AppState {
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
+  /** Duplicate the selected direct bodies (offset copies, keeping colour); selects and returns the new ids. */
+  duplicateSelected: () => string[];
   /** Undo/redo history for scene-body edits (create/transform/delete). */
   undoStack: SolidBody[][];
   redoStack: SolidBody[][];
@@ -426,6 +428,17 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return removed;
+  },
+  duplicateSelected: () => {
+    const { selectedIds, directBodies } = get();
+    const selected = new Set(selectedIds);
+    const toCopy = directBodies.filter((b) => selected.has(b.id));
+    if (toCopy.length === 0) return []; // nothing duplicable (only tree bodies selected)
+    const copies = toCopy.map((b) => ({ ...translateBody(b, { x: 5, y: 0, z: 5 }, `${b.name} copy`), color: b.color }));
+    pushUndo();
+    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
+    recombine();
+    return copies.map((c) => c.id);
   },
   undoStack: [],
   redoStack: [],

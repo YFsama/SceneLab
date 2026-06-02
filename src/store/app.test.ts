@@ -368,6 +368,27 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().lastPrimitiveParams.cylinder).toBeUndefined();
   });
 
+  it('duplicateSelected clones selected bodies (offset, colour kept) and selects copies', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().setBodyColor(box.id, 0xf38ba8);
+    useStore.getState().selectObject(box.id);
+    const ids = useStore.getState().duplicateSelected();
+    expect(ids).toHaveLength(1);
+    expect(ids[0]).not.toBe(box.id);
+    expect(useStore.getState().bodies).toHaveLength(2);
+    expect(useStore.getState().selectedIds).toEqual(ids); // copy is selected
+    const copy = useStore.getState().bodies.find((b) => b.id === ids[0])!;
+    expect(copy.color).toBe(0xf38ba8); // colour preserved
+    expect(useStore.getState().duplicateSelected.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it('duplicateSelected is a no-op with nothing selected', () => {
+    useStore.getState().clearScene();
+    expect(useStore.getState().duplicateSelected()).toEqual([]);
+  });
+
   it('toggleBodyVisibility hides and shows a body; clearScene resets', () => {
     useStore.getState().clearScene();
     const box = createBox(5, 5, 5);

@@ -18,6 +18,7 @@ export function BrowserTree() {
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
   const renameBody = useStore((s) => s.renameBody);
+  const duplicateSelected = useStore((s) => s.duplicateSelected);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
@@ -57,6 +58,7 @@ export function BrowserTree() {
 
   const menuItems = (bodyId: string): ContextMenuItem[] => [
     { label: t('menu.rename'), onClick: () => { const b = bodies.find((x) => x.id === bodyId); if (b) setEditing({ id: bodyId, value: b.name }); } },
+    { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
     { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat), separatorBefore: true },
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
