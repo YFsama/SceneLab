@@ -279,6 +279,28 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).toEqual([a.id]);
   });
 
+  it('selectRange selects the inclusive span of bodies in tree order', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    const c = createBox(5, 5, 5);
+    const d = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().addDirectBody(c);
+    useStore.getState().addDirectBody(d);
+
+    useStore.getState().selectRange(b.id, d.id);
+    expect(useStore.getState().selectedIds).toEqual([b.id, c.id, d.id]);
+
+    // Order-independent: anchor after target still spans the same range.
+    useStore.getState().selectRange(d.id, b.id);
+    expect(useStore.getState().selectedIds).toEqual([b.id, c.id, d.id]);
+
+    // Same id → single selection.
+    useStore.getState().selectRange(a.id, a.id);
+    expect(useStore.getState().selectedIds).toEqual([a.id]);
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();

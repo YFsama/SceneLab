@@ -273,6 +273,7 @@ interface AppState {
   selectAll: () => void;
   deselectAll: () => void;
   invertSelection: () => void;
+  selectRange: (fromId: string, toId: string) => void;
 
   // Panels
   showBrowserTree: boolean;
@@ -1220,6 +1221,15 @@ export const useStore = create<AppState>((set, get) => {
     set((s) => {
       const sel = new Set(s.selectedIds);
       return { selectedIds: s.bodies.filter((b) => !sel.has(b.id)).map((b) => b.id) };
+    }),
+  selectRange: (fromId, toId) =>
+    set((s) => {
+      const ids = s.bodies.map((b) => b.id);
+      const i = ids.indexOf(fromId);
+      const j = ids.indexOf(toId);
+      if (i === -1 || j === -1) return { selectedIds: [toId] };
+      const [lo, hi] = i <= j ? [i, j] : [j, i];
+      return { selectedIds: ids.slice(lo, hi + 1) };
     }),
 
   showBrowserTree: stored('scenelab.showBrowserTree') !== 'false',

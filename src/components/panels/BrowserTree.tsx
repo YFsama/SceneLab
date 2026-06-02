@@ -14,6 +14,7 @@ export function BrowserTree() {
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
   const toggleSelect = useStore((s) => s.toggleSelect);
+  const selectRange = useStore((s) => s.selectRange);
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
@@ -51,6 +52,21 @@ export function BrowserTree() {
   const removeCoordinateSystem = useStore((s) => s.removeCoordinateSystem);
   const featureTree = useStore((s) => s.featureTree);
   const [menu, setMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
+  // Anchor for SolidWorks-style Shift+click range selection in the tree.
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+
+  // Click selection: Shift = range from anchor, Ctrl/Cmd = toggle, plain = single.
+  const handleRowClick = (e: React.MouseEvent, id: string) => {
+    if (e.shiftKey && anchorId) {
+      selectRange(anchorId, id);
+    } else if (e.ctrlKey || e.metaKey) {
+      toggleSelect(id);
+      setAnchorId(id);
+    } else {
+      selectObject(id);
+      setAnchorId(id);
+    }
+  };
 
   const apply = (bodyId: string, op: (b: SolidBody) => SolidBody) => {
     const body = bodies.find((b) => b.id === bodyId);
@@ -214,7 +230,7 @@ export function BrowserTree() {
               ) : (
                 <div key={body.id} className="group flex items-center">
                   <button
-                    onClick={(e) => (e.ctrlKey || e.metaKey || e.shiftKey ? toggleSelect(body.id) : selectObject(body.id))}
+                    onClick={(e) => handleRowClick(e, body.id)}
                     onDoubleClick={() => setEditing({ id: body.id, value: body.name })}
                     onContextMenu={(e) => {
                       e.preventDefault();
