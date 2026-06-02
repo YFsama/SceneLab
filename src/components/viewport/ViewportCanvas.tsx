@@ -7,6 +7,7 @@ import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
+import { pickCycle, distinctInOrder } from '../../lib/render/pickCycle';
 import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
@@ -996,11 +997,17 @@ export function ViewportCanvas() {
       // 1) A body under the cursor takes priority — clicking it selects it.
       if (bodiesGroup) {
         const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
-        const bodyId = bodyHits[0]?.object.userData.bodyId as string | undefined;
-        if (bodyId) {
+        const ordered = distinctInOrder(bodyHits.map((h) => h.object.userData.bodyId as string | undefined));
+        if (ordered.length > 0) {
           // Ctrl/⌘/Shift-click adds to (or toggles) the selection, like SolidWorks.
-          if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(bodyId);
-          else selectObject(bodyId);
+          if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            toggleSelect(ordered[0]!);
+          } else {
+            // Plain click cycles through stacked bodies so occluded parts are
+            // reachable by clicking the same spot again ("select other").
+            const next = pickCycle(ordered, selectedIds);
+            if (next) selectObject(next);
+          }
           return;
         }
       }
@@ -1021,7 +1028,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, sketchTool, currentSketch, gridSize, getSketchPoint, measureActive, addMeasurePoint, bodies, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, sketchTool, currentSketch, gridSize, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
   );
 
   const handleMouseMove = useCallback(
