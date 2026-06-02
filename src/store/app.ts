@@ -56,6 +56,9 @@ interface AppState {
   /** Grid/snap step in mm for sketch drawing. */
   gridSize: number;
   setGridSize: (mm: number) => void;
+  /** Number of sides for the polygon sketch tool. */
+  polygonSides: number;
+  setPolygonSides: (n: number) => void;
 
   // Sketch drawing
   drawStart: { x: number; y: number } | null;
@@ -318,6 +321,8 @@ export const useStore = create<AppState>((set, get) => {
   setSketchPlaneId: (sketchPlaneId) => set({ sketchPlaneId }),
   gridSize: 0.5,
   setGridSize: (gridSize) => set({ gridSize: gridSize > 0 ? gridSize : 0.5 }),
+  polygonSides: 6,
+  setPolygonSides: (n) => set({ polygonSides: Math.max(3, Math.min(64, Math.floor(n) || 3)) }),
 
   drawStart: null,
   setDrawStart: (drawStart) => set({ drawStart }),

@@ -90,6 +90,7 @@ export function ViewportCanvas() {
   const drawStart = useStore((s) => s.drawStart);
   const gridSize = useStore((s) => s.gridSize);
   const selectedSketchId = useStore((s) => s.selectedSketchId);
+  const polygonSides = useStore((s) => s.polygonSides);
   const bodies = useStore((s) => s.bodies);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const wireframe = useStore((s) => s.wireframe);
@@ -542,7 +543,7 @@ export function ViewportCanvas() {
           }
           case 'polygon': {
             const r = Math.hypot(m.x - s.x, m.y - s.y);
-            const poly = polygonPoints(s.x, s.y, r, 6);
+            const poly = polygonPoints(s.x, s.y, r, polygonSides);
             pts = [...poly, poly[0]!].map((p) => v(p.x, p.y)); // closed outline
             break;
           }
@@ -556,7 +557,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [drawStart, mousePos, sketchTool, sketchActive, currentSketch]);
+  }, [drawStart, mousePos, sketchTool, sketchActive, currentSketch, polygonSides]);
 
   // Dimension labels on the sketch: each line shows its length, each circle/arc
   // its radius — drawn as camera-facing text sprites at the entity.
@@ -1231,14 +1232,14 @@ export function ViewportCanvas() {
         }
         case 'polygon': {
           const r = Math.hypot(pt.x - drawStart.x, pt.y - drawStart.y);
-          if (r > 1e-6) addSketchPolygon(drawStart.x, drawStart.y, r, 6);
+          if (r > 1e-6) addSketchPolygon(drawStart.x, drawStart.y, r, polygonSides);
           break;
         }
       }
 
       setDrawStart(null);
     },
-    [sketchActive, drawStart, sketchTool, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart],
+    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart],
   );
 
   return (

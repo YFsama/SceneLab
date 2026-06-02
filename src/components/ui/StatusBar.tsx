@@ -14,6 +14,9 @@ export function StatusBar() {
   const currentSketch = useStore((s) => s.currentSketch);
   const gridSize = useStore((s) => s.gridSize);
   const setGridSize = useStore((s) => s.setGridSize);
+  const sketchTool = useStore((s) => s.sketchTool);
+  const polygonSides = useStore((s) => s.polygonSides);
+  const setPolygonSides = useStore((s) => s.setPolygonSides);
   const wireframe = useStore((s) => s.wireframe);
   const setWireframe = useStore((s) => s.setWireframe);
   const showGrid = useStore((s) => s.showGrid);
@@ -58,6 +61,22 @@ export function StatusBar() {
                 <option key={s} value={s}>{s}mm</option>
               ))}
             </select>
+          </span>
+        )}
+        {sketchActive && sketchTool === 'polygon' && (
+          <span className="flex items-center gap-1">
+            {t('sketch.polygon')}:
+            <input
+              type="number"
+              min={3}
+              max={64}
+              step={1}
+              value={polygonSides}
+              onChange={(e) => setPolygonSides(Number(e.target.value))}
+              className="w-12 bg-surface border border-panel-border rounded px-1 py-0 text-[10px] text-text-primary"
+              aria-label={t('sketch.polygon')}
+            />
+            {t('status.sides')}
           </span>
         )}
         {sketchActive && currentSketch && (

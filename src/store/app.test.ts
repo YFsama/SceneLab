@@ -574,6 +574,15 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().duplicateSelected()).toEqual([]);
   });
 
+  it('setPolygonSides clamps to the 3–64 range', () => {
+    useStore.getState().setPolygonSides(8);
+    expect(useStore.getState().polygonSides).toBe(8);
+    useStore.getState().setPolygonSides(2);
+    expect(useStore.getState().polygonSides).toBe(3); // min 3
+    useStore.getState().setPolygonSides(100);
+    expect(useStore.getState().polygonSides).toBe(64); // max 64
+  });
+
   it('setGridSize updates the snap step and rejects non-positive values', () => {
     useStore.getState().setGridSize(5);
     expect(useStore.getState().gridSize).toBe(5);
