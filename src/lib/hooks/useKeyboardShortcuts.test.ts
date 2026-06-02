@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { registerShortcut } from './useKeyboardShortcuts';
+import { registerShortcut, escapeAction } from './useKeyboardShortcuts';
+
+describe('escapeAction', () => {
+  it('exits the sketch first when one is active', () => {
+    expect(escapeAction({ sketchActive: true, measureActive: true })).toBe('exitSketch');
+  });
+  it('leaves the measure tool when measuring (and not sketching)', () => {
+    expect(escapeAction({ sketchActive: false, measureActive: true })).toBe('exitMeasure');
+  });
+  it('clears the selection otherwise', () => {
+    expect(escapeAction({ sketchActive: false, measureActive: false })).toBe('deselect');
+  });
+});
 
 describe('useKeyboardShortcuts', () => {
   it('should export registerShortcut function', () => {

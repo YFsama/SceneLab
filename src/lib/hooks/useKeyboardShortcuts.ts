@@ -7,6 +7,20 @@ export function registerShortcut(key: string, handler: () => void): void {
   shortcuts[key] = handler;
 }
 
+/**
+ * What the Escape key should cancel, in priority order: an active sketch first
+ * (so you leave drawing mode keeping the sketch), then the measure tool, then
+ * the current selection — mirroring how Esc backs out of the active tool in
+ * SolidWorks.
+ */
+export function escapeAction(
+  s: { sketchActive: boolean; measureActive: boolean },
+): 'exitSketch' | 'exitMeasure' | 'deselect' {
+  if (s.sketchActive) return 'exitSketch';
+  if (s.measureActive) return 'exitMeasure';
+  return 'deselect';
+}
+
 export function useKeyboardShortcuts() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -90,9 +104,13 @@ export function initShortcuts(): void {
   registerShortcut('shift+?', () => store.setShowShortcuts(true));
   registerShortcut('shift+/', () => store.setShowShortcuts(true));
   registerShortcut('escape', () => {
-    // Esc exits sketch mode if drawing (keeping the sketch), otherwise clears
-    // the current selection.
-    if (useStore.getState().sketchActive) store.exitSketch();
-    else store.deselectAll();
+    // Esc cancels the active tool in priority order: exit sketch (keeping the
+    // sketch), then leave the measure tool, then clear the selection.
+    const s = useStore.getState();
+    switch (escapeAction(s)) {
+      case 'exitSketch': s.exitSketch(); break;
+      case 'exitMeasure': s.setMeasureActive(false); break;
+      case 'deselect': s.deselectAll(); break;
+    }
   });
 }

@@ -112,6 +112,7 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'view.showAll', label: 'Show all bodies', category: 'View', shortcut: 'Shift+Tab', run: () => s().showAllBodies() });
   registerCommand({ id: 'view.toggleWireframe', label: 'Toggle wireframe', category: 'View', run: () => s().setWireframe(!s().wireframe) });
   registerCommand({ id: 'view.toggleGrid', label: 'Toggle grid', category: 'View', shortcut: 'G', run: () => s().setShowGrid(!s().showGrid) });
+  registerCommand({ id: 'view.measure', label: 'Measure (toggle)', category: 'View', run: () => s().setMeasureActive(!s().measureActive) });
   registerCommand({ id: 'project.new', label: 'New document', category: 'Project', run: () => s().newProject() });
   registerCommand({ id: 'scene.clear', label: 'Clear scene', category: 'Scene', run: () => s().clearScene() });
   registerCommand({ id: 'reference.standardPlanes', label: 'Add standard planes (Front/Top/Right)', category: 'Reference', run: () => s().ensureStandardPlanes() });
