@@ -157,6 +157,8 @@ interface AppState {
   /** Re-apply the last undone change; returns true if something was redone. */
   redo: () => boolean;
   clearScene: () => void;
+  /** Start a fresh, clean, untitled document (empties everything). */
+  newProject: () => void;
   loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry) => void;
 
   // Reference geometry — datum planes (SolidWorks Front/Top/Right + custom).
@@ -819,6 +821,10 @@ export const useStore = create<AppState>((set, get) => {
       sketchActive: false,
       projectDirty: true,
     });
+  },
+  newProject: () => {
+    get().clearScene();
+    set({ projectName: 'Untitled', projectDirty: false, workspace: 'model', selectedSketchId: null });
   },
   loadProject: (features, name, directBodies = [], referenceGeometry) => {
     const tree = new FeatureTree();

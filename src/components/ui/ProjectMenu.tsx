@@ -3,7 +3,7 @@ import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
-import { Save, FolderOpen, Download, FileBox, Image, Upload } from 'lucide-react';
+import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
 
 export function ProjectMenu() {
   const { t } = useT();
@@ -144,6 +144,16 @@ export function ProjectMenu() {
 
   return (
     <div className="flex items-center gap-1">
+      <button
+        onClick={() => useStore.getState().newProject()}
+        className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+        aria-label={t('project.new')}
+        title={t('project.new')}
+      >
+        <FilePlus size={14} />
+        <span className="hidden sm:inline">{t('project.new')}</span>
+      </button>
+
       <button
         onClick={handleSave}
         className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"

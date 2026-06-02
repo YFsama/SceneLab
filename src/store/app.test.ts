@@ -583,6 +583,15 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().polygonSides).toBe(64); // max 64
   });
 
+  it('newProject yields a clean, empty, untitled document', () => {
+    useStore.getState().addDirectBody(createBox(5, 5, 5));
+    useStore.getState().setProjectName('Part1');
+    useStore.getState().newProject();
+    expect(useStore.getState().bodies).toHaveLength(0);
+    expect(useStore.getState().projectName).toBe('Untitled');
+    expect(useStore.getState().projectDirty).toBe(false);
+  });
+
   it('view/sketch preferences persist to localStorage', () => {
     useStore.getState().setWireframe(true);
     expect(localStorage.getItem('scenelab.wireframe')).toBe('true');
