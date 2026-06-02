@@ -64,45 +64,78 @@ export function BrowserTree() {
     addDirectBodies(halves);
   };
 
-  const menuItems = (bodyId: string): ContextMenuItem[] => [
-    { label: t('menu.rename'), onClick: () => { const b = bodies.find((x) => x.id === bodyId); if (b) setEditing({ id: bodyId, value: b.name }); } },
-    { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
-    { label: t('menu.isolate'), onClick: () => { selectObject(bodyId); isolateSelected(); } },
-    ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => showAllBodies() }] : []),
-    { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat), separatorBefore: true },
-    { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
-    { label: t('menu.dropFloor'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); dropSelectedToFloor(); } },
-    { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
-    { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
-    ...(selectedIds.length > 1
-      ? [
-          { label: t('menu.alignX'), onClick: () => alignSelected('x', 'center'), separatorBefore: true },
-          { label: t('menu.alignY'), onClick: () => alignSelected('y', 'center') },
-          { label: t('menu.alignZ'), onClick: () => alignSelected('z', 'center') },
-        ]
-      : []),
-    ...(selectedIds.length > 2
-      ? [
-          { label: t('menu.distributeX'), onClick: () => distributeSelected('x') },
-          { label: t('menu.distributeY'), onClick: () => distributeSelected('y') },
-          { label: t('menu.distributeZ'), onClick: () => distributeSelected('z') },
-        ]
-      : []),
-    { label: t('menu.linearPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'linear' }), separatorBefore: true },
-    { label: t('menu.circularPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'circular' }) },
-    { label: t('menu.rotateX'), onClick: () => { selectObject(bodyId); rotateSelected('x', 90); }, separatorBefore: true },
-    { label: t('menu.rotateY'), onClick: () => { selectObject(bodyId); rotateSelected('y', 90); } },
-    { label: t('menu.rotateZ'), onClick: () => { selectObject(bodyId); rotateSelected('z', 90); } },
-    { label: t('menu.scaleUp'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); scaleSelected(2); }, separatorBefore: true },
-    { label: t('menu.scaleDown'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); scaleSelected(0.5); } },
-    { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
-    { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },
-    { label: t('menu.mirrorZ'), onClick: () => mirror(bodyId, 'z') },
-    { label: t('menu.splitX'), onClick: () => split(bodyId, 'x'), separatorBefore: true },
-    { label: t('menu.splitY'), onClick: () => split(bodyId, 'y') },
-    { label: t('menu.splitZ'), onClick: () => split(bodyId, 'z') },
-    { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
-  ];
+  // Grouped right-click menu: common actions at the top level, everything else
+  // tucked into flyout submenus so the menu stays short (SolidWorks-style).
+  const menuItems = (bodyId: string): ContextMenuItem[] => {
+    const pre = (fn: () => void) => () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fn(); };
+    const align: ContextMenuItem[] =
+      selectedIds.length > 1
+        ? [
+            { label: t('menu.alignX'), onClick: () => alignSelected('x', 'center') },
+            { label: t('menu.alignY'), onClick: () => alignSelected('y', 'center') },
+            { label: t('menu.alignZ'), onClick: () => alignSelected('z', 'center') },
+            ...(selectedIds.length > 2
+              ? [
+                  { label: t('menu.distributeX'), onClick: () => distributeSelected('x'), separatorBefore: true },
+                  { label: t('menu.distributeY'), onClick: () => distributeSelected('y') },
+                  { label: t('menu.distributeZ'), onClick: () => distributeSelected('z') },
+                ]
+              : []),
+          ]
+        : [];
+    return [
+      { label: t('menu.rename'), onClick: () => { const b = bodies.find((x) => x.id === bodyId); if (b) setEditing({ id: bodyId, value: b.name }); } },
+      { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
+      {
+        label: t('menu.transform'),
+        separatorBefore: true,
+        submenu: [
+          { label: t('menu.rotateX'), onClick: pre(() => rotateSelected('x', 90)) },
+          { label: t('menu.rotateY'), onClick: pre(() => rotateSelected('y', 90)) },
+          { label: t('menu.rotateZ'), onClick: pre(() => rotateSelected('z', 90)) },
+          { label: t('menu.scaleUp'), onClick: pre(() => scaleSelected(2)), separatorBefore: true },
+          { label: t('menu.scaleDown'), onClick: pre(() => scaleSelected(0.5)) },
+          { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
+          { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },
+          { label: t('menu.mirrorZ'), onClick: () => mirror(bodyId, 'z') },
+        ],
+      },
+      {
+        label: t('menu.pattern'),
+        submenu: [
+          { label: t('menu.linearPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'linear' }) },
+          { label: t('menu.circularPattern'), onClick: () => setPendingPattern({ bodyId, mode: 'circular' }) },
+        ],
+      },
+      ...(align.length > 0 ? [{ label: t('menu.alignGroup'), submenu: align }] : []),
+      {
+        label: t('menu.modify'),
+        submenu: [
+          { label: t('menu.splitX'), onClick: () => split(bodyId, 'x') },
+          { label: t('menu.splitY'), onClick: () => split(bodyId, 'y') },
+          { label: t('menu.splitZ'), onClick: () => split(bodyId, 'z') },
+          { label: t('menu.center'), onClick: () => apply(bodyId, centerBody), separatorBefore: true },
+          { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
+        ],
+      },
+      {
+        label: t('menu.placement'),
+        submenu: [
+          { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat) },
+          { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
+          { label: t('menu.dropFloor'), onClick: pre(() => dropSelectedToFloor()) },
+        ],
+      },
+      {
+        label: t('menu.visibility'),
+        submenu: [
+          { label: t('menu.isolate'), onClick: () => { selectObject(bodyId); isolateSelected(); } },
+          ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => showAllBodies() }] : []),
+        ],
+      },
+      { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
+    ];
+  };
 
   return (
     <aside
