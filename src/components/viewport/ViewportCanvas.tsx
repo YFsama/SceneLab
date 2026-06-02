@@ -92,11 +92,13 @@ export function ViewportCanvas() {
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
+  const setPendingPrimitive = useStore((s) => s.setPendingPrimitive);
+  const ensureStandardPlanes = useStore((s) => s.ensureStandardPlanes);
   const theme = useStore((s) => s.theme);
   const measureActive = useStore((s) => s.measureActive);
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
-  const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
+  const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -315,6 +317,23 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [viewDirection]);
 
+  // While sketching, lock camera rotation (so a left-drag draws instead of
+  // orbiting the view) and snap to a top-down view facing the sketch plane —
+  // the "normal to" behaviour that makes 2D drawing usable. Restore on exit.
+  useEffect(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    controls.enableRotate = !sketchActive;
+    if (sketchActive) {
+      camera.position.set(0, 14, 0);
+      camera.up.set(0, 0, -1);
+      controls.target.set(0, 0, 0);
+      controls.update();
+      dirtyRef.current = true;
+    }
+  }, [sketchActive]);
+
   useEffect(() => {
     const planesGroup = planesGroupRef.current;
     if (!planesGroup) return;
@@ -446,44 +465,53 @@ export function ViewportCanvas() {
     while (previewGroup.children.length > 0) {
       const child = previewGroup.children[0]!;
       previewGroup.remove(child);
-      if (child instanceof THREE.Line) {
+      if (child instanceof THREE.Line || child instanceof THREE.Points) {
         child.geometry.dispose();
         (child.material as THREE.Material).dispose();
       }
     }
 
-    if (sketchActive && drawStart && mousePos && sketchTool !== 'select') {
-      const v = (x: number, y: number) => new THREE.Vector3(x, 0, y);
-      const s = drawStart;
+    if (sketchActive && mousePos && sketchTool !== 'select') {
+      const v = (x: number, y: number) => new THREE.Vector3(x, 0.01, y);
       const m = mousePos;
-      let pts: THREE.Vector3[] = [];
-      switch (sketchTool) {
-        case 'line':
-          pts = [v(s.x, s.y), v(m.x, m.y)];
-          break;
-        case 'rect':
-          pts = [v(s.x, s.y), v(m.x, s.y), v(m.x, m.y), v(s.x, m.y), v(s.x, s.y)];
-          break;
-        case 'circle': {
-          const r = Math.hypot(m.x - s.x, m.y - s.y);
-          const curve = new THREE.EllipseCurve(s.x, s.y, r, r, 0, Math.PI * 2, false, 0);
-          pts = curve.getPoints(64).map((p) => v(p.x, p.y));
-          break;
+      const s = drawStart;
+      // A marker dot at a sketch point, drawn on top (depthTest off) so it's
+      // always visible regardless of the geometry behind it.
+      const marker = (x: number, y: number, color: number, size: number) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute([x, 0.01, y], 3));
+        return new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
+      };
+      // Current cursor position (always shown while a draw tool is active).
+      previewGroup.add(marker(m.x, m.y, 0x89b4fa, 9));
+      if (s) {
+        previewGroup.add(marker(s.x, s.y, 0xa6e3a1, 11)); // green start point
+        let pts: THREE.Vector3[] = [];
+        switch (sketchTool) {
+          case 'line':
+            pts = [v(s.x, s.y), v(m.x, m.y)];
+            break;
+          case 'rect':
+            pts = [v(s.x, s.y), v(m.x, s.y), v(m.x, m.y), v(s.x, m.y), v(s.x, s.y)];
+            break;
+          case 'circle': {
+            const r = Math.hypot(m.x - s.x, m.y - s.y);
+            pts = new THREE.EllipseCurve(s.x, s.y, r, r, 0, Math.PI * 2, false, 0).getPoints(64).map((p) => v(p.x, p.y));
+            break;
+          }
+          case 'arc': {
+            const r = Math.hypot(m.x - s.x, m.y - s.y);
+            const end = Math.atan2(m.y - s.y, m.x - s.x);
+            pts = new THREE.EllipseCurve(s.x, s.y, r, r, 0, end, false, 0).getPoints(64).map((p) => v(p.x, p.y));
+            break;
+          }
         }
-        case 'arc': {
-          const r = Math.hypot(m.x - s.x, m.y - s.y);
-          const end = Math.atan2(m.y - s.y, m.x - s.x);
-          const curve = new THREE.EllipseCurve(s.x, s.y, r, r, 0, end, false, 0);
-          pts = curve.getPoints(64).map((p) => v(p.x, p.y));
-          break;
+        if (pts.length >= 2) {
+          const geo = new THREE.BufferGeometry().setFromPoints(pts);
+          // Solid, bright, always-on-top line — far more visible than a dashed one.
+          const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false }));
+          previewGroup.add(line);
         }
-      }
-      if (pts.length >= 2) {
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        const mat = new THREE.LineDashedMaterial({ color: 0xf9e2af, dashSize: 0.4, gapSize: 0.2 });
-        const line = new THREE.Line(geo, mat);
-        line.computeLineDistances();
-        previewGroup.add(line);
       }
     }
     dirtyRef.current = true;
@@ -507,7 +535,7 @@ export function ViewportCanvas() {
           if (a && b) {
             const len = Math.hypot(b.x - a.x, b.y - a.y);
             if (len > 1e-6) {
-              const s = makeTextSprite(`${len.toFixed(1)}`, 0xf9e2af, 0.6);
+              const s = makeTextSprite(`${len.toFixed(1)}`, 0xf9e2af, 0.3);
               s.position.set((a.x + b.x) / 2, 0.05, (a.y + b.y) / 2);
               group.add(s);
             }
@@ -515,7 +543,7 @@ export function ViewportCanvas() {
         } else if (e.type === 'circle' || e.type === 'arc') {
           const c = pt(e.centerId);
           if (c) {
-            const s = makeTextSprite(`R${e.radius.toFixed(1)}`, 0xf9e2af, 0.6);
+            const s = makeTextSprite(`R${e.radius.toFixed(1)}`, 0xf9e2af, 0.3);
             s.position.set(c.x, 0.05, c.y);
             group.add(s);
           }
@@ -843,18 +871,28 @@ export function ViewportCanvas() {
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
       const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
-      const bodyId = hit?.object.userData.bodyId as string | undefined;
-      if (bodyId) {
-        e.preventDefault();
-        selectObject(bodyId);
-        setBodyMenu({ x: e.clientX, y: e.clientY, bodyId });
-      }
+      const bodyId = (hit?.object.userData.bodyId as string | undefined) ?? null;
+      // Always show our menu (and suppress the browser's): body actions on a
+      // body, general insert/scene actions on empty space.
+      e.preventDefault();
+      if (bodyId) selectObject(bodyId);
+      setBodyMenu({ x: e.clientX, y: e.clientY, bodyId });
     },
     [sketchActive, selectObject],
   );
 
   const bodyMenuItems = useCallback(
-    (bodyId: string): ContextMenuItem[] => {
+    (bodyId: string | null): ContextMenuItem[] => {
+      // Empty-space menu: quick insert + scene actions.
+      if (!bodyId) {
+        return [
+          { label: `${t('dialog.insert')}: ${t('primitive.box')}`, onClick: () => setPendingPrimitive('box') },
+          { label: `${t('dialog.insert')}: ${t('primitive.cylinder')}`, onClick: () => setPendingPrimitive('cylinder') },
+          { label: `${t('dialog.insert')}: ${t('primitive.sphere')}`, onClick: () => setPendingPrimitive('sphere') },
+          { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
+          { label: t('menu.deselectAll'), onClick: () => deselectAll() },
+        ];
+      }
       const body = () => bodies.find((b) => b.id === bodyId);
       const mirror = (axis: Axis) => { const b = body(); if (b) { const r = mirrorAcrossAxis(b, axis); if (r) replaceBody(bodyId, r); } };
       const split = (axis: Axis) => { const b = body(); if (b) { const h = splitAcrossAxis(b, axis); if (h.length) { removeDirectBody(bodyId); addDirectBodies(h); } } };
@@ -869,7 +907,7 @@ export function ViewportCanvas() {
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, replaceBody, removeDirectBody, addDirectBodies],
+    [bodies, t, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll],
   );
 
   const handleMouseDown = useCallback(
