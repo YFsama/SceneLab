@@ -60,6 +60,9 @@ export function initShortcuts(): void {
   registerShortcut('2', () => store.setViewDirection('top'));
   registerShortcut('3', () => store.setViewDirection('right'));
   registerShortcut('4', () => store.setViewDirection('iso'));
+  registerShortcut('5', () => store.setViewDirection('back'));
+  registerShortcut('6', () => store.setViewDirection('bottom'));
+  registerShortcut('7', () => store.setViewDirection('left'));
   registerShortcut('0', () => store.setViewDirection('iso'));
 
   // Workspace shortcuts (read fresh state — initShortcuts runs once at startup).

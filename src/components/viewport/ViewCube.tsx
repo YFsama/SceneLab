@@ -7,11 +7,11 @@ import { useT } from '../../lib/i18n';
 // command palette.
 const views: { dir: ViewDirection; shortcut?: string }[] = [
   { dir: 'front', shortcut: '1' },
-  { dir: 'back' },
-  { dir: 'left' },
+  { dir: 'back', shortcut: '5' },
+  { dir: 'left', shortcut: '7' },
   { dir: 'right', shortcut: '3' },
   { dir: 'top', shortcut: '2' },
-  { dir: 'bottom' },
+  { dir: 'bottom', shortcut: '6' },
   { dir: 'iso', shortcut: '4' },
 ];
 
