@@ -533,6 +533,28 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().alignSelected('x', 'min')).toBe(0);
   });
 
+  it('scaleSelected scales about the body centre keeping id (2× doubles extent, centre fixed)', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10); // x ∈ [-5,5], center 0
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().scaleSelected(2)).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === box.id)!;
+    const xs = r.vertices.map((v) => v.x);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 4); // doubled
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(0, 4); // centre unchanged
+  });
+
+  it('scaleSelected rejects nothing-selected and non-positive factor', () => {
+    useStore.getState().clearScene();
+    const box = createBox(2, 2, 2);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().scaleSelected(0)).toBe(0);
+    useStore.getState().deselectAll();
+    expect(useStore.getState().scaleSelected(2)).toBe(0);
+  });
+
   it('rotateSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));

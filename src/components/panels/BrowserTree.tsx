@@ -24,6 +24,7 @@ export function BrowserTree() {
   const isolateSelected = useStore((s) => s.isolateSelected);
   const showAllBodies = useStore((s) => s.showAllBodies);
   const rotateSelected = useStore((s) => s.rotateSelected);
+  const scaleSelected = useStore((s) => s.scaleSelected);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
@@ -92,6 +93,8 @@ export function BrowserTree() {
     { label: t('menu.rotateX'), onClick: () => { selectObject(bodyId); rotateSelected('x', 90); }, separatorBefore: true },
     { label: t('menu.rotateY'), onClick: () => { selectObject(bodyId); rotateSelected('y', 90); } },
     { label: t('menu.rotateZ'), onClick: () => { selectObject(bodyId); rotateSelected('z', 90); } },
+    { label: t('menu.scaleUp'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); scaleSelected(2); }, separatorBefore: true },
+    { label: t('menu.scaleDown'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); scaleSelected(0.5); } },
     { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
     { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },
     { label: t('menu.mirrorZ'), onClick: () => mirror(bodyId, 'z') },
