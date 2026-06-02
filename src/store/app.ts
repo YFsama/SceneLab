@@ -178,8 +178,8 @@ interface AppState {
   /** Paste the clipboard as offset copies, select them; returns the new ids. */
   paste: () => string[];
   /** Undo/redo history for scene-body edits (create/transform/delete). */
-  undoStack: SolidBody[][];
-  redoStack: SolidBody[][];
+  undoStack: { directBodies: SolidBody[]; hiddenIds: string[] }[];
+  redoStack: { directBodies: SolidBody[]; hiddenIds: string[] }[];
   /** Revert the last scene-body change; returns true if something was undone. */
   undo: () => boolean;
   /** Re-apply the last undone change; returns true if something was redone. */
@@ -334,7 +334,7 @@ export const useStore = create<AppState>((set, get) => {
   // clearing the redo stack (a new edit invalidates the redo branch). Capped so
   // history can't grow without bound.
   const pushUndo = () => {
-    set((s) => ({ undoStack: [...s.undoStack, s.directBodies].slice(-50), redoStack: [] }));
+    set((s) => ({ undoStack: [...s.undoStack, { directBodies: s.directBodies, hiddenIds: s.hiddenIds }].slice(-50), redoStack: [] }));
   };
 
   return {
@@ -580,22 +580,33 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   },
   hiddenIds: [],
-  toggleBodyVisibility: (id) =>
+  // Visibility changes are undoable (hiddenIds is part of the undo snapshot).
+  toggleBodyVisibility: (id) => {
+    pushUndo();
     set((s) => ({
       hiddenIds: s.hiddenIds.includes(id) ? s.hiddenIds.filter((h) => h !== id) : [...s.hiddenIds, id],
-    })),
-  isolateSelected: () =>
-    set((s) => (s.selectedIds.length === 0
-      ? {}
-      : { hiddenIds: s.bodies.map((b) => b.id).filter((id) => !s.selectedIds.includes(id)) })),
-  hideSelected: () =>
+    }));
+  },
+  isolateSelected: () => {
+    if (get().selectedIds.length === 0) return;
+    pushUndo();
+    set((s) => ({ hiddenIds: s.bodies.map((b) => b.id).filter((id) => !s.selectedIds.includes(id)) }));
+  },
+  hideSelected: () => {
+    const { selectedIds, hiddenIds } = get();
+    if (selectedIds.every((id) => hiddenIds.includes(id))) return; // nothing new to hide
+    pushUndo();
     set((s) => {
       const add = s.selectedIds.filter((id) => !s.hiddenIds.includes(id));
-      if (add.length === 0) return {};
       // Hidden bodies drop out of the selection (SolidWorks Tab-hide behaviour).
       return { hiddenIds: [...s.hiddenIds, ...add], selectedIds: [] };
-    }),
-  showAllBodies: () => set({ hiddenIds: [] }),
+    });
+  },
+  showAllBodies: () => {
+    if (get().hiddenIds.length === 0) return;
+    pushUndo();
+    set({ hiddenIds: [] });
+  },
   removeDirectBody: (id) => {
     pushUndo();
     set((s) => ({
@@ -965,13 +976,14 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies } = get();
+    const { undoStack, directBodies, hiddenIds } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
     set((s) => ({
-      directBodies: prev,
+      directBodies: prev.directBodies,
+      hiddenIds: prev.hiddenIds,
       undoStack: s.undoStack.slice(0, -1),
-      redoStack: [...s.redoStack, directBodies],
+      redoStack: [...s.redoStack, { directBodies, hiddenIds }],
       selectedIds: [],
       projectDirty: true,
     }));
@@ -979,13 +991,14 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies } = get();
+    const { redoStack, directBodies, hiddenIds } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
     set((s) => ({
-      directBodies: next,
+      directBodies: next.directBodies,
+      hiddenIds: next.hiddenIds,
       redoStack: s.redoStack.slice(0, -1),
-      undoStack: [...s.undoStack, directBodies],
+      undoStack: [...s.undoStack, { directBodies, hiddenIds }],
       selectedIds: [],
       projectDirty: true,
     }));

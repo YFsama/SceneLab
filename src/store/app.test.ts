@@ -329,6 +329,32 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().hiddenIds).toEqual([]);
   });
 
+  it('visibility changes are undoable', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+
+    useStore.getState().toggleBodyVisibility(a.id);
+    expect(useStore.getState().hiddenIds).toEqual([a.id]);
+    useStore.getState().undo();
+    expect(useStore.getState().hiddenIds).toEqual([]); // hide undone
+    useStore.getState().redo();
+    expect(useStore.getState().hiddenIds).toEqual([a.id]); // and redone
+
+    // showAllBodies is undoable too.
+    useStore.getState().showAllBodies();
+    expect(useStore.getState().hiddenIds).toEqual([]);
+    useStore.getState().undo();
+    expect(useStore.getState().hiddenIds).toEqual([a.id]);
+
+    // No-op visibility calls don't create undo entries.
+    useStore.getState().showAllBodies(); // clears
+    const depth = useStore.getState().undoStack.length;
+    useStore.getState().showAllBodies(); // already empty → no-op
+    expect(useStore.getState().undoStack.length).toBe(depth);
+  });
+
   it('rename editing flow: begin/setValue/commit updates the body name', () => {
     const a = createBox(5, 5, 5);
     useStore.getState().addDirectBody(a);
