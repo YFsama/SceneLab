@@ -1346,14 +1346,19 @@ export function ViewportCanvas() {
         <Maximize2 size={15} />
       </button>
       {sketchActive && (
-        <button
-          onClick={exitSketch}
-          className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-surface text-xs font-medium shadow-lg hover:bg-accent-hover transition-colors"
-          title={`${t('sketch.exit')} (Esc)`}
-        >
-          <Check size={14} />
-          {t('sketch.exit')}
-        </button>
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1">
+          <button
+            onClick={exitSketch}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-surface text-xs font-medium shadow-lg hover:bg-accent-hover transition-colors"
+            title={`${t('sketch.exit')} (Esc)`}
+          >
+            <Check size={14} />
+            {t('sketch.exit')}
+          </button>
+          <span className="px-2 py-0.5 rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-[10px] text-text-muted">
+            {t(`sketch.${sketchTool}`)} · {t('sketch.hint')}
+          </span>
+        </div>
       )}
       {bodyMenu && (
         <ContextMenu x={bodyMenu.x} y={bodyMenu.y} items={bodyMenuItems(bodyMenu.bodyId)} onClose={() => setBodyMenu(null)} />
