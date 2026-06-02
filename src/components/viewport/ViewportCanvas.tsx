@@ -89,6 +89,7 @@ export function ViewportCanvas() {
   const gridSize = useStore((s) => s.gridSize);
   const bodies = useStore((s) => s.bodies);
   const hiddenIds = useStore((s) => s.hiddenIds);
+  const wireframe = useStore((s) => s.wireframe);
   const datumPlanes = useStore((s) => s.planes);
   const datumAxes = useStore((s) => s.axes);
   const datumPoints = useStore((s) => s.points);
@@ -608,6 +609,7 @@ export function ViewportCanvas() {
         roughness: 0.4,
         metalness: 0.1,
         side: THREE.DoubleSide,
+        wireframe,
       });
 
       const mesh = new THREE.Mesh(geo, mat);
@@ -616,7 +618,7 @@ export function ViewportCanvas() {
       bodiesGroup.add(mesh);
     }
     dirtyRef.current = true;
-  }, [bodies, hiddenIds]);
+  }, [bodies, hiddenIds, wireframe]);
 
   // Edge overlay: draw each (visible) body's edges as dark line segments so the
   // shape reads clearly, like a CAD viewport's edge display. Kept in its own
@@ -632,17 +634,19 @@ export function ViewportCanvas() {
         (child.material as THREE.Material).dispose();
       }
     }
-    for (const body of bodies) {
-      if (hiddenIds.includes(body.id)) continue;
-      const pos = buildEdgePositions(body);
-      if (pos.length === 0) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      const seg = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x45475a }));
-      edgesGroup.add(seg);
+    if (!wireframe) {
+      for (const body of bodies) {
+        if (hiddenIds.includes(body.id)) continue;
+        const pos = buildEdgePositions(body);
+        if (pos.length === 0) continue;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        const seg = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x45475a }));
+        edgesGroup.add(seg);
+      }
     }
     dirtyRef.current = true;
-  }, [bodies, hiddenIds]);
+  }, [bodies, hiddenIds, wireframe]);
 
   // Apply selection / hover styling by tweaking materials (no geometry rebuild):
   // selected → orange glow, hovered (unselected) → a lighter blue preselect.

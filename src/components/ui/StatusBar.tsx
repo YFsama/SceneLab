@@ -1,7 +1,7 @@
 import { useStore, type ThemeMode } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
-import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard } from 'lucide-react';
+import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard, Box } from 'lucide-react';
 
 const themes: ThemeMode[] = ['dark', 'light', 'high-contrast'];
 
@@ -14,6 +14,8 @@ export function StatusBar() {
   const currentSketch = useStore((s) => s.currentSketch);
   const gridSize = useStore((s) => s.gridSize);
   const setGridSize = useStore((s) => s.setGridSize);
+  const wireframe = useStore((s) => s.wireframe);
+  const setWireframe = useStore((s) => s.setWireframe);
   const viewDirection = useStore((s) => s.viewDirection);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
@@ -65,6 +67,15 @@ export function StatusBar() {
         <span>{t('status.selected')}: {selectedCount}</span>
       </div>
       <div className="flex items-center gap-1">
+        <button
+          onClick={() => setWireframe(!wireframe)}
+          className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${wireframe ? 'bg-accent/20 text-accent' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
+          aria-label={t('status.wireframe')}
+          aria-pressed={wireframe}
+          title={t('status.wireframe')}
+        >
+          <Box size={12} />
+        </button>
         <button
           onClick={() => useStore.getState().setShowShortcuts(true)}
           className="flex items-center gap-1 px-2 py-0.5 text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"

@@ -524,6 +524,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().hiddenIds).toEqual([]);
   });
 
+  it('setWireframe toggles the wireframe display flag', () => {
+    expect(useStore.getState().wireframe).toBe(false);
+    useStore.getState().setWireframe(true);
+    expect(useStore.getState().wireframe).toBe(true);
+    useStore.getState().setWireframe(false);
+    expect(useStore.getState().wireframe).toBe(false);
+  });
+
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
     useStore.getState().setShowShortcuts(true);

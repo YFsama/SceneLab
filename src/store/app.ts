@@ -178,6 +178,9 @@ interface AppState {
   /** Whether the keyboard-shortcuts help overlay is open. */
   showShortcuts: boolean;
   setShowShortcuts: (v: boolean) => void;
+  /** Render bodies as wireframe instead of shaded. */
+  wireframe: boolean;
+  setWireframe: (v: boolean) => void;
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
@@ -777,6 +780,8 @@ export const useStore = create<AppState>((set, get) => {
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   showShortcuts: false,
   setShowShortcuts: (showShortcuts) => set({ showShortcuts }),
+  wireframe: false,
+  setWireframe: (wireframe) => set({ wireframe }),
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
   lastPrimitiveParams: {},
