@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
 import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
+import { buildEdgePositions } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
 import { snapToPoints, inferLineEnd, nearestVertexWithin } from '../../lib/sketch/snap';
@@ -71,6 +72,7 @@ export function ViewportCanvas() {
   const pointGroupRef = useRef<THREE.Group | null>(null);
   const csGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
+  const edgesGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const sketchDimGroupRef = useRef<THREE.Group | null>(null);
   const previewGroupRef = useRef<THREE.Group | null>(null);
@@ -245,6 +247,11 @@ export function ViewportCanvas() {
     bodiesGroup.name = 'bodies';
     scene.add(bodiesGroup);
     bodiesGroupRef.current = bodiesGroup;
+
+    const edgesGroup = new THREE.Group();
+    edgesGroup.name = 'body-edges';
+    scene.add(edgesGroup);
+    edgesGroupRef.current = edgesGroup;
 
     const datumGroup = new THREE.Group();
     datumGroup.name = 'datum-planes';
@@ -597,6 +604,32 @@ export function ViewportCanvas() {
       mesh.name = body.name;
       mesh.userData = { bodyId: body.id };
       bodiesGroup.add(mesh);
+    }
+    dirtyRef.current = true;
+  }, [bodies, hiddenIds]);
+
+  // Edge overlay: draw each (visible) body's edges as dark line segments so the
+  // shape reads clearly, like a CAD viewport's edge display. Kept in its own
+  // group (not raycast) so it never interferes with picking.
+  useEffect(() => {
+    const edgesGroup = edgesGroupRef.current;
+    if (!edgesGroup) return;
+    while (edgesGroup.children.length > 0) {
+      const child = edgesGroup.children[0]!;
+      edgesGroup.remove(child);
+      if (child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+    for (const body of bodies) {
+      if (hiddenIds.includes(body.id)) continue;
+      const pos = buildEdgePositions(body);
+      if (pos.length === 0) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      const seg = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x45475a }));
+      edgesGroup.add(seg);
     }
     dirtyRef.current = true;
   }, [bodies, hiddenIds]);
