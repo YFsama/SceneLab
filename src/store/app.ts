@@ -238,6 +238,9 @@ interface AppState {
   /** Whether the ground grid is shown. */
   showGrid: boolean;
   setShowGrid: (v: boolean) => void;
+  /** Whether to mark the centre of mass of selected bodies. */
+  showCenterOfMass: boolean;
+  setShowCenterOfMass: (v: boolean) => void;
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
@@ -1115,6 +1118,8 @@ export const useStore = create<AppState>((set, get) => {
   setWireframe: (wireframe) => { set({ wireframe }); persist('scenelab.wireframe', String(wireframe)); },
   showGrid: stored('scenelab.showGrid') !== 'false',
   setShowGrid: (showGrid) => { set({ showGrid }); persist('scenelab.showGrid', String(showGrid)); },
+  showCenterOfMass: stored('scenelab.showCenterOfMass') === 'true',
+  setShowCenterOfMass: (showCenterOfMass) => { set({ showCenterOfMass }); persist('scenelab.showCenterOfMass', String(showCenterOfMass)); },
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
   lastPrimitiveParams: {},

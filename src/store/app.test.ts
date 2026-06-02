@@ -797,6 +797,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().rotateDialogOpen).toBe(false);
   });
 
+  it('setShowCenterOfMass toggles and persists the COM flag', () => {
+    expect(useStore.getState().showCenterOfMass).toBe(false);
+    useStore.getState().setShowCenterOfMass(true);
+    expect(useStore.getState().showCenterOfMass).toBe(true);
+    expect(localStorage.getItem('scenelab.showCenterOfMass')).toBe('true');
+    useStore.getState().setShowCenterOfMass(false);
+  });
+
   it('setShowGrid toggles the grid visibility flag (default on)', () => {
     expect(useStore.getState().showGrid).toBe(true);
     useStore.getState().setShowGrid(false);

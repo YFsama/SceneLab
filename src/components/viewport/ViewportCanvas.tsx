@@ -9,7 +9,7 @@ import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPl
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
-import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
+import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
@@ -75,6 +75,7 @@ export function ViewportCanvas() {
   const csGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const edgesGroupRef = useRef<THREE.Group | null>(null);
+  const comGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const sketchDimGroupRef = useRef<THREE.Group | null>(null);
   const previewGroupRef = useRef<THREE.Group | null>(null);
@@ -95,6 +96,7 @@ export function ViewportCanvas() {
   const hiddenIds = useStore((s) => s.hiddenIds);
   const wireframe = useStore((s) => s.wireframe);
   const showGrid = useStore((s) => s.showGrid);
+  const showCenterOfMass = useStore((s) => s.showCenterOfMass);
   const datumPlanes = useStore((s) => s.planes);
   const datumAxes = useStore((s) => s.axes);
   const datumPoints = useStore((s) => s.points);
@@ -262,6 +264,11 @@ export function ViewportCanvas() {
     edgesGroup.name = 'body-edges';
     scene.add(edgesGroup);
     edgesGroupRef.current = edgesGroup;
+
+    const comGroup = new THREE.Group();
+    comGroup.name = 'center-of-mass';
+    scene.add(comGroup);
+    comGroupRef.current = comGroup;
 
     const datumGroup = new THREE.Group();
     datumGroup.name = 'datum-planes';
@@ -665,6 +672,27 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [bodies, hiddenIds, wireframe]);
+
+  // Center-of-mass markers for selected bodies (when enabled).
+  useEffect(() => {
+    const comGroup = comGroupRef.current;
+    if (!comGroup) return;
+    while (comGroup.children.length > 0) {
+      const child = comGroup.children[0]!;
+      comGroup.remove(child);
+      if (child instanceof THREE.Points) { child.geometry.dispose(); (child.material as THREE.Material).dispose(); }
+    }
+    if (showCenterOfMass) {
+      for (const body of bodies) {
+        if (hiddenIds.includes(body.id) || !selectedIds.includes(body.id)) continue;
+        const c = computeVolumetricCentroid(body);
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute([c.x, c.y, c.z], 3));
+        comGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xf9e2af, size: 13, sizeAttenuation: false, depthTest: false })));
+      }
+    }
+    dirtyRef.current = true;
+  }, [bodies, selectedIds, hiddenIds, showCenterOfMass]);
 
   // Apply selection / hover styling by tweaking materials (no geometry rebuild):
   // selected → orange glow, hovered (unselected) → a lighter blue preselect.
