@@ -35,6 +35,7 @@ export function BrowserTree() {
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
   const combineSelected = useStore((s) => s.combineSelected);
+  const joinSelected = useStore((s) => s.joinSelected);
   const setHollowDialogBody = useStore((s) => s.setHollowDialogBody);
   const makeBoundingBoxOfSelection = useStore((s) => s.makeBoundingBoxOfSelection);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
@@ -138,6 +139,7 @@ export function BrowserTree() {
               { label: t('menu.union'), onClick: () => combineSelected('union') },
               { label: t('menu.subtract'), onClick: () => combineSelected('difference') },
               { label: t('menu.intersect'), onClick: () => combineSelected('intersect') },
+              { label: t('menu.join'), onClick: () => joinSelected(), separatorBefore: true },
             ],
           }]
         : []),

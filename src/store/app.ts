@@ -221,6 +221,8 @@ interface AppState {
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
   /** Boolean-combine the first two selected direct bodies (a op b), replacing them; null if it failed. */
   combineSelected: (op: BooleanOp) => string | null;
+  /** Merge the selected direct bodies into one mesh (no boolean — exact, for disjoint parts); null if <2. */
+  joinSelected: () => string | null;
 
   // Extrude dialog
   showExtrudeDialog: boolean;
@@ -1088,6 +1090,23 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return result.id;
+  },
+  joinSelected: () => {
+    const { selectedIds, directBodies } = get();
+    const sel = directBodies.filter((b) => selectedIds.includes(b.id));
+    if (sel.length < 2) return null;
+    const merged = mergeBodies(sel);
+    merged.color = sel[0]!.color;
+    merged.name = `${sel[0]!.name} (joined)`;
+    const ids = new Set(sel.map((b) => b.id));
+    pushUndo();
+    set((s) => ({
+      directBodies: [...s.directBodies.filter((b) => !ids.has(b.id)), merged],
+      selectedIds: [merged.id],
+      projectDirty: true,
+    }));
+    recombine();
+    return merged.id;
   },
   splitBodyByPlane: (bodyId, planeId) => {
     const body = get().bodies.find((b) => b.id === bodyId);

@@ -872,6 +872,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).toEqual([id]);
   });
 
+  it('joinSelected merges selected bodies into one (exact, volume summed)', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 50, y: 0, z: 0 }); // disjoint
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    const id = useStore.getState().joinSelected();
+    expect(id).toBeTruthy();
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(2000, 2); // exact sum
+  });
+
+  it('joinSelected returns null with fewer than two selected', () => {
+    useStore.getState().clearScene();
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().selectObject(a.id);
+    expect(useStore.getState().joinSelected()).toBeNull();
+  });
+
   it('combineSelected returns null with fewer than two selected', () => {
     useStore.getState().clearScene();
     const a = createBox(5, 5, 5);

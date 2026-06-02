@@ -1141,6 +1141,7 @@ export function ViewportCanvas() {
                 { label: t('menu.union'), onClick: () => st().combineSelected('union') },
                 { label: t('menu.subtract'), onClick: () => st().combineSelected('difference') },
                 { label: t('menu.intersect'), onClick: () => st().combineSelected('intersect') },
+                { label: t('menu.join'), onClick: () => st().joinSelected(), separatorBefore: true },
               ],
             }]
           : []),
