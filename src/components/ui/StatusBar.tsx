@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useStore, type ThemeMode } from '../../store/app';
+import { computeBoundingBox } from '../../lib/geometry';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
 import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard, Box } from 'lucide-react';
@@ -11,6 +12,16 @@ export function StatusBar() {
   const workspace = useStore((s) => s.workspace);
   const objectCount = useStore((s) => s.objectIds.length);
   const selectedCount = useStore((s) => s.selectedIds.length);
+  const selectedIds = useStore((s) => s.selectedIds);
+  const bodies = useStore((s) => s.bodies);
+  // X×Y×Z of the single selected body (shown for quick reference).
+  const oneBodyDims = (() => {
+    if (selectedIds.length !== 1) return null;
+    const b = bodies.find((x) => x.id === selectedIds[0]);
+    if (!b || b.vertices.length === 0) return null;
+    const bb = computeBoundingBox(b);
+    return `${(bb.max.x - bb.min.x).toFixed(1)} × ${(bb.max.y - bb.min.y).toFixed(1)} × ${(bb.max.z - bb.min.z).toFixed(1)} mm`;
+  })();
   const sketchActive = useStore((s) => s.sketchActive);
   const currentSketch = useStore((s) => s.currentSketch);
   const gridSize = useStore((s) => s.gridSize);
@@ -118,6 +129,7 @@ export function StatusBar() {
         )}
         <span>{t('status.objects')}: {objectCount}</span>
         <span>{t('status.selected')}: {selectedCount}</span>
+        {oneBodyDims && <span className="font-mono text-text-secondary">{oneBodyDims}</span>}
       </div>
       <div className="flex items-center gap-1">
         <button
