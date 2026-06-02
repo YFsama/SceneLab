@@ -40,6 +40,17 @@ export function ProjectMenu() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Opening replaces the scene — confirm if there's unsaved work to lose.
+    if (useStore.getState().projectDirty) {
+      const ok = await confirm({
+        title: t('project.open'),
+        message: t('project.unsavedWarning'),
+        confirmLabel: t('project.discard'),
+        destructive: true,
+      });
+      if (!ok) { if (fileInputRef.current) fileInputRef.current.value = ''; return; }
+    }
+
     try {
       const json = await readFileAsText(file);
       const project = loadFromFile(json);
