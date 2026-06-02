@@ -105,6 +105,7 @@ export function ViewportCanvas() {
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const exitSketch = useStore((s) => s.exitSketch);
@@ -581,13 +582,10 @@ export function ViewportCanvas() {
       geo.setIndex(indices);
       geo.computeVertexNormals();
 
-      // Selected bodies render in orange with an emissive glow so the pick is
-      // obvious; unselected stay the default blue.
-      const selected = selectedIds.includes(body.id);
+      // Neutral material; selection/hover styling is applied separately so
+      // hovering or selecting never rebuilds geometry.
       const mat = new THREE.MeshStandardMaterial({
-        color: selected ? 0xfab387 : 0x89b4fa,
-        emissive: selected ? 0xf38800 : 0x000000,
-        emissiveIntensity: selected ? 0.35 : 0,
+        color: 0x89b4fa,
         roughness: 0.4,
         metalness: 0.1,
         side: THREE.DoubleSide,
@@ -599,7 +597,31 @@ export function ViewportCanvas() {
       bodiesGroup.add(mesh);
     }
     dirtyRef.current = true;
-  }, [bodies, selectedIds]);
+  }, [bodies]);
+
+  // Apply selection / hover styling by tweaking materials (no geometry rebuild):
+  // selected → orange glow, hovered (unselected) → a lighter blue preselect.
+  useEffect(() => {
+    const bodiesGroup = bodiesGroupRef.current;
+    if (!bodiesGroup) return;
+    for (const child of bodiesGroup.children) {
+      if (!(child instanceof THREE.Mesh)) continue;
+      const id = child.userData.bodyId as string | undefined;
+      const mat = child.material as THREE.MeshStandardMaterial;
+      const selected = !!id && selectedIds.includes(id);
+      const hovered = !sketchActive && !!id && id === hoveredId;
+      // Brightness is encoded in the emissive colour (no emissiveIntensity write)
+      // so the material is mutated only through setHex.
+      if (selected) {
+        mat.color.setHex(0xfab387); mat.emissive.setHex(0x6e3b00);
+      } else if (hovered) {
+        mat.color.setHex(0xb4befe); mat.emissive.setHex(0x232a52);
+      } else {
+        mat.color.setHex(0x89b4fa); mat.emissive.setHex(0x000000);
+      }
+    }
+    dirtyRef.current = true;
+  }, [bodies, selectedIds, hoveredId, sketchActive]);
 
   // Render the store's datum/reference planes as translucent outlined quads.
   useEffect(() => {
@@ -868,12 +890,25 @@ export function ViewportCanvas() {
     (e: React.MouseEvent) => {
       if (!sketchActive) {
         setMousePos(null);
+        // Hover-highlight the body under the cursor (preselect), skipped while
+        // measuring so the crosshair stays the focus.
+        const container = containerRef.current;
+        const camera = cameraRef.current;
+        const bodiesGroup = bodiesGroupRef.current;
+        if (!measureActive && container && camera && bodiesGroup) {
+          const rect = container.getBoundingClientRect();
+          mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          raycasterRef.current.setFromCamera(mouseRef.current, camera);
+          const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
+          setHoveredId((prev) => (prev === id ? prev : id));
+        }
         return;
       }
       const pt = getSketchPoint(e);
       setMousePos(pt);
     },
-    [sketchActive, getSketchPoint],
+    [sketchActive, measureActive, getSketchPoint],
   );
 
   // Right-click a body in the 3D view → select it and open its context menu.
@@ -1016,11 +1051,12 @@ export function ViewportCanvas() {
     <div className="relative w-full h-full">
       <div
         ref={containerRef}
-        className="w-full h-full bg-surface"
+        className={`w-full h-full bg-surface ${hoveredId && !sketchActive ? 'cursor-pointer' : ''}`}
         onClick={handleClick}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={() => setHoveredId(null)}
         onContextMenu={handleContextMenu}
         role="img"
         aria-label={t('viewport.title')}
