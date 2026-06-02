@@ -1161,6 +1161,14 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [bodies, selectedIds]);
 
+  // Auto-frame the first body added to an empty scene so it's immediately
+  // visible (avoids "inserted but off-screen"), and only then.
+  const prevBodyCountRef = useRef(0);
+  useEffect(() => {
+    if (prevBodyCountRef.current === 0 && bodies.length > 0 && !sketchActive) fitView(false);
+    prevBodyCountRef.current = bodies.length;
+  }, [bodies.length, sketchActive, fitView]);
+
   // Keyboard: F frames the model (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
