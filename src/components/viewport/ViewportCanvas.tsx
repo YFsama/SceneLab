@@ -1166,7 +1166,13 @@ export function ViewportCanvas() {
     if (selectedSketchId) {
       items.push({ label: t('menu.delete'), danger: true, onClick: () => useStore.getState().removeSketchEntity(selectedSketchId) });
     }
-    items.push({ label: t('sketch.exit'), separatorBefore: items.length > 0, onClick: () => useStore.getState().exitSketch() });
+    const tools = ['select', 'line', 'rect', 'circle', 'arc', 'polygon'] as const;
+    items.push({
+      label: t('sketch.tools'),
+      separatorBefore: items.length > 0,
+      submenu: tools.map((tool) => ({ label: t(`sketch.${tool}`), onClick: () => useStore.getState().setSketchTool(tool) })),
+    });
+    items.push({ label: t('sketch.exit'), separatorBefore: true, onClick: () => useStore.getState().exitSketch() });
     return items;
   }, [selectedSketchId, t]);
 
