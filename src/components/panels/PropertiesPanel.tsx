@@ -68,6 +68,7 @@ export function PropertiesPanel() {
   const resizeBodyTo = useStore((s) => s.resizeBodyTo);
   const setBodyColor = useStore((s) => s.setBodyColor);
   const setSelectionColor = useStore((s) => s.setSelectionColor);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const selectedBody = selectedIds.length === 1
     ? bodies.find((b) => b.id === selectedIds[0])
@@ -253,6 +254,15 @@ export function PropertiesPanel() {
               })()}
             </div>
 
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="w-full flex items-center gap-1 text-xs font-medium text-text-muted hover:text-text-primary py-1 border-t border-panel-border mt-1"
+              aria-expanded={showAdvanced}
+            >
+              <span className="font-mono w-3">{showAdvanced ? '▾' : '▸'}</span>
+              <span>{t('panel.advancedAnalysis')}</span>
+            </button>
+            {showAdvanced && (<>
             <div className="space-y-1">
               <div className="flex items-center gap-1 text-xs text-text-muted">
                 <Shield size={12} />
@@ -1790,6 +1800,7 @@ export function PropertiesPanel() {
                 );
               })()}
             </div>
+            </>)}
           </div>
         ) : (
           (() => {
