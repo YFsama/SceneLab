@@ -1365,6 +1365,11 @@ export function ViewportCanvas() {
       )}
       {measureActive && (
         <div className="absolute top-2 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono pointer-events-none space-y-0.5">
+          {measureHover && (
+            <div className={measureHover.snapped ? 'text-success' : 'text-text-muted'}>
+              → ({measureHover.x.toFixed(2)}, {measureHover.y.toFixed(2)}, {measureHover.z.toFixed(2)})
+            </div>
+          )}
           {measurePts.length < 2 ? (
             <>
               <span className="text-accent">{t('measure.hint')} ({measurePts.length}/3)</span>
