@@ -123,6 +123,7 @@ export function ViewportCanvas() {
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
+  const [sketchMenu, setSketchMenu] = useState<{ x: number; y: number } | null>(null);
   const hoveredId = useStore((s) => s.hoveredId);
   const setHoveredId = useStore((s) => s.setHoveredId);
   const [measureHover, setMeasureHover] = useState<{ x: number; y: number; z: number; snapped: boolean } | null>(null);
@@ -1122,7 +1123,17 @@ export function ViewportCanvas() {
   // Right-click a body in the 3D view → select it and open its context menu.
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      if (sketchActive) return;
+      if (sketchActive) {
+        // Sketch right-click: pick the entity under the cursor (if any) and open
+        // a small menu — Delete it / exit the sketch.
+        if (!currentSketch) return;
+        e.preventDefault();
+        const pt = getSketchPoint(e);
+        const id = pt ? pickSketchEntity(currentSketch, pt, Math.max(gridSize, 0.4)) : null;
+        useStore.getState().setSelectedSketchId(id);
+        setSketchMenu({ x: e.clientX, y: e.clientY });
+        return;
+      }
       const container = containerRef.current;
       const camera = cameraRef.current;
       const bodiesGroup = bodiesGroupRef.current;
@@ -1140,8 +1151,17 @@ export function ViewportCanvas() {
       if (bodyId && !selectedIds.includes(bodyId)) selectObject(bodyId);
       setBodyMenu({ x: e.clientX, y: e.clientY, bodyId });
     },
-    [sketchActive, selectObject, selectedIds],
+    [sketchActive, currentSketch, getSketchPoint, gridSize, selectObject, selectedIds],
   );
+
+  const sketchMenuItems = useCallback((): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = [];
+    if (selectedSketchId) {
+      items.push({ label: t('menu.delete'), danger: true, onClick: () => useStore.getState().removeSketchEntity(selectedSketchId) });
+    }
+    items.push({ label: t('sketch.exit'), separatorBefore: items.length > 0, onClick: () => useStore.getState().exitSketch() });
+    return items;
+  }, [selectedSketchId, t]);
 
   const bodyMenuItems = useCallback(
     (bodyId: string | null): ContextMenuItem[] => {
@@ -1473,6 +1493,9 @@ export function ViewportCanvas() {
       )}
       {bodyMenu && (
         <ContextMenu x={bodyMenu.x} y={bodyMenu.y} items={bodyMenuItems(bodyMenu.bodyId)} onClose={() => setBodyMenu(null)} />
+      )}
+      {sketchMenu && (
+        <ContextMenu x={sketchMenu.x} y={sketchMenu.y} items={sketchMenuItems()} onClose={() => setSketchMenu(null)} />
       )}
       {measureActive && (
         <div className="absolute top-2 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono pointer-events-none space-y-0.5">
