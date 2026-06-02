@@ -132,6 +132,8 @@ interface AppState {
   nudgeSelected: (dx: number, dy: number, dz: number) => number;
   /** Move the selection so its combined bounding-box centre sits at the world origin; returns count. */
   moveSelectionToOrigin: () => number;
+  /** Move the selection so its bounding-box centre sits at `target`; returns moved count. */
+  moveSelectionTo: (target: Vec3) => number;
   /** Rotate the selected direct bodies about their own centre (keeps ids); returns how many rotated. */
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Uniformly scale the selected direct bodies about their own centre (keeps ids); returns how many scaled. */
@@ -680,7 +682,7 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return n;
   },
-  moveSelectionToOrigin: () => {
+  moveSelectionTo: (target) => {
     const { selectedIds, bodies } = get();
     const sel = bodies.filter((b) => selectedIds.includes(b.id));
     if (sel.length === 0) return 0;
@@ -690,8 +692,10 @@ export const useStore = create<AppState>((set, get) => {
       min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
       max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
     }
-    return get().nudgeSelected(-(min.x + max.x) / 2, -(min.y + max.y) / 2, -(min.z + max.z) / 2);
+    const center = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
+    return get().nudgeSelected(target.x - center.x, target.y - center.y, target.z - center.z);
   },
+  moveSelectionToOrigin: () => get().moveSelectionTo({ x: 0, y: 0, z: 0 }),
   rotateSelected: (axis, degrees) => {
     const { selectedIds, directBodies } = get();
     const sel = new Set(selectedIds);

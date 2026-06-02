@@ -929,6 +929,19 @@ describe('app store — direct bodies', () => {
     expect(c('z')).toBeCloseTo(0, 4);
   });
 
+  it('moveSelectionTo places the selection centre at an absolute target', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10); // centre at origin
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().moveSelectionTo({ x: 5, y: 12, z: -3 })).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === box.id)!;
+    const c = (axis: 'x' | 'y' | 'z') => { const a = r.vertices.map((v) => v[axis]); return (Math.min(...a) + Math.max(...a)) / 2; };
+    expect(c('x')).toBeCloseTo(5, 4);
+    expect(c('y')).toBeCloseTo(12, 4);
+    expect(c('z')).toBeCloseTo(-3, 4);
+  });
+
   it('nudgeSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));
