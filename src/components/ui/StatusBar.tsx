@@ -15,6 +15,8 @@ export function StatusBar() {
   const gridSize = useStore((s) => s.gridSize);
   const setGridSize = useStore((s) => s.setGridSize);
   const sketchTool = useStore((s) => s.sketchTool);
+  const projectName = useStore((s) => s.projectName);
+  const projectDirty = useStore((s) => s.projectDirty);
   const polygonSides = useStore((s) => s.polygonSides);
   const setPolygonSides = useStore((s) => s.setPolygonSides);
   const wireframe = useStore((s) => s.wireframe);
@@ -42,6 +44,9 @@ export function StatusBar() {
       role="status"
     >
       <div className="flex items-center gap-4">
+        <span className="text-text-secondary font-medium" title={projectDirty ? t('status.unsaved') : undefined}>
+          {projectName}{projectDirty && <span className="text-warning"> •</span>}
+        </span>
         <span>{t(`toolbar.${workspace}`)}</span>
         <span className="flex items-center gap-1">
           <Eye size={10} />
