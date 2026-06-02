@@ -43,6 +43,8 @@ const GROUPS: Group[] = [
     rows: [
       { keys: 'Ctrl+Z', labelKey: 'toolbar.undo' },
       { keys: 'Ctrl+Y', labelKey: 'toolbar.redo' },
+      { keys: 'Ctrl+C / Ctrl+V', labelKey: 'shortcuts.copyPaste' },
+      { keys: 'Ctrl+D', labelKey: 'menu.duplicate' },
       { keys: 'Del', labelKey: 'menu.delete' },
       { keys: 'Ctrl+K', labelKey: 'shortcuts.palette' },
       { keys: 'Ctrl+B / Ctrl+P', labelKey: 'shortcuts.panels' },

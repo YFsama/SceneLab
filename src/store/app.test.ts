@@ -397,6 +397,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).toEqual([box.id]); // selection preserved
   });
 
+  it('copySelected + paste creates offset copies and supports multiple pastes', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().copySelected()).toBe(1);
+    const first = useStore.getState().paste();
+    expect(first).toHaveLength(1);
+    expect(useStore.getState().bodies).toHaveLength(2);
+    const second = useStore.getState().paste(); // clipboard persists → paste again
+    expect(second).toHaveLength(1);
+    expect(useStore.getState().bodies).toHaveLength(3);
+    expect(useStore.getState().selectedIds).toEqual(second);
+  });
+
+  it('paste is a no-op with an empty clipboard', () => {
+    useStore.getState().clearScene();
+    expect(useStore.getState().paste()).toEqual([]);
+  });
+
   it('nudgeSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));

@@ -102,6 +102,12 @@ interface AppState {
   duplicateSelected: () => string[];
   /** Translate the selected direct bodies by an offset in place (keeps ids); returns how many moved. */
   nudgeSelected: (dx: number, dy: number, dz: number) => number;
+  /** Clipboard of copied bodies. */
+  clipboard: SolidBody[];
+  /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
+  copySelected: () => number;
+  /** Paste the clipboard as offset copies, select them; returns the new ids. */
+  paste: () => string[];
   /** Undo/redo history for scene-body edits (create/transform/delete). */
   undoStack: SolidBody[][];
   redoStack: SolidBody[][];
@@ -481,6 +487,23 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return n;
   },
+  clipboard: [],
+  copySelected: () => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const copied = directBodies.filter((b) => sel.has(b.id));
+    set({ clipboard: copied });
+    return copied.length;
+  },
+  paste: () => {
+    const { clipboard } = get();
+    if (clipboard.length === 0) return [];
+    const copies = clipboard.map((b) => ({ ...translateBody(b, { x: 10, y: 0, z: 10 }, `${b.name} copy`), color: b.color }));
+    pushUndo();
+    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
+    recombine();
+    return copies.map((c) => c.id);
+  },
   undoStack: [],
   redoStack: [],
   undo: () => {
@@ -519,6 +542,7 @@ export const useStore = create<AppState>((set, get) => {
       objectIds: [],
       selectedIds: [],
       hiddenIds: [],
+      clipboard: [],
       planes: [],
       axes: [],
       points: [],
@@ -539,6 +563,7 @@ export const useStore = create<AppState>((set, get) => {
       directBodies,
       selectedIds: [],
       hiddenIds: [],
+      clipboard: [],
       planes: referenceGeometry?.planes ?? [],
       axes: referenceGeometry?.axes ?? [],
       points: referenceGeometry?.points ?? [],
