@@ -199,6 +199,9 @@ export function ViewportCanvas() {
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.screenSpacePanning = true;
+    // Wheel zoom moves toward the cursor (Fusion / SolidWorks behaviour) rather
+    // than the orbit centre, so you can zoom into the detail you're pointing at.
+    controls.zoomToCursor = true;
     controlsRef.current = controls;
 
     const grid = new THREE.GridHelper(20, 20, 0x313244, 0x313244);
