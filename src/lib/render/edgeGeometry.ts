@@ -12,3 +12,12 @@ export function buildEdgePositions(body: SolidBody): number[] {
   }
   return out;
 }
+
+/** Midpoint of every edge — extra snap targets for the measure tool. */
+export function edgeMidpoints(body: SolidBody): { x: number; y: number; z: number }[] {
+  return body.edges.map((e) => ({
+    x: (e.start.x + e.end.x) / 2,
+    y: (e.start.y + e.end.y) / 2,
+    z: (e.start.z + e.end.z) / 2,
+  }));
+}

@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
 import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
-import { buildEdgePositions } from '../../lib/render/edgeGeometry';
+import { buildEdgePositions, edgeMidpoints } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
@@ -921,7 +921,8 @@ export function ViewportCanvas() {
           const bb = body && combinedBounds([body]);
           if (body && bb) {
             const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
-            const v = nearestVertexWithin(pt, body.vertices, diag * 0.1);
+            // Snap to corners and edge midpoints (SolidWorks Measure snaps to both).
+            const v = nearestVertexWithin(pt, [...body.vertices, ...edgeMidpoints(body)], diag * 0.1);
             if (v) pt = v;
           }
           addMeasurePoint(pt);
