@@ -147,6 +147,32 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'draw_polygon',
+    description: 'Draw a regular polygon in the current sketch: centre (cx,cy), circumradius and number of sides (>=3).',
+    parameters: {
+      type: 'object',
+      properties: {
+        cx: { type: 'number', description: 'Center X' },
+        cy: { type: 'number', description: 'Center Y' },
+        radius: { type: 'number', description: 'Circumradius' },
+        sides: { type: 'number', description: 'Number of sides (>=3)' },
+      },
+      required: ['cx', 'cy', 'radius', 'sides'],
+    },
+    execute: async (args) => {
+      if (!useStore.getState().currentSketch) throw new Error('No active sketch — create one first');
+      const sides = Math.max(3, Math.floor(assertNumber(args.sides, 'sides')));
+      useStore.getState().addSketchPolygon(
+        assertNumber(args.cx, 'cx'),
+        assertNumber(args.cy, 'cy'),
+        assertNumber(args.radius, 'radius'),
+        sides,
+      );
+      return { success: true, sides };
+    },
+  });
+
+  registerTool({
     name: 'draw_arc',
     description: 'Draw an arc in the current sketch: center (cx,cy), radius, and start/end angles in degrees.',
     parameters: {
