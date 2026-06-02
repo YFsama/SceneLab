@@ -108,7 +108,8 @@ export function initBuiltinCommands(): void {
     registerCommand({ id: `edit.rotate${ax}`, label: `Rotate selected 90° about ${ax.toUpperCase()}`, category: 'Edit', run: () => s().rotateSelected(ax, 90) });
   }
   registerCommand({ id: 'view.isolate', label: 'Isolate selected', category: 'View', run: () => s().isolateSelected() });
-  registerCommand({ id: 'view.showAll', label: 'Show all bodies', category: 'View', run: () => s().showAllBodies() });
+  registerCommand({ id: 'view.hideSelected', label: 'Hide selected', category: 'View', shortcut: 'Tab', run: () => s().hideSelected() });
+  registerCommand({ id: 'view.showAll', label: 'Show all bodies', category: 'View', shortcut: 'Shift+Tab', run: () => s().showAllBodies() });
   registerCommand({ id: 'view.toggleWireframe', label: 'Toggle wireframe', category: 'View', run: () => s().setWireframe(!s().wireframe) });
   registerCommand({ id: 'view.toggleGrid', label: 'Toggle grid', category: 'View', shortcut: 'G', run: () => s().setShowGrid(!s().showGrid) });
   registerCommand({ id: 'project.new', label: 'New document', category: 'Project', run: () => s().newProject() });

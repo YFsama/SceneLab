@@ -106,6 +106,7 @@ interface AppState {
   toggleBodyVisibility: (id: string) => void;
   /** Hide every body except the selection (SolidWorks Isolate); no-op if nothing selected. */
   isolateSelected: () => void;
+  hideSelected: () => void;
   /** Unhide all bodies. */
   showAllBodies: () => void;
   removeDirectBody: (id: string) => void;
@@ -521,6 +522,13 @@ export const useStore = create<AppState>((set, get) => {
     set((s) => (s.selectedIds.length === 0
       ? {}
       : { hiddenIds: s.bodies.map((b) => b.id).filter((id) => !s.selectedIds.includes(id)) })),
+  hideSelected: () =>
+    set((s) => {
+      const add = s.selectedIds.filter((id) => !s.hiddenIds.includes(id));
+      if (add.length === 0) return {};
+      // Hidden bodies drop out of the selection (SolidWorks Tab-hide behaviour).
+      return { hiddenIds: [...s.hiddenIds, ...add], selectedIds: [] };
+    }),
   showAllBodies: () => set({ hiddenIds: [] }),
   removeDirectBody: (id) => {
     pushUndo();

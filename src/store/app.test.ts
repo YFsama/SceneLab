@@ -301,6 +301,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).toEqual([a.id]);
   });
 
+  it('hideSelected hides the selection and clears it; showAllBodies restores', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().selectObject(a.id);
+
+    useStore.getState().hideSelected();
+    expect(useStore.getState().hiddenIds).toContain(a.id);
+    expect(useStore.getState().hiddenIds).not.toContain(b.id);
+    expect(useStore.getState().selectedIds).toEqual([]);
+
+    // No selection → no-op.
+    useStore.getState().hideSelected();
+    expect(useStore.getState().hiddenIds).toEqual([a.id]);
+
+    useStore.getState().showAllBodies();
+    expect(useStore.getState().hiddenIds).toEqual([]);
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();

@@ -18,6 +18,8 @@ const GROUPS: Group[] = [
       { keys: 'F', labelKey: 'viewport.fit' },
       { keys: 'Shift+F', labelKey: 'viewport.fitSelection' },
       { keys: 'Home', labelKey: 'viewport.home' },
+      { keys: 'Tab', labelKey: 'shortcuts.hideSelected' },
+      { keys: 'Shift+Tab', labelKey: 'shortcuts.showAll' },
     ],
   },
   {
