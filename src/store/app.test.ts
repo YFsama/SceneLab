@@ -604,6 +604,19 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().scaleSelected(2)).toBe(0);
   });
 
+  it('flipSelected reflects in place keeping id, bbox and volume', () => {
+    useStore.getState().clearScene();
+    const wedge = createBox(10, 20, 30); // asymmetric extents
+    useStore.getState().addDirectBody(wedge);
+    useStore.getState().selectObject(wedge.id);
+    const vol0 = Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(useStore.getState().flipSelected('x')).toBe(1);
+    const r = useStore.getState().bodies.find((b) => b.id === wedge.id)!; // id preserved
+    expect(Math.abs(computeVolume(r))).toBeCloseTo(vol0, 3); // reflection preserves volume
+    const ext = (a: 'x' | 'y' | 'z') => { const vs = r.vertices.map((v) => v[a]); return Math.max(...vs) - Math.min(...vs); };
+    expect(ext('x')).toBeCloseTo(10, 4); // same size (in place)
+  });
+
   it('rotateSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));

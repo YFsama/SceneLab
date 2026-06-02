@@ -1088,6 +1088,9 @@ export function ViewportCanvas() {
             { label: t('menu.mirrorX'), onClick: () => mirror('x'), separatorBefore: true },
             { label: t('menu.mirrorY'), onClick: () => mirror('y') },
             { label: t('menu.mirrorZ'), onClick: () => mirror('z') },
+            { label: t('menu.flipX'), onClick: pre(() => st().flipSelected('x')), separatorBefore: true },
+            { label: t('menu.flipY'), onClick: pre(() => st().flipSelected('y')) },
+            { label: t('menu.flipZ'), onClick: pre(() => st().flipSelected('z')) },
           ],
         },
         {

@@ -28,6 +28,7 @@ export function BrowserTree() {
   const setMoveDialogOpen = useStore((s) => s.setMoveDialogOpen);
   const setRotateDialogOpen = useStore((s) => s.setRotateDialogOpen);
   const moveSelectionToOrigin = useStore((s) => s.moveSelectionToOrigin);
+  const flipSelected = useStore((s) => s.flipSelected);
   const setScaleDialogOpen = useStore((s) => s.setScaleDialogOpen);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
@@ -114,6 +115,9 @@ export function BrowserTree() {
           { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
           { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },
           { label: t('menu.mirrorZ'), onClick: () => mirror(bodyId, 'z') },
+          { label: t('menu.flipX'), onClick: pre(() => flipSelected('x')), separatorBefore: true },
+          { label: t('menu.flipY'), onClick: pre(() => flipSelected('y')) },
+          { label: t('menu.flipZ'), onClick: pre(() => flipSelected('z')) },
         ],
       },
       {

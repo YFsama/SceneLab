@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 import {
@@ -119,6 +119,8 @@ interface AppState {
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Uniformly scale the selected direct bodies about their own centre (keeps ids); returns how many scaled. */
   scaleSelected: (factor: number) => number;
+  /** Reflect the selected direct bodies in place about their own centre plane (keeps ids); returns count. */
+  flipSelected: (axis: 'x' | 'y' | 'z') => number;
   /** Add a box enclosing the selected bodies' combined bounding box; returns its id or null. */
   makeBoundingBoxOfSelection: (margin?: number) => string | null;
   /** Align selected direct bodies along an axis by min/center/max (keeps ids); returns how many moved. */
@@ -592,6 +594,30 @@ export const useStore = create<AppState>((set, get) => {
         }
         const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
         return { ...rotateBody(b, { origin, direction: dir }, angle), id: b.id, color: b.color };
+      }),
+      projectDirty: true,
+    }));
+    recombine();
+    return n;
+  },
+  flipSelected: (axis) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const n = directBodies.filter((b) => sel.has(b.id)).length;
+    if (n === 0) return 0;
+    const normal: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => {
+        if (!sel.has(b.id)) return b;
+        const min = { x: Infinity, y: Infinity, z: Infinity };
+        const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+        for (const v of b.vertices) {
+          min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+          max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+        }
+        const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
+        return { ...applyMirror(b, { origin, normal }), id: b.id, color: b.color };
       }),
       projectDirty: true,
     }));
