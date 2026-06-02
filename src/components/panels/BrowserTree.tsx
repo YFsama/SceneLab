@@ -13,6 +13,7 @@ export function BrowserTree() {
   const bodies = useStore((s) => s.bodies);
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
+  const toggleSelect = useStore((s) => s.toggleSelect);
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
   const addDirectBodies = useStore((s) => s.addDirectBodies);
@@ -86,7 +87,7 @@ export function BrowserTree() {
             bodies.map((body) => (
               <button
                 key={body.id}
-                onClick={() => selectObject(body.id)}
+                onClick={(e) => (e.ctrlKey || e.metaKey || e.shiftKey ? toggleSelect(body.id) : selectObject(body.id))}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   selectObject(body.id);

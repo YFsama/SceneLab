@@ -165,6 +165,8 @@ interface AppState {
   selectedIds: string[];
   addObject: (id: string) => void;
   selectObject: (id: string) => void;
+  /** Toggle a body in/out of the current selection (Ctrl/⌘-click multi-select). */
+  toggleSelect: (id: string) => void;
   deselectAll: () => void;
 
   // Panels
@@ -656,6 +658,12 @@ export const useStore = create<AppState>((set, get) => {
   selectedIds: [],
   addObject: (id) => set((s) => ({ objectIds: [...s.objectIds, id] })),
   selectObject: (id) => set({ selectedIds: [id] }),
+  toggleSelect: (id) =>
+    set((s) => ({
+      selectedIds: s.selectedIds.includes(id)
+        ? s.selectedIds.filter((sid) => sid !== id)
+        : [...s.selectedIds, id],
+    })),
   deselectAll: () => set({ selectedIds: [] }),
 
   showBrowserTree: true,

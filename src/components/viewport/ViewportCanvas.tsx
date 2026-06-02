@@ -88,6 +88,7 @@ export function ViewportCanvas() {
   const coordSystems = useStore((s) => s.coordSystems);
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
+  const toggleSelect = useStore((s) => s.toggleSelect);
   const deselectAll = useStore((s) => s.deselectAll);
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
@@ -822,7 +823,9 @@ export function ViewportCanvas() {
         const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
         const bodyId = bodyHits[0]?.object.userData.bodyId as string | undefined;
         if (bodyId) {
-          selectObject(bodyId);
+          // Ctrl/⌘/Shift-click adds to (or toggles) the selection, like SolidWorks.
+          if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(bodyId);
+          else selectObject(bodyId);
           return;
         }
       }
@@ -843,7 +846,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, measureActive, addMeasurePoint, selectObject, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, measureActive, addMeasurePoint, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
   );
 
   const handleMouseMove = useCallback(

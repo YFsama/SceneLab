@@ -332,6 +332,17 @@ describe('app store — direct bodies', () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(5, 4);
   });
 
+  it('toggleSelect adds and removes ids for multi-select', () => {
+    useStore.getState().deselectAll();
+    useStore.getState().toggleSelect('a');
+    useStore.getState().toggleSelect('b');
+    expect(useStore.getState().selectedIds).toEqual(['a', 'b']);
+    useStore.getState().toggleSelect('a'); // remove
+    expect(useStore.getState().selectedIds).toEqual(['b']);
+    useStore.getState().selectObject('c'); // replaces
+    expect(useStore.getState().selectedIds).toEqual(['c']);
+  });
+
   it('measure tool: points accumulate to 2 then restart, and toggling off clears', () => {
     useStore.getState().setMeasureActive(true);
     useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
