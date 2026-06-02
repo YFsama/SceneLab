@@ -53,6 +53,19 @@ export function inferLineEnd(start: P2, end: P2, tolDeg = 5): { point: P2; const
   return { point: end, constraint: null };
 }
 
+/**
+ * Snap candidates for a sketch: the origin (0,0) followed by the given existing
+ * endpoints, de-duplicated. The sketch origin is always snappable so geometry
+ * can be anchored to it precisely, as in SolidWorks.
+ */
+export function sketchSnapPoints(endpoints: P2[]): P2[] {
+  const out: P2[] = [{ x: 0, y: 0 }];
+  for (const p of endpoints) {
+    if (!out.some((q) => q.x === p.x && q.y === p.y)) out.push(p);
+  }
+  return out;
+}
+
 export function snapToPoints(p: P2, candidates: P2[], tol: number): { point: P2; snapped: boolean } {
   let best: P2 | null = null;
   let bestD = tol;

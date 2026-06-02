@@ -8,7 +8,7 @@ import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { pickCycle, distinctInOrder } from '../../lib/render/pickCycle';
-import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
+import { snapToPoints, sketchSnapPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
@@ -522,14 +522,14 @@ export function ViewportCanvas() {
         return new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
       };
       // Current cursor — turns green (and larger) when snapped onto an existing
-      // endpoint, so it's clear the new geometry will connect there.
+      // endpoint or the origin, so it's clear the new geometry will connect there.
       const endpoints: { x: number; y: number }[] = [];
       if (currentSketch) {
         for (const ent of currentSketch.entities.values()) {
           if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
         }
       }
-      const onPoint = snapToPoints(m, endpoints, 1e-6).snapped;
+      const onPoint = snapToPoints(m, sketchSnapPoints(endpoints), 1e-6).snapped;
       previewGroup.add(marker(m.x, m.y, onPoint ? 0xa6e3a1 : 0x89b4fa, onPoint ? 12 : 9));
       if (s) {
         previewGroup.add(marker(s.x, s.y, 0xa6e3a1, 11)); // green start point
@@ -933,16 +933,16 @@ export function ViewportCanvas() {
     // Hold Shift to draw freely (no snapping at all).
     if (e.shiftKey) return raw;
 
-    // Endpoint snapping takes priority over the grid so new geometry connects
-    // precisely to existing sketch points (SolidWorks-style inference).
+    // Endpoint/origin snapping takes priority over the grid so new geometry
+    // connects precisely to existing sketch points and the origin (SolidWorks).
+    const endpoints: { x: number; y: number }[] = [];
     if (currentSketch) {
-      const endpoints: { x: number; y: number }[] = [];
       for (const ent of currentSketch.entities.values()) {
         if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
       }
-      const snap = snapToPoints(raw, endpoints, 0.4);
-      if (snap.snapped) return snap.point;
     }
+    const snap = snapToPoints(raw, sketchSnapPoints(endpoints), 0.4);
+    if (snap.snapped) return snap.point;
 
     // Otherwise snap to the configurable grid step.
     return { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize };

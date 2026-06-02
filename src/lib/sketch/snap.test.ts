@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { snapToPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from './snap';
+import { snapToPoints, sketchSnapPoints, inferLineEnd, nearestVertexWithin, angleAtVertex } from './snap';
+
+describe('sketchSnapPoints', () => {
+  it('always includes the origin first, even with no endpoints', () => {
+    expect(sketchSnapPoints([])).toEqual([{ x: 0, y: 0 }]);
+  });
+
+  it('appends endpoints after the origin and de-dupes', () => {
+    expect(sketchSnapPoints([{ x: 10, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 0 }])).toEqual([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+    ]);
+  });
+
+  it('lets a point near the origin snap to (0,0)', () => {
+    const snap = snapToPoints({ x: 0.2, y: -0.1 }, sketchSnapPoints([]), 0.4);
+    expect(snap.snapped).toBe(true);
+    expect(snap.point).toEqual({ x: 0, y: 0 });
+  });
+});
 
 describe('snapToPoints', () => {
   const pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
