@@ -16,6 +16,8 @@ export function StatusBar() {
   const setGridSize = useStore((s) => s.setGridSize);
   const wireframe = useStore((s) => s.wireframe);
   const setWireframe = useStore((s) => s.setWireframe);
+  const showGrid = useStore((s) => s.showGrid);
+  const setShowGrid = useStore((s) => s.setShowGrid);
   const viewDirection = useStore((s) => s.viewDirection);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
@@ -67,6 +69,15 @@ export function StatusBar() {
         <span>{t('status.selected')}: {selectedCount}</span>
       </div>
       <div className="flex items-center gap-1">
+        <button
+          onClick={() => setShowGrid(!showGrid)}
+          className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${showGrid ? 'bg-accent/20 text-accent' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
+          aria-label={t('status.grid')}
+          aria-pressed={showGrid}
+          title={`${t('status.grid')} (G)`}
+        >
+          <Grid3X3 size={12} />
+        </button>
         <button
           onClick={() => setWireframe(!wireframe)}
           className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${wireframe ? 'bg-accent/20 text-accent' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}

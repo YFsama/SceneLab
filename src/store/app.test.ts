@@ -623,6 +623,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().hiddenIds).toEqual([]);
   });
 
+  it('setShowGrid toggles the grid visibility flag (default on)', () => {
+    expect(useStore.getState().showGrid).toBe(true);
+    useStore.getState().setShowGrid(false);
+    expect(useStore.getState().showGrid).toBe(false);
+    useStore.getState().setShowGrid(true);
+    expect(useStore.getState().showGrid).toBe(true);
+  });
+
   it('setWireframe toggles the wireframe display flag', () => {
     expect(useStore.getState().wireframe).toBe(false);
     useStore.getState().setWireframe(true);

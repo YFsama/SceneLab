@@ -90,6 +90,7 @@ export function ViewportCanvas() {
   const bodies = useStore((s) => s.bodies);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const wireframe = useStore((s) => s.wireframe);
+  const showGrid = useStore((s) => s.showGrid);
   const datumPlanes = useStore((s) => s.planes);
   const datumAxes = useStore((s) => s.axes);
   const datumPoints = useStore((s) => s.points);
@@ -803,6 +804,17 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [coordSystems]);
 
+  // Show/hide the ground grid by attaching/detaching it (methods only, so no
+  // property mutation of a ref value inside the effect).
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const grid = gridRef.current;
+    if (!scene || !grid) return;
+    if (showGrid) scene.add(grid);
+    else scene.remove(grid);
+    dirtyRef.current = true;
+  }, [showGrid]);
+
   // Theme the 3D viewport so light/high-contrast modes change the scene too —
   // the canvas background and grid follow the active theme, not just the panels.
   useEffect(() => {
@@ -1057,6 +1069,7 @@ export function ViewportCanvas() {
       // keys and Esc are handled by the central shortcut map (initShortcuts).
       if (e.key === 'f') { e.preventDefault(); fitView(false); }
       else if (e.key === 'F') { e.preventDefault(); fitView(true); }
+      else if (e.key === 'g' || e.key === 'G') { e.preventDefault(); useStore.getState().setShowGrid(!useStore.getState().showGrid); }
       // Arrow keys nudge the selection on the ground plane (top-view mapping):
       // ←/→ = X, ↑/↓ = Z. Shift = 10mm coarse step, else 1mm. Skipped in sketch.
       if (!sketchActive && e.key.startsWith('Arrow')) {

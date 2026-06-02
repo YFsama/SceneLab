@@ -194,6 +194,9 @@ interface AppState {
   /** Render bodies as wireframe instead of shaded. */
   wireframe: boolean;
   setWireframe: (v: boolean) => void;
+  /** Whether the ground grid is shown. */
+  showGrid: boolean;
+  setShowGrid: (v: boolean) => void;
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
@@ -913,6 +916,8 @@ export const useStore = create<AppState>((set, get) => {
   setShowShortcuts: (showShortcuts) => set({ showShortcuts }),
   wireframe: false,
   setWireframe: (wireframe) => set({ wireframe }),
+  showGrid: true,
+  setShowGrid: (showGrid) => set({ showGrid }),
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
   lastPrimitiveParams: {},
