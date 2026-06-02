@@ -429,6 +429,27 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setSelectionColor(0x123456)).toBe(0);
   });
 
+  it('reorderBody moves a body within the tree order and is bounded at the ends', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    const c = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().addDirectBody(c);
+    const order = () => useStore.getState().bodies.map((x) => x.id);
+    expect(order()).toEqual([a.id, b.id, c.id]);
+
+    expect(useStore.getState().reorderBody(b.id, 'up')).toBe(true);
+    expect(order()).toEqual([b.id, a.id, c.id]);
+
+    expect(useStore.getState().reorderBody(c.id, 'down')).toBe(false); // already last
+    expect(useStore.getState().reorderBody(b.id, 'up')).toBe(false);   // now first
+    expect(order()).toEqual([b.id, a.id, c.id]);
+
+    useStore.getState().undo(); // reorder is undoable
+    expect(order()).toEqual([a.id, b.id, c.id]);
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();

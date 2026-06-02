@@ -108,6 +108,8 @@ interface AppState {
   setBodyColor: (id: string, color: number) => boolean;
   /** Set the colour of every selected direct body in one undoable step; returns how many changed. */
   setSelectionColor: (color: number) => number;
+  /** Move a direct body one slot earlier/later in the tree order; false at the ends. */
+  reorderBody: (id: string, direction: 'up' | 'down') => boolean;
   /** Toggle a (direct) body between opaque and semi-transparent; returns false if missing. */
   toggleBodyTransparency: (id: string) => boolean;
   /** Ids of bodies hidden from the viewport (still listed in the tree). */
@@ -536,6 +538,19 @@ export const useStore = create<AppState>((set, get) => {
     if (!target || target.color === color) return false;
     pushUndo();
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, color } : b)), projectDirty: true });
+    recombine();
+    return true;
+  },
+  reorderBody: (id, direction) => {
+    const { directBodies } = get();
+    const i = directBodies.findIndex((b) => b.id === id);
+    if (i === -1) return false;
+    const j = direction === 'up' ? i - 1 : i + 1;
+    if (j < 0 || j >= directBodies.length) return false;
+    pushUndo();
+    const next = [...directBodies];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    set({ directBodies: next, projectDirty: true });
     recombine();
     return true;
   },

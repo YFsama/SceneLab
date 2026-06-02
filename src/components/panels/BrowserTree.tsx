@@ -27,6 +27,8 @@ export function BrowserTree() {
   const hiddenIds = useStore((s) => s.hiddenIds);
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
   const copySelected = useStore((s) => s.copySelected);
+  const directBodies = useStore((s) => s.directBodies);
+  const reorderBody = useStore((s) => s.reorderBody);
   const isolateSelected = useStore((s) => s.isolateSelected);
   const showAllBodies = useStore((s) => s.showAllBodies);
   const rotateSelected = useStore((s) => s.rotateSelected);
@@ -123,6 +125,14 @@ export function BrowserTree() {
       { label: t('menu.rename'), onClick: () => beginRename(bodyId) },
       { label: t('menu.copy'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); copySelected(); } },
       { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
+      ...((): ContextMenuItem[] => {
+        const di = directBodies.findIndex((b) => b.id === bodyId);
+        if (di === -1) return [];
+        return [
+          { label: t('menu.moveUp'), onClick: () => reorderBody(bodyId, 'up'), separatorBefore: true, disabled: di === 0 },
+          { label: t('menu.moveDown'), onClick: () => reorderBody(bodyId, 'down'), disabled: di === directBodies.length - 1 },
+        ];
+      })(),
       {
         label: t('menu.transform'),
         separatorBefore: true,
