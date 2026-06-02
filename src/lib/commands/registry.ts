@@ -95,7 +95,21 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'edit.undo', label: 'Undo', category: 'Edit', shortcut: 'Ctrl+Z', run: () => s().undo() });
   registerCommand({ id: 'edit.redo', label: 'Redo', category: 'Edit', shortcut: 'Ctrl+Y', run: () => s().redo() });
   registerCommand({ id: 'edit.deleteSelected', label: 'Delete selected', category: 'Edit', shortcut: 'Del', run: () => s().deleteSelected() });
+  registerCommand({ id: 'edit.selectAll', label: 'Select all', category: 'Edit', shortcut: 'Ctrl+A', run: () => s().selectAll() });
   registerCommand({ id: 'edit.deselectAll', label: 'Deselect all', category: 'Edit', run: () => s().deselectAll() });
+  registerCommand({ id: 'edit.duplicate', label: 'Duplicate selected', category: 'Edit', shortcut: 'Ctrl+D', run: () => s().duplicateSelected() });
+  registerCommand({ id: 'edit.copy', label: 'Copy', category: 'Edit', shortcut: 'Ctrl+C', run: () => s().copySelected() });
+  registerCommand({ id: 'edit.paste', label: 'Paste', category: 'Edit', shortcut: 'Ctrl+V', run: () => s().paste() });
+  registerCommand({ id: 'edit.dropFloor', label: 'Drop selected to floor', category: 'Edit', run: () => s().dropSelectedToFloor() });
+  registerCommand({ id: 'edit.scaleUp', label: 'Scale selected 2×', category: 'Edit', run: () => s().scaleSelected(2) });
+  registerCommand({ id: 'edit.scaleDown', label: 'Scale selected ½×', category: 'Edit', run: () => s().scaleSelected(0.5) });
+  for (const ax of ['x', 'y', 'z'] as const) {
+    registerCommand({ id: `edit.rotate${ax}`, label: `Rotate selected 90° about ${ax.toUpperCase()}`, category: 'Edit', run: () => s().rotateSelected(ax, 90) });
+  }
+  registerCommand({ id: 'view.isolate', label: 'Isolate selected', category: 'View', run: () => s().isolateSelected() });
+  registerCommand({ id: 'view.showAll', label: 'Show all bodies', category: 'View', run: () => s().showAllBodies() });
+  registerCommand({ id: 'view.toggleWireframe', label: 'Toggle wireframe', category: 'View', run: () => s().setWireframe(!s().wireframe) });
+  registerCommand({ id: 'view.toggleGrid', label: 'Toggle grid', category: 'View', shortcut: 'G', run: () => s().setShowGrid(!s().showGrid) });
   registerCommand({ id: 'scene.clear', label: 'Clear scene', category: 'Scene', run: () => s().clearScene() });
   registerCommand({ id: 'reference.standardPlanes', label: 'Add standard planes (Front/Top/Right)', category: 'Reference', run: () => s().ensureStandardPlanes() });
   registerCommand({ id: 'reference.midplaneFromSelection', label: 'Midplane from selected body (largest opposite faces)', category: 'Reference', run: () => addMidplaneFromSelection() });

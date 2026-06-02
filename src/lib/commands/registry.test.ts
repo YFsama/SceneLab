@@ -32,6 +32,11 @@ describe('command registry', () => {
     expect(getCommand('view.iso')).toBeDefined();
     expect(getCommand('reference.standardPlanes')).toBeDefined();
     expect(getCommand('reference.midplaneFromSelection')).toBeDefined();
+    // Edit/view actions are searchable in the palette too.
+    expect(getCommand('edit.duplicate')).toBeDefined();
+    expect(getCommand('edit.selectAll')).toBeDefined();
+    expect(getCommand('edit.rotatez')).toBeDefined();
+    expect(getCommand('view.toggleWireframe')).toBeDefined();
     expect(allCommands().length).toBeGreaterThan(10);
   });
 
