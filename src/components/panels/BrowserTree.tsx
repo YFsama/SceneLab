@@ -24,6 +24,7 @@ export function BrowserTree() {
   const isolateSelected = useStore((s) => s.isolateSelected);
   const showAllBodies = useStore((s) => s.showAllBodies);
   const rotateSelected = useStore((s) => s.rotateSelected);
+  const alignSelected = useStore((s) => s.alignSelected);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -68,6 +69,13 @@ export function BrowserTree() {
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },
     { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
+    ...(selectedIds.length > 1
+      ? [
+          { label: t('menu.alignX'), onClick: () => alignSelected('x', 'center'), separatorBefore: true },
+          { label: t('menu.alignY'), onClick: () => alignSelected('y', 'center') },
+          { label: t('menu.alignZ'), onClick: () => alignSelected('z', 'center') },
+        ]
+      : []),
     { label: t('menu.rotateX'), onClick: () => { selectObject(bodyId); rotateSelected('x', 90); }, separatorBefore: true },
     { label: t('menu.rotateY'), onClick: () => { selectObject(bodyId); rotateSelected('y', 90); } },
     { label: t('menu.rotateZ'), onClick: () => { selectObject(bodyId); rotateSelected('z', 90); } },
@@ -122,7 +130,8 @@ export function BrowserTree() {
                     onDoubleClick={() => setEditing({ id: body.id, value: body.name })}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      selectObject(body.id);
+                      // Keep an existing multi-selection if right-clicking one of its members.
+                      if (!selectedIds.includes(body.id)) selectObject(body.id);
                       setMenu({ x: e.clientX, y: e.clientY, bodyId: body.id });
                     }}
                     className={`flex-1 min-w-0 flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors

@@ -985,10 +985,11 @@ export function ViewportCanvas() {
       // Always show our menu (and suppress the browser's): body actions on a
       // body, general insert/scene actions on empty space.
       e.preventDefault();
-      if (bodyId) selectObject(bodyId);
+      // Keep an existing multi-selection if right-clicking one of its members.
+      if (bodyId && !selectedIds.includes(bodyId)) selectObject(bodyId);
       setBodyMenu({ x: e.clientX, y: e.clientY, bodyId });
     },
-    [sketchActive, selectObject],
+    [sketchActive, selectObject, selectedIds],
   );
 
   const bodyMenuItems = useCallback(

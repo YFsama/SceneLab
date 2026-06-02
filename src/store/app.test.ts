@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
-import { createBox, computeVolume } from '../lib/geometry';
+import { createBox, computeVolume, translateBody } from '../lib/geometry';
 import { createSketch, addRectangle } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
@@ -428,6 +428,32 @@ describe('app store — direct bodies', () => {
     const ys = r.vertices.map((v) => v.y);
     expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 4); // swapped
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(10, 4);
+  });
+
+  it('alignSelected centers selected bodies on an axis (keeps ids)', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10); // x ∈ [-5,5], center 0
+    const b = translateBody(createBox(10, 10, 10), { x: 20, y: 0, z: 0 }); // x ∈ [15,25], center 20
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    expect(useStore.getState().alignSelected('x', 'center')).toBe(2);
+    // Overall center is (−5..25) → 10; both bodies' centers move to x=10.
+    const center = (body: { vertices: { x: number }[] }) => {
+      const xs = body.vertices.map((v) => v.x);
+      return (Math.min(...xs) + Math.max(...xs)) / 2;
+    };
+    const ra = useStore.getState().bodies.find((x) => x.id === a.id)!;
+    const rb = useStore.getState().bodies.find((x) => x.id === b.id)!;
+    expect(center(ra)).toBeCloseTo(10, 4);
+    expect(center(rb)).toBeCloseTo(10, 4);
+  });
+
+  it('alignSelected needs at least two bodies', () => {
+    useStore.getState().clearScene();
+    const box = createBox(2, 2, 2);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().alignSelected('x', 'min')).toBe(0);
   });
 
   it('rotateSelected is a no-op with nothing selected', () => {

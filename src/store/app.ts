@@ -104,6 +104,8 @@ interface AppState {
   nudgeSelected: (dx: number, dy: number, dz: number) => number;
   /** Rotate the selected direct bodies about their own centre (keeps ids); returns how many rotated. */
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
+  /** Align selected direct bodies along an axis by min/center/max (keeps ids); returns how many moved. */
+  alignSelected: (axis: 'x' | 'y' | 'z', mode: 'min' | 'center' | 'max') => number;
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
@@ -513,6 +515,41 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return n;
+  },
+  alignSelected: (axis, mode) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const targets = directBodies.filter((b) => sel.has(b.id));
+    if (targets.length < 2) return 0; // need at least two bodies to align
+    const range = (b: SolidBody) => {
+      let lo = Infinity, hi = -Infinity;
+      for (const v of b.vertices) { lo = Math.min(lo, v[axis]); hi = Math.max(hi, v[axis]); }
+      return { lo, hi };
+    };
+    const ranges = new Map(targets.map((b) => [b.id, range(b)]));
+    const allLo = Math.min(...[...ranges.values()].map((r) => r.lo));
+    const allHi = Math.max(...[...ranges.values()].map((r) => r.hi));
+    const target = mode === 'min' ? allLo : mode === 'max' ? allHi : (allLo + allHi) / 2;
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => {
+        const r = ranges.get(b.id);
+        if (!r) return b;
+        const current = mode === 'min' ? r.lo : mode === 'max' ? r.hi : (r.lo + r.hi) / 2;
+        const d = target - current;
+        if (Math.abs(d) < 1e-12) return b;
+        const move = (v: Vec3): Vec3 => ({ ...v, [axis]: v[axis] + d });
+        return {
+          ...b,
+          vertices: b.vertices.map(move),
+          faces: b.faces.map((f) => ({ ...f, vertices: f.vertices.map(move) })),
+          edges: b.edges.map((e) => ({ ...e, start: move(e.start), end: move(e.end) })),
+        };
+      }),
+      projectDirty: true,
+    }));
+    recombine();
+    return targets.length;
   },
   clipboard: [],
   copySelected: () => {
