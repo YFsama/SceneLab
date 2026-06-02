@@ -703,19 +703,26 @@ export function ViewportCanvas() {
         if (pos.length === 0) continue;
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        // Selected bodies get bright (orange) edges that draw on top, so the
-        // selection reads clearly even against the face tint (SolidWorks-style).
-        const selected = selectedIds.includes(body.id);
-        const seg = new THREE.LineSegments(
-          geo,
-          new THREE.LineBasicMaterial({ color: selected ? 0xfab387 : 0x45475a, depthTest: !selected }),
-        );
-        seg.renderOrder = selected ? 1 : 0;
+        const seg = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x45475a }));
+        seg.userData.bodyId = body.id; // so the selection-colour pass can find it
         edgesGroup.add(seg);
       }
     }
     dirtyRef.current = true;
-  }, [bodies, hiddenIds, wireframe, selectedIds]);
+  }, [bodies, hiddenIds, wireframe]);
+
+  // Recolour edges on selection without rebuilding geometry — selecting a body
+  // shouldn't regenerate every edge buffer (only the colours change).
+  useEffect(() => {
+    const edgesGroup = edgesGroupRef.current;
+    if (!edgesGroup) return;
+    for (const child of edgesGroup.children) {
+      if (!(child instanceof THREE.LineSegments)) continue;
+      const selected = selectedIds.includes(child.userData.bodyId as string);
+      (child.material as THREE.LineBasicMaterial).color.setHex(selected ? 0xfab387 : 0x45475a);
+    }
+    dirtyRef.current = true;
+  }, [selectedIds, bodies, hiddenIds, wireframe]);
 
   // Center-of-mass markers for selected bodies (when enabled).
   useEffect(() => {
