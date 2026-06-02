@@ -8,7 +8,7 @@ import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPl
 import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
-import { Maximize2 } from 'lucide-react';
+import { Maximize2, Check } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -104,6 +104,7 @@ export function ViewportCanvas() {
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
+  const exitSketch = useStore((s) => s.exitSketch);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
   const setSketchPlaneId = useStore((s) => s.setSketchPlaneId);
   const setWorkspace = useStore((s) => s.setWorkspace);
@@ -944,10 +945,12 @@ export function ViewportCanvas() {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
       if (e.key === 'f' || e.key === 'F') { e.preventDefault(); fitView(); }
+      // Esc leaves sketch mode (like clicking "Exit sketch").
+      if (e.key === 'Escape' && sketchActive) { e.preventDefault(); exitSketch(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView]);
+  }, [fitView, sketchActive, exitSketch]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -1012,6 +1015,16 @@ export function ViewportCanvas() {
       >
         <Maximize2 size={15} />
       </button>
+      {sketchActive && (
+        <button
+          onClick={exitSketch}
+          className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-surface text-xs font-medium shadow-lg hover:bg-accent-hover transition-colors"
+          title={`${t('sketch.exit')} (Esc)`}
+        >
+          <Check size={14} />
+          {t('sketch.exit')}
+        </button>
+      )}
       {bodyMenu && (
         <ContextMenu x={bodyMenu.x} y={bodyMenu.y} items={bodyMenuItems(bodyMenu.bodyId)} onClose={() => setBodyMenu(null)} />
       )}

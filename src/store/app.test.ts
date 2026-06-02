@@ -332,6 +332,15 @@ describe('app store — direct bodies', () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(5, 4);
   });
 
+  it('exitSketch leaves sketch mode and returns to the model workspace', () => {
+    useStore.setState({ sketchActive: true, sketchTool: 'rect', drawStart: { x: 1, y: 1 }, workspace: 'sketch' });
+    useStore.getState().exitSketch();
+    expect(useStore.getState().sketchActive).toBe(false);
+    expect(useStore.getState().sketchTool).toBe('select');
+    expect(useStore.getState().drawStart).toBeNull();
+    expect(useStore.getState().workspace).toBe('model');
+  });
+
   it('toggleSelect adds and removes ids for multi-select', () => {
     useStore.getState().deselectAll();
     useStore.getState().toggleSelect('a');

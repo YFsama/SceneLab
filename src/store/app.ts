@@ -47,6 +47,8 @@ interface AppState {
   setSketchTool: (t: SketchTool) => void;
   sketchActive: boolean;
   setSketchActive: (a: boolean) => void;
+  /** Leave sketch mode cleanly: stop drawing, reset the tool, return to the model workspace. */
+  exitSketch: () => void;
   currentSketch: Sketch | null;
   setCurrentSketch: (s: Sketch | null) => void;
   sketchPlaneId: SketchPlaneId;
@@ -230,6 +232,7 @@ export const useStore = create<AppState>((set, get) => {
   setSketchTool: (sketchTool) => set({ sketchTool }),
   sketchActive: false,
   setSketchActive: (sketchActive) => set({ sketchActive }),
+  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, workspace: 'model' }),
   currentSketch: null,
   setCurrentSketch: (currentSketch) => set({ currentSketch }),
   sketchPlaneId: 'xy',
