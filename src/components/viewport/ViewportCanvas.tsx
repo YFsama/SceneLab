@@ -1058,10 +1058,12 @@ export function ViewportCanvas() {
     (bodyId: string | null): ContextMenuItem[] => {
       // Empty-space menu: quick insert + scene actions.
       if (!bodyId) {
+        const kinds = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube', 'coil'] as const;
         return [
-          { label: `${t('dialog.insert')}: ${t('primitive.box')}`, onClick: () => setPendingPrimitive('box') },
-          { label: `${t('dialog.insert')}: ${t('primitive.cylinder')}`, onClick: () => setPendingPrimitive('cylinder') },
-          { label: `${t('dialog.insert')}: ${t('primitive.sphere')}`, onClick: () => setPendingPrimitive('sphere') },
+          {
+            label: t('dialog.insert'),
+            submenu: kinds.map((k) => ({ label: t(`primitive.${k}`), onClick: () => setPendingPrimitive(k) })),
+          },
           { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
           { label: t('menu.deselectAll'), onClick: () => deselectAll() },
         ];
