@@ -97,6 +97,8 @@ interface AppState {
   deleteSelected: () => number;
   /** Duplicate the selected direct bodies (offset copies, keeping colour); selects and returns the new ids. */
   duplicateSelected: () => string[];
+  /** Translate the selected direct bodies by an offset in place (keeps ids); returns how many moved. */
+  nudgeSelected: (dx: number, dy: number, dz: number) => number;
   /** Undo/redo history for scene-body edits (create/transform/delete). */
   undoStack: SolidBody[][];
   redoStack: SolidBody[][];
@@ -450,6 +452,29 @@ export const useStore = create<AppState>((set, get) => {
     set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
     recombine();
     return copies.map((c) => c.id);
+  },
+  nudgeSelected: (dx, dy, dz) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const n = directBodies.filter((b) => sel.has(b.id)).length;
+    if (n === 0) return 0; // nothing direct selected
+    const move = (v: Vec3): Vec3 => ({ x: v.x + dx, y: v.y + dy, z: v.z + dz });
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) =>
+        sel.has(b.id)
+          ? {
+              ...b,
+              vertices: b.vertices.map(move),
+              faces: b.faces.map((f) => ({ ...f, vertices: f.vertices.map(move) })),
+              edges: b.edges.map((e) => ({ ...e, start: move(e.start), end: move(e.end) })),
+            }
+          : b,
+      ),
+      projectDirty: true,
+    }));
+    recombine();
+    return n;
   },
   undoStack: [],
   redoStack: [],

@@ -95,6 +95,7 @@ export function ViewportCanvas() {
   const selectedIds = useStore((s) => s.selectedIds);
   const selectObject = useStore((s) => s.selectObject);
   const toggleSelect = useStore((s) => s.toggleSelect);
+  const nudgeSelected = useStore((s) => s.nudgeSelected);
   const deselectAll = useStore((s) => s.deselectAll);
   const replaceBody = useStore((s) => s.replaceBody);
   const removeDirectBody = useStore((s) => s.removeDirectBody);
@@ -1042,10 +1043,22 @@ export function ViewportCanvas() {
       // F frames the model. Standard-view number keys and Esc are handled by
       // the central shortcut map (initShortcuts) to avoid double-binding.
       if (e.key === 'f' || e.key === 'F') { e.preventDefault(); fitView(); }
+      // Arrow keys nudge the selection on the ground plane (top-view mapping):
+      // ←/→ = X, ↑/↓ = Z. Shift = 10mm coarse step, else 1mm. Skipped in sketch.
+      if (!sketchActive && e.key.startsWith('Arrow')) {
+        const step = e.shiftKey ? 10 : 1;
+        const move =
+          e.key === 'ArrowLeft' ? [-step, 0, 0]
+          : e.key === 'ArrowRight' ? [step, 0, 0]
+          : e.key === 'ArrowUp' ? [0, 0, -step]
+          : e.key === 'ArrowDown' ? [0, 0, step]
+          : null;
+        if (move && nudgeSelected(move[0]!, move[1]!, move[2]!) > 0) e.preventDefault();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView]);
+  }, [fitView, sketchActive, nudgeSelected]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {

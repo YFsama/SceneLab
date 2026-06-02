@@ -384,6 +384,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().duplicateSelected.length).toBeGreaterThanOrEqual(0);
   });
 
+  it('nudgeSelected translates selected bodies in place, keeping ids', () => {
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10); // x ∈ [-5,5]
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().nudgeSelected(2, 0, 0)).toBe(1);
+    const moved = useStore.getState().bodies.find((b) => b.id === box.id)!; // same id
+    expect(moved).toBeDefined();
+    const minX = Math.min(...moved.vertices.map((v) => v.x));
+    expect(minX).toBeCloseTo(-3, 5); // -5 + 2
+    expect(useStore.getState().selectedIds).toEqual([box.id]); // selection preserved
+  });
+
+  it('nudgeSelected is a no-op with nothing selected', () => {
+    useStore.getState().clearScene();
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    useStore.getState().deselectAll();
+    expect(useStore.getState().nudgeSelected(1, 0, 0)).toBe(0);
+  });
+
   it('duplicateSelected is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     expect(useStore.getState().duplicateSelected()).toEqual([]);
