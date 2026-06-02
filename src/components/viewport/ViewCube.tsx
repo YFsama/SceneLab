@@ -1,11 +1,13 @@
 import { useStore, type ViewDirection } from '../../store/app';
 import { useT } from '../../lib/i18n';
 
+// Order and shortcut badges match the central hotkeys (initShortcuts):
+// 1 front, 2 top, 3 right, 4 iso.
 const views: { dir: ViewDirection; shortcut: string }[] = [
-  { dir: 'top', shortcut: '1' },
-  { dir: 'front', shortcut: '2' },
+  { dir: 'front', shortcut: '1' },
+  { dir: 'top', shortcut: '2' },
   { dir: 'right', shortcut: '3' },
-  { dir: 'iso', shortcut: '0' },
+  { dir: 'iso', shortcut: '4' },
 ];
 
 export function ViewCube() {

@@ -1056,7 +1056,7 @@ export function ViewportCanvas() {
       />
       <button
         onClick={fitView}
-        className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+        className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
         aria-label={t('viewport.fit')}
         title={`${t('viewport.fit')} (F)`}
       >
