@@ -29,4 +29,17 @@ describe('selectionSummary', () => {
     const a = createBox(10, 10, 10);
     expect(selectionSummary([a])!.gap).toBeUndefined();
   });
+
+  it('reports interference volume for two overlapping bodies', () => {
+    const a = createBox(10, 10, 10); // x ∈ [-5,5]
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 }); // overlaps x ∈ [0,5]
+    const s = selectionSummary([a, b])!;
+    expect(s.interference).toBeGreaterThan(0);
+  });
+
+  it('no interference for disjoint bodies', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 50, y: 0, z: 0 });
+    expect(selectionSummary([a, b])!.interference).toBeUndefined();
+  });
 });

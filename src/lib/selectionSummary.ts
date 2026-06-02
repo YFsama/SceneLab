@@ -1,6 +1,6 @@
 import type { SolidBody } from './geometry/types';
 import { computeVolume } from './geometry/brep';
-import { minDistanceBetweenBodies } from './geometry/measure';
+import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume } from './geometry/measure';
 
 export interface SelectionSummary {
   count: number;
@@ -10,6 +10,8 @@ export interface SelectionSummary {
   totalVolume: number;
   /** Minimum surface gap between the two bodies (mm); only when exactly two. */
   gap?: number;
+  /** Interference (overlap) volume between the two bodies (mm³); set only when they overlap. */
+  interference?: number;
 }
 
 /**
@@ -29,6 +31,15 @@ export function selectionSummary(bodies: SolidBody[]): SelectionSummary | null {
       max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
     }
   }
-  const gap = bodies.length === 2 ? minDistanceBetweenBodies(bodies[0]!, bodies[1]!) : undefined;
-  return { count: bodies.length, size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z }, totalVolume, gap };
+  let gap: number | undefined;
+  let interference: number | undefined;
+  if (bodies.length === 2) {
+    const [a, b] = bodies as [SolidBody, SolidBody];
+    gap = minDistanceBetweenBodies(a, b);
+    if (bodiesInterfere(a, b)) {
+      const v = interferenceVolume(a, b);
+      if (v > 0) interference = v;
+    }
+  }
+  return { count: bodies.length, size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z }, totalVolume, gap, interference };
 }

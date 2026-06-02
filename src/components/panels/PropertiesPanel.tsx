@@ -1814,13 +1814,22 @@ export function PropertiesPanel() {
                   </div>
                   <p className="pl-4 text-xs text-text-secondary">{summary.totalVolume.toFixed(2)} mm³</p>
                 </div>
-                {summary.gap !== undefined && (
+                {summary.gap !== undefined && summary.interference === undefined && (
                   <div className="space-y-1">
                     <div className="flex items-center gap-1 text-xs text-text-muted">
                       <Move size={12} />
                       <span>{t('panel.gap')}</span>
                     </div>
                     <p className="pl-4 text-xs text-text-secondary">{summary.gap.toFixed(3)} mm</p>
+                  </div>
+                )}
+                {summary.interference !== undefined && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1 text-xs text-warning">
+                      <AlertTriangle size={12} />
+                      <span>{t('panel.interference')}</span>
+                    </div>
+                    <p className="pl-4 text-xs text-warning">{summary.interference.toFixed(2)} mm³</p>
                   </div>
                 )}
               </div>
