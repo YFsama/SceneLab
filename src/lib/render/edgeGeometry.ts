@@ -21,3 +21,15 @@ export function edgeMidpoints(body: SolidBody): { x: number; y: number; z: numbe
     z: (e.start.z + e.end.z) / 2,
   }));
 }
+
+/** Centroid of every face (average of its vertices) — more measure snap targets. */
+export function faceCenters(body: SolidBody): { x: number; y: number; z: number }[] {
+  const out: { x: number; y: number; z: number }[] = [];
+  for (const f of body.faces) {
+    if (f.vertices.length === 0) continue;
+    const c = { x: 0, y: 0, z: 0 };
+    for (const v of f.vertices) { c.x += v.x; c.y += v.y; c.z += v.z; }
+    out.push({ x: c.x / f.vertices.length, y: c.y / f.vertices.length, z: c.z / f.vertices.length });
+  }
+  return out;
+}
