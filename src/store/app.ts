@@ -167,6 +167,8 @@ interface AppState {
   gridPatternBody: (bodyId: string, countX: number, spacingX: number, countZ: number, spacingZ: number) => string[];
   /** Clipboard of copied bodies. */
   clipboard: SolidBody[];
+  /** Number of pastes since the last copy, so repeated pastes cascade. */
+  pasteCount: number;
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
   copySelected: () => number;
   /** Paste the clipboard as offset copies, select them; returns the new ids. */
@@ -907,19 +909,24 @@ export const useStore = create<AppState>((set, get) => {
     return n;
   },
   clipboard: [],
+  pasteCount: 0,
   copySelected: () => {
     const { selectedIds, directBodies } = get();
     const sel = new Set(selectedIds);
     const copied = directBodies.filter((b) => sel.has(b.id));
-    set({ clipboard: copied });
+    // Reset the cascade so the first paste lands one step from the originals.
+    set({ clipboard: copied, pasteCount: 0 });
     return copied.length;
   },
   paste: () => {
-    const { clipboard } = get();
+    const { clipboard, pasteCount } = get();
     if (clipboard.length === 0) return [];
-    const copies = clipboard.map((b) => ({ ...translateBody(b, { x: 10, y: 0, z: 10 }, `${b.name} copy`), color: b.color }));
+    // Each successive paste steps further out so copies don't stack on top.
+    const k = pasteCount + 1;
+    const offset = { x: 10 * k, y: 0, z: 10 * k };
+    const copies = clipboard.map((b) => ({ ...translateBody(b, offset, `${b.name} copy`), color: b.color }));
     pushUndo();
-    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
+    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), pasteCount: k, projectDirty: true }));
     recombine();
     return copies.map((c) => c.id);
   },
@@ -962,6 +969,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedIds: [],
       hiddenIds: [],
       clipboard: [],
+      pasteCount: 0,
       renaming: null,
       planes: [],
       axes: [],
@@ -988,6 +996,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedIds: [],
       hiddenIds: [],
       clipboard: [],
+      pasteCount: 0,
       renaming: null,
       planes: referenceGeometry?.planes ?? [],
       axes: referenceGeometry?.axes ?? [],

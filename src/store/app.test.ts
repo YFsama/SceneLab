@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
-import { createBox, computeVolume, translateBody } from '../lib/geometry';
+import { createBox, computeVolume, translateBody, computeBoundingBoxCenter } from '../lib/geometry';
 import { createSketch, addRectangle, addLine } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
@@ -563,6 +563,32 @@ describe('app store — direct bodies', () => {
   it('paste is a no-op with an empty clipboard', () => {
     useStore.getState().clearScene();
     expect(useStore.getState().paste()).toEqual([]);
+  });
+
+  it('repeated pastes cascade outward instead of stacking', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.getState().copySelected();
+
+    const centerOf = (id: string) => {
+      const b = useStore.getState().bodies.find((x) => x.id === id)!;
+      return computeBoundingBoxCenter(b);
+    };
+    const first = useStore.getState().paste()[0]!;
+    const second = useStore.getState().paste()[0]!;
+    const c1 = centerOf(first);
+    const c2 = centerOf(second);
+    // Second paste sits a further 10mm out on X and Z than the first.
+    expect(c2.x - c1.x).toBeCloseTo(10);
+    expect(c2.z - c1.z).toBeCloseTo(10);
+
+    // Re-copying resets the cascade: next paste lands one step from the original.
+    useStore.getState().selectObject(box.id);
+    useStore.getState().copySelected();
+    const third = useStore.getState().paste()[0]!;
+    expect(centerOf(third).x - centerOf(box.id).x).toBeCloseTo(10);
   });
 
   it('rotateSelected rotates in place keeping id (90° about Z swaps X/Y extents)', () => {
