@@ -474,6 +474,31 @@ describe('app store — direct bodies', () => {
     expect(Math.min(...r.vertices.map((v) => v.y))).toBeCloseTo(0, 5);
   });
 
+  it('linearPatternBody replaces a body with count copies along an axis', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    const ids = useStore.getState().linearPatternBody(box.id, 'x', 4, 10);
+    expect(ids).toHaveLength(4);
+    expect(useStore.getState().bodies.find((b) => b.id === box.id)).toBeUndefined(); // original replaced
+    expect(useStore.getState().bodies).toHaveLength(4);
+    // Copies span 3 gaps of 10 → 30mm spread between first and last centres.
+    const centers = ids.map((id) => {
+      const b = useStore.getState().bodies.find((x) => x.id === id)!;
+      const xs = b.vertices.map((v) => v.x);
+      return (Math.min(...xs) + Math.max(...xs)) / 2;
+    }).sort((a, b) => a - b);
+    expect(centers[centers.length - 1]! - centers[0]!).toBeCloseTo(30, 4);
+  });
+
+  it('linearPatternBody returns [] for a missing body or bad params', () => {
+    useStore.getState().clearScene();
+    const box = createBox(2, 2, 2);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().linearPatternBody('nope', 'x', 3, 5)).toEqual([]);
+    expect(useStore.getState().linearPatternBody(box.id, 'x', 3, 0)).toEqual([]);
+  });
+
   it('dropSelectedToFloor is a no-op with nothing selected', () => {
     useStore.getState().clearScene();
     useStore.getState().addDirectBody(createBox(2, 2, 2));

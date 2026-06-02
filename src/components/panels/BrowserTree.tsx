@@ -27,6 +27,7 @@ export function BrowserTree() {
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
+  const setPendingPattern = useStore((s) => s.setPendingPattern);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -86,6 +87,7 @@ export function BrowserTree() {
           { label: t('menu.distributeZ'), onClick: () => distributeSelected('z') },
         ]
       : []),
+    { label: t('menu.linearPattern'), onClick: () => setPendingPattern(bodyId), separatorBefore: true },
     { label: t('menu.rotateX'), onClick: () => { selectObject(bodyId); rotateSelected('x', 90); }, separatorBefore: true },
     { label: t('menu.rotateY'), onClick: () => { selectObject(bodyId); rotateSelected('y', 90); } },
     { label: t('menu.rotateZ'), onClick: () => { selectObject(bodyId); rotateSelected('z', 90); } },
