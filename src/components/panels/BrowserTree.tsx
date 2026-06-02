@@ -21,6 +21,8 @@ export function BrowserTree() {
   const duplicateSelected = useStore((s) => s.duplicateSelected);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
+  const isolateSelected = useStore((s) => s.isolateSelected);
+  const showAllBodies = useStore((s) => s.showAllBodies);
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
   const planes = useStore((s) => s.planes);
   const axes = useStore((s) => s.axes);
@@ -59,6 +61,8 @@ export function BrowserTree() {
   const menuItems = (bodyId: string): ContextMenuItem[] => [
     { label: t('menu.rename'), onClick: () => { const b = bodies.find((x) => x.id === bodyId); if (b) setEditing({ id: bodyId, value: b.name }); } },
     { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
+    { label: t('menu.isolate'), onClick: () => { selectObject(bodyId); isolateSelected(); } },
+    ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => showAllBodies() }] : []),
     { label: t('menu.layFlat'), onClick: () => apply(bodyId, layFlat), separatorBefore: true },
     { label: t('menu.seatOnBed'), onClick: () => apply(bodyId, (b) => seatOnBed(b)) },
     { label: t('menu.center'), onClick: () => apply(bodyId, centerBody) },

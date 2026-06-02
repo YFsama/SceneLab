@@ -389,6 +389,35 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().duplicateSelected()).toEqual([]);
   });
 
+  it('selectAll selects every body', () => {
+    useStore.getState().clearScene();
+    const a = createBox(2, 2, 2); const b = createBox(3, 3, 3);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().selectAll();
+    expect(useStore.getState().selectedIds.sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it('isolateSelected hides all but the selection; showAllBodies restores', () => {
+    useStore.getState().clearScene();
+    const a = createBox(2, 2, 2); const b = createBox(3, 3, 3);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().selectObject(a.id);
+    useStore.getState().isolateSelected();
+    expect(useStore.getState().hiddenIds).toEqual([b.id]);
+    useStore.getState().showAllBodies();
+    expect(useStore.getState().hiddenIds).toEqual([]);
+  });
+
+  it('isolateSelected is a no-op with nothing selected', () => {
+    useStore.getState().clearScene();
+    useStore.getState().addDirectBody(createBox(2, 2, 2));
+    useStore.getState().deselectAll();
+    useStore.getState().isolateSelected();
+    expect(useStore.getState().hiddenIds).toEqual([]);
+  });
+
   it('toggleBodyVisibility hides and shows a body; clearScene resets', () => {
     useStore.getState().clearScene();
     const box = createBox(5, 5, 5);

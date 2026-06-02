@@ -88,6 +88,10 @@ interface AppState {
   hiddenIds: string[];
   /** Show/hide a body in the viewport. */
   toggleBodyVisibility: (id: string) => void;
+  /** Hide every body except the selection (SolidWorks Isolate); no-op if nothing selected. */
+  isolateSelected: () => void;
+  /** Unhide all bodies. */
+  showAllBodies: () => void;
   removeDirectBody: (id: string) => void;
   /** Delete all currently-selected direct bodies; returns how many were removed. */
   deleteSelected: () => number;
@@ -185,6 +189,8 @@ interface AppState {
   selectObject: (id: string) => void;
   /** Toggle a body in/out of the current selection (Ctrl/⌘-click multi-select). */
   toggleSelect: (id: string) => void;
+  /** Select every body in the scene (Ctrl+A). */
+  selectAll: () => void;
   deselectAll: () => void;
 
   // Panels
@@ -402,6 +408,11 @@ export const useStore = create<AppState>((set, get) => {
     set((s) => ({
       hiddenIds: s.hiddenIds.includes(id) ? s.hiddenIds.filter((h) => h !== id) : [...s.hiddenIds, id],
     })),
+  isolateSelected: () =>
+    set((s) => (s.selectedIds.length === 0
+      ? {}
+      : { hiddenIds: s.bodies.map((b) => b.id).filter((id) => !s.selectedIds.includes(id)) })),
+  showAllBodies: () => set({ hiddenIds: [] }),
   removeDirectBody: (id) => {
     pushUndo();
     set((s) => ({
@@ -721,6 +732,7 @@ export const useStore = create<AppState>((set, get) => {
         ? s.selectedIds.filter((sid) => sid !== id)
         : [...s.selectedIds, id],
     })),
+  selectAll: () => set((s) => ({ selectedIds: s.bodies.map((b) => b.id) })),
   deselectAll: () => set({ selectedIds: [] }),
 
   showBrowserTree: true,
