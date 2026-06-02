@@ -1182,11 +1182,11 @@ export function ViewportCanvas() {
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
   // keeping the current viewing direction — SolidWorks "Zoom to Fit" (F).
-  const fitView = useCallback((selectionOnly = false) => {
+  const fitView = useCallback((selectionOnly = false, targets?: import('../../lib/geometry/types').SolidBody[]) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
-    const bb = combinedBounds(framingBodies(bodies, selectedIds, selectionOnly));
+    const bb = combinedBounds(targets ?? framingBodies(bodies, selectedIds, selectionOnly));
     const center = bb
       ? new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2)
       : new THREE.Vector3(0, 0, 0);
@@ -1202,6 +1202,25 @@ export function ViewportCanvas() {
     controls.update();
     dirtyRef.current = true;
   }, [bodies, selectedIds]);
+
+  // Double-click a body to select and frame it (SolidWorks/Fusion zoom-to-part).
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (sketchActive || measureActive) return;
+      const container = containerRef.current;
+      const camera = cameraRef.current;
+      const bodiesGroup = bodiesGroupRef.current;
+      if (!container || !camera || !bodiesGroup) return;
+      const rect = container.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycasterRef.current.setFromCamera(mouseRef.current, camera);
+      const id = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined;
+      const body = id ? bodies.find((b) => b.id === id) : undefined;
+      if (body) { selectObject(body.id); fitView(false, [body]); }
+    },
+    [sketchActive, measureActive, bodies, selectObject, fitView],
+  );
 
   // Home view: snap to a fitted isometric view (orient + frame), regardless of
   // the current orientation — the CAD "home"/reset-view action.
@@ -1321,6 +1340,7 @@ export function ViewportCanvas() {
         ref={containerRef}
         className={`w-full h-full bg-surface ${hoveredId && !sketchActive ? 'cursor-pointer' : ''}`}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
