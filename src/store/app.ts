@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addConstraint, removeEntity } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -27,7 +27,7 @@ export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | '
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
 export type WorkspaceMode = 'sketch' | 'model' | 'assembly' | 'drawing' | 'cam';
-export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'constraint';
+export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'constraint';
 export type ViewDirection = 'top' | 'front' | 'right' | 'iso';
 export type SketchPlaneId = 'xy' | 'xz' | 'yz';
 
@@ -64,6 +64,8 @@ interface AppState {
   addSketchRect: (x1: number, y1: number, x2: number, y2: number) => string;
   addSketchCircle: (cx: number, cy: number, radius: number) => string;
   addSketchArc: (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => string;
+  /** Add a regular polygon (sides line segments) centred at (cx,cy). */
+  addSketchPolygon: (cx: number, cy: number, radius: number, sides: number) => void;
   addSketchConstraint: (type: import('../lib/sketch/types').ConstraintType, entityIds: string[], value?: number) => void;
   /** Currently-selected sketch entity (for highlight/deletion); null if none. */
   selectedSketchId: string | null;
@@ -351,6 +353,12 @@ export const useStore = create<AppState>((set, get) => {
     const e = addArc(sketch, cx, cy, radius, startAngle, endAngle);
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return e.id;
+  },
+  addSketchPolygon: (cx, cy, radius, sides) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(radius > 0)) return;
+    addPolygon(sketch, cx, cy, radius, sides);
+    set({ currentSketch: { ...sketch }, projectDirty: true });
   },
 
   addSketchConstraint: (type, entityIds, value) => {

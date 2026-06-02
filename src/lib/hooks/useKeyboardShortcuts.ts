@@ -64,6 +64,7 @@ export function initShortcuts(): void {
   registerShortcut('r', () => store.setSketchTool('rect'));
   registerShortcut('o', () => store.setSketchTool('circle'));
   registerShortcut('a', () => store.setSketchTool('arc'));
+  registerShortcut('p', () => store.setSketchTool('polygon'));
   registerShortcut('v', () => store.setSketchTool('select'));
 
   // Panel toggles

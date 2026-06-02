@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
-import { createSketch } from '../../lib/sketch/engine';
+import { createSketch, polygonPoints } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
@@ -126,6 +126,7 @@ export function ViewportCanvas() {
   const addSketchRect = useStore((s) => s.addSketchRect);
   const addSketchCircle = useStore((s) => s.addSketchCircle);
   const addSketchArc = useStore((s) => s.addSketchArc);
+  const addSketchPolygon = useStore((s) => s.addSketchPolygon);
 
   const dirtyRef = useRef(true);
   const frameIdRef2 = useRef<number>(0);
@@ -537,6 +538,12 @@ export function ViewportCanvas() {
             const r = Math.hypot(m.x - s.x, m.y - s.y);
             const end = Math.atan2(m.y - s.y, m.x - s.x);
             pts = new THREE.EllipseCurve(s.x, s.y, r, r, 0, end, false, 0).getPoints(64).map((p) => v(p.x, p.y));
+            break;
+          }
+          case 'polygon': {
+            const r = Math.hypot(m.x - s.x, m.y - s.y);
+            const poly = polygonPoints(s.x, s.y, r, 6);
+            pts = [...poly, poly[0]!].map((p) => v(p.x, p.y)); // closed outline
             break;
           }
         }
@@ -1222,11 +1229,16 @@ export function ViewportCanvas() {
           addSketchArc(drawStart.x, drawStart.y, radius, 0, Math.atan2(dy, dx));
           break;
         }
+        case 'polygon': {
+          const r = Math.hypot(pt.x - drawStart.x, pt.y - drawStart.y);
+          if (r > 1e-6) addSketchPolygon(drawStart.x, drawStart.y, r, 6);
+          break;
+        }
       }
 
       setDrawStart(null);
     },
-    [sketchActive, drawStart, sketchTool, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, setDrawStart],
+    [sketchActive, drawStart, sketchTool, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart],
   );
 
   return (

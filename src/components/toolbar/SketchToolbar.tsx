@@ -1,6 +1,6 @@
 import { useStore, type SketchTool } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { MousePointer2, Minus, Square, Circle, CircleDot, Box, RotateCw, LogOut } from 'lucide-react';
+import { MousePointer2, Minus, Square, Circle, CircleDot, Hexagon, Box, RotateCw, LogOut } from 'lucide-react';
 
 const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[] = [
   { tool: 'select', icon: MousePointer2, shortcut: 'V' },
@@ -8,6 +8,7 @@ const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[
   { tool: 'rect', icon: Square, shortcut: 'R' },
   { tool: 'circle', icon: Circle, shortcut: 'O' },
   { tool: 'arc', icon: CircleDot, shortcut: 'A' },
+  { tool: 'polygon', icon: Hexagon, shortcut: 'P' },
 ];
 
 export function SketchToolbar() {

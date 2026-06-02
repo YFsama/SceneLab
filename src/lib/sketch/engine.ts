@@ -38,6 +38,30 @@ export function addLine(sketch: Sketch, x1: number, y1: number, x2: number, y2: 
   return line;
 }
 
+/** Vertices of a regular `sides`-gon centred at (cx,cy) with circumradius `r`,
+ * first vertex at the top. Pure — used for drawing and the polygon preview. */
+export function polygonPoints(cx: number, cy: number, r: number, sides: number): { x: number; y: number }[] {
+  const n = Math.max(3, Math.floor(sides));
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    out.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  return out;
+}
+
+/** Add a closed regular polygon as `sides` line segments; returns their ids. */
+export function addPolygon(sketch: Sketch, cx: number, cy: number, radius: number, sides: number): string[] {
+  const pts = polygonPoints(cx, cy, radius, sides);
+  const ids: string[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % pts.length]!;
+    ids.push(addLine(sketch, a.x, a.y, b.x, b.y).id);
+  }
+  return ids;
+}
+
 export function addRectangle(
   sketch: Sketch,
   x1: number,
