@@ -231,7 +231,7 @@ export function BrowserTree() {
                     aria-selected={selectedIds.includes(body.id)}
                     title={t('menu.rename')}
                   >
-                    <Box size={14} />
+                    <Box size={14} style={{ color: `#${(body.color ?? 0x89b4fa).toString(16).padStart(6, '0')}` }} />
                     <span className="truncate">{body.name}</span>
                   </button>
                   <button
