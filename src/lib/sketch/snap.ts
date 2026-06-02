@@ -1,4 +1,20 @@
 export interface P2 { x: number; y: number }
+export interface P3 { x: number; y: number; z: number }
+
+/**
+ * Nearest vertex to a 3D point within `tol`, or null. Used by the measure tool
+ * to snap a surface pick onto a corner so distances are exact (SolidWorks-style
+ * vertex snapping).
+ */
+export function nearestVertexWithin(p: P3, verts: P3[], tol: number): P3 | null {
+  let best: P3 | null = null;
+  let bestD = tol;
+  for (const v of verts) {
+    const d = Math.hypot(v.x - p.x, v.y - p.y, v.z - p.z);
+    if (d <= bestD) { bestD = d; best = v; }
+  }
+  return best ? { x: best.x, y: best.y, z: best.z } : null;
+}
 
 /**
  * Snap a point to the nearest candidate (e.g. an existing sketch endpoint)

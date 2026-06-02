@@ -6,7 +6,7 @@ import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
-import { snapToPoints, inferLineEnd } from '../../lib/sketch/snap';
+import { snapToPoints, inferLineEnd, nearestVertexWithin } from '../../lib/sketch/snap';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
@@ -853,8 +853,20 @@ export function ViewportCanvas() {
       // after two points the readout shows the distance. A third click restarts.
       if (measureActive) {
         if (!bodiesGroup) return;
-        const p = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.point;
-        if (p) addMeasurePoint({ x: p.x, y: p.y, z: p.z });
+        const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+        if (hit) {
+          let pt = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+          // Snap to the hit body's nearest corner (within 10% of its size) for
+          // exact corner-to-corner measurements.
+          const body = bodies.find((b) => b.id === (hit.object.userData.bodyId as string | undefined));
+          const bb = body && combinedBounds([body]);
+          if (body && bb) {
+            const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+            const v = nearestVertexWithin(pt, body.vertices, diag * 0.1);
+            if (v) pt = v;
+          }
+          addMeasurePoint(pt);
+        }
         return;
       }
 
@@ -886,7 +898,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, measureActive, addMeasurePoint, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, measureActive, addMeasurePoint, bodies, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
   );
 
   const handleMouseMove = useCallback(
