@@ -926,6 +926,19 @@ describe('app store — direct bodies', () => {
     expect(ext('x')).toBeCloseTo(10, 4); // same size (in place)
   });
 
+  it('flipSelected mirrors a multi-selection as a group (positions mirror)', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10); // centre x 0
+    const b = translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }); // centre x 30
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    // Mirror across X through the combined centre (15): a (centre 0) → 30.
+    expect(useStore.getState().flipSelected('x')).toBe(2);
+    const ra = useStore.getState().bodies.find((bd) => bd.id === a.id)!;
+    const cx = (() => { const xs = ra.vertices.map((v) => v.x); return (Math.min(...xs) + Math.max(...xs)) / 2; })();
+    expect(cx).toBeCloseTo(30, 4); // body a swapped to where b was — group mirror
+  });
+
   it('weldSelected cleans a body keeping id and volume', () => {
     useStore.getState().clearScene();
     const box = createBox(10, 10, 10);
