@@ -562,6 +562,18 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().distributeSelected('x')).toBe(0);
   });
 
+  it('alignSelected min/max align the selected edges on an axis', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10); // x ∈ [-5,5]
+    const b = translateBody(createBox(6, 6, 6), { x: 20, y: 0, z: 0 }); // x ∈ [17,23]
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    useStore.getState().alignSelected('x', 'min');
+    const minX = (id: string) => Math.min(...useStore.getState().bodies.find((x) => x.id === id)!.vertices.map((v) => v.x));
+    expect(minX(a.id)).toBeCloseTo(-5, 4);
+    expect(minX(b.id)).toBeCloseTo(-5, 4); // both mins aligned to the overall min
+  });
+
   it('alignSelected needs at least two bodies', () => {
     useStore.getState().clearScene();
     const box = createBox(2, 2, 2);

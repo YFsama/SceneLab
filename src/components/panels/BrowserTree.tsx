@@ -75,12 +75,17 @@ export function BrowserTree() {
   // tucked into flyout submenus so the menu stays short (SolidWorks-style).
   const menuItems = (bodyId: string): ContextMenuItem[] => {
     const pre = (fn: () => void) => () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fn(); };
+    const axisAlign = (ax: 'x' | 'y' | 'z'): ContextMenuItem[] => [
+      { label: t('menu.alignMin'), onClick: () => alignSelected(ax, 'min') },
+      { label: t('menu.alignCenter'), onClick: () => alignSelected(ax, 'center') },
+      { label: t('menu.alignMax'), onClick: () => alignSelected(ax, 'max') },
+    ];
     const align: ContextMenuItem[] =
       selectedIds.length > 1
         ? [
-            { label: t('menu.alignX'), onClick: () => alignSelected('x', 'center') },
-            { label: t('menu.alignY'), onClick: () => alignSelected('y', 'center') },
-            { label: t('menu.alignZ'), onClick: () => alignSelected('z', 'center') },
+            { label: 'X', submenu: axisAlign('x') },
+            { label: 'Y', submenu: axisAlign('y') },
+            { label: 'Z', submenu: axisAlign('z') },
             ...(selectedIds.length > 2
               ? [
                   { label: t('menu.distributeX'), onClick: () => distributeSelected('x'), separatorBefore: true },
