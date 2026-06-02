@@ -1164,6 +1164,28 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [bodies, selectedIds]);
 
+  // Home view: snap to a fitted isometric view (orient + frame), regardless of
+  // the current orientation — the CAD "home"/reset-view action.
+  const resetView = useCallback(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const bb = combinedBounds(bodies);
+    const center = bb
+      ? new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2)
+      : new THREE.Vector3(0, 0, 0);
+    const size = bb
+      ? { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z }
+      : { x: 10, y: 10, z: 10 };
+    const dist = fitCameraDistance(size, camera.fov, camera.aspect);
+    const dir = new THREE.Vector3(1, 0.8, 1).normalize();
+    camera.up.set(0, 1, 0);
+    camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+    controls.target.copy(center);
+    controls.update();
+    dirtyRef.current = true;
+  }, [bodies]);
+
   // Auto-frame the first body added to an empty scene so it's immediately
   // visible (avoids "inserted but off-screen"), and only then.
   const prevBodyCountRef = useRef(0);
@@ -1181,6 +1203,7 @@ export function ViewportCanvas() {
       // keys and Esc are handled by the central shortcut map (initShortcuts).
       if (e.key === 'f') { e.preventDefault(); fitView(false); }
       else if (e.key === 'F') { e.preventDefault(); fitView(true); }
+      else if (e.key === 'Home') { e.preventDefault(); resetView(); }
       else if (e.key === 'g' || e.key === 'G') { e.preventDefault(); useStore.getState().setShowGrid(!useStore.getState().showGrid); }
       // Arrow keys nudge the selection on the ground plane (top-view mapping):
       // ←/→ = X, ↑/↓ = Z. Shift = 10mm coarse step, else 1mm. Skipped in sketch.
@@ -1202,7 +1225,7 @@ export function ViewportCanvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView, sketchActive, nudgeSelected]);
+  }, [fitView, resetView, sketchActive, nudgeSelected]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
