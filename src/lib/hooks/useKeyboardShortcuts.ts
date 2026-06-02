@@ -76,6 +76,7 @@ export function initShortcuts(): void {
   registerShortcut('backspace', () => store.deleteSelected());
   registerShortcut('ctrl+d', () => store.duplicateSelected());
   registerShortcut('ctrl+a', () => store.selectAll());
+  registerShortcut('ctrl+shift+i', () => store.invertSelection());
   registerShortcut('ctrl+c', () => store.copySelected());
   registerShortcut('ctrl+v', () => store.paste());
   registerShortcut('ctrl+z', () => store.undo());

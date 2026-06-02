@@ -272,6 +272,7 @@ interface AppState {
   /** Select every body in the scene (Ctrl+A). */
   selectAll: () => void;
   deselectAll: () => void;
+  invertSelection: () => void;
 
   // Panels
   showBrowserTree: boolean;
@@ -1215,6 +1216,11 @@ export const useStore = create<AppState>((set, get) => {
     })),
   selectAll: () => set((s) => ({ selectedIds: s.bodies.map((b) => b.id) })),
   deselectAll: () => set({ selectedIds: [] }),
+  invertSelection: () =>
+    set((s) => {
+      const sel = new Set(s.selectedIds);
+      return { selectedIds: s.bodies.filter((b) => !sel.has(b.id)).map((b) => b.id) };
+    }),
 
   showBrowserTree: stored('scenelab.showBrowserTree') !== 'false',
   showProperties: stored('scenelab.showProperties') !== 'false',

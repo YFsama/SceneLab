@@ -258,6 +258,27 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().projectDirty).toBe(true);
   });
 
+  it('invertSelection swaps selected and unselected bodies', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    const c = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().addDirectBody(c);
+    useStore.getState().selectObject(a.id);
+
+    useStore.getState().invertSelection();
+    const sel = useStore.getState().selectedIds;
+    expect(sel).toHaveLength(2);
+    expect(sel).toContain(b.id);
+    expect(sel).toContain(c.id);
+    expect(sel).not.toContain(a.id);
+
+    // Inverting again returns to the original single selection.
+    useStore.getState().invertSelection();
+    expect(useStore.getState().selectedIds).toEqual([a.id]);
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();
