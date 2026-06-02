@@ -112,6 +112,7 @@ export function ViewportCanvas() {
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [measureHover, setMeasureHover] = useState<{ x: number; y: number; z: number; snapped: boolean } | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const exitSketch = useStore((s) => s.exitSketch);
@@ -855,8 +856,14 @@ export function ViewportCanvas() {
       line.computeLineDistances();
       measureGroup.add(line);
     }
+    // Live snap-preview marker under the cursor (green when snapped to a feature).
+    if (measureActive && measureHover) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute([measureHover.x, measureHover.y, measureHover.z], 3));
+      measureGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ color: measureHover.snapped ? 0xa6e3a1 : 0x89b4fa, size: measureHover.snapped ? 12 : 8, sizeAttenuation: false, depthTest: false })));
+    }
     dirtyRef.current = true;
-  }, [measurePts]);
+  }, [measurePts, measureActive, measureHover]);
 
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;
@@ -965,25 +972,39 @@ export function ViewportCanvas() {
     (e: React.MouseEvent) => {
       if (!sketchActive) {
         setMousePos(null);
-        // Hover-highlight the body under the cursor (preselect), skipped while
-        // measuring so the crosshair stays the focus.
         const container = containerRef.current;
         const camera = cameraRef.current;
         const bodiesGroup = bodiesGroupRef.current;
-        if (!measureActive && container && camera && bodiesGroup) {
-          const rect = container.getBoundingClientRect();
-          mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-          mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-          raycasterRef.current.setFromCamera(mouseRef.current, camera);
-          const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
-          setHoveredId((prev) => (prev === id ? prev : id));
+        if (!container || !camera || !bodiesGroup) return;
+        const rect = container.getBoundingClientRect();
+        mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        raycasterRef.current.setFromCamera(mouseRef.current, camera);
+        if (measureActive) {
+          // Preview the point a click would drop, snapped to the nearest feature.
+          const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+          if (!hit) { setMeasureHover(null); return; }
+          let pt = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+          let snapped = false;
+          const b = bodies.find((x) => x.id === (hit.object.userData.bodyId as string | undefined));
+          const bb = b && combinedBounds([b]);
+          if (b && bb) {
+            const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+            const v = nearestVertexWithin(pt, [...b.vertices, ...edgeMidpoints(b), ...faceCenters(b)], diag * 0.1);
+            if (v) { pt = v; snapped = true; }
+          }
+          setMeasureHover({ ...pt, snapped });
+          return;
         }
+        // Hover-highlight the body under the cursor (preselect).
+        const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
+        setHoveredId((prev) => (prev === id ? prev : id));
         return;
       }
       const pt = getSketchPoint(e);
       setMousePos(pt);
     },
-    [sketchActive, measureActive, getSketchPoint],
+    [sketchActive, measureActive, bodies, getSketchPoint],
   );
 
   // Right-click a body in the 3D view → select it and open its context menu.
@@ -1200,7 +1221,7 @@ export function ViewportCanvas() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={() => setHoveredId(null)}
+        onMouseLeave={() => { setHoveredId(null); setMeasureHover(null); }}
         onContextMenu={handleContextMenu}
         role="img"
         aria-label={t('viewport.title')}
