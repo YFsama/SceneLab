@@ -98,6 +98,8 @@ interface AppState {
   renameBody: (id: string, name: string) => boolean;
   /** Set a (direct) body's display colour (0xRRGGBB); returns false if the id isn't a direct body. */
   setBodyColor: (id: string, color: number) => boolean;
+  /** Toggle a (direct) body between opaque and semi-transparent; returns false if missing. */
+  toggleBodyTransparency: (id: string) => boolean;
   /** Ids of bodies hidden from the viewport (still listed in the tree). */
   hiddenIds: string[];
   /** Show/hide a body in the viewport. */
@@ -491,6 +493,15 @@ export const useStore = create<AppState>((set, get) => {
     const { directBodies } = get();
     if (!directBodies.some((b) => b.id === id)) return false;
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, color } : b)), projectDirty: true });
+    recombine();
+    return true;
+  },
+  toggleBodyTransparency: (id) => {
+    const { directBodies } = get();
+    const body = directBodies.find((b) => b.id === id);
+    if (!body) return false;
+    const next = (body.opacity ?? 1) < 1 ? 1 : 0.4;
+    set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, opacity: next } : b)), projectDirty: true });
     recombine();
     return true;
   },

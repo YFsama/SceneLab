@@ -30,6 +30,7 @@ export function BrowserTree() {
   const moveSelectionToOrigin = useStore((s) => s.moveSelectionToOrigin);
   const flipSelected = useStore((s) => s.flipSelected);
   const weldSelected = useStore((s) => s.weldSelected);
+  const toggleBodyTransparency = useStore((s) => s.toggleBodyTransparency);
   const setScaleDialogOpen = useStore((s) => s.setScaleDialogOpen);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
@@ -151,6 +152,7 @@ export function BrowserTree() {
           { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
           { label: t('menu.boundingBox'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); makeBoundingBoxOfSelection(); } },
           { label: t('menu.cleanup'), onClick: pre(() => weldSelected()) },
+          { label: t('menu.transparency'), onClick: () => toggleBodyTransparency(bodyId) },
         ],
       },
       {

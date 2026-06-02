@@ -619,12 +619,15 @@ export function ViewportCanvas() {
 
       // Neutral material; selection/hover styling is applied separately so
       // hovering or selecting never rebuilds geometry.
+      const op = body.opacity ?? 1;
       const mat = new THREE.MeshStandardMaterial({
         color: 0x89b4fa,
         roughness: 0.4,
         metalness: 0.1,
         side: THREE.DoubleSide,
         wireframe,
+        transparent: op < 1,
+        opacity: op,
       });
 
       const mesh = new THREE.Mesh(geo, mat);
@@ -1122,6 +1125,7 @@ export function ViewportCanvas() {
             { label: t('menu.convexHull'), onClick: () => apply((b) => convexHullBody(b)) },
             { label: t('menu.boundingBox'), onClick: () => st().makeBoundingBoxOfSelection() },
             { label: t('menu.cleanup'), onClick: pre(() => st().weldSelected()) },
+            { label: t('menu.transparency'), onClick: () => st().toggleBodyTransparency(bodyId) },
           ],
         },
         {

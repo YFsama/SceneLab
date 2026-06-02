@@ -351,6 +351,17 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().renameBody('nope', 'X')).toBe(false);
   });
 
+  it('toggleBodyTransparency flips a body between opaque and semi-transparent', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().toggleBodyTransparency(box.id)).toBe(true);
+    expect(useStore.getState().bodies.find((b) => b.id === box.id)!.opacity).toBeCloseTo(0.4, 6);
+    useStore.getState().toggleBodyTransparency(box.id);
+    expect(useStore.getState().bodies.find((b) => b.id === box.id)!.opacity).toBe(1);
+    expect(useStore.getState().toggleBodyTransparency('nope')).toBe(false);
+  });
+
   it('setBodyColor stores a colour on a direct body; rejects unknown id', () => {
     useStore.getState().clearScene();
     const box = createBox(5, 5, 5);

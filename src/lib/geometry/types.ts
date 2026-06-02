@@ -24,6 +24,8 @@ export interface SolidBody {
   edges: Edge[];
   /** Optional display colour (0xRRGGBB). Undefined renders with the default. */
   color?: number;
+  /** Optional display opacity 0–1 (undefined/1 = opaque). */
+  opacity?: number;
 }
 
 export interface ExtrudeParams {
