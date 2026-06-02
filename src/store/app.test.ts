@@ -889,6 +889,20 @@ describe('app store — direct bodies', () => {
     expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(0, 4); // centre unchanged
   });
 
+  it('scaleSelected scales a multi-selection about the combined centre (gaps too)', () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10); // centre x 0
+    const b = translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 }); // centre x 30
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectAll();
+    // Combined x ∈ [-5,35], centre 15. Scaling 2× about (15,..) keeps the centre
+    // and doubles the overall span (15 → 30 half-extent ⇒ x ∈ [-25,55]).
+    expect(useStore.getState().scaleSelected(2)).toBe(2);
+    const xs = useStore.getState().bodies.flatMap((bd) => bd.vertices.map((v) => v.x));
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(15, 4);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(80, 4); // 40 → 80
+  });
+
   it('scaleSelected rejects nothing-selected and non-positive factor', () => {
     useStore.getState().clearScene();
     const box = createBox(2, 2, 2);

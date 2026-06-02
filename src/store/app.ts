@@ -950,19 +950,22 @@ export const useStore = create<AppState>((set, get) => {
   scaleSelected: (factor) => {
     const { selectedIds, directBodies } = get();
     const sel = new Set(selectedIds);
-    const n = directBodies.filter((b) => sel.has(b.id)).length;
+    const selBodies = directBodies.filter((b) => sel.has(b.id));
+    const n = selBodies.length;
     if (n === 0 || !(factor > 0)) return 0;
+    // Scale about the selection's combined centre (its own centre for a single
+    // body) so a multi-selection scales as a group — gaps included — like SW.
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (const b of selBodies) for (const v of b.vertices) {
+      min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+      max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+    }
+    const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
     pushUndo();
     set((s) => ({
       directBodies: s.directBodies.map((b) => {
         if (!sel.has(b.id)) return b;
-        const min = { x: Infinity, y: Infinity, z: Infinity };
-        const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-        for (const v of b.vertices) {
-          min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
-          max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
-        }
-        const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
         return { ...scaleBody(b, factor, origin), id: b.id, color: b.color };
       }),
       projectDirty: true,
