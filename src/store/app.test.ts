@@ -583,6 +583,22 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().polygonSides).toBe(64); // max 64
   });
 
+  it('view/sketch preferences persist to localStorage', () => {
+    useStore.getState().setWireframe(true);
+    expect(localStorage.getItem('scenelab.wireframe')).toBe('true');
+    useStore.getState().setShowGrid(false);
+    expect(localStorage.getItem('scenelab.showGrid')).toBe('false');
+    useStore.getState().setGridSize(5);
+    expect(localStorage.getItem('scenelab.gridSize')).toBe('5');
+    useStore.getState().setPolygonSides(8);
+    expect(localStorage.getItem('scenelab.polygonSides')).toBe('8');
+    // restore defaults so other tests aren't affected
+    useStore.getState().setWireframe(false);
+    useStore.getState().setShowGrid(true);
+    useStore.getState().setGridSize(0.5);
+    useStore.getState().setPolygonSides(6);
+  });
+
   it('setGridSize updates the snap step and rejects non-positive values', () => {
     useStore.getState().setGridSize(5);
     expect(useStore.getState().gridSize).toBe(5);
