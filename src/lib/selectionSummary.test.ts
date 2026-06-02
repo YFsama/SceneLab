@@ -17,4 +17,16 @@ describe('selectionSummary', () => {
     expect(s.size.y).toBeCloseTo(10, 4);
     expect(s.totalVolume).toBeCloseTo(2000, 2);
   });
+
+  it('reports the gap between exactly two bodies', () => {
+    const a = createBox(10, 10, 10); // x ∈ [-5,5]
+    const b = translateBody(createBox(10, 10, 10), { x: 20, y: 0, z: 0 }); // x ∈ [15,25] → gap 10
+    const s = selectionSummary([a, b])!;
+    expect(s.gap).toBeCloseTo(10, 3);
+  });
+
+  it('omits the gap for one or three bodies', () => {
+    const a = createBox(10, 10, 10);
+    expect(selectionSummary([a])!.gap).toBeUndefined();
+  });
 });

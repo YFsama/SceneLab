@@ -1,5 +1,6 @@
 import type { SolidBody } from './geometry/types';
 import { computeVolume } from './geometry/brep';
+import { minDistanceBetweenBodies } from './geometry/measure';
 
 export interface SelectionSummary {
   count: number;
@@ -7,6 +8,8 @@ export interface SelectionSummary {
   size: { x: number; y: number; z: number };
   /** Sum of the bodies' (absolute) volumes (mm³). */
   totalVolume: number;
+  /** Minimum surface gap between the two bodies (mm); only when exactly two. */
+  gap?: number;
 }
 
 /**
@@ -26,5 +29,6 @@ export function selectionSummary(bodies: SolidBody[]): SelectionSummary | null {
       max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
     }
   }
-  return { count: bodies.length, size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z }, totalVolume };
+  const gap = bodies.length === 2 ? minDistanceBetweenBodies(bodies[0]!, bodies[1]!) : undefined;
+  return { count: bodies.length, size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z }, totalVolume, gap };
 }

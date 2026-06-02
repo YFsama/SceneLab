@@ -1814,6 +1814,15 @@ export function PropertiesPanel() {
                   </div>
                   <p className="pl-4 text-xs text-text-secondary">{summary.totalVolume.toFixed(2)} mm³</p>
                 </div>
+                {summary.gap !== undefined && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1 text-xs text-text-muted">
+                      <Move size={12} />
+                      <span>{t('panel.gap')}</span>
+                    </div>
+                    <p className="pl-4 text-xs text-text-secondary">{summary.gap.toFixed(3)} mm</p>
+                  </div>
+                )}
               </div>
             );
           })()
