@@ -106,6 +106,8 @@ interface AppState {
   cancelRename: () => void;
   /** Set a (direct) body's display colour (0xRRGGBB); returns false if the id isn't a direct body. */
   setBodyColor: (id: string, color: number) => boolean;
+  /** Set the colour of every selected direct body in one undoable step; returns how many changed. */
+  setSelectionColor: (color: number) => number;
   /** Toggle a (direct) body between opaque and semi-transparent; returns false if missing. */
   toggleBodyTransparency: (id: string) => boolean;
   /** Ids of bodies hidden from the viewport (still listed in the tree). */
@@ -536,6 +538,16 @@ export const useStore = create<AppState>((set, get) => {
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, color } : b)), projectDirty: true });
     recombine();
     return true;
+  },
+  setSelectionColor: (color) => {
+    const { directBodies, selectedIds } = get();
+    const sel = new Set(selectedIds);
+    const targets = directBodies.filter((b) => sel.has(b.id) && b.color !== color);
+    if (targets.length === 0) return 0;
+    pushUndo();
+    set({ directBodies: directBodies.map((b) => (sel.has(b.id) ? { ...b, color } : b)), projectDirty: true });
+    recombine();
+    return targets.length;
   },
   toggleBodyTransparency: (id) => {
     const { directBodies } = get();

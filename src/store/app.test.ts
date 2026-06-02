@@ -403,6 +403,32 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().undoStack.length).toBe(depth);
   });
 
+  it('setSelectionColor colours every selected body in one undoable step', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    const c = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().addDirectBody(c);
+    useStore.getState().selectObject(a.id);
+    useStore.getState().toggleSelect(b.id);
+    const depth = useStore.getState().undoStack.length;
+
+    expect(useStore.getState().setSelectionColor(0x123456)).toBe(2);
+    const byId = (id: string) => useStore.getState().bodies.find((x) => x.id === id);
+    expect(byId(a.id)?.color).toBe(0x123456);
+    expect(byId(b.id)?.color).toBe(0x123456);
+    expect(byId(c.id)?.color).not.toBe(0x123456); // unselected untouched
+    expect(useStore.getState().undoStack.length).toBe(depth + 1); // single entry
+
+    useStore.getState().undo();
+    expect(byId(a.id)?.color).not.toBe(0x123456);
+
+    // Re-applying the same colour to an already-matching selection is a no-op.
+    useStore.getState().setSelectionColor(0x123456);
+    expect(useStore.getState().setSelectionColor(0x123456)).toBe(0);
+  });
+
   it('deleteSelected is a no-op with nothing selected', () => {
     useStore.getState().addDirectBody(createBox(10, 10, 10));
     useStore.getState().deselectAll();

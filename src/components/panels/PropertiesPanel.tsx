@@ -27,6 +27,7 @@ export function PropertiesPanel() {
   const bodies = useStore((s) => s.bodies);
   const resizeBodyTo = useStore((s) => s.resizeBodyTo);
   const setBodyColor = useStore((s) => s.setBodyColor);
+  const setSelectionColor = useStore((s) => s.setSelectionColor);
   const [material, setMaterial] = useState('steel');
 
   const selectedBody = selectedIds.length === 1
@@ -1795,6 +1796,24 @@ export function PropertiesPanel() {
                 <div className="flex items-center gap-2">
                   <Box size={14} className="text-accent" />
                   <span className="text-sm font-medium text-text-primary">{summary.count} {t('panel.bodiesSelected')}</span>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 text-xs text-text-muted">
+                    <Palette size={12} />
+                    <span>{t('panel.appearance')}</span>
+                  </div>
+                  <div className="pl-4 flex flex-wrap gap-1.5">
+                    {APPEARANCE_COLORS.map((hex) => (
+                      <button
+                        key={hex}
+                        onClick={() => setSelectionColor(hex)}
+                        className="w-5 h-5 rounded border border-panel-border hover:border-text-primary"
+                        style={{ backgroundColor: `#${hex.toString(16).padStart(6, '0')}` }}
+                        aria-label={`#${hex.toString(16).padStart(6, '0')}`}
+                        title={`#${hex.toString(16).padStart(6, '0')}`}
+                      />
+                    ))}
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <div className="flex items-center gap-1 text-xs text-text-muted">
