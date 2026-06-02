@@ -6,7 +6,7 @@ import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
-import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
+import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { snapToPoints, inferLineEnd, nearestVertexWithin } from '../../lib/sketch/snap';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
@@ -1014,11 +1014,11 @@ export function ViewportCanvas() {
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
   // keeping the current viewing direction — SolidWorks "Zoom to Fit" (F).
-  const fitView = useCallback(() => {
+  const fitView = useCallback((selectionOnly = false) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
-    const bb = combinedBounds(bodies);
+    const bb = combinedBounds(framingBodies(bodies, selectedIds, selectionOnly));
     const center = bb
       ? new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2)
       : new THREE.Vector3(0, 0, 0);
@@ -1033,16 +1033,17 @@ export function ViewportCanvas() {
     controls.target.copy(center);
     controls.update();
     dirtyRef.current = true;
-  }, [bodies]);
+  }, [bodies, selectedIds]);
 
   // Keyboard: F frames the model (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-      // F frames the model. Standard-view number keys and Esc are handled by
-      // the central shortcut map (initShortcuts) to avoid double-binding.
-      if (e.key === 'f' || e.key === 'F') { e.preventDefault(); fitView(); }
+      // F = zoom to fit (all); Shift+F = zoom to selection. Standard-view number
+      // keys and Esc are handled by the central shortcut map (initShortcuts).
+      if (e.key === 'f') { e.preventDefault(); fitView(false); }
+      else if (e.key === 'F') { e.preventDefault(); fitView(true); }
       // Arrow keys nudge the selection on the ground plane (top-view mapping):
       // ←/→ = X, ↑/↓ = Z. Shift = 10mm coarse step, else 1mm. Skipped in sketch.
       if (!sketchActive && e.key.startsWith('Arrow')) {
@@ -1119,7 +1120,7 @@ export function ViewportCanvas() {
         aria-label={t('viewport.title')}
       />
       <button
-        onClick={fitView}
+        onClick={() => fitView(false)}
         className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
         aria-label={t('viewport.fit')}
         title={`${t('viewport.fit')} (F)`}

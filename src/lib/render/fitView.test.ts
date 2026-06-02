@@ -1,7 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { combinedBounds, fitCameraDistance } from './fitView';
+import { combinedBounds, fitCameraDistance, framingBodies } from './fitView';
 import { createBox } from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
+
+describe('framingBodies', () => {
+  const a = createBox(2, 2, 2);
+  const b = createBox(3, 3, 3);
+
+  it('returns the selected subset when selectionOnly and a selection exists', () => {
+    expect(framingBodies([a, b], [a.id], true)).toEqual([a]);
+  });
+
+  it('falls back to all when selectionOnly but nothing is selected', () => {
+    expect(framingBodies([a, b], [], true)).toEqual([a, b]);
+  });
+
+  it('returns all when not selectionOnly', () => {
+    expect(framingBodies([a, b], [a.id], false)).toEqual([a, b]);
+  });
+});
 
 describe('combinedBounds', () => {
   it('returns null for no bodies', () => {

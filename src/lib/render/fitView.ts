@@ -1,6 +1,21 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
 
+import type { SolidBody as Body } from '../geometry/types';
+
 export interface Bounds { min: Vec3; max: Vec3 }
+
+/**
+ * Which bodies a "fit" should frame: the selected subset when `selectionOnly`
+ * and there is a (matching) selection, otherwise all bodies. Powers Zoom-to-Fit
+ * (all) vs Zoom-to-Selection (selected).
+ */
+export function framingBodies(bodies: Body[], selectedIds: string[], selectionOnly: boolean): Body[] {
+  if (selectionOnly) {
+    const sel = bodies.filter((b) => selectedIds.includes(b.id));
+    if (sel.length > 0) return sel;
+  }
+  return bodies;
+}
 
 /** Combined axis-aligned bounds over every vertex of the given bodies; null if empty. */
 export function combinedBounds(bodies: SolidBody[]): Bounds | null {

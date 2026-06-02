@@ -16,6 +16,7 @@ const GROUPS: Group[] = [
       { keys: '3', labelKey: 'viewport.right' },
       { keys: '4', labelKey: 'viewport.iso' },
       { keys: 'F', labelKey: 'viewport.fit' },
+      { keys: 'Shift+F', labelKey: 'viewport.fitSelection' },
     ],
   },
   {
