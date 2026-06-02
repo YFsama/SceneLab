@@ -696,6 +696,18 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().projectDirty).toBe(false);
   });
 
+  it('panel visibility persists to localStorage', () => {
+    const tree0 = useStore.getState().showBrowserTree;
+    useStore.getState().toggleBrowserTree();
+    expect(localStorage.getItem('scenelab.showBrowserTree')).toBe(String(!tree0));
+    const props0 = useStore.getState().showProperties;
+    useStore.getState().toggleProperties();
+    expect(localStorage.getItem('scenelab.showProperties')).toBe(String(!props0));
+    // restore
+    useStore.getState().toggleBrowserTree();
+    useStore.getState().toggleProperties();
+  });
+
   it('view/sketch preferences persist to localStorage', () => {
     useStore.getState().setWireframe(true);
     expect(localStorage.getItem('scenelab.wireframe')).toBe('true');

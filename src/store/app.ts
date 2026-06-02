@@ -1192,10 +1192,10 @@ export const useStore = create<AppState>((set, get) => {
   selectAll: () => set((s) => ({ selectedIds: s.bodies.map((b) => b.id) })),
   deselectAll: () => set({ selectedIds: [] }),
 
-  showBrowserTree: true,
-  showProperties: true,
-  toggleBrowserTree: () => set((s) => ({ showBrowserTree: !s.showBrowserTree })),
-  toggleProperties: () => set((s) => ({ showProperties: !s.showProperties })),
+  showBrowserTree: stored('scenelab.showBrowserTree') !== 'false',
+  showProperties: stored('scenelab.showProperties') !== 'false',
+  toggleBrowserTree: () => set((s) => { const v = !s.showBrowserTree; persist('scenelab.showBrowserTree', String(v)); return { showBrowserTree: v }; }),
+  toggleProperties: () => set((s) => { const v = !s.showProperties; persist('scenelab.showProperties', String(v)); return { showProperties: v }; }),
 
   projectName: 'Untitled',
   setProjectName: (projectName) => set({ projectName }),
