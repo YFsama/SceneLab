@@ -5,8 +5,10 @@ import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/ap
 import { createSketch } from '../../lib/sketch/engine';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
+import { combinedBounds, fitCameraDistance } from '../../lib/render/fitView';
 import { centerBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
+import { Maximize2 } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -913,6 +915,40 @@ export function ViewportCanvas() {
     [bodies, t, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll],
   );
 
+  // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
+  // keeping the current viewing direction — SolidWorks "Zoom to Fit" (F).
+  const fitView = useCallback(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const bb = combinedBounds(bodies);
+    const center = bb
+      ? new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2)
+      : new THREE.Vector3(0, 0, 0);
+    const size = bb
+      ? { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z }
+      : { x: 10, y: 10, z: 10 };
+    const dist = fitCameraDistance(size, camera.fov, camera.aspect);
+    let dir = camera.position.clone().sub(controls.target);
+    if (dir.lengthSq() < 1e-9) dir = new THREE.Vector3(1, 0.8, 1);
+    dir.normalize();
+    camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+    controls.target.copy(center);
+    controls.update();
+    dirtyRef.current = true;
+  }, [bodies]);
+
+  // Keyboard: F frames the model (ignored while typing in a field).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (e.key === 'f' || e.key === 'F') { e.preventDefault(); fitView(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fitView]);
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (!sketchActive || sketchTool === 'select') return;
@@ -968,6 +1004,14 @@ export function ViewportCanvas() {
         role="img"
         aria-label={t('viewport.title')}
       />
+      <button
+        onClick={fitView}
+        className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+        aria-label={t('viewport.fit')}
+        title={`${t('viewport.fit')} (F)`}
+      >
+        <Maximize2 size={15} />
+      </button>
       {bodyMenu && (
         <ContextMenu x={bodyMenu.x} y={bodyMenu.y} items={bodyMenuItems(bodyMenu.bodyId)} onClose={() => setBodyMenu(null)} />
       )}
