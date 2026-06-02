@@ -77,6 +77,8 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+shift+z', () => store.redo());
   registerShortcut('ctrl+y', () => store.redo());
   registerShortcut('ctrl+k', () => store.setCommandPaletteOpen(true));
+  registerShortcut('shift+?', () => store.setShowShortcuts(true));
+  registerShortcut('shift+/', () => store.setShowShortcuts(true));
   registerShortcut('escape', () => {
     // Esc exits sketch mode if drawing (keeping the sketch), otherwise clears
     // the current selection.

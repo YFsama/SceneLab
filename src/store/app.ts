@@ -150,6 +150,9 @@ interface AppState {
   setShowRevolveDialog: (v: boolean) => void;
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (v: boolean) => void;
+  /** Whether the keyboard-shortcuts help overlay is open. */
+  showShortcuts: boolean;
+  setShowShortcuts: (v: boolean) => void;
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
@@ -615,6 +618,8 @@ export const useStore = create<AppState>((set, get) => {
   setShowRevolveDialog: (showRevolveDialog) => set({ showRevolveDialog }),
   commandPaletteOpen: false,
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
+  showShortcuts: false,
+  setShowShortcuts: (showShortcuts) => set({ showShortcuts }),
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
   measureActive: false,

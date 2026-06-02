@@ -1,7 +1,7 @@
 import { useStore, type ThemeMode } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
-import { Sun, Moon, Globe, Eye, Grid3X3 } from 'lucide-react';
+import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard } from 'lucide-react';
 
 const themes: ThemeMode[] = ['dark', 'light', 'high-contrast'];
 
@@ -53,6 +53,14 @@ export function StatusBar() {
         <span>{t('status.selected')}: {selectedCount}</span>
       </div>
       <div className="flex items-center gap-1">
+        <button
+          onClick={() => useStore.getState().setShowShortcuts(true)}
+          className="flex items-center gap-1 px-2 py-0.5 text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+          aria-label={t('shortcuts.help')}
+          title={t('shortcuts.help')}
+        >
+          <Keyboard size={12} />
+        </button>
         <button
           onClick={toggleLocale}
           className="flex items-center gap-1 px-2 py-0.5 text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"

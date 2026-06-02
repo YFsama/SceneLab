@@ -360,6 +360,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setBodyColor('nope', 0x000000)).toBe(false);
   });
 
+  it('setShowShortcuts toggles the shortcuts overlay flag', () => {
+    expect(useStore.getState().showShortcuts).toBe(false);
+    useStore.getState().setShowShortcuts(true);
+    expect(useStore.getState().showShortcuts).toBe(true);
+    useStore.getState().setShowShortcuts(false);
+    expect(useStore.getState().showShortcuts).toBe(false);
+  });
+
   it('toggleSelect adds and removes ids for multi-select', () => {
     useStore.getState().deselectAll();
     useStore.getState().toggleSelect('a');
