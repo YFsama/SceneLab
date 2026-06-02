@@ -27,6 +27,7 @@ export function BrowserTree() {
   const scaleSelected = useStore((s) => s.scaleSelected);
   const setMoveDialogOpen = useStore((s) => s.setMoveDialogOpen);
   const setRotateDialogOpen = useStore((s) => s.setRotateDialogOpen);
+  const setScaleDialogOpen = useStore((s) => s.setScaleDialogOpen);
   const alignSelected = useStore((s) => s.alignSelected);
   const distributeSelected = useStore((s) => s.distributeSelected);
   const dropSelectedToFloor = useStore((s) => s.dropSelectedToFloor);
@@ -97,7 +98,8 @@ export function BrowserTree() {
           { label: t('menu.rotateX'), onClick: pre(() => rotateSelected('x', 90)), separatorBefore: true },
           { label: t('menu.rotateY'), onClick: pre(() => rotateSelected('y', 90)) },
           { label: t('menu.rotateZ'), onClick: pre(() => rotateSelected('z', 90)) },
-          { label: t('menu.scaleUp'), onClick: pre(() => scaleSelected(2)), separatorBefore: true },
+          { label: t('menu.scaleDlg'), onClick: pre(() => setScaleDialogOpen(true)), separatorBefore: true },
+          { label: t('menu.scaleUp'), onClick: pre(() => scaleSelected(2)) },
           { label: t('menu.scaleDown'), onClick: pre(() => scaleSelected(0.5)) },
           { label: t('menu.mirrorX'), onClick: () => mirror(bodyId, 'x'), separatorBefore: true },
           { label: t('menu.mirrorY'), onClick: () => mirror(bodyId, 'y') },

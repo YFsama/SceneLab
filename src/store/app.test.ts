@@ -631,6 +631,14 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().moveDialogOpen).toBe(false);
   });
 
+  it('setScaleDialogOpen toggles the scale dialog flag', () => {
+    expect(useStore.getState().scaleDialogOpen).toBe(false);
+    useStore.getState().setScaleDialogOpen(true);
+    expect(useStore.getState().scaleDialogOpen).toBe(true);
+    useStore.getState().setScaleDialogOpen(false);
+    expect(useStore.getState().scaleDialogOpen).toBe(false);
+  });
+
   it('setRotateDialogOpen toggles the rotate dialog flag', () => {
     expect(useStore.getState().rotateDialogOpen).toBe(false);
     useStore.getState().setRotateDialogOpen(true);

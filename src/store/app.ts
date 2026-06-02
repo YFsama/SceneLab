@@ -121,6 +121,9 @@ interface AppState {
   /** Whether the precise-rotate (axis + angle) dialog is open. */
   rotateDialogOpen: boolean;
   setRotateDialogOpen: (v: boolean) => void;
+  /** Whether the scale-by-factor dialog is open. */
+  scaleDialogOpen: boolean;
+  setScaleDialogOpen: (v: boolean) => void;
   /** Linear-pattern a body along an axis, replacing it with the copies; returns the new ids. */
   linearPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number, spacing: number) => string[];
   /** Circular-pattern a body around the world axis through the origin; returns the new ids. */
@@ -645,6 +648,8 @@ export const useStore = create<AppState>((set, get) => {
   setMoveDialogOpen: (moveDialogOpen) => set({ moveDialogOpen }),
   rotateDialogOpen: false,
   setRotateDialogOpen: (rotateDialogOpen) => set({ rotateDialogOpen }),
+  scaleDialogOpen: false,
+  setScaleDialogOpen: (scaleDialogOpen) => set({ scaleDialogOpen }),
   linearPatternBody: (bodyId, axis, count, spacing) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(count >= 1) || !(spacing > 0)) return [];

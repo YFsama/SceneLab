@@ -24,6 +24,7 @@ import { ShortcutsHelp } from './components/ui/ShortcutsHelp';
 import { PatternDialog } from './components/ui/PatternDialog';
 import { MoveDialog } from './components/ui/MoveDialog';
 import { RotateDialog } from './components/ui/RotateDialog';
+import { ScaleDialog } from './components/ui/ScaleDialog';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -95,6 +96,7 @@ export default function App() {
       <PatternDialog />
       <MoveDialog />
       <RotateDialog />
+      <ScaleDialog />
       <AIPanel />
     </div>
   );
