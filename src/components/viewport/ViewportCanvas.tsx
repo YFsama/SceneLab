@@ -498,8 +498,16 @@ export function ViewportCanvas() {
         g.setAttribute('position', new THREE.Float32BufferAttribute([x, 0.01, y], 3));
         return new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
       };
-      // Current cursor position (always shown while a draw tool is active).
-      previewGroup.add(marker(m.x, m.y, 0x89b4fa, 9));
+      // Current cursor — turns green (and larger) when snapped onto an existing
+      // endpoint, so it's clear the new geometry will connect there.
+      const endpoints: { x: number; y: number }[] = [];
+      if (currentSketch) {
+        for (const ent of currentSketch.entities.values()) {
+          if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
+        }
+      }
+      const onPoint = snapToPoints(m, endpoints, 1e-6).snapped;
+      previewGroup.add(marker(m.x, m.y, onPoint ? 0xa6e3a1 : 0x89b4fa, onPoint ? 12 : 9));
       if (s) {
         previewGroup.add(marker(s.x, s.y, 0xa6e3a1, 11)); // green start point
         let pts: THREE.Vector3[] = [];
@@ -533,7 +541,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [drawStart, mousePos, sketchTool, sketchActive]);
+  }, [drawStart, mousePos, sketchTool, sketchActive, currentSketch]);
 
   // Dimension labels on the sketch: each line shows its length, each circle/arc
   // its radius — drawn as camera-facing text sprites at the entity.

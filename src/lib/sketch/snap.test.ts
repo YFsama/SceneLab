@@ -24,6 +24,11 @@ describe('snapToPoints', () => {
   it('returns the point unchanged with no candidates', () => {
     expect(snapToPoints({ x: 2, y: 3 }, [], 0.5)).toEqual({ point: { x: 2, y: 3 }, snapped: false });
   });
+
+  it('reports snapped for an exact coincidence (snap feedback uses a tiny tol)', () => {
+    expect(snapToPoints({ x: 10, y: 0 }, pts, 1e-6).snapped).toBe(true);
+    expect(snapToPoints({ x: 9.9, y: 0 }, pts, 1e-6).snapped).toBe(false);
+  });
 });
 
 describe('inferLineEnd', () => {
