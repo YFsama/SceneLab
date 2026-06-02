@@ -3,7 +3,7 @@ import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
-import { confirm } from '../../lib/confirm';
+import { confirmDiscardIfDirty } from '../../lib/projectActions';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
 import { framingBodies } from '../../lib/render/fitView';
 
@@ -41,14 +41,9 @@ export function ProjectMenu() {
     if (!file) return;
 
     // Opening replaces the scene — confirm if there's unsaved work to lose.
-    if (useStore.getState().projectDirty) {
-      const ok = await confirm({
-        title: t('project.open'),
-        message: t('project.unsavedWarning'),
-        confirmLabel: t('project.discard'),
-        destructive: true,
-      });
-      if (!ok) { if (fileInputRef.current) fileInputRef.current.value = ''; return; }
+    if (!(await confirmDiscardIfDirty('project.open'))) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
     }
 
     try {
@@ -167,16 +162,7 @@ export function ProjectMenu() {
       <button
         onClick={async () => {
           // Guard against discarding unsaved work, as SolidWorks prompts on New.
-          if (useStore.getState().projectDirty) {
-            const ok = await confirm({
-              title: t('project.new'),
-              message: t('project.unsavedWarning'),
-              confirmLabel: t('project.discard'),
-              destructive: true,
-            });
-            if (!ok) return;
-          }
-          useStore.getState().newProject();
+          if (await confirmDiscardIfDirty('project.new')) useStore.getState().newProject();
         }}
         className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
         aria-label={t('project.new')}
