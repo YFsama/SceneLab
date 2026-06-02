@@ -34,8 +34,13 @@ export function previewDimensionLabel(
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   switch (tool) {
-    case 'line':
-      return Math.hypot(dx, dy).toFixed(1);
+    case 'line': {
+      const len = Math.hypot(dx, dy);
+      // Angle from the +X axis, 0–360°, so you can draw at a specific slope as
+      // in SolidWorks (which shows length and angle while dragging a line).
+      const ang = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+      return `${len.toFixed(1)}  ${ang.toFixed(0)}°`;
+    }
     case 'rect':
       return `${Math.abs(dx).toFixed(1)} × ${Math.abs(dy).toFixed(1)}`;
     case 'circle':

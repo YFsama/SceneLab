@@ -11,8 +11,12 @@ import {
 
 describe('previewDimensionLabel', () => {
   const o = { x: 0, y: 0 };
-  it('shows a line length', () => {
-    expect(previewDimensionLabel('line', o, { x: 3, y: 4 })).toBe('5.0');
+  it('shows a line length and angle', () => {
+    expect(previewDimensionLabel('line', o, { x: 3, y: 4 })).toBe('5.0  53°');
+    expect(previewDimensionLabel('line', o, { x: 10, y: 0 })).toBe('10.0  0°');
+    expect(previewDimensionLabel('line', o, { x: 0, y: 5 })).toBe('5.0  90°');
+    // Angle wraps to 0–360 (pointing in -X is 180°).
+    expect(previewDimensionLabel('line', o, { x: -4, y: 0 })).toBe('4.0  180°');
   });
   it('shows width × height for a rectangle (absolute, any drag direction)', () => {
     expect(previewDimensionLabel('rect', o, { x: -10, y: 5 })).toBe('10.0 × 5.0');
