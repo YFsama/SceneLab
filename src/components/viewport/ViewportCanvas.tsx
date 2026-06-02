@@ -1484,9 +1484,15 @@ export function ViewportCanvas() {
           {measurePts.length < 2 ? (
             <>
               <span className="text-accent">{t('measure.hint')} ({measurePts.length}/3)</span>
-              {measurePts.length === 1 && (
-                <div>P1: ({measurePts[0]!.x.toFixed(2)}, {measurePts[0]!.y.toFixed(2)}, {measurePts[0]!.z.toFixed(2)})</div>
-              )}
+              {measurePts.length === 1 && (() => {
+                const p = measurePts[0]!;
+                return (
+                  <>
+                    <div>P1: ({p.x.toFixed(2)}, {p.y.toFixed(2)}, {p.z.toFixed(2)})</div>
+                    <div className="text-text-muted">{t('measure.fromOrigin')}: {Math.hypot(p.x, p.y, p.z).toFixed(2)} mm</div>
+                  </>
+                );
+              })()}
             </>
           ) : measurePts.length === 2 ? (() => {
             const [a, b] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }];
