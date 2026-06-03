@@ -27,6 +27,7 @@ export function BrowserTree() {
   const hiddenIds = useStore((s) => s.hiddenIds);
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
   const copySelected = useStore((s) => s.copySelected);
+  const cutSelected = useStore((s) => s.cutSelected);
   const directBodies = useStore((s) => s.directBodies);
   const reorderBody = useStore((s) => s.reorderBody);
   const hoveredId = useStore((s) => s.hoveredId);
@@ -129,6 +130,7 @@ export function BrowserTree() {
         : [];
     return [
       { label: t('menu.rename'), onClick: () => beginRename(bodyId) },
+      { label: t('menu.cut'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); cutSelected(); } },
       { label: t('menu.copy'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); copySelected(); } },
       { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); duplicateSelected(); } },
       ...((): ContextMenuItem[] => {

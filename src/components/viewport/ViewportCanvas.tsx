@@ -1223,7 +1223,8 @@ export function ViewportCanvas() {
       // Grouped flyouts, matching the browser-tree menu.
       return [
         { label: t('viewport.fitSelection'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fitViewRef.current?.(true); } },
-        { label: t('menu.copy'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); st().copySelected(); }, separatorBefore: true },
+        { label: t('menu.cut'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); st().cutSelected(); }, separatorBefore: true },
+        { label: t('menu.copy'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); st().copySelected(); } },
         { label: t('menu.duplicate'), onClick: () => { selectObject(bodyId); st().duplicateSelected(); } },
         {
           label: t('menu.transform'),
