@@ -126,6 +126,9 @@ export function ViewportCanvas() {
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
+  // Hover name tooltip (model mode); updated only when the hovered body changes.
+  const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(null);
+  const lastHoverIdRef = useRef<string | null>(null);
   const [sketchMenu, setSketchMenu] = useState<{ x: number; y: number } | null>(null);
   const hoveredId = useStore((s) => s.hoveredId);
   const setHoveredId = useStore((s) => s.setHoveredId);
@@ -1122,9 +1125,15 @@ export function ViewportCanvas() {
           setMeasureHover({ ...pt, snapped });
           return;
         }
-        // Hover-highlight the body under the cursor (preselect).
+        // Hover-highlight the body under the cursor (preselect) + name tooltip.
         const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
         setHoveredId(id);
+        if (id !== lastHoverIdRef.current) {
+          lastHoverIdRef.current = id;
+          const b = id ? bodies.find((x) => x.id === id) : null;
+          const rect = container.getBoundingClientRect();
+          setHoverLabel(b ? { name: b.name, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+        }
         return;
       }
       const pt = getSketchPoint(e);
@@ -1514,11 +1523,20 @@ export function ViewportCanvas() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={() => { setHoveredId(null); setMeasureHover(null); }}
+        onMouseLeave={() => { setHoveredId(null); setMeasureHover(null); setHoverLabel(null); lastHoverIdRef.current = null; }}
         onContextMenu={handleContextMenu}
         role="img"
         aria-label={t('viewport.title')}
       />
+      {hoverLabel && !sketchActive && !measureActive && (
+        <div
+          className="absolute z-10 px-1.5 py-0.5 rounded bg-panel/90 border border-panel-border text-[10px] text-text-primary pointer-events-none whitespace-nowrap"
+          style={{ left: hoverLabel.x + 12, top: hoverLabel.y + 12 }}
+          aria-hidden="true"
+        >
+          {hoverLabel.name}
+        </div>
+      )}
       {bodies.length === 0 && !sketchActive && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
           <div className="px-4 py-3 rounded-lg bg-panel/70 backdrop-blur-sm border border-panel-border text-center max-w-xs">
