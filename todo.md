@@ -249,7 +249,7 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 ### P4 — 小改进/打磨（低风险）
 13. 非均匀缩放对话框 — ✅ 已完成 (ScaleDialog 均匀/按轴切换 + `scaleBodyXYZ` 正确法线变换)。
 14. 草图线“链式”连续折线（与当前“拖一段=一线”范式冲突，需重设计）。
-15. 构造几何/中心线（不参与拉伸）。
+15. 构造几何/中心线 — ✅ 已完成 (`construction` 标志 + extrude/revolve 过滤 + 虚线渲染 + 右键切换)。
 16. 矩形整体宽高编辑（现为 4 条独立线，改一边长会破坏矩形）。
 17. Ctrl+Shift+A 取消全选 — ✅ 已完成。
 18. 视口悬停名称 tooltip — ✅ 已完成 (`hoverLabel` + 视口 overlay)。
