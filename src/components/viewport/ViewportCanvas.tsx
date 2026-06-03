@@ -90,6 +90,8 @@ export function ViewportCanvas() {
   const mouseRef = useRef(new THREE.Vector2());
   // Lets the (earlier-declared) context menu call fitView without a TDZ.
   const fitViewRef = useRef<((selectionOnly?: boolean) => void) | null>(null);
+  // Camera state saved when entering a sketch, restored on exit.
+  const preSketchCamRef = useRef<{ pos: THREE.Vector3; up: THREE.Vector3; target: THREE.Vector3 } | null>(null);
 
   const viewDirection = useStore((s) => s.viewDirection);
   const sketchActive = useStore((s) => s.sketchActive);
@@ -369,10 +371,21 @@ export function ViewportCanvas() {
     if (!camera || !controls) return;
     controls.enableRotate = !sketchActive;
     if (sketchActive) {
+      // Remember where we were looking, then snap normal-to the sketch plane.
+      preSketchCamRef.current = { pos: camera.position.clone(), up: camera.up.clone(), target: controls.target.clone() };
       camera.position.set(0, 14, 0);
       camera.up.set(0, 0, -1);
       controls.target.set(0, 0, 0);
       controls.update();
+      dirtyRef.current = true;
+    } else if (preSketchCamRef.current) {
+      // Restore the pre-sketch view on exit (SolidWorks returns to it).
+      const saved = preSketchCamRef.current;
+      camera.position.copy(saved.pos);
+      camera.up.copy(saved.up);
+      controls.target.copy(saved.target);
+      controls.update();
+      preSketchCamRef.current = null;
       dirtyRef.current = true;
     }
   }, [sketchActive]);
