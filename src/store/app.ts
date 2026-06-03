@@ -23,6 +23,16 @@ export function uniqueBodyName(name: string, existing: string[]): string {
   while (existing.includes(`${name}${n}`)) n++;
   return `${name}${n}`;
 }
+
+/** Give each body a name unique against `existing` and the others in the batch. */
+function withUniqueNames<T extends { name: string }>(bodies: T[], existing: string[]): T[] {
+  const taken = [...existing];
+  return bodies.map((b) => {
+    const name = uniqueBodyName(b.name, taken);
+    taken.push(name);
+    return name === b.name ? b : { ...b, name };
+  });
+}
 import {
   createBox,
   createCylinder,
@@ -501,7 +511,7 @@ export const useStore = create<AppState>((set, get) => {
   },
   addDirectBodies: (newBodies) => {
     pushUndo();
-    set((s) => ({ directBodies: [...s.directBodies, ...newBodies], projectDirty: true }));
+    set((s) => ({ directBodies: [...s.directBodies, ...withUniqueNames(newBodies, s.directBodies.map((b) => b.name))], projectDirty: true }));
     recombine();
   },
   replaceBody: (oldId, newBody) => {
@@ -675,7 +685,10 @@ export const useStore = create<AppState>((set, get) => {
     if (toCopy.length === 0) return []; // nothing duplicable (only tree bodies selected)
     const copies = toCopy.map((b) => ({ ...translateBody(b, { x: 5, y: 0, z: 5 }, `${b.name} copy`), color: b.color }));
     pushUndo();
-    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
+    set((s) => {
+      const named = withUniqueNames(copies, s.directBodies.map((b) => b.name));
+      return { directBodies: [...s.directBodies, ...named], selectedIds: named.map((c) => c.id), projectDirty: true };
+    });
     recombine();
     return copies.map((c) => c.id);
   },
@@ -782,7 +795,10 @@ export const useStore = create<AppState>((set, get) => {
     const normal: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
     const copies = selBodies.map((b) => ({ ...applyMirror(b, { origin: { x: 0, y: 0, z: 0 }, normal }), color: b.color }));
     pushUndo();
-    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
+    set((s) => {
+      const named = withUniqueNames(copies, s.directBodies.map((b) => b.name));
+      return { directBodies: [...s.directBodies, ...named], selectedIds: named.map((c) => c.id), projectDirty: true };
+    });
     recombine();
     return copies.map((c) => c.id);
   },
@@ -1029,7 +1045,10 @@ export const useStore = create<AppState>((set, get) => {
     const offset = { x: 10 * k, y: 0, z: 10 * k };
     const copies = clipboard.map((b) => ({ ...translateBody(b, offset, `${b.name} copy`), color: b.color }));
     pushUndo();
-    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), pasteCount: k, projectDirty: true }));
+    set((s) => {
+      const named = withUniqueNames(copies, s.directBodies.map((b) => b.name));
+      return { directBodies: [...s.directBodies, ...named], selectedIds: named.map((c) => c.id), pasteCount: k, projectDirty: true };
+    });
     recombine();
     return copies.map((c) => c.id);
   },

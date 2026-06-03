@@ -717,6 +717,18 @@ describe('app store — direct bodies', () => {
     expect(centerOf(third).x - centerOf(box.id).x).toBeCloseTo(10);
   });
 
+  it('pasted/duplicated copies get unique names', () => {
+    useStore.getState().clearScene();
+    const box = createBox(5, 5, 5); // 'Box'
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.getState().copySelected();
+    useStore.getState().paste();
+    useStore.getState().paste();
+    const names = useStore.getState().bodies.map((b) => b.name);
+    expect(names).toEqual(['Box', 'Box copy', 'Box copy2']); // no duplicate names
+  });
+
   it('rotateSelected rotates in place keeping id (90° about Z swaps X/Y extents)', () => {
     useStore.getState().clearScene();
     const box = createBox(10, 20, 10); // x extent 10, y extent 20
