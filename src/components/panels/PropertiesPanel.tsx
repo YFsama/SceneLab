@@ -138,6 +138,15 @@ export function PropertiesPanel() {
                     />
                   );
                 })}
+                {/* Arbitrary colour picker for anything outside the swatches. */}
+                <input
+                  type="color"
+                  value={`#${(selectedBody.color ?? 0x89b4fa).toString(16).padStart(6, '0')}`}
+                  onChange={(e) => setBodyColor(selectedBody.id, parseInt(e.target.value.slice(1), 16))}
+                  className="w-5 h-5 rounded border border-panel-border bg-transparent cursor-pointer p-0"
+                  aria-label={t('panel.customColor')}
+                  title={t('panel.customColor')}
+                />
               </div>
               {/* Opacity presets (SolidWorks-style transparency control). */}
               <div className="pl-4 flex items-center gap-1.5 pt-0.5">
