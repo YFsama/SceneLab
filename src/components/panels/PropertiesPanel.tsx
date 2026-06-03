@@ -210,7 +210,7 @@ export function PropertiesPanel() {
               <div className="pl-4">
                 <PositionEditor
                   key={selectedBody.id}
-                  body={selectedBody}
+                  center={computeBoundingBoxCenter(selectedBody)}
                   onMove={(target) => { selectObject(selectedBody.id); useStore.getState().moveSelectionTo(target); }}
                 />
               </div>
@@ -1870,8 +1870,17 @@ export function PropertiesPanel() {
           </div>
         ) : (
           (() => {
-            const summary = selectionSummary(bodies.filter((b) => selectedIds.includes(b.id)));
+            const selBodies = bodies.filter((b) => selectedIds.includes(b.id));
+            const summary = selectionSummary(selBodies);
             if (!summary) return <p className="text-xs text-text-muted">{t('panel.selectObject')}</p>;
+            // Combined bounding-box centre of the selection (for group position editing).
+            const min = { x: Infinity, y: Infinity, z: Infinity };
+            const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+            for (const b of selBodies) for (const v of b.vertices) {
+              min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+              max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+            }
+            const groupCenter = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
             return (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
@@ -1905,6 +1914,19 @@ export function PropertiesPanel() {
                     <p>X: {summary.size.x.toFixed(2)} mm</p>
                     <p>Y: {summary.size.y.toFixed(2)} mm</p>
                     <p>Z: {summary.size.z.toFixed(2)} mm</p>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 text-xs text-text-muted">
+                    <Move size={12} />
+                    <span>{t('panel.position')}</span>
+                  </div>
+                  <div className="pl-4">
+                    <PositionEditor
+                      key={selectedIds.join(',')}
+                      center={groupCenter}
+                      onMove={(target) => useStore.getState().moveSelectionTo(target)}
+                    />
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -2001,9 +2023,8 @@ function DimensionEditor({ body, onResize, hint }: { body: SolidBody; onResize: 
 }
 
 /** Editable bounding-box-centre position for the selected body (X/Y/Z mm). */
-function PositionEditor({ body, onMove }: { body: SolidBody; onMove: (target: { x: number; y: number; z: number }) => void }) {
-  const c = computeBoundingBoxCenter(body);
-  const init = { x: c.x.toFixed(2), y: c.y.toFixed(2), z: c.z.toFixed(2) };
+function PositionEditor({ center, onMove }: { center: { x: number; y: number; z: number }; onMove: (target: { x: number; y: number; z: number }) => void }) {
+  const init = { x: center.x.toFixed(2), y: center.y.toFixed(2), z: center.z.toFixed(2) };
   const [vals, setVals] = useState(init);
 
   const commit = () => {
