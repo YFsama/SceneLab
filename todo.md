@@ -249,8 +249,8 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 17. Ctrl+Shift+A 取消全选 — ✅ 已完成。
 18. 视口悬停名称 tooltip — ✅ 已完成 (`hoverLabel` + 视口 overlay)。
 19. “重复上一个命令”(Enter) — ✅ 已完成 (`lastCommand` 跟踪 + Enter 快捷键 + 命令面板)。
-20. **AI 直接操作模型**：最初需求之一，本轮聚焦 CAD 交互未推进；AI 工具/面板已存在，可深化。
-    ~89 AI 工具已覆盖创建/编辑/分析/导入导出/CAM，缺视觉反馈（"circle a face"）。
+20. **AI 直接操作模型** — ✅ 基本完成 (~94 AI 工具: 创建/编辑/分析/导入导出/CAM + 复合工具 + 约束 + 材质设置)。
+    缺视觉反馈（"circle a face" → 需 VLM API 集成，跨模块长期需求）。
 
 ### 稳定性注意
 - voxel 几何测试较慢（`boolean.test.ts` ~2s/项）；vitest `testTimeout`/`hookTimeout` 已提到 20s
