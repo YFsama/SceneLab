@@ -97,8 +97,9 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'edit.redo', label: 'Redo', category: 'Edit', shortcut: 'Ctrl+Y', run: () => s().redo() });
   registerCommand({ id: 'edit.deleteSelected', label: 'Delete selected', category: 'Edit', shortcut: 'Del', run: () => s().deleteSelected() });
   registerCommand({ id: 'edit.selectAll', label: 'Select all', category: 'Edit', shortcut: 'Ctrl+A', run: () => s().selectAll() });
-  registerCommand({ id: 'edit.deselectAll', label: 'Deselect all', category: 'Edit', run: () => s().deselectAll() });
+  registerCommand({ id: 'edit.deselectAll', label: 'Deselect all', category: 'Edit', shortcut: 'Ctrl+Shift+A', run: () => s().deselectAll() });
   registerCommand({ id: 'edit.invertSelection', label: 'Invert selection', category: 'Edit', shortcut: 'Ctrl+Shift+I', run: () => s().invertSelection() });
+  registerCommand({ id: 'edit.repeatLast', label: 'Repeat last command', category: 'Edit', shortcut: 'Enter', run: () => s().repeatLastCommand() });
   registerCommand({ id: 'edit.duplicate', label: 'Duplicate selected', category: 'Edit', shortcut: 'Ctrl+D', run: () => s().duplicateSelected() });
   registerCommand({ id: 'edit.cut', label: 'Cut', category: 'Edit', shortcut: 'Ctrl+X', run: () => s().cutSelected() });
   registerCommand({ id: 'edit.copy', label: 'Copy', category: 'Edit', shortcut: 'Ctrl+C', run: () => s().copySelected() });

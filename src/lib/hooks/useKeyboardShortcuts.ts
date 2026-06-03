@@ -101,6 +101,7 @@ export function initShortcuts(): void {
   registerShortcut('backspace', deleteOrUnpick);
   registerShortcut('ctrl+d', () => store.duplicateSelected());
   registerShortcut('ctrl+a', () => store.selectAll());
+  registerShortcut('ctrl+shift+a', () => store.deselectAll());
   registerShortcut('ctrl+shift+i', () => store.invertSelection());
   registerShortcut('f2', () => store.beginRenameSelected());
   // Tab hides the current selection; Shift+Tab brings every hidden body back.
@@ -117,6 +118,10 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+o', () => { void openProjectFromFile(); });
   registerShortcut('ctrl+n', () => { void confirmDiscardIfDirty('project.new').then((ok) => { if (ok) useStore.getState().newProject(); }); });
   registerShortcut('ctrl+k', () => store.setCommandPaletteOpen(true));
+  registerShortcut('enter', () => {
+    const s = useStore.getState();
+    if (!s.sketchActive && !s.measureActive) s.repeatLastCommand();
+  });
   registerShortcut('shift+?', () => store.setShowShortcuts(true));
   registerShortcut('shift+/', () => store.setShowShortcuts(true));
   registerShortcut('escape', () => {

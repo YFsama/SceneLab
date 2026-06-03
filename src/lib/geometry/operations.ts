@@ -426,6 +426,37 @@ export function scaleBody(body: SolidBody, factor: number, origin: Vec3 = { x: 0
   };
 }
 
+/** Non-uniform scale: per-axis factors about an origin. Normals are re-normalized. */
+export function scaleBodyXYZ(body: SolidBody, fx: number, fy: number, fz: number, origin: Vec3 = { x: 0, y: 0, z: 0 }): SolidBody {
+  if (fx <= 0 || fy <= 0 || fz <= 0) throw new Error('Scale factors must be positive');
+  const s = (v: Vec3): Vec3 => ({
+    x: origin.x + (v.x - origin.x) * fx,
+    y: origin.y + (v.y - origin.y) * fy,
+    z: origin.z + (v.z - origin.z) * fz,
+  });
+  // Normal transform: inverse-transpose of the diagonal scale matrix = diag(1/fx, 1/fy, 1/fz), normalized.
+  const n = (v: Vec3): Vec3 => {
+    const nx = v.x / fx, ny = v.y / fy, nz = v.z / fz;
+    const len = Math.hypot(nx, ny, nz);
+    return len > 1e-12 ? { x: nx / len, y: ny / len, z: nz / len } : { ...v };
+  };
+  return {
+    id: genId('body'),
+    name: body.name,
+    vertices: body.vertices.map(s),
+    faces: body.faces.map((f) => ({
+      id: genId('face'),
+      vertices: f.vertices.map(s),
+      normal: n(f.normal),
+    })),
+    edges: body.edges.map((e) => ({
+      id: genId('edge'),
+      start: s(e.start),
+      end: s(e.end),
+    })),
+  };
+}
+
 /** Mirror: reflect body across a plane */
 export function applyMirror(
   body: SolidBody,

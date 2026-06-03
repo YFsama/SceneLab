@@ -7,7 +7,7 @@ import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deseri
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies, weldVertices } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 
@@ -179,6 +179,7 @@ interface AppState {
   rotateSelected: (axis: 'x' | 'y' | 'z', degrees: number) => number;
   /** Uniformly scale the selected direct bodies about their own centre (keeps ids); returns how many scaled. */
   scaleSelected: (factor: number) => number;
+  scaleSelectedXYZ: (fx: number, fy: number, fz: number) => number;
   /** Reflect the selected direct bodies in place about their own centre plane (keeps ids); returns count. */
   flipSelected: (axis: 'x' | 'y' | 'z') => number;
   /** Mirror the selection across the world datum plane (axis-normal), keeping the
@@ -316,6 +317,9 @@ interface AppState {
   /** Primitive kind awaiting a size dialog before insertion (null = no dialog open). */
   pendingPrimitive: PrimitiveKind | null;
   setPendingPrimitive: (k: PrimitiveKind | null) => void;
+  /** Last command for Enter-to-repeat (e.g. last primitive kind inserted). */
+  lastCommand: { type: 'primitive'; kind: PrimitiveKind } | null;
+  repeatLastCommand: () => void;
   /** Last dimensions used per primitive kind, so the insert dialog reuses them. */
   lastPrimitiveParams: Partial<Record<PrimitiveKind, Record<string, number>>>;
   rememberPrimitiveParams: (kind: PrimitiveKind, params: Record<string, number>) => void;
@@ -1173,6 +1177,30 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return n;
   },
+  scaleSelectedXYZ: (fx, fy, fz) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const selBodies = directBodies.filter((b) => sel.has(b.id));
+    const n = selBodies.length;
+    if (n === 0) return 0;
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (const b of selBodies) for (const v of b.vertices) {
+      min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+      max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+    }
+    const origin = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 };
+    pushUndo();
+    set((s) => ({
+      directBodies: s.directBodies.map((b) => {
+        if (!sel.has(b.id)) return b;
+        return { ...scaleBodyXYZ(b, fx, fy, fz, origin), id: b.id, color: b.color };
+      }),
+      projectDirty: true,
+    }));
+    recombine();
+    return n;
+  },
   clipboard: [],
   pasteCount: 0,
   copySelected: () => {
@@ -1474,7 +1502,15 @@ export const useStore = create<AppState>((set, get) => {
   showCenterOfMass: stored('scenelab.showCenterOfMass') === 'true',
   setShowCenterOfMass: (showCenterOfMass) => { set({ showCenterOfMass }); persist('scenelab.showCenterOfMass', String(showCenterOfMass)); },
   pendingPrimitive: null,
-  setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
+  setPendingPrimitive: (pendingPrimitive) => set({
+    pendingPrimitive,
+    ...(pendingPrimitive ? { lastCommand: { type: 'primitive' as const, kind: pendingPrimitive } } : {}),
+  }),
+  lastCommand: null,
+  repeatLastCommand: () => {
+    const cmd = get().lastCommand;
+    if (cmd?.type === 'primitive') set({ pendingPrimitive: cmd.kind });
+  },
   // Persisted so your preferred primitive dimensions carry over between sessions.
   lastPrimitiveParams: (() => {
     try { return JSON.parse(stored('scenelab.lastPrimitiveParams') || '{}'); } catch { return {}; }

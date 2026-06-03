@@ -221,7 +221,7 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 ### P2 — 中等价值、独立可做
 7. **透视/正交切换** — ✅ 已完成 (`ProjectionMode` + `OrthographicCamera` + 视锥自动匹配 + Shift+P/按钮/右键菜单/命令面板/AI 工具)。
 8. **完整视图立方** — ✅ 已完成 (InteractiveViewCube: 26 朝向面/边/角, 拖拽旋转, 悬停高亮, 实时同步主相机, 事件通信)。
-9. **测量/标注持久化**：测量是临时 overlay；需可保存的标注实体（点对/边+文本），随项目存取。风险中。
+9. **测量/标注持久化** — ✅ 已完成 (`AnnotationDefinition` + 保存按钮 + 项目序列化/反序列化 + 视口渲染 + 右键菜单删除)。
 10. **工程图(Drawing)工作区**：基本占位。3视图投影/剖视/标注/标题栏。**独立大模块。**
 11. **每实体材质 per-body material** — ✅ 已完成 (`SolidBody.material` + `setBodyMaterial` +
     `setSelectionMaterial` + 面板/右键 Material 菜单，随项目持久化)。原方案存档：
