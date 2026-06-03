@@ -1,13 +1,36 @@
 import { useStore } from '../store/app';
 import { confirm } from './confirm';
 import { translations } from './i18n';
-import { serializeProject, saveToFile, downloadFile } from './io';
+import { serializeProject, saveToFile, downloadFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, readFileAsText } from './io';
 import { showToast } from './toast';
 
 const tr = (k: string) => {
   const locale = useStore.getState().locale;
   return translations[locale]?.[k] ?? translations.en?.[k] ?? k;
 };
+
+/** Confirm (if dirty) then pick a .studio3d file and load it, replacing the
+ * scene — the canonical "Open" used by the toolbar and Ctrl+O. */
+export async function openProjectFromFile(): Promise<void> {
+  if (!(await confirmDiscardIfDirty('project.open'))) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.studio3d,.json';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const project = loadFromFile(await readFileAsText(file));
+      useStore.getState().loadProject(
+        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project),
+      );
+      showToast(`${tr('toast.loaded')} "${project.name}"`, 'success');
+    } catch (err) {
+      showToast(`${tr('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+  });
+  input.click();
+}
 
 /** Serialize the current project and download it as a .studio3d file, clearing
  * the dirty flag — the canonical "Save" used by the toolbar and Ctrl+S. */

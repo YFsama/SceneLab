@@ -1,9 +1,9 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
+import { downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
-import { confirmDiscardIfDirty, saveProjectToFile } from '../../lib/projectActions';
+import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../../lib/projectActions';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
 import { framingBodies } from '../../lib/render/fitView';
 
@@ -12,35 +12,10 @@ export function ProjectMenu() {
   const projectName = useStore((s) => s.projectName);
   const bodies = useStore((s) => s.bodies);
   const selectedIds = useStore((s) => s.selectedIds);
-  const loadProject = useStore((s) => s.loadProject);
   const addDirectBody = useStore((s) => s.addDirectBody);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const meshInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => saveProjectToFile();
-
-  const handleLoad = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Opening replaces the scene — confirm if there's unsaved work to lose.
-    if (!(await confirmDiscardIfDirty('project.open'))) {
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    try {
-      const json = await readFileAsText(file);
-      const project = loadFromFile(json);
-      // Rebuild the parametric model, not just the name.
-      loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project));
-      showToast(`${t('toast.loaded')} "${project.name}"`, 'success');
-    } catch (err) {
-      showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
-    }
-
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
 
   const handleImportMesh = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -166,7 +141,7 @@ export function ProjectMenu() {
       </button>
 
       <button
-        onClick={() => fileInputRef.current?.click()}
+        onClick={() => openProjectFromFile()}
         className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
         aria-label={t('project.open')}
         title={t('project.open') + ' .studio3d'}
@@ -226,15 +201,6 @@ export function ProjectMenu() {
         <Image size={14} />
         <span className="hidden md:inline">PNG</span>
       </button>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".studio3d,.json"
-        onChange={handleLoad}
-        className="hidden"
-        aria-hidden="true"
-      />
 
       <input
         ref={meshInputRef}

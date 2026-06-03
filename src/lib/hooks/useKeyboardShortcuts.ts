@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useStore } from '../../store/app';
-import { confirmDiscardIfDirty, saveProjectToFile } from '../projectActions';
+import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../projectActions';
 
 const shortcuts: Record<string, () => void> = {};
 
@@ -112,6 +112,7 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+shift+z', () => store.redo());
   registerShortcut('ctrl+y', () => store.redo());
   registerShortcut('ctrl+s', () => saveProjectToFile());
+  registerShortcut('ctrl+o', () => { void openProjectFromFile(); });
   registerShortcut('ctrl+n', () => { void confirmDiscardIfDirty('project.new').then((ok) => { if (ok) useStore.getState().newProject(); }); });
   registerShortcut('ctrl+k', () => store.setCommandPaletteOpen(true));
   registerShortcut('shift+?', () => store.setShowShortcuts(true));
