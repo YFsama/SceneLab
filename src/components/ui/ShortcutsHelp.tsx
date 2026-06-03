@@ -21,6 +21,7 @@ const GROUPS: Group[] = [
       { keys: 'F', labelKey: 'viewport.fit' },
       { keys: 'Shift+F', labelKey: 'viewport.fitSelection' },
       { keys: 'Home', labelKey: 'viewport.home' },
+      { keys: 'G', labelKey: 'status.grid' },
       { keys: 'Tab', labelKey: 'shortcuts.hideSelected' },
       { keys: 'Shift+Tab', labelKey: 'shortcuts.showAll' },
     ],
@@ -37,10 +38,12 @@ const GROUPS: Group[] = [
   {
     titleKey: 'shortcuts.sketch',
     rows: [
+      { keys: 'V', labelKey: 'sketch.select' },
       { keys: 'L', labelKey: 'sketch.line' },
       { keys: 'R', labelKey: 'sketch.rect' },
       { keys: 'O', labelKey: 'sketch.circle' },
       { keys: 'A', labelKey: 'sketch.arc' },
+      { keys: 'P', labelKey: 'sketch.polygon' },
       { keys: 'Esc', labelKey: 'sketch.exit' },
     ],
   },
