@@ -11,10 +11,10 @@ function genId(prefix: string): string {
 export function applyFillet(body: SolidBody, edgeIds: string[], radius: number): SolidBody {
   if (radius <= 0) return body;
   const edgeSet = new Set(edgeIds);
+  const ARC_SEGMENTS = 8; // number of quads approximating the fillet arc
 
-  const newFaces: Face[] = [];
+  const newFaces: Face[] = [...body.faces]; // keep original faces
   const newEdges: Edge[] = [];
-  const filletFaces: Face[] = [];
 
   for (const edge of body.edges) {
     if (!edgeSet.has(edge.id)) {
@@ -22,67 +22,93 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
       continue;
     }
 
-    // Find faces sharing this edge
-    const adjacentFaces = body.faces.filter((f) =>
-      faceContainsEdge(f, edge),
-    );
-
-    if (adjacentFaces.length < 2) continue;
+    // Find faces sharing this edge.
+    const adjacentFaces = body.faces.filter((f) => faceContainsEdge(f, edge));
+    if (adjacentFaces.length < 2) { newEdges.push(edge); continue; }
 
     const [face1, face2] = adjacentFaces;
-    if (!face1 || !face2) continue;
+    if (!face1 || !face2) { newEdges.push(edge); continue; }
 
-    // Compute fillet direction (bisector of face normals)
-    const bisector = normalize({
-      x: face1.normal.x + face2.normal.x,
-      y: face1.normal.y + face2.normal.y,
-      z: face1.normal.z + face2.normal.z,
-    });
+    // The fillet arc swings from face1's surface to face2's surface, centered
+    // on the edge. The arc lies in the plane defined by the edge direction and
+    // the bisector of the two face normals.
+    const edgeDir = normalize({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
+    const n1 = normalize(face1.normal);
+    const n2 = normalize(face2.normal);
 
-    // Offset the edge inward by radius
-    const offsetStart: Vec3 = {
-      x: edge.start.x - bisector.x * radius,
-      y: edge.start.y - bisector.y * radius,
-      z: edge.start.z - bisector.z * radius,
+    // Build an orthonormal frame: edgeDir (along edge), n1 (face1 normal), and
+    // a tangent perpendicular to both.
+    const tangent = cross(n1, edgeDir);
+    const tangentLen = vecLen(tangent);
+    if (tangentLen < 1e-9) { newEdges.push(edge); continue; }
+    const t = { x: tangent.x / tangentLen, y: tangent.y / tangentLen, z: tangent.z / tangentLen };
+
+    // The fillet center is offset from the edge along the bisector by the
+    // radius divided by sin(half-angle).
+    const dotNN = Math.max(-1, Math.min(1, n1.x * n2.x + n1.y * n2.y + n1.z * n2.z));
+    const halfAngle = Math.acos(dotNN) / 2;
+    const sinHalf = Math.sin(halfAngle);
+    const centerOffset = sinHalf > 1e-6 ? radius / sinHalf : radius;
+    const bisector = normalize({ x: n1.x + n2.x, y: n1.y + n2.y, z: n1.z + n2.z });
+
+    // Generate arc segments along the edge.
+    for (let seg = 0; seg < ARC_SEGMENTS; seg++) {
+      const a0 = (seg / ARC_SEGMENTS) * Math.PI;
+      const a1 = ((seg + 1) / ARC_SEGMENTS) * Math.PI;
+
+      // Arc points at the start and end of this segment, at both edge endpoints.
+      const arcPoint = (angle: number, edgeT: number): Vec3 => {
+        const along = { x: edge.start.x + edgeDir.x * edgeT, y: edge.start.y + edgeDir.y * edgeT, z: edge.start.z + edgeDir.z * edgeT };
+        const r0 = centerOffset * Math.cos(angle);
+        const r1 = radius * Math.sin(angle);
+        return {
+          x: along.x + bisector.x * r0 + t.x * r1,
+          y: along.y + bisector.y * r0 + t.y * r1,
+          z: along.z + bisector.z * r0 + t.z * r1,
+        };
+      };
+
+      const v00 = arcPoint(a0, 0);
+      const v10 = arcPoint(a1, 0);
+      const v01 = arcPoint(a0, 1);
+      const v11 = arcPoint(a1, 1);
+
+      // Quad face (two triangles).
+      const faceNormal = normalize(cross(
+        { x: v10.x - v00.x, y: v10.y - v00.y, z: v10.z - v00.z },
+        { x: v01.x - v00.x, y: v01.y - v00.y, z: v01.z - v00.z },
+      ));
+      newFaces.push({
+        id: genId('face'),
+        vertices: [v00, v10, v11, v01],
+        normal: faceNormal,
+      });
+
+      newEdges.push(
+        { id: genId('edge'), start: v00, end: v10 },
+        { id: genId('edge'), start: v01, end: v11 },
+      );
+    }
+
+    // Edges connecting the arc endpoints to the original edge.
+    const arcStart0 = {
+      x: edge.start.x + bisector.x * centerOffset,
+      y: edge.start.y + bisector.y * centerOffset,
+      z: edge.start.z + bisector.z * centerOffset,
     };
-    const offsetEnd: Vec3 = {
-      x: edge.end.x - bisector.x * radius,
-      y: edge.end.y - bisector.y * radius,
-      z: edge.end.z - bisector.z * radius,
+    const arcEnd0 = {
+      x: edge.end.x + bisector.x * centerOffset,
+      y: edge.end.y + bisector.y * centerOffset,
+      z: edge.end.z + bisector.z * centerOffset,
     };
-
-    // Create fillet face (quad connecting original edge to offset edge)
-    filletFaces.push({
-      id: genId('face'),
-      vertices: [edge.start, edge.end, offsetEnd, offsetStart],
-      normal: bisector,
-    });
-
     newEdges.push(
-      { id: genId('edge'), start: offsetStart, end: offsetEnd },
-      { id: genId('edge'), start: edge.start, end: offsetStart },
-      { id: genId('edge'), start: edge.end, end: offsetEnd },
+      { id: genId('edge'), start: edge.start, end: arcStart0 },
+      { id: genId('edge'), start: edge.end, end: arcEnd0 },
     );
   }
 
-  // A fillet rounds an edge: the adjacent faces are retained (a real kernel
-  // would trim them back), and a blend face is inserted along each edge. Keep
-  // every original face and add the fillet faces on top.
-  for (const face of body.faces) {
-    newFaces.push(face);
-  }
-
-  newFaces.push(...filletFaces);
-
   const newVertices = dedupVertices(newFaces);
-
-  return {
-    id: body.id,
-    name: body.name,
-    vertices: newVertices,
-    faces: newFaces,
-    edges: newEdges,
-  };
+  return { id: body.id, name: body.name, vertices: newVertices, faces: newFaces, edges: newEdges };
 }
 
 /** Chamfer: bevel edges by cutting them at an angle */
@@ -90,9 +116,8 @@ export function applyChamfer(body: SolidBody, edgeIds: string[], distance: numbe
   if (distance <= 0) return body;
   const edgeSet = new Set(edgeIds);
 
-  const newFaces: Face[] = [];
+  const newFaces: Face[] = [...body.faces]; // keep original faces
   const newEdges: Edge[] = [];
-  const chamferFaces: Face[] = [];
 
   for (const edge of body.edges) {
     if (!edgeSet.has(edge.id)) {
@@ -100,67 +125,46 @@ export function applyChamfer(body: SolidBody, edgeIds: string[], distance: numbe
       continue;
     }
 
+    // Find the two adjacent faces.
     const adjacentFaces = body.faces.filter((f) => faceContainsEdge(f, edge));
-    if (adjacentFaces.length < 2) continue;
+    if (adjacentFaces.length < 2) { newEdges.push(edge); continue; }
 
     const [face1, face2] = adjacentFaces;
-    if (!face1 || !face2) continue;
+    if (!face1 || !face2) { newEdges.push(edge); continue; }
 
-    const dir = normalize({
-      x: face1.normal.x + face2.normal.x,
-      y: face1.normal.y + face2.normal.y,
-      z: face1.normal.z + face2.normal.z,
-    });
+    const n1 = normalize(face1.normal);
+    const n2 = normalize(face2.normal);
 
-    const offsetStart: Vec3 = {
-      x: edge.start.x - dir.x * distance,
-      y: edge.start.y - dir.y * distance,
-      z: edge.start.z - dir.z * distance,
-    };
-    const offsetEnd: Vec3 = {
-      x: edge.end.x - dir.x * distance,
-      y: edge.end.y - dir.y * distance,
-      z: edge.end.z - dir.z * distance,
-    };
+    // Chamfer: offset each edge endpoint inward along both face normals by
+    // `distance`. This creates 4 new points per edge (2 per face), forming a
+    // diamond-shaped chamfer face.
+    const sOff1: Vec3 = { x: edge.start.x - n1.x * distance, y: edge.start.y - n1.y * distance, z: edge.start.z - n1.z * distance };
+    const sOff2: Vec3 = { x: edge.start.x - n2.x * distance, y: edge.start.y - n2.y * distance, z: edge.start.z - n2.z * distance };
+    const eOff1: Vec3 = { x: edge.end.x - n1.x * distance, y: edge.end.y - n1.y * distance, z: edge.end.z - n1.z * distance };
+    const eOff2: Vec3 = { x: edge.end.x - n2.x * distance, y: edge.end.y - n2.y * distance, z: edge.end.z - n2.z * distance };
 
-    chamferFaces.push({
+    // Chamfer face: a quad connecting the two offset lines.
+    const chamferNormal = normalize(cross(
+      { x: sOff2.x - sOff1.x, y: sOff2.y - sOff1.y, z: sOff2.z - sOff1.z },
+      { x: eOff1.x - sOff1.x, y: eOff1.y - sOff1.y, z: eOff1.z - sOff1.z },
+    ));
+    newFaces.push({
       id: genId('face'),
-      vertices: [edge.start, edge.end, offsetEnd, offsetStart],
-      normal: dir,
+      vertices: [sOff1, eOff1, eOff2, sOff2],
+      normal: chamferNormal,
     });
 
+    // New edges for the chamfer outline.
     newEdges.push(
-      { id: genId('edge'), start: offsetStart, end: offsetEnd },
-      { id: genId('edge'), start: edge.start, end: offsetStart },
-      { id: genId('edge'), start: edge.end, end: offsetEnd },
+      { id: genId('edge'), start: sOff1, end: eOff1 },
+      { id: genId('edge'), start: sOff2, end: eOff2 },
+      { id: genId('edge'), start: sOff1, end: sOff2 },
+      { id: genId('edge'), start: eOff1, end: eOff2 },
     );
   }
 
-  for (const face of body.faces) {
-    const hasChamferedEdge = face.vertices.some((_, i) => {
-      const next = (i + 1) % face.vertices.length;
-      const v1 = face.vertices[i]!;
-      const v2 = face.vertices[next]!;
-      return body.edges.some(
-        (e) => edgeSet.has(e.id) && edgeMatchesPoints(e, v1, v2),
-      );
-    });
-    if (!hasChamferedEdge) {
-      newFaces.push(face);
-    }
-  }
-
-  newFaces.push(...chamferFaces);
-
   const newVertices = dedupVertices(newFaces);
-
-  return {
-    id: body.id,
-    name: body.name,
-    vertices: newVertices,
-    faces: newFaces,
-    edges: newEdges,
-  };
+  return { id: body.id, name: body.name, vertices: newVertices, faces: newFaces, edges: newEdges };
 }
 
 /** Shell: hollow out a body by removing faces and offsetting inward */
@@ -745,9 +749,17 @@ function vecEqual(a: Vec3, b: Vec3): boolean {
 }
 
 function normalize(v: Vec3): Vec3 {
-  const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-  if (len < 1e-10) return { x: 0, y: 1, z: 0 };
-  return { x: v.x / len, y: v.y / len, z: v.z / len };
+  const l = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  if (l < 1e-10) return { x: 0, y: 1, z: 0 };
+  return { x: v.x / l, y: v.y / l, z: v.z / l };
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
+}
+
+function vecLen(v: Vec3): number {
+  return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 }
 
 function computeFaceNormal(a: Vec3, b: Vec3, c: Vec3): Vec3 {
