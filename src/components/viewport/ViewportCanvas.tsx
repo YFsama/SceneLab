@@ -1195,6 +1195,7 @@ export function ViewportCanvas() {
           ...(useStore.getState().clipboard.length > 0
             ? [{ label: t('menu.paste'), onClick: () => useStore.getState().paste(), separatorBefore: true }]
             : []),
+          { label: t('measure.tool'), onClick: () => useStore.getState().setMeasureActive(!useStore.getState().measureActive), separatorBefore: true },
           { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
           { label: t('menu.selectAll'), onClick: () => useStore.getState().selectAll() },
           { label: t('menu.deselectAll'), onClick: () => deselectAll() },
