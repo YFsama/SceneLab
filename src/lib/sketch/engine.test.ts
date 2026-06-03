@@ -1,8 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc,
-  addConstraint, removeEntity, removeConstraint, solveSketch,
+  addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
 } from './engine';
+
+describe('snapTargets', () => {
+  it('returns each point plus every line midpoint', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 10, 0); // endpoints (0,0),(10,0); midpoint (5,0)
+    const targets = snapTargets(s);
+    expect(targets).toContainEqual({ x: 0, y: 0 });
+    expect(targets).toContainEqual({ x: 10, y: 0 });
+    expect(targets).toContainEqual({ x: 5, y: 0 }); // midpoint snap target
+  });
+
+  it('is empty for an empty sketch', () => {
+    expect(snapTargets(createSketch('xy'))).toEqual([]);
+  });
+});
 
 describe('createSketch', () => {
   it('should create an empty sketch', () => {

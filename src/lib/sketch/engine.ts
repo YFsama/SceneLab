@@ -213,3 +213,25 @@ export function getEntityPoints(
     }
   }
 }
+
+/**
+ * Snap targets a new point can latch onto while sketching: every existing point
+ * (endpoints, centres) plus the midpoint of each line — the midpoint snap is a
+ * SolidWorks staple. The origin is added separately by sketchSnapPoints.
+ */
+export function snapTargets(sketch: Sketch): { x: number; y: number }[] {
+  const pts: { x: number; y: number }[] = [];
+  for (const ent of sketch.entities.values()) {
+    if (ent.type === 'point') pts.push({ x: ent.x, y: ent.y });
+  }
+  for (const ent of sketch.entities.values()) {
+    if (ent.type === 'line') {
+      const a = sketch.entities.get(ent.p1Id);
+      const b = sketch.entities.get(ent.p2Id);
+      if (a?.type === 'point' && b?.type === 'point') {
+        pts.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      }
+    }
+  }
+  return pts;
+}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
-import { createSketch, polygonPoints } from '../../lib/sketch/engine';
+import { createSketch, polygonPoints, snapTargets } from '../../lib/sketch/engine';
 import { previewDimensionLabel } from '../../lib/sketch/dimensions';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render/edgeGeometry';
@@ -530,19 +530,14 @@ export function ViewportCanvas() {
         return new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
       };
       // Current cursor — turns green (and larger) when snapped onto an existing
-      // endpoint or the origin, so it's clear the new geometry will connect there.
-      const endpoints: { x: number; y: number }[] = [];
-      if (currentSketch) {
-        for (const ent of currentSketch.entities.values()) {
-          if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
-        }
-      }
-      const onPoint = snapToPoints(m, sketchSnapPoints(endpoints), 1e-6).snapped;
+      // point, line midpoint or the origin, so it's clear where it will connect.
+      const candidates = sketchSnapPoints(currentSketch ? snapTargets(currentSketch) : []);
+      const onPoint = snapToPoints(m, candidates, 1e-6).snapped;
       previewGroup.add(marker(m.x, m.y, onPoint ? 0xa6e3a1 : 0x89b4fa, onPoint ? 12 : 9));
       // Inference guide lines: when the cursor lines up (but isn't exactly on)
       // an existing point's X or Y, draw a faint line to that point.
       if (!onPoint) {
-        const align = inferAlignment(m, sketchSnapPoints(endpoints), 1e-6);
+        const align = inferAlignment(m, candidates, 1e-6);
         const guideMat = () => new THREE.LineBasicMaterial({ color: 0x6c7086, depthTest: false });
         if (align.guideX) {
           const g = new THREE.BufferGeometry().setFromPoints([v(align.guideX.x, align.guideX.y), v(m.x, m.y)]);
@@ -980,15 +975,10 @@ export function ViewportCanvas() {
     // Hold Shift to draw freely (no snapping at all).
     if (e.shiftKey) return raw;
 
-    // Endpoint/origin snapping takes priority over the grid so new geometry
-    // connects precisely to existing sketch points and the origin (SolidWorks).
-    const endpoints: { x: number; y: number }[] = [];
-    if (currentSketch) {
-      for (const ent of currentSketch.entities.values()) {
-        if (ent.type === 'point') endpoints.push({ x: ent.x, y: ent.y });
-      }
-    }
-    const candidates = sketchSnapPoints(endpoints);
+    // Endpoint/midpoint/origin snapping takes priority over the grid so new
+    // geometry connects precisely to existing points, line midpoints and the
+    // origin (SolidWorks).
+    const candidates = sketchSnapPoints(currentSketch ? snapTargets(currentSketch) : []);
     const snap = snapToPoints(raw, candidates, 0.4);
     if (snap.snapped) return snap.point;
 
