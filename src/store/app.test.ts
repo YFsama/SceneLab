@@ -939,6 +939,26 @@ describe('app store — direct bodies', () => {
     expect(cx).toBeCloseTo(30, 4); // body a swapped to where b was — group mirror
   });
 
+  it('mirrorCopySelected keeps the original and adds a reflected copy', () => {
+    useStore.getState().clearScene();
+    const a = translateBody(createBox(10, 10, 10), { x: 20, y: 0, z: 0 }); // centre x 20
+    useStore.getState().addDirectBody(a);
+    useStore.getState().selectObject(a.id);
+
+    const ids = useStore.getState().mirrorCopySelected('x'); // mirror across x=0
+    expect(ids).toHaveLength(1);
+    expect(useStore.getState().bodies).toHaveLength(2); // original kept + copy
+    expect(useStore.getState().selectedIds).toEqual(ids); // copy selected
+
+    const copy = useStore.getState().bodies.find((b) => b.id === ids[0])!;
+    const xs = copy.vertices.map((v) => v.x);
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(-20, 4); // reflected to x=-20
+    // Original untouched at x=20.
+    const orig = useStore.getState().bodies.find((b) => b.id === a.id)!;
+    const oxs = orig.vertices.map((v) => v.x);
+    expect((Math.min(...oxs) + Math.max(...oxs)) / 2).toBeCloseTo(20, 4);
+  });
+
   it('weldSelected cleans a body keeping id and volume', () => {
     useStore.getState().clearScene();
     const box = createBox(10, 10, 10);

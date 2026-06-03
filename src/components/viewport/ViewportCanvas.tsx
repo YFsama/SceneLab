@@ -1230,6 +1230,9 @@ export function ViewportCanvas() {
             { label: t('menu.flipX'), onClick: pre(() => st().flipSelected('x')), separatorBefore: true },
             { label: t('menu.flipY'), onClick: pre(() => st().flipSelected('y')) },
             { label: t('menu.flipZ'), onClick: pre(() => st().flipSelected('z')) },
+            { label: t('menu.mirrorCopyX'), onClick: pre(() => st().mirrorCopySelected('x')), separatorBefore: true },
+            { label: t('menu.mirrorCopyY'), onClick: pre(() => st().mirrorCopySelected('y')) },
+            { label: t('menu.mirrorCopyZ'), onClick: pre(() => st().mirrorCopySelected('z')) },
           ],
         },
         {

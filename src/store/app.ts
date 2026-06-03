@@ -140,6 +140,9 @@ interface AppState {
   scaleSelected: (factor: number) => number;
   /** Reflect the selected direct bodies in place about their own centre plane (keeps ids); returns count. */
   flipSelected: (axis: 'x' | 'y' | 'z') => number;
+  /** Mirror the selection across the world datum plane (axis-normal), keeping the
+   * originals and adding the reflected copies; returns the new ids. */
+  mirrorCopySelected: (axis: 'x' | 'y' | 'z') => string[];
   /** Weld near-coincident vertices of the selected direct bodies (mesh cleanup, keeps ids); returns count. */
   weldSelected: () => number;
   /** Add a box enclosing the selected bodies' combined bounding box; returns its id or null. */
@@ -751,6 +754,20 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return n;
+  },
+  mirrorCopySelected: (axis) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const selBodies = directBodies.filter((b) => sel.has(b.id));
+    if (selBodies.length === 0) return [];
+    // Mirror across the world datum plane (origin, axis-normal) and keep both the
+    // original and the reflected copy — SolidWorks "Mirror" about a plane.
+    const normal: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+    const copies = selBodies.map((b) => ({ ...applyMirror(b, { origin: { x: 0, y: 0, z: 0 }, normal }), color: b.color }));
+    pushUndo();
+    set((s) => ({ directBodies: [...s.directBodies, ...copies], selectedIds: copies.map((c) => c.id), projectDirty: true }));
+    recombine();
+    return copies.map((c) => c.id);
   },
   weldSelected: () => {
     const { selectedIds, directBodies } = get();
