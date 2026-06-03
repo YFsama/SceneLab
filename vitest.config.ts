@@ -8,5 +8,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // The voxel-based boolean/geometry tests can take a couple of seconds each;
+    // a generous timeout keeps them from flaking past the 5s default under load.
+    testTimeout: 20000,
+    hookTimeout: 20000,
   },
 })
