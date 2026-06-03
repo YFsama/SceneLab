@@ -113,6 +113,7 @@ export function ViewportCanvas() {
   const sketchTool = useStore((s) => s.sketchTool);
   const currentSketch = useStore((s) => s.currentSketch);
   const drawStart = useStore((s) => s.drawStart);
+  const setPolylineLast = useStore((s) => s.setPolylineLast);
   const gridSize = useStore((s) => s.gridSize);
   const selectedSketchId = useStore((s) => s.selectedSketchId);
   const polygonSides = useStore((s) => s.polygonSides);
@@ -808,6 +809,15 @@ export function ViewportCanvas() {
           const sprite = makeTextSprite(label, 0xf9e2af, 0.35);
           sprite.position.set(m.x + 0.5, 0.06, m.y + 0.5);
           previewGroup.add(sprite);
+        }
+      }
+      // Polyline preview: show a line from the last committed point to the cursor.
+      if (sketchTool === 'polyline') {
+        const pl = useStore.getState().polylineLast;
+        if (pl) {
+          const geo = new THREE.BufferGeometry().setFromPoints([v(pl.x, pl.y), v(m.x, m.y)]);
+          previewGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false })));
+          previewGroup.add(marker(pl.x, pl.y, 0xa6e3a1, 11));
         }
       }
     }
@@ -1535,7 +1545,7 @@ export function ViewportCanvas() {
         onClick: () => useStore.getState().toggleSketchConstruction(selectedSketchId),
       });
     }
-    const tools = ['select', 'line', 'rect', 'circle', 'arc', 'polygon'] as const;
+    const tools = ['select', 'line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] as const;
     items.push({
       label: t('sketch.tools'),
       separatorBefore: items.length > 0,
@@ -1851,6 +1861,11 @@ export function ViewportCanvas() {
         const id = useStore.getState().selectedSketchId;
         if (id) { e.preventDefault(); useStore.getState().removeSketchEntity(id); }
       }
+      // Enter finishes the polyline chain.
+      if (sketchActive && e.key === 'Enter' && useStore.getState().sketchTool === 'polyline') {
+        e.preventDefault();
+        useStore.getState().setPolylineLast(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1941,6 +1956,21 @@ export function ViewportCanvas() {
       }
       selRectStartRef.current = null;
       setSelRect(null);
+
+      // Polyline tool: click commits a segment from polylineLast to the click point.
+      if (sketchActive && sketchTool === 'polyline') {
+        const pt = getSketchPoint(e);
+        if (!pt) return;
+        const last = useStore.getState().polylineLast;
+        if (last) {
+          const dx = pt.x - last.x, dy = pt.y - last.y;
+          if (Math.hypot(dx, dy) > 1e-6) {
+            addSketchLine(last.x, last.y, pt.x, pt.y);
+          }
+        }
+        setPolylineLast(pt);
+        return;
+      }
 
       if (!sketchActive || !drawStart || sketchTool === 'select') return;
       const pt = getSketchPoint(e);

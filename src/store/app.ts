@@ -51,7 +51,7 @@ export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | '
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
 export type WorkspaceMode = 'sketch' | 'model' | 'assembly' | 'drawing' | 'cam';
-export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'constraint';
+export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'polyline' | 'constraint';
 export type ViewDirection = 'top' | 'front' | 'right' | 'iso' | 'back' | 'bottom' | 'left';
 export type ProjectionMode = 'perspective' | 'orthographic';
 export type SketchPlaneId = 'xy' | 'xz' | 'yz';
@@ -93,6 +93,9 @@ interface AppState {
   // Sketch drawing
   drawStart: { x: number; y: number } | null;
   setDrawStart: (p: { x: number; y: number } | null) => void;
+  /** Last committed point in a polyline chain (null when not chaining). */
+  polylineLast: { x: number; y: number } | null;
+  setPolylineLast: (p: { x: number; y: number } | null) => void;
   addSketchLine: (x1: number, y1: number, x2: number, y2: number) => string;
   addSketchRect: (x1: number, y1: number, x2: number, y2: number) => string;
   addSketchCircle: (cx: number, cy: number, radius: number) => string;
@@ -429,7 +432,7 @@ export const useStore = create<AppState>((set, get) => {
   setSketchTool: (sketchTool) => set({ sketchTool }),
   sketchActive: false,
   setSketchActive: (sketchActive) => set({ sketchActive }),
-  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, selectedSketchId: null, workspace: 'model' }),
+  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, polylineLast: null, selectedSketchId: null, workspace: 'model' }),
   currentSketch: null,
   // Starting/exiting a sketch begins a fresh edit history.
   setCurrentSketch: (currentSketch) => set({ currentSketch, sketchUndoStack: [], sketchRedoStack: [] }),
@@ -470,6 +473,8 @@ export const useStore = create<AppState>((set, get) => {
 
   drawStart: null,
   setDrawStart: (drawStart) => set({ drawStart }),
+  polylineLast: null,
+  setPolylineLast: (polylineLast) => set({ polylineLast }),
 
   addSketchLine: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;

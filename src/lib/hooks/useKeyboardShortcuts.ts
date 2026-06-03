@@ -80,6 +80,7 @@ export function initShortcuts(): void {
 
   // Sketch tool shortcuts
   registerShortcut('l', () => store.setSketchTool('line'));
+  registerShortcut('shift+l', () => store.setSketchTool('polyline'));
   registerShortcut('r', () => store.setSketchTool('rect'));
   registerShortcut('o', () => store.setSketchTool('circle'));
   registerShortcut('a', () => store.setSketchTool('arc'));
