@@ -253,6 +253,7 @@ export function BrowserTree() {
                       else if (e.key === 'Escape') cancelRename();
                     }}
                     onBlur={() => commitRename()}
+                    onFocus={(e) => e.currentTarget.select()}
                     className="flex-1 min-w-0 px-1 py-0.5 bg-surface border border-accent rounded text-xs text-text-primary"
                   />
                 </div>

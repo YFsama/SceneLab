@@ -84,6 +84,7 @@ export function StatusBar() {
             onChange={(e) => setEditingName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') commitName(); else if (e.key === 'Escape') setEditingName(null); }}
             onBlur={commitName}
+            onFocus={(e) => e.currentTarget.select()}
             className="w-32 px-1 py-0 bg-surface border border-accent rounded text-xs text-text-primary"
             aria-label={t('project.rename')}
           />
