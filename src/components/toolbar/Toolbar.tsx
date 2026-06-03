@@ -14,10 +14,11 @@ export function Toolbar() {
   const { t } = useT();
   const current = useStore((s) => s.workspace);
   const setWorkspace = useStore((s) => s.setWorkspace);
-  const canUndo = useStore((s) => s.undoStack.length > 0);
-  const canRedo = useStore((s) => s.redoStack.length > 0);
-  const undo = useStore((s) => s.undo);
-  const redo = useStore((s) => s.redo);
+  // While sketching, the undo/redo buttons act on the sketch's own history.
+  const canUndo = useStore((s) => (s.sketchActive ? s.sketchUndoStack.length : s.undoStack.length) > 0);
+  const canRedo = useStore((s) => (s.sketchActive ? s.sketchRedoStack.length : s.redoStack.length) > 0);
+  const undo = () => { const s = useStore.getState(); if (s.sketchActive) s.sketchUndo(); else s.undo(); };
+  const redo = () => { const s = useStore.getState(); if (s.sketchActive) s.sketchRedo(); else s.redo(); };
 
   return (
     <aside
