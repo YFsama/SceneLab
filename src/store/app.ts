@@ -5,7 +5,7 @@ import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
-import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition } from '../lib/geometry/referenceGeometry';
+import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
 import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies, weldVertices } from '../lib/geometry/operations';
 
@@ -280,6 +280,11 @@ interface AppState {
   /** Add a coordinate system (origin + primary/secondary directions); null if the directions are parallel. */
   addCoordinateSystem: (origin: Vec3, primary: Vec3, secondary: Vec3, name?: string) => string | null;
   removeCoordinateSystem: (id: string) => void;
+
+  // Persistent measurement annotations.
+  annotations: AnnotationDefinition[];
+  addAnnotation: (a: AnnotationDefinition) => void;
+  removeAnnotation: (id: string) => void;
   /** Place a body into a coordinate system's frame (rigid transform), replacing it; null if missing. */
   placeBodyInCoordinateSystem: (bodyId: string, csId: string) => string | null;
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
@@ -1245,6 +1250,7 @@ export const useStore = create<AppState>((set, get) => {
       axes: [],
       points: [],
       coordSystems: [],
+      annotations: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -1272,6 +1278,7 @@ export const useStore = create<AppState>((set, get) => {
       axes: referenceGeometry?.axes ?? [],
       points: referenceGeometry?.points ?? [],
       coordSystems: referenceGeometry?.coordSystems ?? [],
+      annotations: referenceGeometry?.annotations ?? [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -1383,6 +1390,10 @@ export const useStore = create<AppState>((set, get) => {
     return cs.id;
   },
   removeCoordinateSystem: (id) => set((s) => ({ coordSystems: s.coordSystems.filter((c) => c.id !== id), projectDirty: true })),
+
+  annotations: [],
+  addAnnotation: (a) => set((s) => ({ annotations: [...s.annotations, a], projectDirty: true })),
+  removeAnnotation: (id) => set((s) => ({ annotations: s.annotations.filter((a) => a.id !== id), projectDirty: true })),
   placeBodyInCoordinateSystem: (bodyId, csId) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     const cs = get().coordSystems.find((c) => c.id === csId);
@@ -1582,10 +1593,10 @@ export const useStore = create<AppState>((set, get) => {
 
   autosave: () => {
     if (typeof localStorage === 'undefined') return false;
-    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points, coordSystems } = get();
+    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations } = get();
     if (!projectDirty) return false;
     try {
-      const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points, coordSystems });
+      const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points, coordSystems, annotations });
       localStorage.setItem(AUTOSAVE_KEY, saveToFile(project));
       return true;
     } catch {

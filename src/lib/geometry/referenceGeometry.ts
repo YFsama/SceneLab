@@ -235,6 +235,18 @@ export interface CoordinateSystemDefinition {
   zAxis: Vec3;
 }
 
+/** A persistent measurement annotation saved with the project. */
+export interface AnnotationDefinition {
+  id: string;
+  name: string;
+  /** 2 points = distance, 3 points = angle at vertex. */
+  points: Vec3[];
+  /** Pre-computed display value (distance in mm or angle in degrees). */
+  value: number;
+  /** 'distance' or 'angle'. */
+  kind: 'distance' | 'angle';
+}
+
 /**
  * Build a coordinate system from an origin, a primary direction (becomes +X) and
  * a secondary direction defining the XY plane. Gram–Schmidt makes the frame

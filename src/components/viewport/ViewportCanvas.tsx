@@ -127,6 +127,8 @@ export function ViewportCanvas() {
   const measureActive = useStore((s) => s.measureActive);
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
+  const annotations = useStore((s) => s.annotations);
+  const addAnnotation = useStore((s) => s.addAnnotation);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
   // Hover name tooltip (model mode); updated only when the hovered body changes.
   const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -136,6 +138,7 @@ export function ViewportCanvas() {
   const setHoveredId = useStore((s) => s.setHoveredId);
   const [measureHover, setMeasureHover] = useState<{ x: number; y: number; z: number; snapped: boolean } | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
+  const annotationGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const exitSketch = useStore((s) => s.exitSketch);
   const setCurrentSketch = useStore((s) => s.setCurrentSketch);
@@ -308,6 +311,11 @@ export function ViewportCanvas() {
     measureGroup.name = 'measure';
     scene.add(measureGroup);
     measureGroupRef.current = measureGroup;
+
+    const annotationGroup = new THREE.Group();
+    annotationGroup.name = 'annotations';
+    scene.add(annotationGroup);
+    annotationGroupRef.current = annotationGroup;
 
     const bodiesGroup = new THREE.Group();
     bodiesGroup.name = 'bodies';
@@ -1110,6 +1118,52 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [measurePts, measureActive, measureHover]);
 
+  // Render persistent annotations (saved measurements that survive project save/load).
+  useEffect(() => {
+    const group = annotationGroupRef.current;
+    if (!group) return;
+    while (group.children.length > 0) {
+      const child = group.children[0]!;
+      group.remove(child);
+      if (child instanceof THREE.Points || child instanceof THREE.Line || child instanceof THREE.Sprite) {
+        if (child instanceof THREE.Sprite) {
+          const mat = child.material as THREE.SpriteMaterial;
+          mat.map?.dispose();
+          mat.dispose();
+        } else {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      }
+    }
+    for (const ann of annotations) {
+      const ptMat = new THREE.PointsMaterial({ color: 0xf9e2af, size: 8, sizeAttenuation: false, depthTest: false });
+      for (const p of ann.points) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute([p.x, p.y, p.z], 3));
+        group.add(new THREE.Points(g, ptMat));
+      }
+      if (ann.points.length >= 2) {
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(
+          ann.points.map((p) => new THREE.Vector3(p.x, p.y, p.z)),
+        );
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false });
+        const line = new THREE.Line(lineGeo, lineMat);
+        group.add(line);
+      }
+      // Label at the midpoint
+      const mid = ann.points.reduce(
+        (acc, p) => ({ x: acc.x + p.x / ann.points.length, y: acc.y + p.y / ann.points.length, z: acc.z + p.z / ann.points.length }),
+        { x: 0, y: 0, z: 0 },
+      );
+      const labelText = ann.kind === 'distance' ? `${ann.value.toFixed(2)} mm` : `${ann.value.toFixed(1)}°`;
+      const sprite = makeTextSprite(labelText, 0xf9e2af, 0.4);
+      sprite.position.set(mid.x, mid.y + 0.3, mid.z);
+      group.add(sprite);
+    }
+    dirtyRef.current = true;
+  }, [annotations]);
+
   const getSketchPoint = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = containerRef.current;
     const camera = cameraRef.current;
@@ -1357,6 +1411,19 @@ export function ViewportCanvas() {
             ? [{ label: t('menu.paste'), onClick: () => useStore.getState().paste(), separatorBefore: true }]
             : []),
           { label: t('measure.tool'), onClick: () => useStore.getState().setMeasureActive(!useStore.getState().measureActive), separatorBefore: true },
+          ...(annotations.length > 0
+            ? [{
+                label: `${t('measure.annotation')} (${annotations.length})`,
+                submenu: annotations.map((ann) => ({
+                  label: `${ann.name}: ${ann.kind === 'distance' ? `${ann.value.toFixed(2)} mm` : `${ann.value.toFixed(1)}°`}`,
+                  onClick: () => {},
+                  danger: false,
+                  submenu: [
+                    { label: t('annotation.delete'), danger: true, onClick: () => useStore.getState().removeAnnotation(ann.id) },
+                  ],
+                })),
+              }]
+            : []),
           { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
           { label: t('menu.selectAll'), onClick: () => useStore.getState().selectAll() },
           { label: t('menu.deselectAll'), onClick: () => deselectAll() },
@@ -1458,7 +1525,7 @@ export function ViewportCanvas() {
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll, projection],
+    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll, projection, annotations],
   );
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
@@ -1785,6 +1852,12 @@ export function ViewportCanvas() {
                 <div className="text-accent">{t('measure.distance')}: {dist.toFixed(2)} mm</div>
                 <div>ΔX: {dx.toFixed(2)} ΔY: {dy.toFixed(2)} ΔZ: {dz.toFixed(2)}</div>
                 <div className="text-text-muted">{t('measure.angleHint')}</div>
+                <button
+                  className="mt-1 px-1.5 py-0.5 rounded bg-accent/20 text-accent text-[10px] hover:bg-accent/30 pointer-events-auto"
+                  onClick={() => addAnnotation({ id: `ann_${Date.now()}`, name: t('measure.annotation'), points: [a, b], value: dist, kind: 'distance' })}
+                >
+                  {t('measure.saveAnnotation')}
+                </button>
               </>
             );
           })() : (() => {
@@ -1796,6 +1869,12 @@ export function ViewportCanvas() {
               <>
                 <div className="text-accent">{t('measure.angle')}: {ang.toFixed(1)}°</div>
                 <div>{d1.toFixed(2)} mm · {d2.toFixed(2)} mm</div>
+                <button
+                  className="mt-1 px-1.5 py-0.5 rounded bg-accent/20 text-accent text-[10px] hover:bg-accent/30 pointer-events-auto"
+                  onClick={() => addAnnotation({ id: `ann_${Date.now()}`, name: t('measure.annotation'), points: [a, b, c], value: ang, kind: 'angle' })}
+                >
+                  {t('measure.saveAnnotation')}
+                </button>
               </>
             );
           })()}

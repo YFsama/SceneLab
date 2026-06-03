@@ -82,6 +82,7 @@ describe('saveToFile / loadFromFile', () => {
       axes: [makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 'Z')],
       points: [makePoint({ x: 1, y: 2, z: 3 }, 'P')],
       coordSystems: [makeCoordinateSystem({ x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 'CS')],
+      annotations: [],
     };
     const json = saveToFile(serializeProject('Ref', tree.features, [], [], refGeo));
     const loaded = loadFromFile(json);
@@ -97,7 +98,7 @@ describe('saveToFile / loadFromFile', () => {
 
   it('deserializeReferenceGeometry defaults to empty arrays for old files', () => {
     const rg = deserializeReferenceGeometry({ version: 1, name: 'x', features: [], bodies: [], metadata: { created: '', modified: '', appVersion: '' } });
-    expect(rg).toEqual({ planes: [], axes: [], points: [], coordSystems: [] });
+    expect(rg).toEqual({ planes: [], axes: [], points: [], coordSystems: [], annotations: [] });
   });
 
   it('should throw on invalid JSON', () => {

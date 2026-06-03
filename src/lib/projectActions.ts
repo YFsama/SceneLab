@@ -38,7 +38,7 @@ export function saveProjectToFile(): void {
   const s = useStore.getState();
   try {
     const project = serializeProject(s.projectName, s.featureTree.features, s.bodies, s.directBodies, {
-      planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems,
+      planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
     });
     downloadFile(saveToFile(project), `${s.projectName}.studio3d`);
     s.setProjectDirty(false);

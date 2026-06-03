@@ -536,6 +536,9 @@ export const translations: Record<string, TranslationMap> = {
     'viewport.projection': 'Projection (Perspective / Orthographic)',
     'viewport.perspective': 'Perspective',
     'viewport.orthographic': 'Orthographic',
+    'measure.saveAnnotation': 'Save as annotation',
+    'measure.annotation': 'Annotation',
+    'annotation.delete': 'Delete annotation',
   },
   zh: {
     'app.title': 'SceneLab',
@@ -1066,6 +1069,9 @@ export const translations: Record<string, TranslationMap> = {
     'viewport.projection': '投影模式（透视 / 正交）',
     'viewport.perspective': '透视',
     'viewport.orthographic': '正交',
+    'measure.saveAnnotation': '保存为标注',
+    'measure.annotation': '标注',
+    'annotation.delete': '删除标注',
   },
 };
 

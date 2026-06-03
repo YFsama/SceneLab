@@ -13,7 +13,7 @@ import type {
 import type { SolidBody } from '../geometry/types';
 import type { SketchEntity, SketchConstraint } from '../sketch/types';
 import type { PlaneDefinition } from '../geometry/types';
-import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition } from '../geometry/referenceGeometry';
+import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition, AnnotationDefinition } from '../geometry/referenceGeometry';
 
 /** Datum planes/axes/points/coordinate systems — plain serializable reference geometry. */
 export interface SerializedReferenceGeometry {
@@ -21,6 +21,7 @@ export interface SerializedReferenceGeometry {
   axes: AxisDefinition[];
   points: PointDefinition[];
   coordSystems: CoordinateSystemDefinition[];
+  annotations: AnnotationDefinition[];
 }
 
 export interface ProjectFile {
@@ -64,7 +65,7 @@ export function serializeProject(
   features: Feature[],
   bodies: SolidBody[],
   directBodies: SolidBody[] = [],
-  referenceGeometry: SerializedReferenceGeometry = { planes: [], axes: [], points: [], coordSystems: [] },
+  referenceGeometry: SerializedReferenceGeometry = { planes: [], axes: [], points: [], coordSystems: [], annotations: [] },
 ): ProjectFile {
   return {
     version: FILE_VERSION,
@@ -127,6 +128,7 @@ export function deserializeReferenceGeometry(project: ProjectFile): SerializedRe
     axes: Array.isArray(rg?.axes) ? rg.axes : [],
     points: Array.isArray(rg?.points) ? rg.points : [],
     coordSystems: Array.isArray(rg?.coordSystems) ? rg.coordSystems : [],
+    annotations: Array.isArray(rg?.annotations) ? rg.annotations : [],
   };
 }
 
