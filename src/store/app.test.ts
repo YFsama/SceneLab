@@ -1230,6 +1230,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedSketchId).toBeNull();
   });
 
+  it('setSketchLineLength moves the 2nd endpoint to set the length', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 3, 0); // along +X, length 3
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().setSketchLineLength(line.id, 10)).toBe(true);
+    const s = useStore.getState().currentSketch!;
+    const p1 = s.entities.get(line.p1Id) as { x: number; y: number };
+    const p2 = s.entities.get(line.p2Id) as { x: number; y: number };
+    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeCloseTo(10, 6);
+    expect(p2.y).toBeCloseTo(0, 6); // direction preserved (still along +X)
+    expect(useStore.getState().setSketchLineLength(line.id, 0)).toBe(false); // rejects non-positive
+  });
+
+  it('setSketchEntityRadius sets a circle/arc radius and rejects a line', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 5, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().setSketchEntityRadius(line.id, 7)).toBe(false); // not a circle/arc
+  });
+
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
     useStore.getState().setShowShortcuts(true);

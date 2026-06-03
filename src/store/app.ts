@@ -99,6 +99,10 @@ interface AppState {
   setSelectedSketchId: (id: string | null) => void;
   /** Remove a sketch entity from the current sketch. */
   removeSketchEntity: (id: string) => void;
+  /** Set a sketch line's length by moving its 2nd endpoint along the line; false if not a line. */
+  setSketchLineLength: (id: string, length: number) => boolean;
+  /** Set a sketch circle/arc's radius; false if the entity isn't a circle or arc. */
+  setSketchEntityRadius: (id: string, radius: number) => boolean;
 
   // Feature tree
   featureTree: FeatureTree;
@@ -451,6 +455,31 @@ export const useStore = create<AppState>((set, get) => {
     if (!sketch) return;
     removeEntity(sketch, id);
     set((s) => ({ currentSketch: { ...sketch }, selectedSketchId: s.selectedSketchId === id ? null : s.selectedSketchId, projectDirty: true }));
+  },
+  setSketchLineLength: (id, length) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(length > 0)) return false;
+    const e = sketch.entities.get(id);
+    if (!e || e.type !== 'line') return false;
+    const p1 = sketch.entities.get(e.p1Id);
+    const p2 = sketch.entities.get(e.p2Id);
+    if (p1?.type !== 'point' || p2?.type !== 'point') return false;
+    let dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) { dx = 1; dy = 0; } else { dx /= len; dy /= len; }
+    p2.x = p1.x + dx * length; // move the endpoint along the line so |p1→p2| = length
+    p2.y = p1.y + dy * length;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
+  },
+  setSketchEntityRadius: (id, radius) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(radius > 0)) return false;
+    const e = sketch.entities.get(id);
+    if (!e || (e.type !== 'circle' && e.type !== 'arc')) return false;
+    e.radius = radius;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
   },
 
   featureTree: new FeatureTree(),

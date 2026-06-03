@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import type { SolidBody } from '../../lib/geometry/types';
+import type { Sketch } from '../../lib/sketch/types';
 import { selectionSummary } from '../../lib/selectionSummary';
 import { Settings, Box, Ruler, Beaker, Weight, Layers, RulerIcon, Move, BarChart, Network, Maximize, Shield, Torus, Gauge, Crosshair, RefreshCw, GitBranch, Hash, TrendingUp, CornerDownRight, AlertTriangle, Zap, ArrowUpDown, Triangle, CheckCircle, Activity, Proportions, Ratio, Shapes, Minus, Diamond, Orbit, FlipHorizontal, Circle, ArrowRight, Pentagon, Hexagon, Waves, Columns, Anchor, Percent, Sliders, ArrowDownUp, Grid3X3, Network as NetworkIcon, Sigma, AreaChart, Target, Compass, Navigation, TrendingDown, Waypoints, BoxSelect, Layers as LayersIcon, MapPin, GitCommit, GitBranch as GitBranchIcon, GitMerge, GitPullRequest, Spline, Crosshair as CrosshairIcon, Ruler as RulerIcon2, CircleDot, Waypoints as WaypointsIcon, ArrowUpRight, TrendingUp as TrendingUpIcon, Waves as WavesIcon, Move as MoveIcon, Layers as LayersIcon2, Waypoints as WaypointsIcon2, Circle as CircleIcon, ArrowDown as ArrowDownIcon, ArrowRight as ArrowRightIcon, Spline as SplineIcon, Move as MoveIcon2, Square as SquareIcon, Diamond as DiamondIcon, CornerDownLeft, Move as MoveIcon3, ArrowRightLeft, Spline as SplineIcon2, Move as MoveIcon4, Square as SquareIcon2, Diamond as DiamondIcon2, Triangle as TriangleIcon, ArrowDown as ArrowDownIcon2, ArrowRightLeft as ArrowRightLeftIcon, Spline as SplineIcon3, Move as MoveIcon5, Square as SquareIcon3, Diamond as DiamondIcon3, Triangle as TriangleIcon2, ArrowDown as ArrowDownIcon3, ArrowRightLeft as ArrowRightLeftIcon2, Spline as SplineIcon4, Move as MoveIcon6, Square as SquareIcon4, Diamond as DiamondIcon4, Triangle as TriangleIcon3, ArrowDown as ArrowDownIcon4, ArrowRightLeft as ArrowRightLeftIcon3, Spline as SplineIcon5, Palette } from 'lucide-react';
 import { analyzeOverhangs, analyzeStability, recommendOrientation, estimatePrintJob, estimateSupportVolume, analyzeBedContact } from '../../lib/print';
@@ -75,6 +76,9 @@ export function PropertiesPanel() {
   const setRenameValue = useStore((s) => s.setRenameValue);
   const commitRename = useStore((s) => s.commitRename);
   const cancelRename = useStore((s) => s.cancelRename);
+  const sketchActive = useStore((s) => s.sketchActive);
+  const currentSketch = useStore((s) => s.currentSketch);
+  const selectedSketchId = useStore((s) => s.selectedSketchId);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const selectedBody = selectedIds.length === 1
@@ -92,7 +96,9 @@ export function PropertiesPanel() {
         <h2 className="text-sm font-semibold text-text-primary">{t('panel.properties')}</h2>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {selectedIds.length === 0 ? (
+        {sketchActive && selectedSketchId && currentSketch ? (
+          <SketchEntityEditor sketch={currentSketch} entityId={selectedSketchId} t={t} />
+        ) : selectedIds.length === 0 ? (
           <p className="text-xs text-text-muted">{t('panel.selectObject')}</p>
         ) : selectedBody ? (
           <div className="space-y-3">
@@ -2057,6 +2063,57 @@ function PositionEditor({ center, onMove }: { center: { x: number; y: number; z:
           <span className="text-text-muted">mm</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** A labelled numeric field that commits on Enter/blur (selects on focus). */
+function DimField({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
+  const [val, setVal] = useState(value.toFixed(2));
+  const commit = () => {
+    const n = parseFloat(val);
+    if (Number.isFinite(n) && n > 0) onCommit(n); else setVal(value.toFixed(2));
+  };
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs text-text-secondary">
+      <span>{label}</span>
+      <span className="flex items-center gap-1">
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          onBlur={commit}
+          onFocus={(e) => e.currentTarget.select()}
+          className="w-20 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
+        />
+        <span className="text-text-muted">mm</span>
+      </span>
+    </label>
+  );
+}
+
+/** Edit the driving dimension of the selected sketch entity (line length / radius). */
+function SketchEntityEditor({ sketch, entityId, t }: { sketch: Sketch; entityId: string; t: (k: string) => string }) {
+  const e = sketch.entities.get(entityId);
+  let field = <p className="text-xs text-text-muted">{t('panel.sketchEntity')}</p>;
+  if (e?.type === 'line') {
+    const p1 = sketch.entities.get(e.p1Id);
+    const p2 = sketch.entities.get(e.p2Id);
+    const len = p1?.type === 'point' && p2?.type === 'point' ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
+    field = <DimField key={`${entityId}:${len.toFixed(3)}`} label={t('dim.length')} value={len} onCommit={(v) => useStore.getState().setSketchLineLength(entityId, v)} />;
+  } else if (e?.type === 'circle' || e?.type === 'arc') {
+    field = <DimField key={`${entityId}:${e.radius.toFixed(3)}`} label={t('dim.radius')} value={e.radius} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v)} />;
+  }
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Ruler size={14} className="text-accent" />
+        <span className="text-sm font-medium text-text-primary">{t('panel.sketchEntity')}</span>
+      </div>
+      <div className="pl-1">{field}</div>
     </div>
   );
 }
