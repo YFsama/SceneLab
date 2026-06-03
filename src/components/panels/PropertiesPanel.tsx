@@ -2107,13 +2107,21 @@ function SketchEntityEditor({ sketch, entityId, t }: { sketch: Sketch; entityId:
   } else if (e?.type === 'circle' || e?.type === 'arc') {
     field = <DimField key={`${entityId}:${e.radius.toFixed(3)}`} label={t('dim.radius')} value={e.radius} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v)} />;
   }
+  // Friendly type label (Line/Circle/Arc/…) reusing the sketch-tool strings.
+  const typeLabel = e && e.type !== 'point' && e.type !== 'rectangle' ? t(`sketch.${e.type}`) : t('panel.sketchEntity');
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <Ruler size={14} className="text-accent" />
-        <span className="text-sm font-medium text-text-primary">{t('panel.sketchEntity')}</span>
+        <span className="text-sm font-medium text-text-primary">{typeLabel}</span>
       </div>
       <div className="pl-1">{field}</div>
+      <button
+        onClick={() => useStore.getState().removeSketchEntity(entityId)}
+        className="ml-1 px-2 py-0.5 text-xs rounded text-error hover:bg-error/10"
+      >
+        {t('menu.delete')}
+      </button>
     </div>
   );
 }
