@@ -137,4 +137,12 @@ export function initBuiltinCommands(): void {
   for (const kind of PRIMITIVES) {
     registerCommand({ id: `create.${kind}`, label: `Add ${kind}`, category: 'Create', run: () => s().addPrimitive(kind) });
   }
+  // Sketch draw tools — mirror the L/R/O/A/P/V hotkeys (active in a sketch).
+  const sketchTools: { tool: 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon'; key: string }[] = [
+    { tool: 'select', key: 'V' }, { tool: 'line', key: 'L' }, { tool: 'rect', key: 'R' },
+    { tool: 'circle', key: 'O' }, { tool: 'arc', key: 'A' }, { tool: 'polygon', key: 'P' },
+  ];
+  for (const { tool, key } of sketchTools) {
+    registerCommand({ id: `sketch.${tool}`, label: `Sketch tool: ${tool}`, category: 'Sketch', shortcut: key, run: () => s().setSketchTool(tool) });
+  }
 }
