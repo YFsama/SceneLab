@@ -512,6 +512,21 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setSelectionColor(0x123456)).toBe(0);
   });
 
+  it('setSelectionMaterial sets material on every selected body, no-op when matching', () => {
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().selectObject(a.id);
+    useStore.getState().toggleSelect(b.id);
+
+    expect(useStore.getState().setSelectionMaterial('aluminum')).toBe(2);
+    const byId = (id: string) => useStore.getState().bodies.find((x) => x.id === id);
+    expect(byId(a.id)?.material).toBe('aluminum');
+    expect(byId(b.id)?.material).toBe('aluminum');
+    expect(useStore.getState().setSelectionMaterial('aluminum')).toBe(0); // unchanged
+  });
+
   it('reorderBody moves a body within the tree order and is bounded at the ends', () => {
     const a = createBox(5, 5, 5);
     const b = createBox(5, 5, 5);

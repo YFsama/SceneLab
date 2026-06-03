@@ -1906,6 +1906,25 @@ export function PropertiesPanel() {
                 </div>
                 <div className="space-y-1">
                   <div className="flex items-center gap-1 text-xs text-text-muted">
+                    <Weight size={12} />
+                    <span>{t('panel.material')}</span>
+                  </div>
+                  <div className="pl-4">
+                    <select
+                      defaultValue=""
+                      onChange={(e) => { if (e.target.value) useStore.getState().setSelectionMaterial(e.target.value); }}
+                      className="w-full px-1.5 py-0.5 text-xs bg-surface border border-panel-border rounded text-text-primary"
+                      aria-label={t('panel.material')}
+                    >
+                      <option value="" disabled>—</option>
+                      {Object.entries(MATERIALS).map(([key, m]) => (
+                        <option key={key} value={key}>{m.name} ({m.density} g/cm³)</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 text-xs text-text-muted">
                     <Ruler size={12} />
                     <span>{t('panel.dimensions')}</span>
                   </div>

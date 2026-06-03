@@ -223,7 +223,8 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 8. **完整视图立方**：现 7 按钮；SW 可点面/边/角=26 朝向 + 拖拽。需独立 3D 控件。风险中。
 9. **测量/标注持久化**：测量是临时 overlay；需可保存的标注实体（点对/边+文本），随项目存取。风险中。
 10. **工程图(Drawing)工作区**：基本占位。3视图投影/剖视/标注/标题栏。**独立大模块。**
-11. **每实体材质 per-body material**（*已设计好、低风险、推荐先做*）：
+11. **每实体材质 per-body material** — ✅ 已完成 (`SolidBody.material` + `setBodyMaterial` +
+    `setSelectionMaterial` + 面板/右键 Material 菜单，随项目持久化)。原方案存档：
     - `SolidBody` 加 `material?: string`（io 直接序列化整对象 → 自动随项目保存）。
     - store 加 `setBodyMaterial(id, material)`（仿 `setBodyColor`：pushUndo + 不变 no-op）。
     - `MassProperties` 去掉本地 material state，改读 `body.material ?? 'steel'`，onChange 调 setBodyMaterial。

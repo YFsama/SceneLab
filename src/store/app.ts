@@ -146,6 +146,8 @@ interface AppState {
   setBodyMaterial: (id: string, material: string) => boolean;
   /** Set the colour of every selected direct body in one undoable step; returns how many changed. */
   setSelectionColor: (color: number) => number;
+  /** Set the material of every selected direct body in one undoable step; returns how many changed. */
+  setSelectionMaterial: (material: string) => number;
   /** Move a direct body one slot earlier/later in the tree order; false at the ends. */
   reorderBody: (id: string, direction: 'up' | 'down') => boolean;
   /** Toggle a (direct) body between opaque and semi-transparent; returns false if missing. */
@@ -725,6 +727,16 @@ export const useStore = create<AppState>((set, get) => {
     if (targets.length === 0) return 0;
     pushUndo();
     set({ directBodies: directBodies.map((b) => (sel.has(b.id) ? { ...b, color } : b)), projectDirty: true });
+    recombine();
+    return targets.length;
+  },
+  setSelectionMaterial: (material) => {
+    const { directBodies, selectedIds } = get();
+    const sel = new Set(selectedIds);
+    const targets = directBodies.filter((b) => sel.has(b.id) && (b.material ?? 'steel') !== material);
+    if (targets.length === 0) return 0;
+    pushUndo();
+    set({ directBodies: directBodies.map((b) => (sel.has(b.id) ? { ...b, material } : b)), projectDirty: true });
     recombine();
     return targets.length;
   },
