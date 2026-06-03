@@ -2175,4 +2175,172 @@ export function registerBuiltinTools(): void {
       };
     },
   });
+
+  // ── Compound / convenience tools ─────────────────────────────────────
+
+  registerTool({
+    name: 'sketch_rectangle_and_extrude',
+    description: 'Create a rectangular sketch on the ground plane and extrude it in one step. Returns the body ID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: 'Rectangle width (mm) along X' },
+        depth: { type: 'number', description: 'Rectangle depth (mm) along Z' },
+        height: { type: 'number', description: 'Extrude height (mm) along Y' },
+        name: { type: 'string', description: 'Optional body name' },
+      },
+      required: ['width', 'depth', 'height'],
+    },
+    execute: async (args) => {
+      const w = assertNumber(args.width, 'width');
+      const d = assertNumber(args.depth, 'depth');
+      const h = assertNumber(args.height, 'height');
+      const store = useStore.getState();
+      const body = createBox(w, h, d);
+      if (typeof args.name === 'string') body.name = args.name;
+      store.addDirectBodies([body]);
+      return { success: true, bodyId: body.id, name: body.name };
+    },
+  });
+
+  registerTool({
+    name: 'analyze_symmetry',
+    description: 'Check if a body is symmetric about the X, Y, and/or Z axes (within tolerance).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID' },
+        tolerance: { type: 'number', description: 'Tolerance in mm (default 0.1)' },
+      },
+      required: ['bodyId'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const body = store.bodies.find((b) => b.id === assertString(args.bodyId, 'bodyId'));
+      if (!body) throw new Error(`Body "${args.bodyId}" not found`);
+      const tol = typeof args.tolerance === 'number' ? args.tolerance : 0.1;
+      const checkSymmetry = (axis: 'x' | 'y' | 'z'): boolean => {
+        for (const v of body.vertices) {
+          const reflected = { ...v };
+          reflected[axis] = -reflected[axis];
+          // Check if the reflected point exists in the body.
+          const found = body.vertices.some((ov) =>
+            Math.abs(ov.x - reflected.x) < tol &&
+            Math.abs(ov.y - reflected.y) < tol &&
+            Math.abs(ov.z - reflected.z) < tol,
+          );
+          if (!found) return false;
+        }
+        return true;
+      };
+      return {
+        bodyId: body.id,
+        symmetricX: checkSymmetry('x'),
+        symmetricY: checkSymmetry('y'),
+        symmetricZ: checkSymmetry('z'),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'get_bounding_box',
+    description: 'Get the axis-aligned bounding box of a body (min, max, size, center).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID' },
+      },
+      required: ['bodyId'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const body = store.bodies.find((b) => b.id === assertString(args.bodyId, 'bodyId'));
+      if (!body) throw new Error(`Body "${args.bodyId}" not found`);
+      const min = { x: Infinity, y: Infinity, z: Infinity };
+      const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+      for (const v of body.vertices) {
+        min.x = Math.min(min.x, v.x); min.y = Math.min(min.y, v.y); min.z = Math.min(min.z, v.z);
+        max.x = Math.max(max.x, v.x); max.y = Math.max(max.y, v.y); max.z = Math.max(max.z, v.z);
+      }
+      return {
+        bodyId: body.id,
+        min,
+        max,
+        size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z },
+        center: { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: (min.z + max.z) / 2 },
+      };
+    },
+  });
+
+  registerTool({
+    name: 'set_body_appearance',
+    description: 'Set a body\'s color, opacity, and material in one call.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID' },
+        color: { type: 'number', description: 'Hex color (e.g. 0xff0000 for red)' },
+        opacity: { type: 'number', description: 'Opacity 0-1' },
+        material: { type: 'string', description: 'Material key from the materials library' },
+      },
+      required: ['bodyId'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const bodyId = assertString(args.bodyId, 'bodyId');
+      const body = store.bodies.find((b) => b.id === bodyId);
+      if (!body) throw new Error(`Body "${bodyId}" not found`);
+      if (typeof args.color === 'number') store.setBodyColor(bodyId, args.color);
+      if (typeof args.opacity === 'number') store.setBodyOpacity(bodyId, Math.max(0, Math.min(1, args.opacity)));
+      if (typeof args.material === 'string') store.setBodyMaterial(bodyId, args.material);
+      return { success: true, bodyId };
+    },
+  });
+
+  registerTool({
+    name: 'create_sketch_on_plane',
+    description: 'Start a sketch on a standard plane (xy, xz, or yz) and draw a shape. Returns sketch entity IDs for constraints/extrude.',
+    parameters: {
+      type: 'object',
+      properties: {
+        plane: { type: 'string', enum: ['xy', 'xz', 'yz'], description: 'Sketch plane' },
+        shape: {
+          type: 'string',
+          enum: ['line', 'rectangle', 'circle'],
+          description: 'Shape to draw',
+        },
+        params: {
+          type: 'object',
+          description: 'Shape parameters: line={x1,y1,x2,y2}, rectangle={x1,y1,x2,y2}, circle={cx,cy,r}',
+        },
+      },
+      required: ['plane', 'shape', 'params'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      const plane = assertEnum(args.plane, ['xy', 'xz', 'yz'] as const, 'plane');
+      const shape = assertEnum(args.shape, ['line', 'rectangle', 'circle'] as const, 'shape');
+      const p = (args.params ?? {}) as Record<string, number>;
+      // Create a sketch on the plane.
+      const { createSketch } = await import('../../lib/sketch/engine');
+      const sketch = createSketch(plane);
+      const engine = await import('../../lib/sketch/engine');
+      switch (shape) {
+        case 'line':
+          engine.addLine(sketch, p.x1 ?? 0, p.y1 ?? 0, p.x2 ?? 10, p.y2 ?? 0);
+          break;
+        case 'rectangle':
+          engine.addRectangle(sketch, p.x1 ?? 0, p.y1 ?? 0, p.x2 ?? 10, p.y2 ?? 5);
+          break;
+        case 'circle':
+          engine.addCircle(sketch, p.cx ?? 0, p.cy ?? 0, p.r ?? 5);
+          break;
+      }
+      store.setSketchPlaneId(plane);
+      store.setCurrentSketch(sketch);
+      store.setSketchActive(true);
+      store.setWorkspace('sketch');
+      return { success: true, plane, shape, entityCount: sketch.entities.size };
+    },
+  });
 }
