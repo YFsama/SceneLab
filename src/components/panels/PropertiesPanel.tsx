@@ -27,7 +27,8 @@ const materials: Record<string, { name: string; density: number }> = {
  * the material only re-renders this section, not the panel's ~50 mesh analyses.
  */
 function MassProperties({ body, t }: { body: SolidBody; t: (k: string) => string }) {
-  const [material, setMaterial] = useState('steel');
+  // Material is stored on the body so each part keeps its own (and it persists).
+  const material = body.material ?? 'steel';
   const volume = computeVolume(body);
   const density = materials[material]?.density ?? 7.85;
   const mass = (volume / 1000) * density; // mm³ to cm³, then * density
@@ -43,7 +44,7 @@ function MassProperties({ body, t }: { body: SolidBody; t: (k: string) => string
       <div className="pl-4 space-y-1">
         <select
           value={material}
-          onChange={(e) => setMaterial(e.target.value)}
+          onChange={(e) => useStore.getState().setBodyMaterial(body.id, e.target.value)}
           className="w-full px-1.5 py-0.5 text-xs bg-surface border border-panel-border rounded text-text-primary"
           aria-label={t('panel.material')}
         >

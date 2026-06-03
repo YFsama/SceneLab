@@ -142,6 +142,8 @@ interface AppState {
   cancelRename: () => void;
   /** Set a (direct) body's display colour (0xRRGGBB); returns false if the id isn't a direct body. */
   setBodyColor: (id: string, color: number) => boolean;
+  /** Set a (direct) body's material key (mass/density); false if unchanged or not a direct body. */
+  setBodyMaterial: (id: string, material: string) => boolean;
   /** Set the colour of every selected direct body in one undoable step; returns how many changed. */
   setSelectionColor: (color: number) => number;
   /** Move a direct body one slot earlier/later in the tree order; false at the ends. */
@@ -691,6 +693,15 @@ export const useStore = create<AppState>((set, get) => {
     if (!target || target.color === color) return false;
     pushUndo();
     set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, color } : b)), projectDirty: true });
+    recombine();
+    return true;
+  },
+  setBodyMaterial: (id, material) => {
+    const { directBodies } = get();
+    const target = directBodies.find((b) => b.id === id);
+    if (!target || (target.material ?? 'steel') === material) return false;
+    pushUndo();
+    set({ directBodies: directBodies.map((b) => (b.id === id ? { ...b, material } : b)), projectDirty: true });
     recombine();
     return true;
   },

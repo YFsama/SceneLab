@@ -26,6 +26,8 @@ export interface SolidBody {
   color?: number;
   /** Optional display opacity 0–1 (undefined/1 = opaque). */
   opacity?: number;
+  /** Optional material key (drives mass/density); undefined = default 'steel'. */
+  material?: string;
 }
 
 export interface ExtrudeParams {

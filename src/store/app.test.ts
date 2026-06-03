@@ -432,6 +432,25 @@ describe('app store — direct bodies', () => {
     useStore.getState().cancelRename();
   });
 
+  it('setBodyMaterial stores material per body, no-ops when unchanged, undoable', () => {
+    const a = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    const matOf = () => useStore.getState().bodies.find((b) => b.id === a.id)?.material;
+
+    expect(matOf()).toBeUndefined(); // defaults to steel implicitly
+    expect(useStore.getState().setBodyMaterial(a.id, 'aluminum')).toBe(true);
+    expect(matOf()).toBe('aluminum');
+    // Setting the same again → no-op.
+    expect(useStore.getState().setBodyMaterial(a.id, 'aluminum')).toBe(false);
+    // Setting back to the implicit default ('steel') is a real change from 'aluminum'.
+    expect(useStore.getState().setBodyMaterial(a.id, 'steel')).toBe(true);
+    // ...but from the default, 'steel' is a no-op.
+    expect(useStore.getState().setBodyMaterial(a.id, 'steel')).toBe(false);
+
+    useStore.getState().undo();
+    expect(matOf()).toBe('aluminum'); // last real change undone
+  });
+
   it('rename, colour and transparency edits are undoable', () => {
     const a = createBox(5, 5, 5);
     useStore.getState().addDirectBody(a);
