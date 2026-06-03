@@ -214,8 +214,8 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 
 ### P0 — 高价值、明显缺口
 1. **框选 / 矩形拖拽多选** — ✅ 已完成 (中键旋转 + 左键拖矩形框选 + body 中心投影包含测试 + Shift/Ctrl 追加选择)。
-2. **子实体选择（面/边）**：只能选整个 body。是“在面上画草图 / 对边倒角 / 测面间距”的前置。
-   需给 mesh 携带 faceId、拾取命中面、面高亮 + 状态模型。**风险高、工作量大。**
+2. **子实体选择（面/边）** — ✅ 基本完成 (`triFaceIds` 映射 + vertexColors + Ctrl+click 面选择 + 面高亮)。
+   边选择尚未实现（需 edge ID 映射）。
 
 ### P1 — 真正的建模内核（当前近似/占位）
 3. **圆角/倒角 Fillet/Chamfer**：`applyFillet/applyChamfer` 占位，产生非流形网格，未暴露 UI。

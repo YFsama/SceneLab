@@ -28,6 +28,13 @@ const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vec
   iso: { pos: new THREE.Vector3(5, 5, 5), up: new THREE.Vector3(0, 1, 0) },
 };
 
+/** Map a sketch plane ID to its 3D normal and 2D basis vectors (u, v). */
+const SKETCH_PLANE_FRAMES: Record<SketchPlaneId, { normal: THREE.Vector3; u: THREE.Vector3; v: THREE.Vector3 }> = {
+  xy: { normal: new THREE.Vector3(0, 0, 1), u: new THREE.Vector3(1, 0, 0), v: new THREE.Vector3(0, 1, 0) },
+  xz: { normal: new THREE.Vector3(0, 1, 0), u: new THREE.Vector3(1, 0, 0), v: new THREE.Vector3(0, 0, 1) },
+  yz: { normal: new THREE.Vector3(1, 0, 0), u: new THREE.Vector3(0, 1, 0), v: new THREE.Vector3(0, 0, 1) },
+};
+
 const PLANE_COLORS: Record<SketchPlaneId, number> = {
   xy: 0x89b4fa,
   xz: 0xa6e3a1,
@@ -102,6 +109,7 @@ export function ViewportCanvas() {
   const viewDirection = useStore((s) => s.viewDirection);
   const projection = useStore((s) => s.projection);
   const sketchActive = useStore((s) => s.sketchActive);
+  const sketchPlaneId = useStore((s) => s.sketchPlaneId);
   const sketchTool = useStore((s) => s.sketchTool);
   const currentSketch = useStore((s) => s.currentSketch);
   const drawStart = useStore((s) => s.drawStart);
@@ -499,8 +507,10 @@ export function ViewportCanvas() {
     if (sketchActive) {
       // Remember where we were looking, then snap normal-to the sketch plane.
       preSketchCamRef.current = { pos: camera.position.clone(), up: camera.up.clone(), target: controls.target.clone() };
-      camera.position.set(0, 14, 0);
-      camera.up.set(0, 0, -1);
+      const sFrame = SKETCH_PLANE_FRAMES[sketchPlaneId] ?? SKETCH_PLANE_FRAMES.xz;
+      // Camera looks along -normal from a distance; up = the plane's v axis.
+      camera.position.set(sFrame.normal.x * 14, sFrame.normal.y * 14, sFrame.normal.z * 14);
+      camera.up.set(-sFrame.v.x, -sFrame.v.y, -sFrame.v.z);
       controls.target.set(0, 0, 0);
       controls.update();
       if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
@@ -516,7 +526,7 @@ export function ViewportCanvas() {
       preSketchCamRef.current = null;
       dirtyRef.current = true;
     }
-  }, [sketchActive]);
+  }, [sketchActive, sketchPlaneId]);
 
   // Projection toggle: when switching between perspective and orthographic,
   // sync cameras and size the ortho frustum to match the current view extent.
@@ -622,6 +632,13 @@ export function ViewportCanvas() {
       if (entity.construction) return constructionMat;
       return sketchLineMatRef.current;
     };
+    // Convert 2D sketch coords to 3D world position on the active sketch plane.
+    const frame = SKETCH_PLANE_FRAMES[sketchPlaneId] ?? SKETCH_PLANE_FRAMES.xz;
+    const s2w = (x: number, y: number) => new THREE.Vector3(
+      frame.u.x * x + frame.v.x * y,
+      frame.u.y * x + frame.v.y * y,
+      frame.u.z * x + frame.v.z * y,
+    );
 
     for (const entity of currentSketch.entities.values()) {
       const isConstruction = entity.construction;
@@ -637,8 +654,8 @@ export function ViewportCanvas() {
           const p2 = currentSketch.entities.get(entity.p2Id);
           if (p1?.type === 'point' && p2?.type === 'point') {
             const geo = new THREE.BufferGeometry().setFromPoints([
-              new THREE.Vector3(p1.x, 0, p1.y),
-              new THREE.Vector3(p2.x, 0, p2.y),
+              s2w(p1.x, p1.y),
+              s2w(p2.x, p2.y),
             ]);
             const line = new THREE.Line(geo, matFor(entity));
             if (isConstruction) line.computeLineDistances();
@@ -651,7 +668,7 @@ export function ViewportCanvas() {
           if (center?.type === 'point') {
             const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, 0, Math.PI * 2, false, 0);
             const pts = curve.getPoints(64);
-            const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, 0, p.y)));
+            const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => s2w(p.x, p.y)));
             const line = new THREE.Line(geo, matFor(entity));
             if (isConstruction) line.computeLineDistances();
             sketchGroup.add(line);
@@ -663,7 +680,7 @@ export function ViewportCanvas() {
           if (center?.type === 'point') {
             const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, entity.startAngle, entity.endAngle, false, 0);
             const pts = curve.getPoints(64);
-            const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, 0, p.y)));
+            const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => s2w(p.x, p.y)));
             const line = new THREE.Line(geo, matFor(entity));
             if (isConstruction) line.computeLineDistances();
             sketchGroup.add(line);
@@ -675,7 +692,7 @@ export function ViewportCanvas() {
           const pts = ids
             .map((id) => currentSketch.entities.get(id))
             .filter((e): e is import('../../lib/sketch/types').SketchPoint => e?.type === 'point')
-            .map((e) => new THREE.Vector3(e.x, 0, e.y));
+            .map((e) => s2w(e.x, e.y));
           if (pts.length >= 5) {
             const geo = new THREE.BufferGeometry().setFromPoints(pts);
             const line = new THREE.Line(geo, matFor(entity));
@@ -687,7 +704,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [currentSketch, sketchActive, selectedSketchId]);
+  }, [currentSketch, sketchActive, selectedSketchId, sketchPlaneId]);
 
   // Live rubber-band preview of the shape being drawn (from the mouse-down point
   // to the current cursor) so you can see the line/rect/circle/arc before
@@ -708,7 +725,17 @@ export function ViewportCanvas() {
     }
 
     if (sketchActive && mousePos && sketchTool !== 'select') {
-      const v = (x: number, y: number) => new THREE.Vector3(x, 0.01, y);
+      const pvFrame = SKETCH_PLANE_FRAMES[sketchPlaneId] ?? SKETCH_PLANE_FRAMES.xz;
+      const v = (x: number, y: number) => {
+        const p = new THREE.Vector3(
+          pvFrame.u.x * x + pvFrame.v.x * y,
+          pvFrame.u.y * x + pvFrame.v.y * y,
+          pvFrame.u.z * x + pvFrame.v.z * y,
+        );
+        // Slight offset along the plane normal so the preview renders on top.
+        p.addScaledVector(pvFrame.normal, 0.01);
+        return p;
+      };
       const m = mousePos;
       const s = drawStart;
       // A marker dot at a sketch point, drawn on top (depthTest off) so it's
@@ -785,7 +812,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [drawStart, mousePos, sketchTool, sketchActive, currentSketch, polygonSides]);
+  }, [drawStart, mousePos, sketchTool, sketchActive, currentSketch, polygonSides, sketchPlaneId]);
 
   // Dimension labels on the sketch: each line shows its length, each circle/arc
   // its radius — drawn as camera-facing text sprites at the entity.
@@ -798,6 +825,16 @@ export function ViewportCanvas() {
       if (child instanceof THREE.Sprite) disposeSprite(child);
     }
     if (currentSketch && sketchActive) {
+      const dimFrame = SKETCH_PLANE_FRAMES[sketchPlaneId] ?? SKETCH_PLANE_FRAMES.xz;
+      const d2w = (x: number, y: number) => {
+        const p = new THREE.Vector3(
+          dimFrame.u.x * x + dimFrame.v.x * y,
+          dimFrame.u.y * x + dimFrame.v.y * y,
+          dimFrame.u.z * x + dimFrame.v.z * y,
+        );
+        p.addScaledVector(dimFrame.normal, 0.05);
+        return p;
+      };
       const pt = (id: string) => { const e = currentSketch.entities.get(id); return e?.type === 'point' ? e : null; };
       for (const e of currentSketch.entities.values()) {
         if (e.type === 'line') {
@@ -806,7 +843,8 @@ export function ViewportCanvas() {
             const len = Math.hypot(b.x - a.x, b.y - a.y);
             if (len > 1e-6) {
               const s = makeTextSprite(`${len.toFixed(1)}`, 0xf9e2af, 0.3);
-              s.position.set((a.x + b.x) / 2, 0.05, (a.y + b.y) / 2);
+              const mid = d2w((a.x + b.x) / 2, (a.y + b.y) / 2);
+              s.position.copy(mid);
               group.add(s);
             }
           }
@@ -814,14 +852,15 @@ export function ViewportCanvas() {
           const c = pt(e.centerId);
           if (c) {
             const s = makeTextSprite(`R${e.radius.toFixed(1)}`, 0xf9e2af, 0.3);
-            s.position.set(c.x, 0.05, c.y);
+            const cp = d2w(c.x, c.y);
+            s.position.copy(cp);
             group.add(s);
           }
         }
       }
     }
     dirtyRef.current = true;
-  }, [currentSketch, sketchActive, selectedSketchId]);
+  }, [currentSketch, sketchActive, selectedSketchId, sketchPlaneId]);
 
   // Incremental body + edge rendering: diff against the cache so only
   // changed/new/removed bodies rebuild geometry. This avoids a full teardown
@@ -1259,12 +1298,14 @@ export function ViewportCanvas() {
     mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
     raycasterRef.current.setFromCamera(mouseRef.current, camera);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const frame = SKETCH_PLANE_FRAMES[sketchPlaneId] ?? SKETCH_PLANE_FRAMES.xz;
+    const plane = new THREE.Plane(frame.normal, 0);
     const intersection = new THREE.Vector3();
     raycasterRef.current.ray.intersectPlane(plane, intersection);
     if (!intersection) return null;
 
-    const raw = { x: intersection.x, y: intersection.z };
+    // Project the 3D intersection into the sketch plane's local 2D coords.
+    const raw = { x: intersection.dot(frame.u), y: intersection.dot(frame.v) };
     // Hold Shift to draw freely (no snapping at all).
     if (e.shiftKey) return raw;
 
@@ -1288,7 +1329,7 @@ export function ViewportCanvas() {
 
     // Otherwise snap to the configurable grid step.
     return { x: Math.round(raw.x / gridSize) * gridSize, y: Math.round(raw.y / gridSize) * gridSize };
-  }, [currentSketch, gridSize]);
+  }, [currentSketch, gridSize, sketchPlaneId]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
