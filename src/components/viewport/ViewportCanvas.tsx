@@ -1544,6 +1544,35 @@ export function ViewportCanvas() {
         label: isConstruction ? t('sketch.normalGeometry') : t('sketch.construction'),
         onClick: () => useStore.getState().toggleSketchConstruction(selectedSketchId),
       });
+      // Context-sensitive constraint submenu.
+      if (ent && currentSketch) {
+        const store = useStore.getState();
+        const constraintItems: import('../ui/ContextMenu').ContextMenuItem[] = [];
+        if (ent.type === 'line') {
+          constraintItems.push(
+            { label: t('constraint.horizontal'), onClick: () => { store.addSketchConstraint('horizontal', [selectedSketchId]); } },
+            { label: t('constraint.vertical'), onClick: () => { store.addSketchConstraint('vertical', [selectedSketchId]); } },
+          );
+        }
+        if (ent.type === 'point') {
+          constraintItems.push(
+            { label: t('constraint.fixed'), onClick: () => { store.addSketchConstraint('fixed', [selectedSketchId]); } },
+          );
+        }
+        if (ent.type === 'circle' || ent.type === 'arc') {
+          const r = ent.radius;
+          constraintItems.push(
+            { label: t('constraint.radius'), onClick: () => {
+              const val = parseFloat(prompt(t('constraint.radiusPrompt'), String(r)) ?? '');
+              if (Number.isFinite(val) && val > 0) store.addSketchConstraint('radius', [selectedSketchId], val);
+            }},
+            { label: t('constraint.concentric'), onClick: () => { store.addSketchConstraint('concentric', [selectedSketchId]); } },
+          );
+        }
+        if (constraintItems.length > 0) {
+          items.push({ label: t('sketch.addConstraint'), separatorBefore: true, submenu: constraintItems });
+        }
+      }
     }
     const tools = ['select', 'line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] as const;
     items.push({
@@ -1860,6 +1889,17 @@ export function ViewportCanvas() {
       if (sketchActive && (e.key === 'Delete' || e.key === 'Backspace')) {
         const id = useStore.getState().selectedSketchId;
         if (id) { e.preventDefault(); useStore.getState().removeSketchEntity(id); }
+      }
+      // Constraint shortcuts: apply to the selected entity when a sketch entity is selected.
+      if (sketchActive && useStore.getState().selectedSketchId) {
+        const sid = useStore.getState().selectedSketchId!;
+        const sk = useStore.getState().currentSketch;
+        const sent = sk?.entities.get(sid);
+        if (sent) {
+          if (e.key === 'h' && sent.type === 'line') { e.preventDefault(); useStore.getState().addSketchConstraint('horizontal', [sid]); }
+          else if (e.key === 'j' && sent.type === 'line') { e.preventDefault(); useStore.getState().addSketchConstraint('vertical', [sid]); }
+          else if (e.key === 'f' && sent.type === 'point') { e.preventDefault(); useStore.getState().addSketchConstraint('fixed', [sid]); }
+        }
       }
       // Enter finishes the polyline chain.
       if (sketchActive && e.key === 'Enter' && useStore.getState().sketchTool === 'polyline') {

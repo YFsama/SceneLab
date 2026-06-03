@@ -523,6 +523,7 @@ export const useStore = create<AppState>((set, get) => {
   addSketchConstraint: (type, entityIds, value) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
+    pushSketchUndo();
     addConstraint(sketch, type, entityIds, value);
     set({ currentSketch: { ...sketch }, projectDirty: true });
   },
