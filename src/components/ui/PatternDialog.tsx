@@ -45,7 +45,7 @@ function Form({ bodyId, mode, t }: { bodyId: string; mode: 'linear' | 'circular'
     <label className="flex items-center justify-between gap-2 text-xs text-text-secondary">
       <span>{label}</span>
       <span className="flex items-center gap-1">
-        <input type="number" min={0} step={unit ? 0.5 : 1} value={value} onChange={(e) => set(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') create(); }} className="w-16 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs" />
+        <input type="number" min={0} step={unit ? 0.5 : 1} value={value} onChange={(e) => set(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') create(); }} onFocus={(e) => e.currentTarget.select()} className="w-16 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs" />
         {unit && <span className="text-text-muted">{unit}</span>}
       </span>
     </label>

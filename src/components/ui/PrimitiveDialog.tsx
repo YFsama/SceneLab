@@ -144,6 +144,7 @@ function Form({ kind, spec, t, onClose }: { kind: PrimitiveKind; spec: Spec; t: 
                   value={vals[f.key]}
                   onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))}
                   onKeyDown={(e) => { if (e.key === 'Enter') create(); }}
+                  onFocus={(e) => e.currentTarget.select()}
                   autoFocus={f === spec.fields[0]}
                   className="w-20 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
                 />

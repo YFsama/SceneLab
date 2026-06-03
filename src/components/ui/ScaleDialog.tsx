@@ -36,6 +36,7 @@ function Form({ t }: { t: (k: string) => string }) {
             value={factor}
             onChange={(e) => setFactor(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') apply(); }}
+            onFocus={(e) => e.currentTarget.select()}
             className="w-20 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
           />
         </label>

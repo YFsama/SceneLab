@@ -37,6 +37,7 @@ function Form({ bodyId, t }: { bodyId: string; t: (k: string) => string }) {
               value={thickness}
               onChange={(e) => setThickness(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') apply(); }}
+              onFocus={(e) => e.currentTarget.select()}
               className="w-20 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
             />
             <span className="text-text-muted">mm</span>
