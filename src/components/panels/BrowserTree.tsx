@@ -39,6 +39,7 @@ export function BrowserTree() {
   const setRotateDialogOpen = useStore((s) => s.setRotateDialogOpen);
   const moveSelectionToOrigin = useStore((s) => s.moveSelectionToOrigin);
   const flipSelected = useStore((s) => s.flipSelected);
+  const mirrorCopySelected = useStore((s) => s.mirrorCopySelected);
   const weldSelected = useStore((s) => s.weldSelected);
   const toggleBodyTransparency = useStore((s) => s.toggleBodyTransparency);
   const setScaleDialogOpen = useStore((s) => s.setScaleDialogOpen);
@@ -154,6 +155,9 @@ export function BrowserTree() {
           { label: t('menu.flipX'), onClick: pre(() => flipSelected('x')), separatorBefore: true },
           { label: t('menu.flipY'), onClick: pre(() => flipSelected('y')) },
           { label: t('menu.flipZ'), onClick: pre(() => flipSelected('z')) },
+          { label: t('menu.mirrorCopyX'), onClick: pre(() => mirrorCopySelected('x')), separatorBefore: true },
+          { label: t('menu.mirrorCopyY'), onClick: pre(() => mirrorCopySelected('y')) },
+          { label: t('menu.mirrorCopyZ'), onClick: pre(() => mirrorCopySelected('z')) },
         ],
       },
       {
