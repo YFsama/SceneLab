@@ -20,6 +20,7 @@ const GROUPS: Group[] = [
       { keys: '7', labelKey: 'viewport.left' },
       { keys: 'F', labelKey: 'viewport.fit' },
       { keys: 'Shift+F', labelKey: 'viewport.fitSelection' },
+      { keys: '+ / −', labelKey: 'shortcuts.zoom' },
       { keys: 'Home', labelKey: 'viewport.home' },
       { keys: 'G', labelKey: 'status.grid' },
       { keys: 'Tab', labelKey: 'shortcuts.hideSelected' },

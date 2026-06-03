@@ -1389,6 +1389,18 @@ export function ViewportCanvas() {
       else if (e.key === 'F') { e.preventDefault(); fitView(true); }
       else if (e.key === 'Home') { e.preventDefault(); resetView(); }
       else if (e.key === 'g' || e.key === 'G') { e.preventDefault(); useStore.getState().setShowGrid(!useStore.getState().showGrid); }
+      // +/- dolly the camera toward/away from the target (keyboard zoom).
+      else if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_') {
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+        if (camera && controls) {
+          e.preventDefault();
+          const factor = e.key === '-' || e.key === '_' ? 1.18 : 0.85;
+          camera.position.sub(controls.target).multiplyScalar(factor).add(controls.target);
+          controls.update();
+          dirtyRef.current = true;
+        }
+      }
       // Arrow keys nudge the selection on the ground plane (top-view mapping):
       // ←/→ = X, ↑/↓ = Z; PageUp/PageDown = vertical (Y). Shift = 10mm coarse
       // step, else 1mm. Skipped in sketch.
