@@ -120,8 +120,11 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'reference.midplaneFromSelection', label: 'Midplane from selected body (largest opposite faces)', category: 'Reference', run: () => addMidplaneFromSelection() });
   registerCommand({ id: 'project.save', label: 'Autosave now', category: 'Project', run: () => s().autosave() });
   registerCommand({ id: 'project.restore', label: 'Restore autosave', category: 'Project', run: () => s().restoreAutosave() });
+  // Keyboard hints mirror initShortcuts: 1 front, 2 top, 3 right, 4 iso,
+  // 5 back, 6 bottom, 7 left.
+  const viewKeys: Record<string, string> = { front: '1', top: '2', right: '3', iso: '4', back: '5', bottom: '6', left: '7' };
   for (const dir of ['top', 'bottom', 'front', 'back', 'left', 'right', 'iso'] as const) {
-    registerCommand({ id: `view.${dir}`, label: `View: ${dir}`, category: 'View', run: () => s().setViewDirection(dir) });
+    registerCommand({ id: `view.${dir}`, label: `View: ${dir}`, category: 'View', shortcut: viewKeys[dir], run: () => s().setViewDirection(dir) });
   }
   for (const kind of PRIMITIVES) {
     registerCommand({ id: `create.${kind}`, label: `Add ${kind}`, category: 'Create', run: () => s().addPrimitive(kind) });
