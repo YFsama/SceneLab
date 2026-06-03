@@ -107,7 +107,7 @@ export function DrawingCanvas() {
       }
     }
 
-    // Border
+    // Grid lines between views
     ctx.strokeStyle = '#ccc';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
@@ -116,7 +116,35 @@ export function DrawingCanvas() {
     ctx.moveTo(0, cellH);
     ctx.lineTo(w, cellH);
     ctx.stroke();
-  }, [views]);
+
+    // Title block (bottom-right corner, SolidWorks style).
+    const tbW = 200, tbH = 60;
+    const tbX = w - tbW - 4, tbY = h - tbH - 4;
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tbX, tbY, tbW, tbH);
+    // Horizontal divider
+    ctx.beginPath();
+    ctx.moveTo(tbX, tbY + tbH / 2);
+    ctx.lineTo(tbX + tbW, tbY + tbH / 2);
+    ctx.stroke();
+    // Vertical divider
+    ctx.beginPath();
+    ctx.moveTo(tbX + tbW * 0.4, tbY);
+    ctx.lineTo(tbX + tbW * 0.4, tbY + tbH);
+    ctx.stroke();
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(t('drawing.title'), tbX + 5, tbY + 18);
+    ctx.font = '10px sans-serif';
+    ctx.fillText(useStore.getState().projectName || 'Untitled', tbX + 5, tbY + 35);
+    ctx.fillText(`${t('drawing.scale')}: 1:1`, tbX + 5, tbY + 52);
+    ctx.textAlign = 'left';
+    ctx.fillText(`${t('drawing.date')}: ${new Date().toLocaleDateString()}`, tbX + tbW * 0.4 + 5, tbY + 18);
+    ctx.fillText(`${t('drawing.units')}: mm`, tbX + tbW * 0.4 + 5, tbY + 35);
+    ctx.fillText(`SceneLab v0.1`, tbX + tbW * 0.4 + 5, tbY + 52);
+  }, [views, t]);
 
   const handleExportSVG = () => {
     if (views.length === 0) {
