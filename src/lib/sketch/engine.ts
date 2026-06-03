@@ -246,3 +246,122 @@ export function snapTargets(sketch: Sketch): { x: number; y: number }[] {
   }
   return pts;
 }
+
+/** Result of rectangle detection: the 4 corners and 4 line IDs. */
+export interface DetectedRectangle {
+  /** Corner points in order: p1→p2 (width), p2→p3 (height). */
+  corners: [SketchPoint, SketchPoint, SketchPoint, SketchPoint];
+  lineIds: [string, string, string, string];
+  width: number;
+  height: number;
+}
+
+/**
+ * Detect if the given line is part of a rectangle pattern (4 connected lines
+ * forming a closed loop with ~90° angles at each corner). Returns the rectangle
+ * info or null if the line is not part of a rectangle.
+ */
+export function detectRectangle(sketch: Sketch, lineId: string): DetectedRectangle | null {
+  const line = sketch.entities.get(lineId);
+  if (!line || line.type !== 'line') return null;
+
+  // Build adjacency: point → set of line IDs that reference it.
+  const adj = new Map<string, string[]>();
+  for (const ent of sketch.entities.values()) {
+    if (ent.type === 'line') {
+      for (const pid of [ent.p1Id, ent.p2Id]) {
+        if (!adj.has(pid)) adj.set(pid, []);
+        adj.get(pid)!.push(ent.id);
+      }
+    }
+  }
+
+  // Walk the chain starting from this line.
+  const getEndpoints = (lid: string): [SketchPoint, SketchPoint] | null => {
+    const l = sketch.entities.get(lid);
+    if (!l || l.type !== 'line') return null;
+    const p1 = sketch.entities.get(l.p1Id);
+    const p2 = sketch.entities.get(l.p2Id);
+    if (!p1 || p1.type !== 'point' || !p2 || p2.type !== 'point') return null;
+    return [p1, p2];
+  };
+
+  const otherEnd = (lid: string, pid: string): string | null => {
+    const l = sketch.entities.get(lid);
+    if (!l || l.type !== 'line') return null;
+    return l.p1Id === pid ? l.p2Id : l.p1Id;
+  };
+
+  const eps = 1e-3;
+  const isRightAngle = (a: SketchPoint, b: SketchPoint, c: SketchPoint): boolean => {
+    const dx1 = b.x - a.x, dy1 = b.y - a.y;
+    const dx2 = c.x - b.x, dy2 = c.y - b.y;
+    const dot = dx1 * dx2 + dy1 * dy2;
+    const l1 = Math.hypot(dx1, dy1), l2 = Math.hypot(dx2, dy2);
+    if (l1 < eps || l2 < eps) return false;
+    return Math.abs(dot) / (l1 * l2) < 0.1; // ~90° (within ~6°)
+  };
+
+  // Try to walk 4 lines forming a closed rectangle.
+  const ends = getEndpoints(lineId);
+  if (!ends) return null;
+  const [startP, firstOther] = [ends[0], ends[1]];
+  const chain: string[] = [lineId];
+  const points: SketchPoint[] = [startP];
+  let currentPid = firstOther.id;
+
+  for (let step = 0; step < 3; step++) {
+    const candidates = (adj.get(currentPid) ?? []).filter((lid) => lid !== chain[chain.length - 1]);
+    if (candidates.length !== 1) return null; // must have exactly one continuation
+    const nextLineId = candidates[0]!;
+    const nextOther = otherEnd(nextLineId, currentPid);
+    if (!nextOther) return null;
+    const nextPt = sketch.entities.get(nextOther);
+    if (!nextPt || nextPt.type !== 'point') return null;
+    chain.push(nextLineId);
+    points.push(sketch.entities.get(currentPid) as SketchPoint);
+    currentPid = nextOther;
+  }
+
+  // The chain should close back to startP.
+  if (currentPid !== startP.id) return null;
+  if (chain.length !== 4) return null;
+
+  // Check all 4 angles are ~90°.
+  const p = points as [SketchPoint, SketchPoint, SketchPoint, SketchPoint];
+  for (let i = 0; i < 4; i++) {
+    const a = p[i]!, b = p[(i + 1) % 4]!, c = p[(i + 2) % 4]!;
+    if (!isRightAngle(a, b, c)) return null;
+  }
+
+  const width = Math.hypot(p[1]!.x - p[0]!.x, p[1]!.y - p[0]!.y);
+  const height = Math.hypot(p[2]!.x - p[1]!.x, p[2]!.y - p[1]!.y);
+  return {
+    corners: p,
+    lineIds: chain as [string, string, string, string],
+    width,
+    height,
+  };
+}
+
+/**
+ * Resize a detected rectangle by setting new width and/or height. Moves the
+ * appropriate lines to match the new dimensions, keeping p1 (first corner) fixed.
+ */
+export function resizeRectangle(_sketch: Sketch, rect: DetectedRectangle, newWidth: number, newHeight: number): void {
+  const [p1, p2, p3, p4] = rect.corners;
+  const oldW = rect.width || 1;
+  const oldH = rect.height || 1;
+
+  // Direction vectors for width (p1→p2) and height (p2→p3).
+  const wDir = { x: (p2.x - p1.x) / oldW, y: (p2.y - p1.y) / oldW };
+  const hDir = { x: (p3.x - p2.x) / oldH, y: (p3.y - p2.y) / oldH };
+
+  // New corner positions, keeping p1 fixed.
+  p2.x = p1.x + wDir.x * newWidth;
+  p2.y = p1.y + wDir.y * newWidth;
+  p3.x = p2.x + hDir.x * newHeight;
+  p3.y = p2.y + hDir.y * newHeight;
+  p4.x = p1.x + hDir.x * newHeight;
+  p4.y = p1.y + hDir.y * newHeight;
+}

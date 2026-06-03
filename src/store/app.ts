@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, type DetectedRectangle } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -118,6 +118,10 @@ interface AppState {
   nudgeSketchEntity: (id: string, dx: number, dy: number) => boolean;
   /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
   toggleSketchConstruction: (id: string) => void;
+  /** Detect if a sketch line is part of a rectangle pattern. */
+  detectSketchRectangle: (lineId: string) => DetectedRectangle | null;
+  /** Resize a detected rectangle (keeping first corner fixed). */
+  resizeSketchRectangle: (lineId: string, newWidth: number, newHeight: number) => void;
 
   // Feature tree
   featureTree: FeatureTree;
@@ -602,6 +606,20 @@ export const useStore = create<AppState>((set, get) => {
     if (!e) return;
     pushSketchUndo();
     (e as { construction?: boolean }).construction = !e.construction;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+  },
+  detectSketchRectangle: (lineId) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return null;
+    return detectRectangle(sketch, lineId);
+  },
+  resizeSketchRectangle: (lineId, newWidth, newHeight) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return;
+    const rect = detectRectangle(sketch, lineId);
+    if (!rect) return;
+    pushSketchUndo();
+    resizeRectangle(sketch, rect, newWidth, newHeight);
     set({ currentSketch: { ...sketch }, projectDirty: true });
   },
 

@@ -1569,6 +1569,26 @@ export function ViewportCanvas() {
             { label: t('constraint.concentric'), onClick: () => { store.addSketchConstraint('concentric', [selectedSketchId]); } },
           );
         }
+        // Rectangle dimension editing: if the selected line is part of a rectangle.
+        if (ent.type === 'line') {
+          const rect = store.detectSketchRectangle(selectedSketchId);
+          if (rect) {
+            items.push({
+              label: t('sketch.rectangleEdit'),
+              separatorBefore: true,
+              submenu: [
+                { label: `${t('sketch.setWidth')} (${rect.width.toFixed(1)})`, onClick: () => {
+                  const val = parseFloat(prompt(t('sketch.widthPrompt'), String(rect.width.toFixed(1))) ?? '');
+                  if (Number.isFinite(val) && val > 0) store.resizeSketchRectangle(selectedSketchId, val, rect.height);
+                }},
+                { label: `${t('sketch.setHeight')} (${rect.height.toFixed(1)})`, onClick: () => {
+                  const val = parseFloat(prompt(t('sketch.heightPrompt'), String(rect.height.toFixed(1))) ?? '');
+                  if (Number.isFinite(val) && val > 0) store.resizeSketchRectangle(selectedSketchId, rect.width, val);
+                }},
+              ],
+            });
+          }
+        }
         if (constraintItems.length > 0) {
           items.push({ label: t('sketch.addConstraint'), separatorBefore: true, submenu: constraintItems });
         }
