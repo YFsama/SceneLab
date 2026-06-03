@@ -221,8 +221,8 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 3. **圆角/倒角 Fillet/Chamfer**：`applyFillet/applyChamfer` 占位，产生非流形网格，未暴露 UI。
    需半边拓扑。见 memory `fillet-chamfer-nonmanifold.md`。**内核级，非一轮可完成。**
 4. **布尔运算是体素的（块状）**：需真网格布尔(manifold-3d)或 B-rep(OCCT)。**内核级。**
-5. **草图约束系统**：仅 H/V 推断；驱动尺寸是直接改几何，无求解器联动，无共线/相切/相等/
-   同心/对称约束，无“尺寸即约束”。需扩展 `solveSketch` + 约束 UI。**核心、风险高。**
+5. **草图约束系统** — ✅ 基本完成 (求解器已支持全部 10 种约束类型 + 右键菜单/快捷键约束 UI + undo)。
+   多实体约束(平行/垂直/等长/重合/距离)需双选实体 UI；切线/对称约束尚未暴露 UI。
 6. **多基准面草图** — ✅ 已完成 (`SKETCH_PLANE_FRAMES` + 法向求交 + 局部 2D 变换 + 相机/渲染/预览一致)。
 
 ### P2 — 中等价值、独立可做
