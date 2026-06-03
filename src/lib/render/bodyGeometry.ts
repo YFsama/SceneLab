@@ -5,6 +5,8 @@ export interface MeshArrays {
   positions: number[];
   /** Triangle vertex indices into `positions` (every 3 = one triangle). */
   indices: number[];
+  /** Maps each triangle (by index / 3) to the original face ID. */
+  triFaceIds: string[];
 }
 
 /**
@@ -17,6 +19,7 @@ export interface MeshArrays {
 export function buildBodyMeshArrays(body: SolidBody): MeshArrays {
   const positions: number[] = [];
   const indices: number[] = [];
+  const triFaceIds: string[] = [];
 
   for (const face of body.faces) {
     if (face.vertices.length < 3) continue;
@@ -26,8 +29,9 @@ export function buildBodyMeshArrays(body: SolidBody): MeshArrays {
     }
     for (let i = 1; i < face.vertices.length - 1; i++) {
       indices.push(baseIdx, baseIdx + i, baseIdx + i + 1);
+      triFaceIds.push(face.id);
     }
   }
 
-  return { positions, indices };
+  return { positions, indices, triFaceIds };
 }

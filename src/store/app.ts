@@ -346,6 +346,8 @@ interface AppState {
   // Scene objects
   objectIds: string[];
   selectedIds: string[];
+  selectedFaceIds: string[];
+  setSelectedFaceIds: (ids: string[]) => void;
   addObject: (id: string) => void;
   selectObject: (id: string) => void;
   /** Set the selection to exactly the given ids (box-select, etc.). */
@@ -1599,9 +1601,11 @@ export const useStore = create<AppState>((set, get) => {
 
   objectIds: [],
   selectedIds: [],
+  selectedFaceIds: [],
+  setSelectedFaceIds: (ids) => set({ selectedFaceIds: ids }),
   addObject: (id) => set((s) => ({ objectIds: [...s.objectIds, id] })),
-  selectObject: (id) => set({ selectedIds: [id] }),
-  setSelectedIds: (ids) => set({ selectedIds: ids }),
+  selectObject: (id) => set({ selectedIds: [id], selectedFaceIds: [] }),
+  setSelectedIds: (ids) => set({ selectedIds: ids, selectedFaceIds: [] }),
   toggleSelect: (id) =>
     set((s) => ({
       selectedIds: s.selectedIds.includes(id)
@@ -1611,7 +1615,7 @@ export const useStore = create<AppState>((set, get) => {
   // Select all *visible* bodies — hidden bodies stay out of the selection, as
   // in SolidWorks (Ctrl+A doesn't grab what you can't see).
   selectAll: () => set((s) => ({ selectedIds: s.bodies.filter((b) => !s.hiddenIds.includes(b.id)).map((b) => b.id) })),
-  deselectAll: () => set({ selectedIds: [] }),
+  deselectAll: () => set({ selectedIds: [], selectedFaceIds: [] }),
   hoveredId: null,
   // Guarded so a mousemove over the same body doesn't churn subscribers.
   setHoveredId: (id) => { if (get().hoveredId !== id) set({ hoveredId: id }); },

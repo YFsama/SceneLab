@@ -118,6 +118,7 @@ export function ViewportCanvas() {
   const datumPoints = useStore((s) => s.points);
   const coordSystems = useStore((s) => s.coordSystems);
   const selectedIds = useStore((s) => s.selectedIds);
+  const selectedFaceIds = useStore((s) => s.selectedFaceIds);
   const selectObject = useStore((s) => s.selectObject);
   const toggleSelect = useStore((s) => s.toggleSelect);
   const nudgeSelected = useStore((s) => s.nudgeSelected);
@@ -870,25 +871,30 @@ export function ViewportCanvas() {
         }
       }
 
-      // Build mesh.
+      // Build mesh with per-vertex colors (for face highlighting).
       const geo = new THREE.BufferGeometry();
-      const { positions, indices } = buildBodyMeshArrays(body);
+      const { positions, indices, triFaceIds } = buildBodyMeshArrays(body);
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setIndex(indices);
       geo.computeVertexNormals();
+      // Initialize vertex colors to the base body color.
+      const baseR = 0x89 / 255, baseG = 0xb4 / 255, baseB = 0xfa / 255;
+      const colors = new Float32Array(positions.length);
+      for (let i = 0; i < colors.length; i += 3) { colors[i] = baseR; colors[i + 1] = baseG; colors[i + 2] = baseB; }
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       const op = body.opacity ?? 1;
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x89b4fa,
         roughness: 0.4,
         metalness: 0.1,
         side: THREE.DoubleSide,
         wireframe,
         transparent: op < 1,
         opacity: op,
+        vertexColors: true,
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = body.name;
-      mesh.userData = { bodyId: body.id };
+      mesh.userData = { bodyId: body.id, triFaceIds };
       bodiesGroup.add(mesh);
 
       // Build edges.
@@ -946,11 +952,13 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [bodies, selectedIds, hiddenIds, showCenterOfMass]);
 
-  // Apply selection / hover styling by tweaking materials (no geometry rebuild):
-  // selected → orange glow, hovered (unselected) → a lighter blue preselect.
+  // Apply selection / hover styling by tweaking materials and vertex colors.
+  // With vertexColors:true the material colour is white; vertex colours encode
+  // the body tint and per-face selection highlight. Emissive adds the glow.
   useEffect(() => {
     const bodiesGroup = bodiesGroupRef.current;
     if (!bodiesGroup) return;
+    const selectedFaceSet = new Set(useStore.getState().selectedFaceIds);
     const colorOf = new Map(bodies.map((b) => [b.id, b.color ?? 0x89b4fa]));
     for (const child of bodiesGroup.children) {
       if (!(child instanceof THREE.Mesh)) continue;
@@ -958,18 +966,53 @@ export function ViewportCanvas() {
       const mat = child.material as THREE.MeshStandardMaterial;
       const selected = !!id && selectedIds.includes(id);
       const hovered = !sketchActive && !!id && id === hoveredId;
-      // Brightness is encoded in the emissive colour (no emissiveIntensity write)
-      // so the material is mutated only through setHex.
+      // Emissive glow for body selection/hover.
       if (selected) {
-        mat.color.setHex(0xfab387); mat.emissive.setHex(0x6e3b00);
+        mat.emissive.setHex(0x6e3b00);
       } else if (hovered) {
-        mat.color.setHex(0xb4befe); mat.emissive.setHex(0x232a52);
+        mat.emissive.setHex(0x232a52);
       } else {
-        mat.color.setHex((id && colorOf.get(id)) || 0x89b4fa); mat.emissive.setHex(0x000000);
+        mat.emissive.setHex(0x000000);
+      }
+      // Update vertex colours: body tint for most, face highlight for selected faces.
+      const baseHex = (id && colorOf.get(id)) || 0x89b4fa;
+      const baseR = ((baseHex >> 16) & 0xff) / 255;
+      const baseG = ((baseHex >> 8) & 0xff) / 255;
+      const baseB = (baseHex & 0xff) / 255;
+      const selR = 0xfa / 255, selG = 0xb3 / 255, selB = 0x87 / 255; // orange highlight
+      const geo = child.geometry;
+      const colorAttr = geo.getAttribute('color');
+      if (!colorAttr) continue;
+      const triFaceIds = child.userData.triFaceIds as string[] | undefined;
+      const indexAttr = geo.getIndex();
+      if (triFaceIds && indexAttr && selectedFaceSet.size > 0 && id && selectedIds.includes(id)) {
+        // Per-face vertex colour update.
+        const colors = colorAttr.array as Float32Array;
+        for (let ti = 0; ti < triFaceIds.length; ti++) {
+          const fid = triFaceIds[ti]!;
+          const isFaceSel = selectedFaceSet.has(fid);
+          const r = isFaceSel ? selR : baseR;
+          const g = isFaceSel ? selG : baseG;
+          const b = isFaceSel ? selB : baseB;
+          for (let vi = 0; vi < 3; vi++) {
+            const idx = indexAttr.getX(ti * 3 + vi);
+            colors[idx * 3] = r;
+            colors[idx * 3 + 1] = g;
+            colors[idx * 3 + 2] = b;
+          }
+        }
+        colorAttr.needsUpdate = true;
+      } else {
+        // Uniform body colour.
+        const colors = colorAttr.array as Float32Array;
+        for (let i = 0; i < colors.length; i += 3) {
+          colors[i] = baseR; colors[i + 1] = baseG; colors[i + 2] = baseB;
+        }
+        colorAttr.needsUpdate = true;
       }
     }
     dirtyRef.current = true;
-  }, [bodies, selectedIds, hoveredId, sketchActive]);
+  }, [bodies, selectedIds, hoveredId, sketchActive, selectedFaceIds]);
 
   // Render the store's datum/reference planes as translucent outlined quads.
   useEffect(() => {
@@ -1300,8 +1343,28 @@ export function ViewportCanvas() {
         const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
         const ordered = distinctInOrder(bodyHits.map((h) => h.object.userData.bodyId as string | undefined));
         if (ordered.length > 0) {
-          // Ctrl/⌘/Shift-click adds to (or toggles) the selection, like SolidWorks.
-          if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          // Ctrl+click selects the face under the cursor (sub-entity selection).
+          if ((e.ctrlKey || e.metaKey) && bodyHits[0]) {
+            const hit = bodyHits[0];
+            const mesh = hit.object as THREE.Mesh;
+            const triFaceIds = mesh.userData.triFaceIds as string[] | undefined;
+            const faceIndex = hit.faceIndex;
+            if (triFaceIds && faceIndex != null) {
+              const fid = triFaceIds[faceIndex];
+              if (fid) {
+                // Ensure the body is selected first.
+                const bodyId = mesh.userData.bodyId as string;
+                if (!selectedIds.includes(bodyId)) selectObject(bodyId);
+                const current = useStore.getState().selectedFaceIds;
+                useStore.getState().setSelectedFaceIds(
+                  current.includes(fid) ? current.filter((f) => f !== fid) : [...current, fid],
+                );
+                return;
+              }
+            }
+            // Fallback: toggle body selection if face detection fails.
+            toggleSelect(ordered[0]!);
+          } else if (e.shiftKey) {
             toggleSelect(ordered[0]!);
           } else {
             // Plain click cycles through stacked bodies so occluded parts are

@@ -213,11 +213,7 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 > 但内核类项（真 fillet/chamfer、真布尔、约束求解器、STEP）仍是占位或缺失。
 
 ### P0 — 高价值、明显缺口
-1. **框选 / 矩形拖拽多选**：完全没有。根本冲突——左键拖空白=旋转。SW 做法=中键旋转、
-   左键框选（左→右框选 / 右→左交叉）。方案：`controls.mouseButtons` 改 MIDDLE=ROTATE，
-   左键画屏幕矩形 overlay，up 时把可见 body 包围盒中心投影到屏幕做包含测试（抽纯函数
-   `boxContains` 单测），抑制随后的 click。**风险高**：改导航习惯 + 无法目视验证；建议
-   先与用户确认“旋转改中键”，最好能交互测试。入口 `ViewportCanvas`（OrbitControls ~198）。
+1. **框选 / 矩形拖拽多选** — ✅ 已完成 (中键旋转 + 左键拖矩形框选 + body 中心投影包含测试 + Shift/Ctrl 追加选择)。
 2. **子实体选择（面/边）**：只能选整个 body。是“在面上画草图 / 对边倒角 / 测面间距”的前置。
    需给 mesh 携带 faceId、拾取命中面、面高亮 + 状态模型。**风险高、工作量大。**
 
