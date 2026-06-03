@@ -103,6 +103,8 @@ interface AppState {
   setSketchLineLength: (id: string, length: number) => boolean;
   /** Set a sketch circle/arc's radius; false if the entity isn't a circle or arc. */
   setSketchEntityRadius: (id: string, radius: number) => boolean;
+  /** Set a sketch line's angle (deg from +X) by rotating its 2nd endpoint about the 1st. */
+  setSketchLineAngle: (id: string, deg: number) => boolean;
   /** Translate a sketch entity's points by (dx, dy); false if it has no movable points. */
   nudgeSketchEntity: (id: string, dx: number, dy: number) => boolean;
 
@@ -480,6 +482,22 @@ export const useStore = create<AppState>((set, get) => {
     const e = sketch.entities.get(id);
     if (!e || (e.type !== 'circle' && e.type !== 'arc')) return false;
     e.radius = radius;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
+  },
+  setSketchLineAngle: (id, deg) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return false;
+    const e = sketch.entities.get(id);
+    if (!e || e.type !== 'line') return false;
+    const p1 = sketch.entities.get(e.p1Id);
+    const p2 = sketch.entities.get(e.p2Id);
+    if (p1?.type !== 'point' || p2?.type !== 'point') return false;
+    const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    if (len < 1e-9) return false; // no direction to set an angle on
+    const rad = (deg * Math.PI) / 180;
+    p2.x = p1.x + Math.cos(rad) * len; // rotate the endpoint about p1, keeping length
+    p2.y = p1.y + Math.sin(rad) * len;
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
   },

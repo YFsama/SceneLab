@@ -1250,6 +1250,17 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setSketchEntityRadius(line.id, 7)).toBe(false); // not a circle/arc
   });
 
+  it('setSketchLineAngle rotates the endpoint about p1, keeping length', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 5, 0); // length 5 along +X (0°)
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().setSketchLineAngle(line.id, 90)).toBe(true);
+    const s = useStore.getState().currentSketch!;
+    const p2 = s.entities.get(line.p2Id) as { x: number; y: number };
+    expect(p2.x).toBeCloseTo(0, 6);
+    expect(p2.y).toBeCloseTo(5, 6); // now points +Y, length preserved
+  });
+
   it('nudgeSketchEntity translates the entity points', () => {
     const sketch = createSketch('xy');
     const line = addLine(sketch, 0, 0, 5, 0);

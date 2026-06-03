@@ -2067,12 +2067,13 @@ function PositionEditor({ center, onMove }: { center: { x: number; y: number; z:
   );
 }
 
-/** A labelled numeric field that commits on Enter/blur (selects on focus). */
-function DimField({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
+/** A labelled numeric field that commits on Enter/blur (selects on focus).
+ * `allowAny` accepts any finite value (e.g. an angle); otherwise positive only. */
+function DimField({ label, value, onCommit, unit = 'mm', allowAny = false }: { label: string; value: number; onCommit: (v: number) => void; unit?: string; allowAny?: boolean }) {
   const [val, setVal] = useState(value.toFixed(2));
   const commit = () => {
     const n = parseFloat(val);
-    if (Number.isFinite(n) && n > 0) onCommit(n); else setVal(value.toFixed(2));
+    if (Number.isFinite(n) && (allowAny || n > 0)) onCommit(n); else setVal(value.toFixed(2));
   };
   return (
     <label className="flex items-center justify-between gap-2 text-xs text-text-secondary">
@@ -2080,7 +2081,6 @@ function DimField({ label, value, onCommit }: { label: string; value: number; on
       <span className="flex items-center gap-1">
         <input
           type="number"
-          min={0}
           step={0.5}
           value={val}
           onChange={(e) => setVal(e.target.value)}
@@ -2089,7 +2089,7 @@ function DimField({ label, value, onCommit }: { label: string; value: number; on
           onFocus={(e) => e.currentTarget.select()}
           className="w-20 px-1.5 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
         />
-        <span className="text-text-muted">mm</span>
+        <span className="text-text-muted">{unit}</span>
       </span>
     </label>
   );
@@ -2102,8 +2102,15 @@ function SketchEntityEditor({ sketch, entityId, t }: { sketch: Sketch; entityId:
   if (e?.type === 'line') {
     const p1 = sketch.entities.get(e.p1Id);
     const p2 = sketch.entities.get(e.p2Id);
-    const len = p1?.type === 'point' && p2?.type === 'point' ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
-    field = <DimField key={`${entityId}:${len.toFixed(3)}`} label={t('dim.length')} value={len} onCommit={(v) => useStore.getState().setSketchLineLength(entityId, v)} />;
+    const havePts = p1?.type === 'point' && p2?.type === 'point';
+    const len = havePts ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
+    const ang = havePts ? ((Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI + 360) % 360 : 0;
+    field = (
+      <div className="space-y-1">
+        <DimField key={`${entityId}:l:${len.toFixed(3)}`} label={t('dim.length')} value={len} onCommit={(v) => useStore.getState().setSketchLineLength(entityId, v)} />
+        <DimField key={`${entityId}:a:${ang.toFixed(2)}`} label={t('dim.angle')} value={ang} unit="°" allowAny onCommit={(v) => useStore.getState().setSketchLineAngle(entityId, v)} />
+      </div>
+    );
   } else if (e?.type === 'circle' || e?.type === 'arc') {
     field = <DimField key={`${entityId}:${e.radius.toFixed(3)}`} label={t('dim.radius')} value={e.radius} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v)} />;
   }
