@@ -616,6 +616,13 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().lastPrimitiveParams.cylinder).toBeUndefined();
   });
 
+  it('rememberPrimitiveParams persists to localStorage', () => {
+    useStore.getState().rememberPrimitiveParams('cylinder', { r: 7, h: 20 });
+    const raw = localStorage.getItem('scenelab.lastPrimitiveParams');
+    expect(raw).toBeTruthy();
+    expect(JSON.parse(raw!).cylinder).toEqual({ r: 7, h: 20 });
+  });
+
   it('duplicateSelected clones selected bodies (offset, colour kept) and selects copies', () => {
     useStore.getState().clearScene();
     const box = createBox(5, 5, 5);

@@ -1282,9 +1282,16 @@ export const useStore = create<AppState>((set, get) => {
   setShowCenterOfMass: (showCenterOfMass) => { set({ showCenterOfMass }); persist('scenelab.showCenterOfMass', String(showCenterOfMass)); },
   pendingPrimitive: null,
   setPendingPrimitive: (pendingPrimitive) => set({ pendingPrimitive }),
-  lastPrimitiveParams: {},
+  // Persisted so your preferred primitive dimensions carry over between sessions.
+  lastPrimitiveParams: (() => {
+    try { return JSON.parse(stored('scenelab.lastPrimitiveParams') || '{}'); } catch { return {}; }
+  })(),
   rememberPrimitiveParams: (kind, params) =>
-    set((s) => ({ lastPrimitiveParams: { ...s.lastPrimitiveParams, [kind]: params } })),
+    set((s) => {
+      const next = { ...s.lastPrimitiveParams, [kind]: params };
+      persist('scenelab.lastPrimitiveParams', JSON.stringify(next));
+      return { lastPrimitiveParams: next };
+    }),
   measureActive: false,
   setMeasureActive: (measureActive) => set({ measureActive, measurePts: [] }),
   measurePts: [],
