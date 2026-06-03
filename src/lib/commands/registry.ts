@@ -129,6 +129,7 @@ export function initBuiltinCommands(): void {
   for (const dir of ['top', 'bottom', 'front', 'back', 'left', 'right', 'iso'] as const) {
     registerCommand({ id: `view.${dir}`, label: `View: ${dir}`, category: 'View', shortcut: viewKeys[dir], run: () => s().setViewDirection(dir) });
   }
+  registerCommand({ id: 'view.toggleProjection', label: 'Toggle Perspective / Orthographic', category: 'View', shortcut: 'Shift+P', run: () => s().toggleProjection() });
   // Workspace switching — mirrors the S/M/D/C shortcuts. Entering Sketch also
   // activates the sketch (matching the 'S' hotkey).
   registerCommand({ id: 'workspace.sketch', label: 'Workspace: Sketch', category: 'View', shortcut: 'S', run: () => { if (!s().sketchActive) { s().setWorkspace('sketch'); s().setSketchActive(true); } } });

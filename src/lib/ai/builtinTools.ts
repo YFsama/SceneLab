@@ -2130,6 +2130,23 @@ export function registerBuiltinTools(): void {
     },
   });
 
+  registerTool({
+    name: 'set_projection',
+    description: 'Switch between perspective and orthographic camera projection',
+    parameters: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['perspective', 'orthographic'], description: 'Projection mode' },
+      },
+      required: ['mode'],
+    },
+    execute: async (args) => {
+      const store = useStore.getState();
+      store.setProjection(args.mode as 'perspective' | 'orthographic');
+      return { success: true, mode: args.mode };
+    },
+  });
+
   // CAM tools
   registerTool({
     name: 'suggest_feeds_speeds',

@@ -18,7 +18,9 @@ const views: { dir: ViewDirection; shortcut?: string }[] = [
 export function ViewCube() {
   const { t } = useT();
   const current = useStore((s) => s.viewDirection);
+  const projection = useStore((s) => s.projection);
   const setView = useStore((s) => s.setViewDirection);
+  const toggleProjection = useStore((s) => s.toggleProjection);
 
   return (
     <div
@@ -47,6 +49,19 @@ export function ViewCube() {
           )}
         </button>
       ))}
+      <button
+        onClick={toggleProjection}
+        className={`px-2 py-1 text-xs font-medium rounded transition-colors
+          ${projection === 'orthographic'
+            ? 'bg-accent text-white'
+            : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+          }`}
+        aria-label={t('viewport.projection')}
+        aria-pressed={projection === 'orthographic'}
+        title={`${t('viewport.projection')} (Shift+P)`}
+      >
+        {projection === 'orthographic' ? t('viewport.orthographic') : t('viewport.perspective')}
+      </button>
     </div>
   );
 }

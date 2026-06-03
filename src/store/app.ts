@@ -53,6 +53,7 @@ export type Locale = 'en' | 'zh';
 export type WorkspaceMode = 'sketch' | 'model' | 'assembly' | 'drawing' | 'cam';
 export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'constraint';
 export type ViewDirection = 'top' | 'front' | 'right' | 'iso' | 'back' | 'bottom' | 'left';
+export type ProjectionMode = 'perspective' | 'orthographic';
 export type SketchPlaneId = 'xy' | 'xz' | 'yz';
 
 interface AppState {
@@ -327,6 +328,9 @@ interface AppState {
   // Viewport
   viewDirection: ViewDirection;
   setViewDirection: (d: ViewDirection) => void;
+  projection: ProjectionMode;
+  setProjection: (p: ProjectionMode) => void;
+  toggleProjection: () => void;
 
   // Scene objects
   objectIds: string[];
@@ -1529,6 +1533,9 @@ export const useStore = create<AppState>((set, get) => {
 
   viewDirection: 'iso',
   setViewDirection: (viewDirection) => set({ viewDirection }),
+  projection: 'perspective',
+  setProjection: (projection) => set({ projection }),
+  toggleProjection: () => set((s) => ({ projection: s.projection === 'perspective' ? 'orthographic' : 'perspective' })),
 
   objectIds: [],
   selectedIds: [],

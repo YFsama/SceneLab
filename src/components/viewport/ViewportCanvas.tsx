@@ -15,7 +15,7 @@ import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
-import { Maximize2, Check } from 'lucide-react';
+import { Maximize2, Check, Box } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
@@ -73,6 +73,7 @@ export function ViewportCanvas() {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const orthoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const planesGroupRef = useRef<THREE.Group | null>(null);
   const datumGroupRef = useRef<THREE.Group | null>(null);
@@ -95,6 +96,7 @@ export function ViewportCanvas() {
   const preSketchCamRef = useRef<{ pos: THREE.Vector3; up: THREE.Vector3; target: THREE.Vector3 } | null>(null);
 
   const viewDirection = useStore((s) => s.viewDirection);
+  const projection = useStore((s) => s.projection);
   const sketchActive = useStore((s) => s.sketchActive);
   const sketchTool = useStore((s) => s.sketchTool);
   const currentSketch = useStore((s) => s.currentSketch);
@@ -163,9 +165,22 @@ export function ViewportCanvas() {
       if (dirtyRef.current) {
         const renderer = rendererRef.current;
         const scene = sceneRef.current;
-        const camera = cameraRef.current;
-        if (renderer && scene && camera) {
-          renderer.render(scene, camera);
+        const cam = cameraRef.current;
+        const ortho = orthoCameraRef.current;
+        if (renderer && scene && cam && ortho) {
+          // Keep both cameras in sync: copy the active camera's transform to the
+          // inactive one so switching projection is instantaneous.
+          const proj = useStore.getState().projection;
+          const activeCam: THREE.Camera = proj === 'orthographic' ? ortho : cam;
+          if (proj === 'orthographic') {
+            ortho.position.copy(cam.position);
+            ortho.up.copy(cam.up);
+            ortho.lookAt(controls!.target);
+          } else {
+            cam.position.copy(ortho.position);
+            cam.up.copy(ortho.up);
+          }
+          renderer.render(scene, activeCam);
         }
         dirtyRef.current = false;
       }
@@ -207,6 +222,20 @@ export function ViewportCanvas() {
     camera.position.set(5, 5, 5);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
+
+    // Orthographic camera — same position/look-at as the perspective camera;
+    // frustum is sized to match the perspective view at the current distance.
+    const aspect = container.clientWidth / container.clientHeight;
+    const frustumSize = 10;
+    const orthoCamera = new THREE.OrthographicCamera(
+      -frustumSize * aspect / 2, frustumSize * aspect / 2,
+      frustumSize / 2, -frustumSize / 2,
+      0.1, 1000,
+    );
+    orthoCamera.position.copy(camera.position);
+    orthoCamera.up.copy(camera.up);
+    orthoCamera.lookAt(0, 0, 0);
+    orthoCameraRef.current = orthoCamera;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -315,6 +344,14 @@ export function ViewportCanvas() {
       const h = container.clientHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      // Update ortho camera frustum to match the new aspect ratio.
+      const oc = orthoCameraRef.current;
+      if (oc) {
+        const halfH = (oc.top - oc.bottom) / 2;
+        oc.left = -halfH * (w / h);
+        oc.right = halfH * (w / h);
+        oc.updateProjectionMatrix();
+      }
       // Re-clamp in case the window moved to a monitor with a different DPR.
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w, h);
@@ -353,6 +390,7 @@ export function ViewportCanvas() {
 
   useEffect(() => {
     const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
@@ -361,6 +399,11 @@ export function ViewportCanvas() {
     camera.up.copy(dir.up);
     controls.target.set(0, 0, 0);
     controls.update();
+    // Keep ortho camera in sync so toggling projection later shows the same view.
+    if (ortho) {
+      ortho.position.copy(camera.position);
+      ortho.up.copy(camera.up);
+    }
     // Snapping the camera is an instant jump; mark dirty so the on-demand loop
     // repaints even if OrbitControls reports no incremental movement.
     dirtyRef.current = true;
@@ -371,6 +414,7 @@ export function ViewportCanvas() {
   // the "normal to" behaviour that makes 2D drawing usable. Restore on exit.
   useEffect(() => {
     const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
     controls.enableRotate = !sketchActive;
@@ -381,6 +425,7 @@ export function ViewportCanvas() {
       camera.up.set(0, 0, -1);
       controls.target.set(0, 0, 0);
       controls.update();
+      if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
       dirtyRef.current = true;
     } else if (preSketchCamRef.current) {
       // Restore the pre-sketch view on exit (SolidWorks returns to it).
@@ -389,10 +434,42 @@ export function ViewportCanvas() {
       camera.up.copy(saved.up);
       controls.target.copy(saved.target);
       controls.update();
+      if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
       preSketchCamRef.current = null;
       dirtyRef.current = true;
     }
   }, [sketchActive]);
+
+  // Projection toggle: when switching between perspective and orthographic,
+  // sync cameras and size the ortho frustum to match the current view extent.
+  useEffect(() => {
+    const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !ortho || !controls) return;
+
+    // Always keep transforms in sync.
+    ortho.position.copy(camera.position);
+    ortho.up.copy(camera.up);
+
+    if (projection === 'orthographic') {
+      // Size the ortho frustum so the visible area matches what the perspective
+      // camera was showing at the current distance.
+      const dist = camera.position.distanceTo(controls.target);
+      const halfH = dist * Math.tan((camera.fov * Math.PI) / 360);
+      const aspect = camera.aspect;
+      ortho.left = -halfH * aspect;
+      ortho.right = halfH * aspect;
+      ortho.top = halfH;
+      ortho.bottom = -halfH;
+      ortho.updateProjectionMatrix();
+      controls.object = ortho;
+    } else {
+      controls.object = camera;
+    }
+    controls.update();
+    dirtyRef.current = true;
+  }, [projection]);
 
   useEffect(() => {
     const planesGroup = planesGroupRef.current;
@@ -1213,6 +1290,7 @@ export function ViewportCanvas() {
               { label: t('viewport.top'), onClick: () => setView('top') },
               { label: t('viewport.bottom'), onClick: () => setView('bottom') },
               { label: t('viewport.iso'), onClick: () => setView('iso'), separatorBefore: true },
+              { label: projection === 'orthographic' ? t('viewport.perspective') : t('viewport.orthographic'), onClick: () => useStore.getState().toggleProjection(), separatorBefore: true },
             ],
           },
           ...(useStore.getState().clipboard.length > 0
@@ -1320,13 +1398,14 @@ export function ViewportCanvas() {
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll],
+    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll, projection],
   );
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
   // keeping the current viewing direction — SolidWorks "Zoom to Fit" (F).
   const fitView = useCallback((selectionOnly = false, targets?: import('../../lib/geometry/types').SolidBody[]) => {
     const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
     const bb = combinedBounds(targets ?? framingBodies(bodies, selectedIds, selectionOnly));
@@ -1343,6 +1422,20 @@ export function ViewportCanvas() {
     camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
     controls.target.copy(center);
     controls.update();
+    // Also update ortho camera to match and resize its frustum.
+    if (ortho) {
+      ortho.position.copy(camera.position);
+      ortho.up.copy(camera.up);
+      if (useStore.getState().projection === 'orthographic') {
+        const halfH = dist * Math.tan((camera.fov * Math.PI) / 360);
+        const aspect = camera.aspect;
+        ortho.left = -halfH * aspect;
+        ortho.right = halfH * aspect;
+        ortho.top = halfH;
+        ortho.bottom = -halfH;
+        ortho.updateProjectionMatrix();
+      }
+    }
     dirtyRef.current = true;
   }, [bodies, selectedIds]);
   useEffect(() => { fitViewRef.current = fitView; }, [fitView]);
@@ -1370,6 +1463,7 @@ export function ViewportCanvas() {
   // the current orientation — the CAD "home"/reset-view action.
   const resetView = useCallback(() => {
     const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
     const bb = combinedBounds(bodies);
@@ -1385,6 +1479,19 @@ export function ViewportCanvas() {
     camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
     controls.target.copy(center);
     controls.update();
+    if (ortho) {
+      ortho.position.copy(camera.position);
+      ortho.up.copy(camera.up);
+      if (useStore.getState().projection === 'orthographic') {
+        const halfH = dist * Math.tan((camera.fov * Math.PI) / 360);
+        const aspect = camera.aspect;
+        ortho.left = -halfH * aspect;
+        ortho.right = halfH * aspect;
+        ortho.top = halfH;
+        ortho.bottom = -halfH;
+        ortho.updateProjectionMatrix();
+      }
+    }
     dirtyRef.current = true;
   }, [bodies]);
 
@@ -1407,6 +1514,7 @@ export function ViewportCanvas() {
       else if (e.key === 'F') { e.preventDefault(); fitView(true); }
       else if (e.key === 'Home') { e.preventDefault(); resetView(); }
       else if (e.key === 'g' || e.key === 'G') { e.preventDefault(); useStore.getState().setShowGrid(!useStore.getState().showGrid); }
+      else if (e.key === 'P') { e.preventDefault(); useStore.getState().toggleProjection(); }
       // +/- dolly the camera toward/away from the target (keyboard zoom).
       else if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_') {
         const camera = cameraRef.current;
@@ -1545,14 +1653,28 @@ export function ViewportCanvas() {
           </div>
         </div>
       )}
-      <button
-        onClick={() => fitView(false)}
-        className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
-        aria-label={t('viewport.fit')}
-        title={`${t('viewport.fit')} (F)`}
-      >
-        <Maximize2 size={15} />
-      </button>
+      <div className="absolute bottom-2 right-2 flex gap-1">
+        <button
+          onClick={() => useStore.getState().toggleProjection()}
+          className={`w-8 h-8 flex items-center justify-center rounded backdrop-blur-sm border transition-colors ${
+            projection === 'orthographic'
+              ? 'bg-accent/90 border-accent text-white'
+              : 'bg-panel/80 border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+          }`}
+          aria-label={t('viewport.projection')}
+          title={`${t('viewport.projection')} (Shift+P)`}
+        >
+          <Box size={15} />
+        </button>
+        <button
+          onClick={() => fitView(false)}
+          className="w-8 h-8 flex items-center justify-center rounded bg-panel/80 backdrop-blur-sm border border-panel-border text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+          aria-label={t('viewport.fit')}
+          title={`${t('viewport.fit')} (F)`}
+        >
+          <Maximize2 size={15} />
+        </button>
+      </div>
       {sketchActive && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1">
           <button

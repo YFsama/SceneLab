@@ -533,6 +533,9 @@ export const translations: Record<string, TranslationMap> = {
     'viewport.drawing': 'Drawing view',
     'viewport.controls': 'View direction controls',
     'viewport.switchTo': 'Switch to {view} view',
+    'viewport.projection': 'Projection (Perspective / Orthographic)',
+    'viewport.perspective': 'Perspective',
+    'viewport.orthographic': 'Orthographic',
   },
   zh: {
     'app.title': 'SceneLab',
@@ -1060,6 +1063,9 @@ export const translations: Record<string, TranslationMap> = {
     'viewport.drawing': '工程图视图',
     'viewport.controls': '视图方向控制',
     'viewport.switchTo': '切换到{view}视图',
+    'viewport.projection': '投影模式（透视 / 正交）',
+    'viewport.perspective': '透视',
+    'viewport.orthographic': '正交',
   },
 };
 
