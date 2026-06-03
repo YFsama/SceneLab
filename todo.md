@@ -252,7 +252,7 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 15. 构造几何/中心线（不参与拉伸）。
 16. 矩形整体宽高编辑（现为 4 条独立线，改一边长会破坏矩形）。
 17. Ctrl+Shift+A 取消全选 — ✅ 已完成。
-18. 视口悬停名称 tooltip（已有树↔视口悬停高亮联动）。
+18. 视口悬停名称 tooltip — ✅ 已完成 (`hoverLabel` + 视口 overlay)。
 19. “重复上一个命令”(Enter) — ✅ 已完成 (`lastCommand` 跟踪 + Enter 快捷键 + 命令面板)。
 20. **AI 直接操作模型**：最初需求之一，本轮聚焦 CAD 交互未推进；AI 工具/面板已存在，可深化。
 

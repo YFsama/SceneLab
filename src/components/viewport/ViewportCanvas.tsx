@@ -585,6 +585,8 @@ export function ViewportCanvas() {
   const sketchLineMatRef = useRef(new THREE.LineBasicMaterial({ color: 0xcdd6f4 }));
   const sketchPointMatRef = useRef(new THREE.PointsMaterial({ color: 0x89b4fa, size: 6, sizeAttenuation: false }));
   const sketchHlMatRef = useRef(new THREE.LineBasicMaterial({ color: 0xfab387 }));
+  const sketchConstructionMatRef = useRef(new THREE.LineDashedMaterial({ color: 0x6c7086, dashSize: 0.3, gapSize: 0.15 }));
+  const sketchConstructionPtMatRef = useRef(new THREE.PointsMaterial({ color: 0x6c7086, size: 4, sizeAttenuation: false }));
 
   useEffect(() => {
     const sketchGroup = sketchGroupRef.current;
@@ -604,15 +606,22 @@ export function ViewportCanvas() {
     if (!currentSketch || !sketchActive) return;
 
     const pointMat = sketchPointMatRef.current;
-    // Selected entity draws in the highlight colour.
-    const matFor = (id: string) => (id === selectedSketchId ? sketchHlMatRef.current : sketchLineMatRef.current);
+    const constructionMat = sketchConstructionMatRef.current;
+    const constructionPtMat = sketchConstructionPtMatRef.current;
+    // Selected entity draws in the highlight colour; construction entities use dashed grey.
+    const matFor = (entity: import('../../lib/sketch/types').SketchEntity) => {
+      if (entity.id === selectedSketchId) return sketchHlMatRef.current;
+      if (entity.construction) return constructionMat;
+      return sketchLineMatRef.current;
+    };
 
     for (const entity of currentSketch.entities.values()) {
+      const isConstruction = entity.construction;
       switch (entity.type) {
         case 'point': {
           const geo = new THREE.BufferGeometry();
           geo.setAttribute('position', new THREE.Float32BufferAttribute([entity.x, 0, entity.y], 3));
-          sketchGroup.add(new THREE.Points(geo, pointMat));
+          sketchGroup.add(new THREE.Points(geo, isConstruction ? constructionPtMat : pointMat));
           break;
         }
         case 'line': {
@@ -623,7 +632,9 @@ export function ViewportCanvas() {
               new THREE.Vector3(p1.x, 0, p1.y),
               new THREE.Vector3(p2.x, 0, p2.y),
             ]);
-            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
+            const line = new THREE.Line(geo, matFor(entity));
+            if (isConstruction) line.computeLineDistances();
+            sketchGroup.add(line);
           }
           break;
         }
@@ -633,7 +644,9 @@ export function ViewportCanvas() {
             const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, 0, Math.PI * 2, false, 0);
             const pts = curve.getPoints(64);
             const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, 0, p.y)));
-            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
+            const line = new THREE.Line(geo, matFor(entity));
+            if (isConstruction) line.computeLineDistances();
+            sketchGroup.add(line);
           }
           break;
         }
@@ -643,7 +656,9 @@ export function ViewportCanvas() {
             const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, entity.startAngle, entity.endAngle, false, 0);
             const pts = curve.getPoints(64);
             const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, 0, p.y)));
-            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
+            const line = new THREE.Line(geo, matFor(entity));
+            if (isConstruction) line.computeLineDistances();
+            sketchGroup.add(line);
           }
           break;
         }
@@ -655,7 +670,9 @@ export function ViewportCanvas() {
             .map((e) => new THREE.Vector3(e.x, 0, e.y));
           if (pts.length >= 5) {
             const geo = new THREE.BufferGeometry().setFromPoints(pts);
-            sketchGroup.add(new THREE.Line(geo, matFor(entity.id)));
+            const line = new THREE.Line(geo, matFor(entity));
+            if (isConstruction) line.computeLineDistances();
+            sketchGroup.add(line);
           }
           break;
         }
@@ -1389,6 +1406,13 @@ export function ViewportCanvas() {
     const items: ContextMenuItem[] = [];
     if (selectedSketchId) {
       items.push({ label: t('menu.delete'), danger: true, onClick: () => useStore.getState().removeSketchEntity(selectedSketchId) });
+      // Check if the entity is construction to show the toggle label.
+      const ent = currentSketch?.entities.get(selectedSketchId);
+      const isConstruction = ent?.construction;
+      items.push({
+        label: isConstruction ? t('sketch.normalGeometry') : t('sketch.construction'),
+        onClick: () => useStore.getState().toggleSketchConstruction(selectedSketchId),
+      });
     }
     const tools = ['select', 'line', 'rect', 'circle', 'arc', 'polygon'] as const;
     items.push({

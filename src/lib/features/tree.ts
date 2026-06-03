@@ -269,6 +269,8 @@ function extractProfileFromSketch(sketch: Sketch, solved: Map<string, Pt>): Pt[]
   const other: Pt[] = [];
 
   for (const entity of sketch.entities.values()) {
+    // Construction geometry is reference-only — excluded from extrude/revolve profiles.
+    if (entity.construction) continue;
     if (entity.type === 'line') {
       const p1 = solved.get(entity.p1Id);
       const p2 = solved.get(entity.p2Id);

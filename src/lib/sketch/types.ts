@@ -10,6 +10,8 @@ export interface SketchPoint {
   type: 'point';
   x: number;
   y: number;
+  /** Construction geometry: used for reference only, not included in extrude/revolve profiles. */
+  construction?: boolean;
 }
 
 export interface SketchLine {
@@ -17,6 +19,7 @@ export interface SketchLine {
   type: 'line';
   p1Id: string;
   p2Id: string;
+  construction?: boolean;
 }
 
 export interface SketchCircle {
@@ -24,6 +27,7 @@ export interface SketchCircle {
   type: 'circle';
   centerId: string;
   radius: number;
+  construction?: boolean;
 }
 
 export interface SketchArc {
@@ -33,6 +37,7 @@ export interface SketchArc {
   startAngle: number;
   endAngle: number;
   radius: number;
+  construction?: boolean;
 }
 
 export interface SketchRectangle {
@@ -42,6 +47,7 @@ export interface SketchRectangle {
   p2Id: string;
   p3Id: string;
   p4Id: string;
+  construction?: boolean;
 }
 
 export type SketchEntity = SketchPoint | SketchLine | SketchCircle | SketchArc | SketchRectangle;

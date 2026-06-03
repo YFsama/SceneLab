@@ -113,6 +113,8 @@ interface AppState {
   setSketchLineAngle: (id: string, deg: number) => boolean;
   /** Translate a sketch entity's points by (dx, dy); false if it has no movable points. */
   nudgeSketchEntity: (id: string, dx: number, dy: number) => boolean;
+  /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
+  toggleSketchConstruction: (id: string) => void;
 
   // Feature tree
   featureTree: FeatureTree;
@@ -582,6 +584,15 @@ export const useStore = create<AppState>((set, get) => {
     if (!moved) return false;
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
+  },
+  toggleSketchConstruction: (id) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return;
+    const e = sketch.entities.get(id);
+    if (!e) return;
+    pushSketchUndo();
+    (e as { construction?: boolean }).construction = !e.construction;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
   },
 
   featureTree: new FeatureTree(),
