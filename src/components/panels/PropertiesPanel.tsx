@@ -2118,6 +2118,7 @@ function SketchEntityEditor({ sketch, entityId, t }: { sketch: Sketch; entityId:
     field = (
       <div className="space-y-1">
         <DimField key={`${entityId}:r:${e.radius.toFixed(3)}`} label={t('dim.radius')} value={e.radius} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v)} />
+        <DimField key={`${entityId}:d:${e.radius.toFixed(3)}`} label={t('dim.diameter')} value={e.radius * 2} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v / 2)} />
         <DimField key={`${entityId}:cx:${cx.toFixed(3)}`} label="X" value={cx} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, v - cx, 0)} />
         <DimField key={`${entityId}:cy:${cy.toFixed(3)}`} label="Y" value={cy} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, 0, v - cy)} />
       </div>
