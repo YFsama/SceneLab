@@ -6,6 +6,7 @@ import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
+import { MATERIALS } from '../../lib/materials';
 import type { SolidBody } from '../../lib/geometry/types';
 
 export function BrowserTree() {
@@ -28,6 +29,7 @@ export function BrowserTree() {
   const toggleBodyVisibility = useStore((s) => s.toggleBodyVisibility);
   const copySelected = useStore((s) => s.copySelected);
   const cutSelected = useStore((s) => s.cutSelected);
+  const setBodyMaterial = useStore((s) => s.setBodyMaterial);
   const directBodies = useStore((s) => s.directBodies);
   const reorderBody = useStore((s) => s.reorderBody);
   const hoveredId = useStore((s) => s.hoveredId);
@@ -199,6 +201,13 @@ export function BrowserTree() {
           { label: t('menu.flipNormals'), onClick: () => apply(bodyId, flipBodyNormals) },
           { label: t('menu.transparency'), onClick: () => toggleBodyTransparency(bodyId) },
         ],
+      },
+      {
+        label: t('panel.material'),
+        submenu: Object.entries(MATERIALS).map(([key, m]) => ({
+          label: m.name,
+          onClick: () => setBodyMaterial(bodyId, key),
+        })),
       },
       {
         label: t('menu.placement'),

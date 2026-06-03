@@ -9,6 +9,7 @@ import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { pickCycle, distinctInOrder } from '../../lib/render/pickCycle';
+import { MATERIALS } from '../../lib/materials';
 import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
@@ -1283,6 +1284,13 @@ export function ViewportCanvas() {
             { label: t('menu.flipNormals'), onClick: () => apply(flipBodyNormals) },
             { label: t('menu.transparency'), onClick: () => st().toggleBodyTransparency(bodyId) },
           ],
+        },
+        {
+          label: t('panel.material'),
+          submenu: Object.entries(MATERIALS).map(([key, m]) => ({
+            label: m.name,
+            onClick: () => st().setBodyMaterial(bodyId, key),
+          })),
         },
         {
           label: t('menu.placement'),
