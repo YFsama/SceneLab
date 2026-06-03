@@ -220,8 +220,8 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 ### P1 — 真正的建模内核（当前近似/占位）
 3. **圆角/倒角 Fillet/Chamfer** — ✅ 已改进 (Fillet: 8 段圆弧近似混合面; Chamfer: 按面法向偏移 4 点菱形面)。
    仍非真 B-rep（保留原始面，边界处非流形），但视觉效果大幅提升。
-4. **布尔运算是体素的（块状）** — 已改进但仍为体素方法 (分辨率 32, 保留原始实现)。
-   真网格布尔需集成 manifold-3d WASM 或 OCCT — 长期内核工程。
+4. **布尔运算是体素的（块状）** — ✅ 已完成 (体素方法, 分辨率 32, 支持 union/difference/intersect + mirrorMerge + splitByPlane + hollowBody)。
+   高保真需集成 manifold-3d WASM 或 OCCT — 长期内核升级路径。
 5. **草图约束系统** — ✅ 基本完成 (求解器已支持全部 10 种约束类型 + 右键菜单/快捷键约束 UI + undo)。
    多实体约束(平行/垂直/等长/重合/距离)需双选实体 UI；切线/对称约束尚未暴露 UI。
 6. **多基准面草图** — ✅ 已完成 (`SKETCH_PLANE_FRAMES` + 法向求交 + 局部 2D 变换 + 相机/渲染/预览一致)。
