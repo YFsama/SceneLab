@@ -213,6 +213,8 @@ interface AppState {
   pasteCount: number;
   /** Copy the selected direct bodies to the clipboard; returns how many were copied. */
   copySelected: () => number;
+  /** Copy the selection to the clipboard then delete it (undoable); returns how many. */
+  cutSelected: () => number;
   /** Paste the clipboard as offset copies, select them; returns the new ids. */
   paste: () => string[];
   /** Undo/redo history for scene-body edits (create/transform/delete). */
@@ -1099,6 +1101,11 @@ export const useStore = create<AppState>((set, get) => {
     // Reset the cascade so the first paste lands one step from the originals.
     set({ clipboard: copied, pasteCount: 0 });
     return copied.length;
+  },
+  cutSelected: () => {
+    const n = get().copySelected();
+    if (n > 0) get().deleteSelected(); // delete pushes undo, so cut is reversible
+    return n;
   },
   paste: () => {
     const { clipboard, pasteCount } = get();

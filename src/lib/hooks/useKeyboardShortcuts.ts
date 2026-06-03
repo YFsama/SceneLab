@@ -106,6 +106,7 @@ export function initShortcuts(): void {
   // Tab hides the current selection; Shift+Tab brings every hidden body back.
   registerShortcut('tab', () => store.hideSelected());
   registerShortcut('shift+tab', () => store.showAllBodies());
+  registerShortcut('ctrl+x', () => store.cutSelected());
   registerShortcut('ctrl+c', () => store.copySelected());
   registerShortcut('ctrl+v', () => store.paste());
   registerShortcut('ctrl+z', () => store.undo());

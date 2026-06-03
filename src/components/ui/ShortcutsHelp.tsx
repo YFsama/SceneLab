@@ -56,7 +56,7 @@ const GROUPS: Group[] = [
       { keys: 'Ctrl+S', labelKey: 'project.save' },
       { keys: 'Ctrl+Z', labelKey: 'toolbar.undo' },
       { keys: 'Ctrl+Y', labelKey: 'toolbar.redo' },
-      { keys: 'Ctrl+C / Ctrl+V', labelKey: 'shortcuts.copyPaste' },
+      { keys: 'Ctrl+X / C / V', labelKey: 'shortcuts.copyPaste' },
       { keys: 'Ctrl+D', labelKey: 'menu.duplicate' },
       { keys: 'Ctrl+A', labelKey: 'shortcuts.selectAll' },
       { keys: 'Ctrl+Shift+I', labelKey: 'shortcuts.invertSelection' },

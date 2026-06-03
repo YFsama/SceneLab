@@ -671,6 +671,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().selectedIds).toEqual([box.id]); // selection preserved
   });
 
+  it('cutSelected removes the selection but keeps it on the clipboard for paste', () => {
+    useStore.getState().clearScene();
+    const a = createBox(5, 5, 5);
+    const b = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().addDirectBody(b);
+    useStore.getState().selectObject(a.id);
+
+    expect(useStore.getState().cutSelected()).toBe(1);
+    expect(useStore.getState().bodies.some((x) => x.id === a.id)).toBe(false); // removed
+    expect(useStore.getState().bodies).toHaveLength(1);
+
+    useStore.getState().paste(); // clipboard still holds the cut body
+    expect(useStore.getState().bodies).toHaveLength(2);
+
+    // Cut is undoable (delete pushed undo).
+    useStore.getState().undo();
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
   it('copySelected + paste creates offset copies and supports multiple pastes', () => {
     useStore.getState().clearScene();
     const box = createBox(5, 5, 5);
