@@ -153,6 +153,8 @@ export function ViewportCanvas() {
 
   const dirtyRef = useRef(true);
   const frameIdRef2 = useRef<number>(0);
+  // Mesh cache: maps bodyId → { body (reference), mesh, edges } for incremental rebuild.
+  const meshCacheRef = useRef<Map<string, { body: typeof bodies[0]; mesh: THREE.Mesh; edges: THREE.LineSegments | null }>>(new Map());
 
   useEffect(() => {
     const container = containerRef.current;
@@ -796,30 +798,60 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [currentSketch, sketchActive, selectedSketchId]);
 
+  // Incremental body + edge rendering: diff against the cache so only
+  // changed/new/removed bodies rebuild geometry. This avoids a full teardown
+  // when a single body is modified (e.g. colour, material, one vertex shift).
   useEffect(() => {
     const bodiesGroup = bodiesGroupRef.current;
-    if (!bodiesGroup) return;
+    const edgesGroup = edgesGroupRef.current;
+    if (!bodiesGroup || !edgesGroup) return;
 
-    while (bodiesGroup.children.length > 0) {
-      const child = bodiesGroup.children[0]!;
-      bodiesGroup.remove(child);
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
+    const cache = meshCacheRef.current;
+    const visibleIds = new Set(bodies.filter((b) => !hiddenIds.includes(b.id)).map((b) => b.id));
+
+    // 1) Remove bodies no longer present or now hidden.
+    for (const [id, entry] of cache) {
+      if (!visibleIds.has(id)) {
+        bodiesGroup.remove(entry.mesh);
+        entry.mesh.geometry.dispose();
+        (entry.mesh.material as THREE.Material).dispose();
+        if (entry.edges) {
+          edgesGroup.remove(entry.edges);
+          entry.edges.geometry.dispose();
+          (entry.edges.material as THREE.Material).dispose();
+        }
+        cache.delete(id);
       }
     }
 
+    // 2) Add new bodies or rebuild changed ones.
     for (const body of bodies) {
-      if (hiddenIds.includes(body.id)) continue; // hidden bodies aren't rendered
+      if (hiddenIds.includes(body.id)) continue;
+      const cached = cache.get(body.id);
+
+      if (cached && cached.body === body && cached.mesh.material instanceof THREE.MeshStandardMaterial && (cached.mesh.material as THREE.MeshStandardMaterial).wireframe === wireframe) {
+        // Body unchanged and wireframe matches — reuse as-is.
+        continue;
+      }
+
+      // Dispose old mesh/edges if rebuilding.
+      if (cached) {
+        bodiesGroup.remove(cached.mesh);
+        cached.mesh.geometry.dispose();
+        (cached.mesh.material as THREE.Material).dispose();
+        if (cached.edges) {
+          edgesGroup.remove(cached.edges);
+          cached.edges.geometry.dispose();
+          (cached.edges.material as THREE.Material).dispose();
+        }
+      }
+
+      // Build mesh.
       const geo = new THREE.BufferGeometry();
       const { positions, indices } = buildBodyMeshArrays(body);
-
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setIndex(indices);
       geo.computeVertexNormals();
-
-      // Neutral material; selection/hover styling is applied separately so
-      // hovering or selecting never rebuilds geometry.
       const op = body.opacity ?? 1;
       const mat = new THREE.MeshStandardMaterial({
         color: 0x89b4fa,
@@ -830,41 +862,27 @@ export function ViewportCanvas() {
         transparent: op < 1,
         opacity: op,
       });
-
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = body.name;
       mesh.userData = { bodyId: body.id };
       bodiesGroup.add(mesh);
-    }
-    dirtyRef.current = true;
-  }, [bodies, hiddenIds, wireframe]);
 
-  // Edge overlay: draw each (visible) body's edges as dark line segments so the
-  // shape reads clearly, like a CAD viewport's edge display. Kept in its own
-  // group (not raycast) so it never interferes with picking.
-  useEffect(() => {
-    const edgesGroup = edgesGroupRef.current;
-    if (!edgesGroup) return;
-    while (edgesGroup.children.length > 0) {
-      const child = edgesGroup.children[0]!;
-      edgesGroup.remove(child);
-      if (child instanceof THREE.LineSegments) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
-      }
-    }
-    if (!wireframe) {
-      for (const body of bodies) {
-        if (hiddenIds.includes(body.id)) continue;
+      // Build edges.
+      let edges: THREE.LineSegments | null = null;
+      if (!wireframe) {
         const pos = buildEdgePositions(body);
-        if (pos.length === 0) continue;
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        const seg = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x45475a }));
-        seg.userData.bodyId = body.id; // so the selection-colour pass can find it
-        edgesGroup.add(seg);
+        if (pos.length > 0) {
+          const eGeo = new THREE.BufferGeometry();
+          eGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+          edges = new THREE.LineSegments(eGeo, new THREE.LineBasicMaterial({ color: 0x45475a }));
+          edges.userData.bodyId = body.id;
+          edgesGroup.add(edges);
+        }
       }
+
+      cache.set(body.id, { body, mesh, edges });
     }
+
     dirtyRef.current = true;
   }, [bodies, hiddenIds, wireframe]);
 

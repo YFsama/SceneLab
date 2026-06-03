@@ -238,13 +238,13 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
     只能用方法如 `color.setHex`）。**风险中**：渲染正确性无法目视验证 + dispose/缓存生命周期。
 
 ### P4 — 小改进/打磨（低风险）
-13. 非均匀缩放对话框（ScaleDialog 现为统一倍数；DimensionEditor 已支持按轴绝对尺寸）。
+13. 非均匀缩放对话框 — ✅ 已完成 (ScaleDialog 均匀/按轴切换 + `scaleBodyXYZ` 正确法线变换)。
 14. 草图线“链式”连续折线（与当前“拖一段=一线”范式冲突，需重设计）。
 15. 构造几何/中心线（不参与拉伸）。
 16. 矩形整体宽高编辑（现为 4 条独立线，改一边长会破坏矩形）。
-17. Ctrl+Shift+A 取消全选（Esc 已可，低价值）。
+17. Ctrl+Shift+A 取消全选 — ✅ 已完成。
 18. 视口悬停名称 tooltip（已有树↔视口悬停高亮联动）。
-19. “重复上一个命令”(Enter)，需跟踪 lastCommand。
+19. “重复上一个命令”(Enter) — ✅ 已完成 (`lastCommand` 跟踪 + Enter 快捷键 + 命令面板)。
 20. **AI 直接操作模型**：最初需求之一，本轮聚焦 CAD 交互未推进；AI 工具/面板已存在，可深化。
 
 ### 稳定性注意
