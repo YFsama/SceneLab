@@ -223,8 +223,7 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
 4. **布尔运算是体素的（块状）**：需真网格布尔(manifold-3d)或 B-rep(OCCT)。**内核级。**
 5. **草图约束系统**：仅 H/V 推断；驱动尺寸是直接改几何，无求解器联动，无共线/相切/相等/
    同心/对称约束，无“尺寸即约束”。需扩展 `solveSketch` + 约束 UI。**核心、风险高。**
-6. **多基准面草图**：`getSketchPoint` 硬编码地面 (XZ, y=0)，不随所选基准面。需按 plane
-   法向/原点相交 + 局部 2D 坐标变换 + 捕捉/渲染一致。**风险中高。** 入口 `ViewportCanvas.getSketchPoint` (~940)。
+6. **多基准面草图** — ✅ 已完成 (`SKETCH_PLANE_FRAMES` + 法向求交 + 局部 2D 变换 + 相机/渲染/预览一致)。
 
 ### P2 — 中等价值、独立可做
 7. **透视/正交切换** — ✅ 已完成 (`ProjectionMode` + `OrthographicCamera` + 视锥自动匹配 + Shift+P/按钮/右键菜单/命令面板/AI 工具)。
