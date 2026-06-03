@@ -181,6 +181,13 @@ export function ViewportCanvas() {
             cam.up.copy(ortho.up);
           }
           renderer.render(scene, activeCam);
+          // Publish camera state so the ViewCube can sync its rotation.
+          window.dispatchEvent(new CustomEvent('viewport-camera-update', {
+            detail: {
+              position: { x: cam.position.x, y: cam.position.y, z: cam.position.z },
+              target: { x: controls!.target.x, y: controls!.target.y, z: controls!.target.z },
+            },
+          }));
         }
         dirtyRef.current = false;
       }
@@ -385,6 +392,59 @@ export function ViewportCanvas() {
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
+    };
+  }, []);
+
+  // ViewCube → main camera communication: snap, orbit, and state request.
+  useEffect(() => {
+    const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    const onSnap = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        position: { x: number; y: number; z: number };
+        up: { x: number; y: number; z: number };
+      };
+      const dist = camera.position.distanceTo(controls.target);
+      camera.position.set(d.position.x * dist, d.position.y * dist, d.position.z * dist);
+      camera.up.set(d.up.x, d.up.y, d.up.z);
+      controls.update();
+      if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
+      dirtyRef.current = true;
+    };
+
+    const onOrbit = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        position: { x: number; y: number; z: number };
+        up: { x: number; y: number; z: number };
+      };
+      camera.position.set(d.position.x, d.position.y, d.position.z);
+      camera.up.set(d.up.x, d.up.y, d.up.z);
+      controls.update();
+      if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
+      dirtyRef.current = true;
+    };
+
+    const onRequest = () => {
+      // Respond with the current camera state so the ViewCube can start a drag.
+      window.dispatchEvent(new CustomEvent('viewport-camera-response', {
+        detail: {
+          position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+          target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+          up: { x: camera.up.x, y: camera.up.y, z: camera.up.z },
+        },
+      }));
+    };
+
+    window.addEventListener('viewport-camera-snap', onSnap);
+    window.addEventListener('viewport-camera-orbit', onOrbit);
+    window.addEventListener('viewport-camera-request', onRequest);
+    return () => {
+      window.removeEventListener('viewport-camera-snap', onSnap);
+      window.removeEventListener('viewport-camera-orbit', onOrbit);
+      window.removeEventListener('viewport-camera-request', onRequest);
     };
   }, []);
 

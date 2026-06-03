@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useStore } from './store/app';
 import { ViewportCanvas } from './components/viewport/ViewportCanvas';
-import { ViewCube } from './components/viewport/ViewCube';
+import { InteractiveViewCube } from './components/viewport/InteractiveViewCube';
 import { DrawingCanvas } from './components/viewport/DrawingCanvas';
 import { Toolbar } from './components/toolbar/Toolbar';
 import { SketchToolbar } from './components/toolbar/SketchToolbar';
@@ -66,7 +66,7 @@ export default function App() {
           ) : (
             <>
               <ViewportCanvas />
-              <ViewCube />
+              <InteractiveViewCube />
               {workspace === 'sketch' && <SketchToolbar />}
               {workspace === 'model' && <PrimitiveBar />}
             </>
