@@ -2112,7 +2112,16 @@ function SketchEntityEditor({ sketch, entityId, t }: { sketch: Sketch; entityId:
       </div>
     );
   } else if (e?.type === 'circle' || e?.type === 'arc') {
-    field = <DimField key={`${entityId}:${e.radius.toFixed(3)}`} label={t('dim.radius')} value={e.radius} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v)} />;
+    const c = sketch.entities.get(e.centerId);
+    const cx = c?.type === 'point' ? c.x : 0;
+    const cy = c?.type === 'point' ? c.y : 0;
+    field = (
+      <div className="space-y-1">
+        <DimField key={`${entityId}:r:${e.radius.toFixed(3)}`} label={t('dim.radius')} value={e.radius} onCommit={(v) => useStore.getState().setSketchEntityRadius(entityId, v)} />
+        <DimField key={`${entityId}:cx:${cx.toFixed(3)}`} label="X" value={cx} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, v - cx, 0)} />
+        <DimField key={`${entityId}:cy:${cy.toFixed(3)}`} label="Y" value={cy} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, 0, v - cy)} />
+      </div>
+    );
   }
   // Friendly type label (Line/Circle/Arc/…) reusing the sketch-tool strings.
   const typeLabel = e && e.type !== 'point' && e.type !== 'rectangle' ? t(`sketch.${e.type}`) : t('panel.sketchEntity');
