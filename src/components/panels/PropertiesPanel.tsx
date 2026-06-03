@@ -69,6 +69,7 @@ export function PropertiesPanel() {
   const setBodyColor = useStore((s) => s.setBodyColor);
   const setSelectionColor = useStore((s) => s.setSelectionColor);
   const setBodyOpacity = useStore((s) => s.setBodyOpacity);
+  const selectObject = useStore((s) => s.selectObject);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const selectedBody = selectedIds.length === 1
@@ -166,6 +167,20 @@ export function PropertiesPanel() {
                   </div>
                 );
               })()}
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-1 text-xs text-text-muted">
+                <Move size={12} />
+                <span>{t('panel.position')}</span>
+              </div>
+              <div className="pl-4">
+                <PositionEditor
+                  key={selectedBody.id}
+                  body={selectedBody}
+                  onMove={(target) => { selectObject(selectedBody.id); useStore.getState().moveSelectionTo(target); }}
+                />
+              </div>
             </div>
 
             <div className="space-y-1">
@@ -1947,6 +1962,45 @@ function DimensionEditor({ body, onResize, hint }: { body: SolidBody; onResize: 
         </div>
       ))}
       <p className="text-[10px] text-text-muted">{hint}</p>
+    </div>
+  );
+}
+
+/** Editable bounding-box-centre position for the selected body (X/Y/Z mm). */
+function PositionEditor({ body, onMove }: { body: SolidBody; onMove: (target: { x: number; y: number; z: number }) => void }) {
+  const c = computeBoundingBoxCenter(body);
+  const init = { x: c.x.toFixed(2), y: c.y.toFixed(2), z: c.z.toFixed(2) };
+  const [vals, setVals] = useState(init);
+
+  const commit = () => {
+    const x = parseFloat(vals.x);
+    const y = parseFloat(vals.y);
+    const z = parseFloat(vals.z);
+    if ([x, y, z].every((n) => Number.isFinite(n))) {
+      if (x.toFixed(2) !== init.x || y.toFixed(2) !== init.y || z.toFixed(2) !== init.z) onMove({ x, y, z });
+    } else {
+      setVals(init);
+    }
+  };
+
+  return (
+    <div className="space-y-0.5">
+      {(['x', 'y', 'z'] as const).map((key) => (
+        <div key={key} className="flex items-center gap-1">
+          <span className="w-3 text-text-muted">{key.toUpperCase()}</span>
+          <input
+            type="number"
+            step={0.5}
+            value={vals[key]}
+            onChange={(e) => setVals((v) => ({ ...v, [key]: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            onBlur={commit}
+            className="w-16 px-1 py-0.5 bg-surface border border-panel-border rounded text-text-primary text-xs"
+            aria-label={`${key.toUpperCase()} mm`}
+          />
+          <span className="text-text-muted">mm</span>
+        </div>
+      ))}
     </div>
   );
 }
