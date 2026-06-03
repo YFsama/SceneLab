@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore, type ThemeMode } from '../../store/app';
 import { computeBoundingBox } from '../../lib/geometry';
 import { selectionSummary } from '../../lib/selectionSummary';
+import { MATERIALS } from '../../lib/materials';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
 import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard, Box, Target } from 'lucide-react';
@@ -22,6 +23,13 @@ export function StatusBar() {
     if (!b || b.vertices.length === 0) return null;
     const bb = computeBoundingBox(b);
     return `${(bb.max.x - bb.min.x).toFixed(1)} × ${(bb.max.y - bb.min.y).toFixed(1)} × ${(bb.max.z - bb.min.z).toFixed(1)} mm`;
+  })();
+  // Material of the single selected body (per-body; defaults to steel).
+  const oneBodyMaterial = (() => {
+    if (selectedIds.length !== 1) return null;
+    const b = bodies.find((x) => x.id === selectedIds[0]);
+    if (!b) return null;
+    return MATERIALS[b.material ?? 'steel']?.name ?? null;
   })();
   // Combined bounding-box size of a multi-selection (SolidWorks shows the
   // selection's overall extents in the status bar).
@@ -142,6 +150,7 @@ export function StatusBar() {
         <span>{t('status.objects')}: {objectCount}</span>
         <span>{t('status.selected')}: {selectedCount}</span>
         {oneBodyDims && <span className="font-mono text-text-secondary">{oneBodyDims}</span>}
+        {oneBodyMaterial && <span className="text-text-muted">{oneBodyMaterial}</span>}
         {multiDims && <span className="font-mono text-text-secondary">{multiDims}</span>}
       </div>
       <div className="flex items-center gap-1">
