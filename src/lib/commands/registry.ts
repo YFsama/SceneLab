@@ -115,7 +115,7 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'view.toggleGrid', label: 'Toggle grid', category: 'View', shortcut: 'G', run: () => s().setShowGrid(!s().showGrid) });
   registerCommand({ id: 'view.measure', label: 'Measure (toggle)', category: 'View', run: () => s().setMeasureActive(!s().measureActive) });
   registerCommand({ id: 'project.new', label: 'New document', category: 'Project', run: async () => { if (await confirmDiscardIfDirty('project.new')) s().newProject(); } });
-  registerCommand({ id: 'scene.clear', label: 'Clear scene', category: 'Scene', run: () => s().clearScene() });
+  registerCommand({ id: 'scene.clear', label: 'Clear scene', category: 'Scene', run: async () => { if (await confirmDiscardIfDirty('scene.clear')) s().clearScene(); } });
   registerCommand({ id: 'reference.standardPlanes', label: 'Add standard planes (Front/Top/Right)', category: 'Reference', run: () => s().ensureStandardPlanes() });
   registerCommand({ id: 'reference.midplaneFromSelection', label: 'Midplane from selected body (largest opposite faces)', category: 'Reference', run: () => addMidplaneFromSelection() });
   registerCommand({ id: 'project.save', label: 'Autosave now', category: 'Project', run: () => s().autosave() });
