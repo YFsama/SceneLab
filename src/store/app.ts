@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -103,6 +103,8 @@ interface AppState {
   setSketchLineLength: (id: string, length: number) => boolean;
   /** Set a sketch circle/arc's radius; false if the entity isn't a circle or arc. */
   setSketchEntityRadius: (id: string, radius: number) => boolean;
+  /** Translate a sketch entity's points by (dx, dy); false if it has no movable points. */
+  nudgeSketchEntity: (id: string, dx: number, dy: number) => boolean;
 
   // Feature tree
   featureTree: FeatureTree;
@@ -478,6 +480,20 @@ export const useStore = create<AppState>((set, get) => {
     const e = sketch.entities.get(id);
     if (!e || (e.type !== 'circle' && e.type !== 'arc')) return false;
     e.radius = radius;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
+  },
+  nudgeSketchEntity: (id, dx, dy) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return false;
+    const e = sketch.entities.get(id);
+    if (!e) return false;
+    let moved = false;
+    for (const pid of pointIdsOf(e)) {
+      const p = sketch.entities.get(pid);
+      if (p?.type === 'point') { p.x += dx; p.y += dy; moved = true; }
+    }
+    if (!moved) return false;
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
   },

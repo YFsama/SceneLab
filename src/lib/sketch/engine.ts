@@ -133,7 +133,7 @@ export function addConstraint(
 }
 
 /** Point ids an entity is built from (its endpoints / center). */
-function pointIdsOf(entity: SketchEntity): string[] {
+export function pointIdsOf(entity: SketchEntity): string[] {
   switch (entity.type) {
     case 'line':
       return [entity.p1Id, entity.p2Id];

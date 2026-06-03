@@ -1416,6 +1416,20 @@ export function ViewportCanvas() {
           : null;
         if (move && nudgeSelected(move[0]!, move[1]!, move[2]!) > 0) e.preventDefault();
       }
+      // In a sketch, arrows nudge the selected entity by the grid step.
+      if (sketchActive && e.key.startsWith('Arrow')) {
+        const id = useStore.getState().selectedSketchId;
+        if (id) {
+          const step = (e.shiftKey ? 10 : 1) * useStore.getState().gridSize;
+          const d =
+            e.key === 'ArrowLeft' ? [-step, 0]
+            : e.key === 'ArrowRight' ? [step, 0]
+            : e.key === 'ArrowUp' ? [0, step]
+            : e.key === 'ArrowDown' ? [0, -step]
+            : null;
+          if (d && useStore.getState().nudgeSketchEntity(id, d[0]!, d[1]!)) e.preventDefault();
+        }
+      }
       // Delete the selected sketch entity while sketching.
       if (sketchActive && (e.key === 'Delete' || e.key === 'Backspace')) {
         const id = useStore.getState().selectedSketchId;

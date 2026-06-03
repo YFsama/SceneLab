@@ -1250,6 +1250,18 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setSketchEntityRadius(line.id, 7)).toBe(false); // not a circle/arc
   });
 
+  it('nudgeSketchEntity translates the entity points', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 5, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().nudgeSketchEntity(line.id, 2, -3)).toBe(true);
+    const s = useStore.getState().currentSketch!;
+    const p1 = s.entities.get(line.p1Id) as { x: number; y: number };
+    const p2 = s.entities.get(line.p2Id) as { x: number; y: number };
+    expect([p1.x, p1.y]).toEqual([2, -3]);
+    expect([p2.x, p2.y]).toEqual([7, -3]);
+  });
+
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
     useStore.getState().setShowShortcuts(true);
