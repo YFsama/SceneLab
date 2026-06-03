@@ -27,11 +27,11 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 - [x] Tauri + React + Three.js scaffold
 - [x] Viewport: orbit camera / zoom / pan / view switching (Top/Front/Right/Iso)
-- [ ] Plane selection + enter sketch mode
-- [ ] Sketch tools: line / rectangle / circle / arc
-- [ ] 5 basic constraints: horizontal, vertical, parallel, equal, distance
-- [ ] Exit sketch → extrude → first solid body
-- [ ] Project file `.studio3d` save / load (with feature tree)
+- [x] Plane selection + enter sketch mode
+- [x] Sketch tools: line / rectangle / circle / arc (+ polygon)
+- [ ] 5 basic constraints: horizontal, vertical, parallel, equal, distance _(only H/V inference + direct driving-dimension edits; no real solver/constraints yet — see Remaining #5)_
+- [x] Exit sketch → extrude → first solid body
+- [x] Project file `.studio3d` save / load (with feature tree)
 
 ### v0.2 — "Complete parts" (~+1 month)
 
@@ -174,3 +174,84 @@ See the original design document for full tech stack rationale. Key choices:
     locale/API-key; AI system prompt; volumetric center of mass (mass props +
     stability); bounding sphere; arrange-on-plate, stock block, measure/dimensions;
     ~45 AI tools incl import/export/transform; finite-number & Vec3 input guards
+- `2026-05-31`: Long SolidWorks/Fusion usability-parity loop (tests → 774, all green).
+  Selection (multi/range/invert/click-cycle/hover-link/edge highlight, hidden-excluded),
+  group-aware transforms (rotate/scale/flip about combined centre, mirror-copy, absolute
+  move/position), insert dialogs (persisted defaults, auto-numbered names, Esc/Enter/
+  select-on-focus), sketch interaction (origin/midpoint snap, alignment inference guides,
+  live length+angle readout, exit restores view, right-click menu + tools, driving-
+  dimension editing for line/circle/arc/point, arrow-nudge, sketch-scoped undo/redo),
+  view nav (6 standard views + iso on 1-7/cube/menu/palette, zoom-to-fit, double-click
+  frame, scroll/+- zoom), full right-click menus (cut/copy/paste/hide/views/zoom),
+  command palette (views/workspaces/sketch-tools/file ops with hints), file safety
+  (New/Open/Clear confirm-if-dirty, Ctrl+N/O/S), appearance (swatches + colour picker +
+  opacity, multi-select colour), collapsible tree + F2/reorder, undoable rename/colour/
+  opacity/visibility, perf (selection recolours without geometry rebuild, advanced
+  analysis collapsed/lazy), vitest timeout raised for stable CI.
+
+---
+
+## Remaining Usability Work (TODO) — as of 2026-05-31
+
+对标 SolidWorks / Autodesk Fusion 仍未完成的项。每轮一个小目标；改完 `tsc -b` +
+eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
+
+> 现状说明：上面 v0.1/v0.2 清单里的“sketch tools / exit→extrude / save-load /
+> pattern / tree edit / feature param edit”等大多**已实现**（见上方 changelog），
+> 但内核类项（真 fillet/chamfer、真布尔、约束求解器、STEP）仍是占位或缺失。
+
+### P0 — 高价值、明显缺口
+1. **框选 / 矩形拖拽多选**：完全没有。根本冲突——左键拖空白=旋转。SW 做法=中键旋转、
+   左键框选（左→右框选 / 右→左交叉）。方案：`controls.mouseButtons` 改 MIDDLE=ROTATE，
+   左键画屏幕矩形 overlay，up 时把可见 body 包围盒中心投影到屏幕做包含测试（抽纯函数
+   `boxContains` 单测），抑制随后的 click。**风险高**：改导航习惯 + 无法目视验证；建议
+   先与用户确认“旋转改中键”，最好能交互测试。入口 `ViewportCanvas`（OrbitControls ~198）。
+2. **子实体选择（面/边）**：只能选整个 body。是“在面上画草图 / 对边倒角 / 测面间距”的前置。
+   需给 mesh 携带 faceId、拾取命中面、面高亮 + 状态模型。**风险高、工作量大。**
+
+### P1 — 真正的建模内核（当前近似/占位）
+3. **圆角/倒角 Fillet/Chamfer**：`applyFillet/applyChamfer` 占位，产生非流形网格，未暴露 UI。
+   需半边拓扑。见 memory `fillet-chamfer-nonmanifold.md`。**内核级，非一轮可完成。**
+4. **布尔运算是体素的（块状）**：需真网格布尔(manifold-3d)或 B-rep(OCCT)。**内核级。**
+5. **草图约束系统**：仅 H/V 推断；驱动尺寸是直接改几何，无求解器联动，无共线/相切/相等/
+   同心/对称约束，无“尺寸即约束”。需扩展 `solveSketch` + 约束 UI。**核心、风险高。**
+6. **多基准面草图**：`getSketchPoint` 硬编码地面 (XZ, y=0)，不随所选基准面。需按 plane
+   法向/原点相交 + 局部 2D 坐标变换 + 捕捉/渲染一致。**风险中高。** 入口 `ViewportCanvas.getSketchPoint` (~940)。
+
+### P2 — 中等价值、独立可做
+7. **透视/正交切换**：维护 OrthographicCamera，切换 `controls.object`/渲染相机，按距离算视锥。风险中（无法目视验证）。
+8. **完整视图立方**：现 7 按钮；SW 可点面/边/角=26 朝向 + 拖拽。需独立 3D 控件。风险中。
+9. **测量/标注持久化**：测量是临时 overlay；需可保存的标注实体（点对/边+文本），随项目存取。风险中。
+10. **工程图(Drawing)工作区**：基本占位。3视图投影/剖视/标注/标题栏。**独立大模块。**
+11. **每实体材质 per-body material**（*已设计好、低风险、推荐先做*）：
+    - `SolidBody` 加 `material?: string`（io 直接序列化整对象 → 自动随项目保存）。
+    - store 加 `setBodyMaterial(id, material)`（仿 `setBodyColor`：pushUndo + 不变 no-op）。
+    - `MassProperties` 去掉本地 material state，改读 `body.material ?? 'steel'`，onChange 调 setBodyMaterial。
+    - 加单测。注意：切材质会触发面板重渲染重算核心分析，但高级分析默认折叠，开销可接受。
+    - 入口 `store/app.ts`(`setBodyColor` ~688)、`PropertiesPanel.tsx`(`MassProperties`)。
+
+### P3 — 性能
+12. **网格重建无 diff/缓存**：`bodies` 任何变化都重建所有 mesh + 边线（微移一个/隐藏一个都全重建）。
+    方案：`useRef<Map<bodyId,{body,mesh}>>` 按 body 引用 diff，只重建变化/新增、移除删除/隐藏
+    （`group.add/remove` 是方法，允许；注意 React Compiler 禁止 effect 内写 `mesh.visible`/属性，
+    只能用方法如 `color.setHex`）。**风险中**：渲染正确性无法目视验证 + dispose/缓存生命周期。
+
+### P4 — 小改进/打磨（低风险）
+13. 非均匀缩放对话框（ScaleDialog 现为统一倍数；DimensionEditor 已支持按轴绝对尺寸）。
+14. 草图线“链式”连续折线（与当前“拖一段=一线”范式冲突，需重设计）。
+15. 构造几何/中心线（不参与拉伸）。
+16. 矩形整体宽高编辑（现为 4 条独立线，改一边长会破坏矩形）。
+17. Ctrl+Shift+A 取消全选（Esc 已可，低价值）。
+18. 视口悬停名称 tooltip（已有树↔视口悬停高亮联动）。
+19. “重复上一个命令”(Enter)，需跟踪 lastCommand。
+20. **AI 直接操作模型**：最初需求之一，本轮聚焦 CAD 交互未推进；AI 工具/面板已存在，可深化。
+
+### 稳定性注意
+- voxel 几何测试较慢（`boolean.test.ts` ~2s/项）；vitest `testTimeout`/`hookTimeout` 已提到 20s
+  防负载下偶发超时。再现 flaky 优先查慢测试。
+
+### 推荐顺序
+1. #11 每实体材质（低风险、已设计、可立刻做完）
+2. #7 透视/正交 或 #8 ViewCube（中等、独立、纯前端）
+3. #1 框选（价值最高，但需先确认“旋转改中键”，最好能交互验证）
+4. 内核类 #3/#4/#5/#6 单独立项（长期工程）
