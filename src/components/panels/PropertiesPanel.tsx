@@ -2122,6 +2122,13 @@ function SketchEntityEditor({ sketch, entityId, t }: { sketch: Sketch; entityId:
         <DimField key={`${entityId}:cy:${cy.toFixed(3)}`} label="Y" value={cy} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, 0, v - cy)} />
       </div>
     );
+  } else if (e?.type === 'point') {
+    field = (
+      <div className="space-y-1">
+        <DimField key={`${entityId}:px:${e.x.toFixed(3)}`} label="X" value={e.x} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, v - e.x, 0)} />
+        <DimField key={`${entityId}:py:${e.y.toFixed(3)}`} label="Y" value={e.y} allowAny onCommit={(v) => useStore.getState().nudgeSketchEntity(entityId, 0, v - e.y)} />
+      </div>
+    );
   }
   // Friendly type label (Line/Circle/Arc/…) reusing the sketch-tool strings.
   const typeLabel = e && e.type !== 'point' && e.type !== 'rectangle' ? t(`sketch.${e.type}`) : t('panel.sketchEntity');
