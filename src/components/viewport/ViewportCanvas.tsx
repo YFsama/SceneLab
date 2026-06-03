@@ -11,7 +11,7 @@ import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/rend
 import { pickCycle, distinctInOrder } from '../../lib/render/pickCycle';
 import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
-import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
+import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check } from 'lucide-react';
@@ -1279,6 +1279,7 @@ export function ViewportCanvas() {
             { label: t('menu.convexHull'), onClick: () => apply((b) => convexHullBody(b)) },
             { label: t('menu.boundingBox'), onClick: () => st().makeBoundingBoxOfSelection() },
             { label: t('menu.cleanup'), onClick: pre(() => st().weldSelected()) },
+            { label: t('menu.flipNormals'), onClick: () => apply(flipBodyNormals) },
             { label: t('menu.transparency'), onClick: () => st().toggleBodyTransparency(bodyId) },
           ],
         },

@@ -12,4 +12,4 @@ export { computeConvexHull } from './convexHull';
 export type { ConvexHull } from './convexHull';
 export { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from './measure';
 export type { SceneMassProperties } from './measure';
-export { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, rotateBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';
+export { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyToTarget, resizeBody, rotateBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';

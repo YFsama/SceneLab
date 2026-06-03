@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import { makeCoordinateSystem } from './referenceGeometry';
@@ -275,6 +275,24 @@ describe('applyCircularArray positions', () => {
     // The four instances occupy distinct positions.
     const distinct = new Set(centers.map((c) => `${c.x.toFixed(2)},${c.z.toFixed(2)}`));
     expect(distinct.size).toBe(4);
+  });
+});
+
+describe('flipBodyNormals', () => {
+  it('negates every face normal and reverses its winding, keeping id and geometry', () => {
+    const body = createBox(10, 10, 10);
+    const r = flipBodyNormals(body);
+    expect(r.id).toBe(body.id); // in-place edit
+    expect(r.vertices).toEqual(body.vertices); // points unchanged
+    expect(r.faces.length).toBe(body.faces.length);
+    r.faces.forEach((f, i) => {
+      const o = body.faces[i]!;
+      expect(f.normal).toEqual({ x: -o.normal.x, y: -o.normal.y, z: -o.normal.z });
+      expect(f.vertices).toEqual([...o.vertices].reverse());
+    });
+    // Flipping twice restores the original orientation.
+    const back = flipBodyNormals(r);
+    expect(back.faces[0]!.normal).toEqual(body.faces[0]!.normal);
   });
 });
 

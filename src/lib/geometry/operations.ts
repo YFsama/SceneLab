@@ -475,6 +475,22 @@ export function applyMirror(
 }
 
 /**
+ * Flip every face's orientation (reverse winding + negate normal) in place,
+ * turning a body inside-out — the fix for an imported mesh that renders
+ * inverted. Keeps id/name/vertices/edges so it's an in-place edit.
+ */
+export function flipBodyNormals(body: SolidBody): SolidBody {
+  return {
+    ...body,
+    faces: body.faces.map((f) => ({
+      ...f,
+      vertices: [...f.vertices].reverse(),
+      normal: { x: -f.normal.x, y: -f.normal.y, z: -f.normal.z },
+    })),
+  };
+}
+
+/**
  * Place a body into a coordinate system's frame: the body's current coordinates
  * are taken as local (CSYS-frame) coordinates and mapped to world space — the
  * rigid transform SolidWorks applies when inserting a part at a coordinate

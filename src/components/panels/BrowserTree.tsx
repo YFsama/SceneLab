@@ -5,7 +5,7 @@ import { Box, Layers, History, Frame, Slash, Dot, Axis3d, X, Eye, EyeOff } from 
 import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
-import { centerBody, convexHullBody, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
+import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import type { SolidBody } from '../../lib/geometry/types';
 
 export function BrowserTree() {
@@ -194,6 +194,7 @@ export function BrowserTree() {
           { label: t('menu.convexHull'), onClick: () => apply(bodyId, (b) => convexHullBody(b)) },
           { label: t('menu.boundingBox'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); makeBoundingBoxOfSelection(); } },
           { label: t('menu.cleanup'), onClick: pre(() => weldSelected()) },
+          { label: t('menu.flipNormals'), onClick: () => apply(bodyId, flipBodyNormals) },
           { label: t('menu.transparency'), onClick: () => toggleBodyTransparency(bodyId) },
         ],
       },
