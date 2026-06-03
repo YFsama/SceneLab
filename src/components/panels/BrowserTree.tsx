@@ -63,6 +63,9 @@ export function BrowserTree() {
   const [menu, setMenu] = useState<{ x: number; y: number; bodyId: string } | null>(null);
   // Anchor for SolidWorks-style Shift+click range selection in the tree.
   const [anchorId, setAnchorId] = useState<string | null>(null);
+  // Collapsible tree sections (SolidWorks tree folders).
+  const [collapsed, setCollapsed] = useState({ bodies: false, refs: false, history: false });
+  const toggleSection = (k: 'bodies' | 'refs' | 'history') => setCollapsed((c) => ({ ...c, [k]: !c[k] }));
 
   // Click selection: Shift = range from anchor, Ctrl/Cmd = toggle, plain = single.
   const handleRowClick = (e: React.MouseEvent, id: string) => {
@@ -227,10 +230,14 @@ export function BrowserTree() {
       <div className="flex-1 overflow-y-auto flex flex-col">
         {/* Bodies section */}
         <div className="p-1">
-          <p className="px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider">
-            {t('panel.features')}
-          </p>
-          {bodies.length === 0 ? (
+          <button
+            onClick={() => toggleSection('bodies')}
+            className="w-full px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider flex items-center gap-1 hover:text-text-primary"
+            aria-expanded={!collapsed.bodies}
+          >
+            <span className="font-mono w-2">{collapsed.bodies ? '▸' : '▾'}</span>{t('panel.features')}
+          </button>
+          {!collapsed.bodies && (bodies.length === 0 ? (
             <p className="text-xs text-text-muted p-2">{t('panel.noObjects')}</p>
           ) : (
             bodies.map((body) =>
@@ -287,15 +294,20 @@ export function BrowserTree() {
                 </div>
               ),
             )
-          )}
+          ))}
         </div>
 
         {/* Reference geometry section */}
         {(planes.length > 0 || axes.length > 0 || points.length > 0 || coordSystems.length > 0) && (
           <div className="border-t border-panel-border p-1">
-            <p className="px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider">
-              {t('panel.referenceGeometry')}
-            </p>
+            <button
+              onClick={() => toggleSection('refs')}
+              className="w-full px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider flex items-center gap-1 hover:text-text-primary"
+              aria-expanded={!collapsed.refs}
+            >
+              <span className="font-mono w-2">{collapsed.refs ? '▸' : '▾'}</span>{t('panel.referenceGeometry')}
+            </button>
+            {!collapsed.refs && (<>
             {planes.map((p) => (
               <RefRow key={p.id} icon={<Frame size={12} />} name={p.name} onDelete={() => removePlane(p.id)} deleteLabel={t('menu.delete')} />
             ))}
@@ -308,21 +320,29 @@ export function BrowserTree() {
             {coordSystems.map((c) => (
               <RefRow key={c.id} icon={<Axis3d size={12} />} name={c.name} onDelete={() => removeCoordinateSystem(c.id)} deleteLabel={t('menu.delete')} />
             ))}
+            </>)}
           </div>
         )}
 
         {/* Feature history section */}
         <div className="border-t border-panel-border p-1">
-          <p className="px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider flex items-center gap-1">
+          <button
+            onClick={() => toggleSection('history')}
+            className="w-full px-2 py-1 text-[10px] font-medium text-text-muted uppercase tracking-wider flex items-center gap-1 hover:text-text-primary"
+            aria-expanded={!collapsed.history}
+          >
+            <span className="font-mono w-2">{collapsed.history ? '▸' : '▾'}</span>
             <History size={10} />
             {t('panel.history')}
-          </p>
+          </button>
+          {!collapsed.history && (<>
           {featureTree.features.length > 0 && (
             <div className="px-2 py-0.5 text-[10px] text-text-muted">
               {featureTree.features.length} {featureTree.features.length === 1 ? 'feature' : 'features'}
             </div>
           )}
           <FeatureEditor />
+          </>)}
         </div>
       </div>
 
