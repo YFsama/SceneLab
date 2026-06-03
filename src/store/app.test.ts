@@ -1,9 +1,20 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStore } from './app';
+import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody, computeBoundingBoxCenter } from '../lib/geometry';
 import { createSketch, addRectangle, addLine } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
+
+describe('uniqueBodyName', () => {
+  it('returns the name unchanged when free', () => {
+    expect(uniqueBodyName('Box', ['Cylinder'])).toBe('Box');
+  });
+  it('appends the smallest free number on collision', () => {
+    expect(uniqueBodyName('Box', ['Box'])).toBe('Box2');
+    expect(uniqueBodyName('Box', ['Box', 'Box2'])).toBe('Box3');
+    expect(uniqueBodyName('Box', ['Box', 'Box3'])).toBe('Box2'); // fills the gap
+  });
+});
 
 describe('app store', () => {
   it('should have default theme', () => {
@@ -124,6 +135,14 @@ describe('app store — direct bodies', () => {
       undoStack: [],
       redoStack: [],
     });
+  });
+
+  it('auto-numbers duplicate body names on add (Box, Box2, Box3)', () => {
+    useStore.getState().addDirectBody(createBox(5, 5, 5));
+    useStore.getState().addDirectBody(createBox(5, 5, 5));
+    useStore.getState().addDirectBody(createBox(5, 5, 5));
+    const names = useStore.getState().bodies.map((b) => b.name);
+    expect(names).toEqual(['Box', 'Box2', 'Box3']);
   });
 
   it('direct bodies survive a tree recompute', () => {

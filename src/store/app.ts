@@ -10,6 +10,19 @@ import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geom
 import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, mergeBodies, weldVertices } from '../lib/geometry/operations';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
+
+/**
+ * Make `name` unique against `existing` by appending the smallest free number
+ * (Box → Box2 → Box3 …) — like SolidWorks auto-numbering features so multiple
+ * inserts of the same primitive are distinguishable in the tree. An
+ * already-unique name is returned unchanged.
+ */
+export function uniqueBodyName(name: string, existing: string[]): string {
+  if (!existing.includes(name)) return name;
+  let n = 2;
+  while (existing.includes(`${name}${n}`)) n++;
+  return `${name}${n}`;
+}
 import {
   createBox,
   createCylinder,
@@ -461,7 +474,11 @@ export const useStore = create<AppState>((set, get) => {
 
   addDirectBody: (body) => {
     pushUndo();
-    set((s) => ({ directBodies: [...s.directBodies, body], projectDirty: true }));
+    set((s) => {
+      const name = uniqueBodyName(body.name, s.directBodies.map((b) => b.name));
+      const b = name === body.name ? body : { ...body, name };
+      return { directBodies: [...s.directBodies, b], projectDirty: true };
+    });
     recombine();
   },
   addPrimitive: (kind) => {
