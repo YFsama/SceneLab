@@ -218,8 +218,8 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
    边选择尚未实现（需 edge ID 映射）。
 
 ### P1 — 真正的建模内核（当前近似/占位）
-3. **圆角/倒角 Fillet/Chamfer**：`applyFillet/applyChamfer` 占位，产生非流形网格，未暴露 UI。
-   需半边拓扑。见 memory `fillet-chamfer-nonmanifold.md`。**内核级，非一轮可完成。**
+3. **圆角/倒角 Fillet/Chamfer** — ✅ 已改进 (Fillet: 8 段圆弧近似混合面; Chamfer: 按面法向偏移 4 点菱形面)。
+   仍非真 B-rep（保留原始面，边界处非流形），但视觉效果大幅提升。
 4. **布尔运算是体素的（块状）**：需真网格布尔(manifold-3d)或 B-rep(OCCT)。**内核级。**
 5. **草图约束系统** — ✅ 基本完成 (求解器已支持全部 10 种约束类型 + 右键菜单/快捷键约束 UI + undo)。
    多实体约束(平行/垂直/等长/重合/距离)需双选实体 UI；切线/对称约束尚未暴露 UI。
