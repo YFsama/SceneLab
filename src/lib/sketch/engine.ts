@@ -24,6 +24,17 @@ export function createSketch(planeId: string): Sketch {
   };
 }
 
+/** Deep-ish clone of a sketch (fresh entity/constraint maps with copied values)
+ * so a snapshot can be kept for undo without aliasing the live sketch. */
+export function cloneSketch(s: Sketch): Sketch {
+  return {
+    id: s.id,
+    planeId: s.planeId,
+    entities: new Map([...s.entities].map(([k, v]) => [k, { ...v }])),
+    constraints: new Map([...s.constraints].map(([k, v]) => [k, { ...v }])),
+  };
+}
+
 export function addPoint(sketch: Sketch, x: number, y: number): SketchPoint {
   const pt: SketchPoint = { id: genId('pt'), type: 'point', x, y };
   sketch.entities.set(pt.id, pt);

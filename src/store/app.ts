@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -75,6 +75,11 @@ interface AppState {
   exitSketch: () => void;
   currentSketch: Sketch | null;
   setCurrentSketch: (s: Sketch | null) => void;
+  /** Sketch-scoped undo/redo history (separate from the body undo stack). */
+  sketchUndoStack: Sketch[];
+  sketchRedoStack: Sketch[];
+  sketchUndo: () => boolean;
+  sketchRedo: () => boolean;
   sketchPlaneId: SketchPlaneId;
   setSketchPlaneId: (p: SketchPlaneId) => void;
   /** Grid/snap step in mm for sketch drawing. */
@@ -376,6 +381,11 @@ export const useStore = create<AppState>((set, get) => {
   const pushUndo = () => {
     set((s) => ({ undoStack: [...s.undoStack, { directBodies: s.directBodies, hiddenIds: s.hiddenIds }].slice(-50), redoStack: [] }));
   };
+  // Separate history for sketch edits — Ctrl+Z while sketching undoes the sketch.
+  const pushSketchUndo = () => {
+    const s = get().currentSketch;
+    if (s) set((st) => ({ sketchUndoStack: [...st.sketchUndoStack, cloneSketch(s)].slice(-50), sketchRedoStack: [] }));
+  };
 
   return {
   theme: (stored('scenelab.theme') as ThemeMode) ?? 'dark',
@@ -398,7 +408,36 @@ export const useStore = create<AppState>((set, get) => {
   setSketchActive: (sketchActive) => set({ sketchActive }),
   exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, selectedSketchId: null, workspace: 'model' }),
   currentSketch: null,
-  setCurrentSketch: (currentSketch) => set({ currentSketch }),
+  // Starting/exiting a sketch begins a fresh edit history.
+  setCurrentSketch: (currentSketch) => set({ currentSketch, sketchUndoStack: [], sketchRedoStack: [] }),
+  sketchUndoStack: [],
+  sketchRedoStack: [],
+  sketchUndo: () => {
+    const { sketchUndoStack, currentSketch } = get();
+    if (sketchUndoStack.length === 0 || !currentSketch) return false;
+    const prev = sketchUndoStack[sketchUndoStack.length - 1]!;
+    set((s) => ({
+      currentSketch: prev,
+      sketchUndoStack: s.sketchUndoStack.slice(0, -1),
+      sketchRedoStack: [...s.sketchRedoStack, cloneSketch(currentSketch)],
+      selectedSketchId: null,
+      projectDirty: true,
+    }));
+    return true;
+  },
+  sketchRedo: () => {
+    const { sketchRedoStack, currentSketch } = get();
+    if (sketchRedoStack.length === 0 || !currentSketch) return false;
+    const next = sketchRedoStack[sketchRedoStack.length - 1]!;
+    set((s) => ({
+      currentSketch: next,
+      sketchRedoStack: s.sketchRedoStack.slice(0, -1),
+      sketchUndoStack: [...s.sketchUndoStack, cloneSketch(currentSketch)],
+      selectedSketchId: null,
+      projectDirty: true,
+    }));
+    return true;
+  },
   sketchPlaneId: 'xy',
   setSketchPlaneId: (sketchPlaneId) => set({ sketchPlaneId }),
   gridSize: Number(stored('scenelab.gridSize')) || 0.5,
@@ -412,6 +451,7 @@ export const useStore = create<AppState>((set, get) => {
   addSketchLine: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;
     if (!sketch) return '';
+    pushSketchUndo();
     const e = addLine(sketch, x1, y1, x2, y2);
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return e.id;
@@ -420,6 +460,7 @@ export const useStore = create<AppState>((set, get) => {
   addSketchRect: (x1, y1, x2, y2) => {
     const sketch = get().currentSketch;
     if (!sketch) return '';
+    pushSketchUndo();
     const e = addRectangle(sketch, x1, y1, x2, y2);
     set({ currentSketch: { ...sketch }, projectDirty: true });
     // A rectangle is decomposed into lines; return the first edge's id.
@@ -429,6 +470,7 @@ export const useStore = create<AppState>((set, get) => {
   addSketchCircle: (cx, cy, radius) => {
     const sketch = get().currentSketch;
     if (!sketch) return '';
+    pushSketchUndo();
     const e = addCircle(sketch, cx, cy, radius);
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return e.id;
@@ -437,6 +479,7 @@ export const useStore = create<AppState>((set, get) => {
   addSketchArc: (cx, cy, radius, startAngle, endAngle) => {
     const sketch = get().currentSketch;
     if (!sketch) return '';
+    pushSketchUndo();
     const e = addArc(sketch, cx, cy, radius, startAngle, endAngle);
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return e.id;
@@ -444,6 +487,7 @@ export const useStore = create<AppState>((set, get) => {
   addSketchPolygon: (cx, cy, radius, sides) => {
     const sketch = get().currentSketch;
     if (!sketch || !(radius > 0)) return;
+    pushSketchUndo();
     addPolygon(sketch, cx, cy, radius, sides);
     set({ currentSketch: { ...sketch }, projectDirty: true });
   },
@@ -459,6 +503,7 @@ export const useStore = create<AppState>((set, get) => {
   removeSketchEntity: (id) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
+    pushSketchUndo();
     removeEntity(sketch, id);
     set((s) => ({ currentSketch: { ...sketch }, selectedSketchId: s.selectedSketchId === id ? null : s.selectedSketchId, projectDirty: true }));
   },
@@ -473,6 +518,7 @@ export const useStore = create<AppState>((set, get) => {
     let dx = p2.x - p1.x, dy = p2.y - p1.y;
     const len = Math.hypot(dx, dy);
     if (len < 1e-9) { dx = 1; dy = 0; } else { dx /= len; dy /= len; }
+    pushSketchUndo();
     p2.x = p1.x + dx * length; // move the endpoint along the line so |p1→p2| = length
     p2.y = p1.y + dy * length;
     set({ currentSketch: { ...sketch }, projectDirty: true });
@@ -483,6 +529,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!sketch || !(radius > 0)) return false;
     const e = sketch.entities.get(id);
     if (!e || (e.type !== 'circle' && e.type !== 'arc')) return false;
+    pushSketchUndo();
     e.radius = radius;
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
@@ -498,6 +545,7 @@ export const useStore = create<AppState>((set, get) => {
     const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
     if (len < 1e-9) return false; // no direction to set an angle on
     const rad = (deg * Math.PI) / 180;
+    pushSketchUndo();
     p2.x = p1.x + Math.cos(rad) * len; // rotate the endpoint about p1, keeping length
     p2.y = p1.y + Math.sin(rad) * len;
     set({ currentSketch: { ...sketch }, projectDirty: true });
@@ -508,6 +556,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!sketch) return false;
     const e = sketch.entities.get(id);
     if (!e) return false;
+    pushSketchUndo();
     let moved = false;
     for (const pid of pointIdsOf(e)) {
       const p = sketch.entities.get(pid);

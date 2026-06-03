@@ -1270,6 +1270,23 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setSketchEntityRadius(line.id, 7)).toBe(false); // not a circle/arc
   });
 
+  it('sketch undo/redo reverts and replays sketch edits', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchLine(0, 0, 5, 0);
+    expect(useStore.getState().currentSketch!.entities.size).toBeGreaterThan(0);
+    const afterAdd = useStore.getState().currentSketch!.entities.size;
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0); // line removed
+
+    useStore.getState().sketchRedo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(afterAdd); // re-added
+
+    // Starting a new sketch clears the history.
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    expect(useStore.getState().sketchUndo()).toBe(false);
+  });
+
   it('setSketchLineAngle rotates the endpoint about p1, keeping length', () => {
     const sketch = createSketch('xy');
     const line = addLine(sketch, 0, 0, 5, 0); // length 5 along +X (0°)

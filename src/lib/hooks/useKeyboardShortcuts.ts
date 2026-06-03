@@ -109,9 +109,10 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+x', () => store.cutSelected());
   registerShortcut('ctrl+c', () => store.copySelected());
   registerShortcut('ctrl+v', () => store.paste());
-  registerShortcut('ctrl+z', () => store.undo());
-  registerShortcut('ctrl+shift+z', () => store.redo());
-  registerShortcut('ctrl+y', () => store.redo());
+  // While sketching, Ctrl+Z/Y act on the sketch's own history; otherwise on bodies.
+  registerShortcut('ctrl+z', () => { const s = useStore.getState(); if (s.sketchActive) s.sketchUndo(); else s.undo(); });
+  registerShortcut('ctrl+shift+z', () => { const s = useStore.getState(); if (s.sketchActive) s.sketchRedo(); else s.redo(); });
+  registerShortcut('ctrl+y', () => { const s = useStore.getState(); if (s.sketchActive) s.sketchRedo(); else s.redo(); });
   registerShortcut('ctrl+s', () => saveProjectToFile());
   registerShortcut('ctrl+o', () => { void openProjectFromFile(); });
   registerShortcut('ctrl+n', () => { void confirmDiscardIfDirty('project.new').then((ok) => { if (ok) useStore.getState().newProject(); }); });
