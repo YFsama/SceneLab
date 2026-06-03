@@ -126,6 +126,12 @@ export function initBuiltinCommands(): void {
   for (const dir of ['top', 'bottom', 'front', 'back', 'left', 'right', 'iso'] as const) {
     registerCommand({ id: `view.${dir}`, label: `View: ${dir}`, category: 'View', shortcut: viewKeys[dir], run: () => s().setViewDirection(dir) });
   }
+  // Workspace switching — mirrors the S/M/D/C shortcuts. Entering Sketch also
+  // activates the sketch (matching the 'S' hotkey).
+  registerCommand({ id: 'workspace.sketch', label: 'Workspace: Sketch', category: 'View', shortcut: 'S', run: () => { if (!s().sketchActive) { s().setWorkspace('sketch'); s().setSketchActive(true); } } });
+  registerCommand({ id: 'workspace.model', label: 'Workspace: Model', category: 'View', shortcut: 'M', run: () => s().setWorkspace('model') });
+  registerCommand({ id: 'workspace.drawing', label: 'Workspace: Drawing', category: 'View', shortcut: 'D', run: () => s().setWorkspace('drawing') });
+  registerCommand({ id: 'workspace.cam', label: 'Workspace: CAM', category: 'View', shortcut: 'C', run: () => s().setWorkspace('cam') });
   for (const kind of PRIMITIVES) {
     registerCommand({ id: `create.${kind}`, label: `Add ${kind}`, category: 'Create', run: () => s().addPrimitive(kind) });
   }
