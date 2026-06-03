@@ -88,6 +88,10 @@ export function ViewportCanvas() {
   const previewGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  // Box-selection state: when left-dragging on empty space, draws a screen rectangle.
+  const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const selRectStartRef = useRef<{ x: number; y: number; hitBody: boolean } | null>(null);
+  const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
   // Lets the (earlier-declared) context menu call fitView without a TDZ.
@@ -253,6 +257,9 @@ export function ViewportCanvas() {
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.screenSpacePanning = true;
+    // Middle button = rotate (CAD convention); left button is free for
+    // box-selection and body-click, right button = pan.
+    controls.mouseButtons = { LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
     // Wheel zoom moves toward the cursor (Fusion / SolidWorks behaviour) rather
     // than the orbit centre, so you can zoom into the detail you're pointing at.
     controls.zoomToCursor = true;
@@ -1242,6 +1249,8 @@ export function ViewportCanvas() {
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
+      // Suppress click after a box-selection drag.
+      if (selRectCommittedRef.current) { selRectCommittedRef.current = false; return; }
       const container = containerRef.current;
       const camera = cameraRef.current;
       const scene = sceneRef.current;
@@ -1325,6 +1334,14 @@ export function ViewportCanvas() {
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      // Update selection rectangle while dragging.
+      if (selRectStartRef.current && !selRectStartRef.current.hitBody) {
+        const container = containerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          setSelRect((prev) => prev ? { ...prev, x2: e.clientX - rect.left, y2: e.clientY - rect.top } : null);
+        }
+      }
       if (!sketchActive) {
         setMousePos(null);
         const container = containerRef.current;
@@ -1737,15 +1754,90 @@ export function ViewportCanvas() {
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!sketchActive || sketchTool === 'select') return;
-      const pt = getSketchPoint(e);
-      if (pt) setDrawStart(pt);
+      if (sketchActive && sketchTool !== 'select') {
+        const pt = getSketchPoint(e);
+        if (pt) setDrawStart(pt);
+        return;
+      }
+      // In model mode, left-click on empty space starts a selection rectangle.
+      if (e.button === 0 && !sketchActive) {
+        const container = containerRef.current;
+        const camera = cameraRef.current;
+        const bodiesGroup = bodiesGroupRef.current;
+        if (!container || !camera || !bodiesGroup) return;
+        const rect = container.getBoundingClientRect();
+        mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        raycasterRef.current.setFromCamera(mouseRef.current, camera);
+        const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+        const hitBody = !!hit;
+        selRectStartRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top, hitBody };
+        selRectCommittedRef.current = false;
+        if (!hitBody) {
+          setSelRect({ x1: e.clientX - rect.left, y1: e.clientY - rect.top, x2: e.clientX - rect.left, y2: e.clientY - rect.top });
+        }
+      }
     },
     [sketchActive, sketchTool, getSketchPoint, setDrawStart],
   );
 
   const handleMouseUp = useCallback(
     (e: React.MouseEvent) => {
+      // Box selection: if we were drawing a selection rectangle, finalize it.
+      if (selRectStartRef.current && !selRectStartRef.current.hitBody && selRect) {
+        const container = containerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const ex = e.clientX - rect.left;
+          const ey = e.clientY - rect.top;
+          const sx = selRectStartRef.current.x;
+          const sy = selRectStartRef.current.y;
+          const w = Math.abs(ex - sx);
+          const h = Math.abs(ey - sy);
+          if (w > 5 || h > 5) {
+            // Perform box selection: project each visible body's center to screen.
+            const camera = cameraRef.current;
+            if (camera) {
+              const minX = Math.min(sx, ex), maxX = Math.max(sx, ex);
+              const minY = Math.min(sy, ey), maxY = Math.max(sy, ey);
+              const selected: string[] = [];
+              for (const body of bodies) {
+                if (hiddenIds.includes(body.id)) continue;
+                // Compute body center from vertices.
+                let cx = 0, cy = 0, cz = 0;
+                for (const v of body.vertices) { cx += v.x; cy += v.y; cz += v.z; }
+                const n = body.vertices.length;
+                if (n === 0) continue;
+                cx /= n; cy /= n; cz /= n;
+                // Project to screen.
+                const v3 = new THREE.Vector3(cx, cy, cz).project(camera);
+                const sx2 = (v3.x * 0.5 + 0.5) * rect.width;
+                  const sy2 = (-v3.y * 0.5 + 0.5) * rect.height;
+                if (sx2 >= minX && sx2 <= maxX && sy2 >= minY && sy2 <= maxY) {
+                  selected.push(body.id);
+                }
+              }
+              if (selected.length > 0) {
+                if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                  // Add to existing selection.
+                  const current = useStore.getState().selectedIds;
+                  const merged = [...new Set([...current, ...selected])];
+                  useStore.getState().setSelectedIds(merged);
+                } else {
+                  useStore.getState().setSelectedIds(selected);
+                }
+              }
+            }
+            selRectCommittedRef.current = true;
+          }
+        }
+        setSelRect(null);
+        selRectStartRef.current = null;
+        return;
+      }
+      selRectStartRef.current = null;
+      setSelRect(null);
+
       if (!sketchActive || !drawStart || sketchTool === 'select') return;
       const pt = getSketchPoint(e);
       if (!pt) return;
@@ -1805,6 +1897,18 @@ export function ViewportCanvas() {
         role="img"
         aria-label={t('viewport.title')}
       />
+      {selRect && (
+        <div
+          className="absolute border-2 border-accent bg-accent/10 pointer-events-none z-20"
+          style={{
+            left: Math.min(selRect.x1, selRect.x2),
+            top: Math.min(selRect.y1, selRect.y2),
+            width: Math.abs(selRect.x2 - selRect.x1),
+            height: Math.abs(selRect.y2 - selRect.y1),
+          }}
+          aria-hidden="true"
+        />
+      )}
       {hoverLabel && !sketchActive && !measureActive && (
         <div
           className="absolute z-10 px-1.5 py-0.5 rounded bg-panel/90 border border-panel-border text-[10px] text-text-primary pointer-events-none whitespace-nowrap"

@@ -348,6 +348,8 @@ interface AppState {
   selectedIds: string[];
   addObject: (id: string) => void;
   selectObject: (id: string) => void;
+  /** Set the selection to exactly the given ids (box-select, etc.). */
+  setSelectedIds: (ids: string[]) => void;
   /** Toggle a body in/out of the current selection (Ctrl/⌘-click multi-select). */
   toggleSelect: (id: string) => void;
   /** Select every body in the scene (Ctrl+A). */
@@ -1599,6 +1601,7 @@ export const useStore = create<AppState>((set, get) => {
   selectedIds: [],
   addObject: (id) => set((s) => ({ objectIds: [...s.objectIds, id] })),
   selectObject: (id) => set({ selectedIds: [id] }),
+  setSelectedIds: (ids) => set({ selectedIds: ids }),
   toggleSelect: (id) =>
     set((s) => ({
       selectedIds: s.selectedIds.includes(id)
