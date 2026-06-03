@@ -47,6 +47,8 @@ const GROUPS: Group[] = [
   {
     titleKey: 'shortcuts.edit',
     rows: [
+      { keys: 'Ctrl+N', labelKey: 'project.new' },
+      { keys: 'Ctrl+S', labelKey: 'project.save' },
       { keys: 'Ctrl+Z', labelKey: 'toolbar.undo' },
       { keys: 'Ctrl+Y', labelKey: 'toolbar.redo' },
       { keys: 'Ctrl+C / Ctrl+V', labelKey: 'shortcuts.copyPaste' },

@@ -1,40 +1,23 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
+import { loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
 import { showToast } from '../../lib/toast';
-import { confirmDiscardIfDirty } from '../../lib/projectActions';
+import { confirmDiscardIfDirty, saveProjectToFile } from '../../lib/projectActions';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
 import { framingBodies } from '../../lib/render/fitView';
 
 export function ProjectMenu() {
   const { t } = useT();
   const projectName = useStore((s) => s.projectName);
-  const featureTree = useStore((s) => s.featureTree);
   const bodies = useStore((s) => s.bodies);
   const selectedIds = useStore((s) => s.selectedIds);
-  const directBodies = useStore((s) => s.directBodies);
-  const planes = useStore((s) => s.planes);
-  const axes = useStore((s) => s.axes);
-  const points = useStore((s) => s.points);
-  const coordSystems = useStore((s) => s.coordSystems);
-  const setProjectDirty = useStore((s) => s.setProjectDirty);
   const loadProject = useStore((s) => s.loadProject);
   const addDirectBody = useStore((s) => s.addDirectBody);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const meshInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSave = () => {
-    try {
-      const project = serializeProject(projectName, featureTree.features, bodies, directBodies, { planes, axes, points, coordSystems });
-      const json = saveToFile(project);
-      downloadFile(json, `${projectName}.studio3d`);
-      setProjectDirty(false);
-      showToast(t('toast.projectSaved'), 'success');
-    } catch (e) {
-      showToast(`${t('toast.saveFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
-    }
-  };
+  const handleSave = () => saveProjectToFile();
 
   const handleLoad = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
