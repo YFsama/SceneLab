@@ -70,6 +70,11 @@ export function PropertiesPanel() {
   const setSelectionColor = useStore((s) => s.setSelectionColor);
   const setBodyOpacity = useStore((s) => s.setBodyOpacity);
   const selectObject = useStore((s) => s.selectObject);
+  const renaming = useStore((s) => s.renaming);
+  const beginRename = useStore((s) => s.beginRename);
+  const setRenameValue = useStore((s) => s.setRenameValue);
+  const commitRename = useStore((s) => s.commitRename);
+  const cancelRename = useStore((s) => s.cancelRename);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const selectedBody = selectedIds.length === 1
@@ -93,7 +98,25 @@ export function PropertiesPanel() {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Box size={14} className="text-accent" />
-              <span className="text-sm font-medium text-text-primary">{selectedBody.name}</span>
+              {renaming?.id === selectedBody.id ? (
+                <input
+                  autoFocus
+                  value={renaming.value}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') cancelRename(); }}
+                  onBlur={commitRename}
+                  className="flex-1 min-w-0 px-1 py-0.5 bg-surface border border-accent rounded text-sm text-text-primary"
+                  aria-label={t('menu.rename')}
+                />
+              ) : (
+                <button
+                  onDoubleClick={() => beginRename(selectedBody.id)}
+                  className="text-sm font-medium text-text-primary hover:text-accent text-left"
+                  title={t('menu.rename')}
+                >
+                  {selectedBody.name}
+                </button>
+              )}
             </div>
 
             <div className="space-y-1">
