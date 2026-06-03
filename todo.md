@@ -188,10 +188,22 @@ See the original design document for full tech stack rationale. Key choices:
   opacity, multi-select colour), collapsible tree + F2/reorder, undoable rename/colour/
   opacity/visibility, perf (selection recolours without geometry rebuild, advanced
   analysis collapsed/lazy), vitest timeout raised for stable CI.
+- `2026-06-03`: Major feature + polish loop (tests 776, all green).
+  - **Perspective/Orthographic projection toggle** (#7): `OrthographicCamera` + frustum
+    auto-sizing + Shift+P/button/ViewCube/command palette/AI tool `set_projection`.
+  - **Interactive 3D ViewCube** (#8): 26 orientations (faces/edges/corners), drag-to-orbit,
+    hover highlights, face labels, event-based communication with ViewportCanvas.
+  - **Persistent measurement annotations** (#9): `AnnotationDefinition` + "Save as annotation"
+    button in measure HUD + project serialization + viewport rendering + context menu delete.
+  - **Non-uniform scaling dialog** (#13): uniform/per-axis toggle + `scaleBodyXYZ` with
+    correct normal transform via inverse-transpose.
+  - **Ctrl+Shift+A deselect all** (#17), **Enter repeats last command** (#19).
+  - **Incremental mesh rebuild** (#12): `meshCacheRef` diffs by body reference,
+    only rebuilds changed/added/removed bodies; wireframe toggle forces full rebuild.
 
 ---
 
-## Remaining Usability Work (TODO) — as of 2026-05-31
+## Remaining Usability Work (TODO) — as of 2026-06-03
 
 对标 SolidWorks / Autodesk Fusion 仍未完成的项。每轮一个小目标；改完 `tsc -b` +
 eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
@@ -232,10 +244,7 @@ eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
     - 入口 `store/app.ts`(`setBodyColor` ~688)、`PropertiesPanel.tsx`(`MassProperties`)。
 
 ### P3 — 性能
-12. **网格重建无 diff/缓存**：`bodies` 任何变化都重建所有 mesh + 边线（微移一个/隐藏一个都全重建）。
-    方案：`useRef<Map<bodyId,{body,mesh}>>` 按 body 引用 diff，只重建变化/新增、移除删除/隐藏
-    （`group.add/remove` 是方法，允许；注意 React Compiler 禁止 effect 内写 `mesh.visible`/属性，
-    只能用方法如 `color.setHex`）。**风险中**：渲染正确性无法目视验证 + dispose/缓存生命周期。
+12. **网格重建无 diff/缓存** — ✅ 已完成 (`meshCacheRef` 按 body 引用 diff，只重建变化/新增/移除，wireframe 切换全量重建)。
 
 ### P4 — 小改进/打磨（低风险）
 13. 非均匀缩放对话框 — ✅ 已完成 (ScaleDialog 均匀/按轴切换 + `scaleBodyXYZ` 正确法线变换)。
