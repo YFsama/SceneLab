@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc,
   addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
-  detectRectangle, resizeRectangle, type DetectedRectangle,
+  detectRectangle, resizeRectangle,
 } from './engine';
 
 describe('snapTargets', () => {

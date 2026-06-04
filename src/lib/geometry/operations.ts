@@ -812,7 +812,7 @@ export function sweepBody(profile: { x: number; y: number }[], path: Vec3[], twi
     const t = tangents[i]!;
     // Gram-Schmidt: project prevUp onto the plane perpendicular to t.
     const dot = prevUp.x * t.x + prevUp.y * t.y + prevUp.z * t.z;
-    let up = normalize({ x: prevUp.x - dot * t.x, y: prevUp.y - dot * t.y, z: prevUp.z - dot * t.z });
+    const up = normalize({ x: prevUp.x - dot * t.x, y: prevUp.y - dot * t.y, z: prevUp.z - dot * t.z });
     const right = cross(t, up);
     frames.push({ up, right });
     prevUp = up;
