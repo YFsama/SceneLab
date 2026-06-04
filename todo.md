@@ -46,7 +46,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - [x] AI panel (AIPanel.tsx)
 - [x] Register all modeling tools for AI (~94 tools in builtinTools.ts)
 - [x] Natural language commands (AI tool-use loop in client.ts, tool results fed back to model)
-- [ ] Vision: user can circle a face and ask "Can I add a rib here?" — 需 VLM API (Claude/GPT-4V) 集成 + 选区截图发送。跨模块长期需求。
+- [x] Vision: user can circle a face and ask "Can I add a rib here?" — 已实现 (AI 面板 Eye 按钮切换, captureViewport → base64 → Anthropic multimodal image content)
 
 ### v0.4 — "External exchange" (~+1 month)
 

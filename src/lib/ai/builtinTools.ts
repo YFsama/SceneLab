@@ -8,6 +8,7 @@ import { listFaces, angleBetweenFaces } from '../geometry/query';
 import { listDimensions } from '../sketch/dimensions';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
+import { exportSTEP } from '../io/step';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
@@ -815,18 +816,18 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'export_body',
-    description: 'Export a body as STL (ASCII), OBJ, or 3MF text — the printable/downloadable mesh. 3MF is the modern 3D-print format.',
+    description: 'Export a body as STL (ASCII), OBJ, 3MF, or STEP text. STEP is a CAD exchange format (AP203 faceted B-rep).',
     parameters: {
       type: 'object',
       properties: {
         bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
-        format: { type: 'string', enum: ['stl', 'obj', '3mf'], description: 'Output format (default stl)' },
+        format: { type: 'string', enum: ['stl', 'obj', '3mf', 'step'], description: 'Output format (default stl)' },
       },
     },
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
-      const format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj', '3mf'] as const, 'format') : 'stl';
-      const content = format === 'obj' ? exportOBJ(body) : format === '3mf' ? export3MF([body]) : exportSTLAscii(body);
+      const format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj', '3mf', 'step'] as const, 'format') : 'stl';
+      const content = format === 'obj' ? exportOBJ(body) : format === '3mf' ? export3MF([body]) : format === 'step' ? exportSTEP(body) : exportSTLAscii(body);
       return { bodyId: body.id, format, bytes: content.length, content };
     },
   });

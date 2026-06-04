@@ -1744,6 +1744,15 @@ export function ViewportCanvas() {
             ...(hiddenIds.length > 0 ? [{ label: t('menu.showAll'), onClick: () => st().showAllBodies() }] : []),
           ],
         },
+        {
+          label: t('menu.export'),
+          separatorBefore: true,
+          submenu: [
+            { label: 'STL', onClick: async () => { const b = bodies.find((x) => x.id === bodyId); if (b) { const { exportSTLAscii } = await import('../../lib/io'); const { downloadFile } = await import('../../lib/io/studio3d'); downloadFile(exportSTLAscii(b), `${b.name}.stl`); } } },
+            { label: 'OBJ', onClick: async () => { const b = bodies.find((x) => x.id === bodyId); if (b) { const { exportOBJ } = await import('../../lib/io'); const { downloadFile } = await import('../../lib/io/studio3d'); downloadFile(exportOBJ(b), `${b.name}.obj`); } } },
+            { label: 'STEP', onClick: async () => { const b = bodies.find((x) => x.id === bodyId); if (b) { const { exportSTEP } = await import('../../lib/io/step'); const { downloadFile } = await import('../../lib/io/studio3d'); downloadFile(exportSTEP(b), `${b.name}.stp`); } } },
+          ],
+        },
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
