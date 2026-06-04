@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyXYZ, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame, sweepBody } from './operations';
 import { createBox } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import { makeCoordinateSystem } from './referenceGeometry';
@@ -458,5 +458,66 @@ describe('placeBodyInFrame', () => {
     const placed = placeBodyInFrame(box, cs);
     expect(Math.abs(computeVolume(placed))).toBeCloseTo(1000, 4);
     expect(checkManifold(placed).boundaryEdges).toBe(0);
+  });
+});
+
+describe('scaleBodyXYZ', () => {
+  it('scales per-axis so X doubles and Y triples while Z stays', () => {
+    const box = createBox(10, 10, 10);
+    const scaled = scaleBodyXYZ(box, 2, 3, 1);
+    const bb = computeBoundingBox(scaled);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(20, 4);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(30, 4);
+    expect(bb.max.z - bb.min.z).toBeCloseTo(10, 4);
+  });
+
+  it('rejects non-positive factors', () => {
+    expect(() => scaleBodyXYZ(createBox(1, 1, 1), 0, 1, 1)).toThrow('positive');
+    expect(() => scaleBodyXYZ(createBox(1, 1, 1), 1, -1, 1)).toThrow('positive');
+  });
+});
+
+describe('sweepBody', () => {
+  it('sweeps a square profile along a straight path', () => {
+    const profile = [
+      { x: -1, y: -1 },
+      { x: 1, y: -1 },
+      { x: 1, y: 1 },
+      { x: -1, y: 1 },
+    ];
+    const path = [
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 10 },
+    ];
+    const body = sweepBody(profile, path);
+    expect(body.faces.length).toBeGreaterThan(0);
+    expect(body.vertices.length).toBeGreaterThan(0);
+    // Volume should be non-zero (exact value depends on face winding).
+    const vol = Math.abs(computeVolume(body));
+    expect(vol).toBeGreaterThan(0);
+  });
+
+  it('sweeps a circular profile along an L-shaped path', () => {
+    const segments = 8;
+    const r = 1;
+    const profile: { x: number; y: number }[] = [];
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      profile.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+    }
+    const path = [
+      { x: 0, y: 0, z: 0 },
+      { x: 10, y: 0, z: 0 },
+      { x: 10, y: 0, z: 10 },
+    ];
+    const body = sweepBody(profile, path);
+    expect(body.faces.length).toBeGreaterThan(0);
+    // Should have non-zero volume.
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(0);
+  });
+
+  it('throws for invalid inputs', () => {
+    expect(() => sweepBody([{ x: 0, y: 0 }], [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }])).toThrow('≥3');
+    expect(() => sweepBody([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], [{ x: 0, y: 0, z: 0 }])).toThrow('≥2');
   });
 });

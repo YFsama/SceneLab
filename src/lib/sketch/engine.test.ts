@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc,
   addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
+  detectRectangle, resizeRectangle, type DetectedRectangle,
 } from './engine';
 
 describe('snapTargets', () => {
@@ -153,5 +154,48 @@ describe('solveSketch', () => {
     const p1 = result.get(line.p1Id);
     const p2 = result.get(line.p2Id);
     expect(p1?.y).toBeCloseTo(p2?.y ?? 0);
+  });
+});
+
+describe('detectRectangle', () => {
+  it('detects a rectangle from 4 lines forming a closed loop', () => {
+    const s = createSketch('xy');
+    const result = addRectangle(s, 0, 0, 10, 5);
+    const firstLineId = result.lines[0]!.id;
+    const rect = detectRectangle(s, firstLineId);
+    expect(rect).not.toBeNull();
+    expect(rect!.width).toBeCloseTo(10, 1);
+    expect(rect!.height).toBeCloseTo(5, 1);
+    expect(rect!.lineIds).toHaveLength(4);
+    expect(rect!.corners).toHaveLength(4);
+  });
+
+  it('returns null for a standalone line', () => {
+    const s = createSketch('xy');
+    const line = addLine(s, 0, 0, 10, 0);
+    expect(detectRectangle(s, line.id)).toBeNull();
+  });
+
+  it('returns null for a triangle (3 lines)', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 10, 0);
+    addLine(s, 10, 0, 5, 8);
+    addLine(s, 5, 8, 0, 0);
+    const firstLine = [...s.entities.values()].find((e) => e.type === 'line');
+    expect(detectRectangle(s, firstLine!.id)).toBeNull();
+  });
+});
+
+describe('resizeRectangle', () => {
+  it('resizes a rectangle to new dimensions', () => {
+    const s = createSketch('xy');
+    const result = addRectangle(s, 0, 0, 10, 5);
+    const firstLineId = result.lines[0]!.id;
+    const rect = detectRectangle(s, firstLineId)!;
+    resizeRectangle(s, rect, 20, 8);
+    const rect2 = detectRectangle(s, firstLineId);
+    expect(rect2).not.toBeNull();
+    expect(rect2!.width).toBeCloseTo(20, 1);
+    expect(rect2!.height).toBeCloseTo(8, 1);
   });
 });
