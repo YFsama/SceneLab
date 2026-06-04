@@ -2343,4 +2343,46 @@ export function registerBuiltinTools(): void {
       return { success: true, plane, shape, entityCount: sketch.entities.size };
     },
   });
+
+  registerTool({
+    name: 'sweep',
+    description: 'Sweep a 2D circular profile along a 3D path to create a tube/pipe body.',
+    parameters: {
+      type: 'object',
+      properties: {
+        radius: { type: 'number', description: 'Profile circle radius (mm)' },
+        path: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+            required: ['x', 'y', 'z'],
+          },
+          description: 'Path points (at least 2)',
+        },
+        name: { type: 'string', description: 'Body name' },
+      },
+      required: ['radius', 'path'],
+    },
+    execute: async (args) => {
+      const r = assertNumber(args.radius, 'radius');
+      if (!(r > 0)) throw new Error('Radius must be positive');
+      const path = (args.path as { x: number; y: number; z: number }[]).map((p) => ({
+        x: assertNumber(p.x, 'x'), y: assertNumber(p.y, 'y'), z: assertNumber(p.z, 'z'),
+      }));
+      if (path.length < 2) throw new Error('Path needs at least 2 points');
+      // Create a circular profile in the XY plane.
+      const segments = 16;
+      const profile: { x: number; y: number }[] = [];
+      for (let i = 0; i < segments; i++) {
+        const a = (i / segments) * Math.PI * 2;
+        profile.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+      }
+      const { sweepBody } = await import('../../lib/geometry/operations');
+      const body = sweepBody(profile, path);
+      if (typeof args.name === 'string') body.name = args.name;
+      useStore.getState().addDirectBodies([body]);
+      return { success: true, bodyId: body.id, name: body.name };
+    },
+  });
 }

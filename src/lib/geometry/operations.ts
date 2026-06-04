@@ -771,3 +771,128 @@ function computeFaceNormal(a: Vec3, b: Vec3, c: Vec3): Vec3 {
     z: ab.x * ac.y - ab.y * ac.x,
   });
 }
+
+/**
+ * Sweep: extrude a 2D profile along a 3D path. The profile is a loop of 2D
+ * points (in the local XY plane) that gets oriented perpendicular to the path
+ * tangent at each path sample. Returns a closed solid body.
+ *
+ * @param profile  2D profile points (closed loop, in XY plane, Z=0).
+ * @param path     3D path points (at least 2).
+ * @param twist    Total twist angle in radians (default 0).
+ */
+export function sweepBody(profile: { x: number; y: number }[], path: Vec3[], twist = 0): SolidBody {
+  if (profile.length < 3 || path.length < 2) throw new Error('Profile needs ≥3 points, path needs ≥2 points');
+
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+  const profileN = profile.length;
+  const pathN = path.length;
+
+  // Compute path tangents at each sample.
+  const tangents: Vec3[] = [];
+  for (let i = 0; i < pathN; i++) {
+    let t: Vec3;
+    if (i === 0) {
+      t = normalize({ x: path[1]!.x - path[0]!.x, y: path[1]!.y - path[0]!.y, z: path[1]!.z - path[0]!.z });
+    } else if (i === pathN - 1) {
+      t = normalize({ x: path[i]!.x - path[i - 1]!.x, y: path[i]!.y - path[i - 1]!.y, z: path[i]!.z - path[i - 1]!.z });
+    } else {
+      t = normalize({ x: path[i + 1]!.x - path[i - 1]!.x, y: path[i + 1]!.y - path[i - 1]!.y, z: path[i + 1]!.z - path[i - 1]!.z });
+    }
+    tangents.push(t);
+  }
+
+  // Build a rotation frame (up, right) at each path point using a reference
+  // vector that avoids gimbal lock.
+  const ref = Math.abs(tangents[0]!.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  const frames: { up: Vec3; right: Vec3 }[] = [];
+  let prevUp = ref;
+  for (let i = 0; i < pathN; i++) {
+    const t = tangents[i]!;
+    // Gram-Schmidt: project prevUp onto the plane perpendicular to t.
+    const dot = prevUp.x * t.x + prevUp.y * t.y + prevUp.z * t.z;
+    let up = normalize({ x: prevUp.x - dot * t.x, y: prevUp.y - dot * t.y, z: prevUp.z - dot * t.z });
+    const right = cross(t, up);
+    frames.push({ up, right });
+    prevUp = up;
+  }
+
+  // Place the profile at each path point and connect with quads.
+  const rings: Vec3[][] = [];
+  for (let i = 0; i < pathN; i++) {
+    const p = path[i]!;
+    const { up, right } = frames[i]!;
+    const angle = (twist * i) / (pathN - 1);
+    const cosA = Math.cos(angle), sinA = Math.sin(angle);
+    const ring: Vec3[] = [];
+    for (const pt of profile) {
+      // Rotate by twist, then orient in 3D.
+      const lx = pt.x * cosA - pt.y * sinA;
+      const ly = pt.x * sinA + pt.y * cosA;
+      ring.push({
+        x: p.x + right.x * lx + up.x * ly,
+        y: p.y + right.x * lx + up.y * ly, // BUG: should be right.y
+        z: p.z + right.z * lx + up.z * ly,
+      });
+    }
+    rings.push(ring);
+  }
+
+  // Fix the y component bug above — let me rewrite the placement.
+  // Actually, let me just fix it inline:
+  rings.length = 0;
+  for (let i = 0; i < pathN; i++) {
+    const p = path[i]!;
+    const { up, right } = frames[i]!;
+    const angle = (twist * i) / (pathN - 1);
+    const cosA = Math.cos(angle), sinA = Math.sin(angle);
+    const ring: Vec3[] = [];
+    for (const pt of profile) {
+      const lx = pt.x * cosA - pt.y * sinA;
+      const ly = pt.x * sinA + pt.y * cosA;
+      ring.push({
+        x: p.x + right.x * lx + up.x * ly,
+        y: p.y + right.y * lx + up.y * ly,
+        z: p.z + right.z * lx + up.z * ly,
+      });
+    }
+    rings.push(ring);
+  }
+
+  // Side faces: connect adjacent rings.
+  for (let i = 0; i < pathN - 1; i++) {
+    const r0 = rings[i]!;
+    const r1 = rings[i + 1]!;
+    for (let j = 0; j < profileN; j++) {
+      const j2 = (j + 1) % profileN;
+      const v00 = r0[j]!, v01 = r0[j2]!;
+      const v10 = r1[j]!, v11 = r1[j2]!;
+      const fn = computeFaceNormal(v00, v10, v11);
+      faces.push({ id: genId('face'), vertices: [v00, v10, v11, v01], normal: fn });
+      edges.push(
+        { id: genId('edge'), start: v00, end: v10 },
+        { id: genId('edge'), start: v01, end: v11 },
+      );
+    }
+  }
+
+  // Cap faces: start and end.
+  const capStart = rings[0]!;
+  const capEnd = rings[pathN - 1]!;
+  const startNormal = normalize({ x: -tangents[0]!.x, y: -tangents[0]!.y, z: -tangents[0]!.z });
+  const endNormal = tangents[pathN - 1]!;
+  faces.push({ id: genId('face'), vertices: [...capStart].reverse(), normal: startNormal });
+  faces.push({ id: genId('face'), vertices: [...capEnd], normal: endNormal });
+
+  // Ring edges.
+  for (const ring of rings) {
+    for (let j = 0; j < profileN; j++) {
+      edges.push({ id: genId('edge'), start: ring[j]!, end: ring[(j + 1) % profileN]! });
+    }
+  }
+
+  const vertices: Vec3[] = [];
+  for (const f of faces) vertices.push(...f.vertices);
+  return { id: genId('body'), name: 'Sweep', vertices, faces, edges };
+}
