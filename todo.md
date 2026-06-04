@@ -59,7 +59,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 - [x] Drawing workspace: 3D → 2D projection + annotation — DrawingCanvas.tsx (Front/Top/Right/Iso + title block)
 - [x] Auto dimensioning (AI-assisted) — drawing.ts projectBody + auto edge dimensions
-- [ ] PDF export (TBD)
+- [x] PDF export — pdf.ts (minimal PDF 1.4 generator, JPEG embedding, A4 landscape)
 - [x] DXF export — dxf.ts
 
 ### v0.6 — "Manufacturing" (~+1 month)
