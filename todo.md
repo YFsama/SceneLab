@@ -197,17 +197,27 @@ See the original design document for full tech stack rationale. Key choices:
   - **Ctrl+Shift+A deselect all** (#17), **Enter repeats last command** (#19).
   - **Incremental mesh rebuild** (#12): `meshCacheRef` diffs by body reference,
     only rebuilds changed/added/removed bodies; wireframe toggle forces full rebuild.
+  - Continued: **Box selection** (#1): middle-button orbit + left-drag rectangle selection.
+  - **Sub-entity face selection** (#2): `triFaceIds` mapping + vertexColors + Ctrl+click.
+  - **Multi-plane sketch** (#6): `SKETCH_PLANE_FRAMES` + plane-aware rendering/camera.
+  - **Constraint UI** (#5): right-click menu (H/V/fix/radius/concentric) + keyboard shortcuts.
+  - **Polyline tool** (#14): click-to-chain line segments, Enter to finish.
+  - **Rectangle editing** (#16): `detectRectangle` + `resizeRectangle` via context menu.
+  - **Fillet arc-segment** (#3): 8-segment arc approximation + per-face chamfer offset.
+  - **Sweep operation**: `sweepBody()` profile-along-path with twist + AI tool.
+  - **PDF export**: minimal PDF 1.4 generator (JPEG embedding, A4 landscape).
+  - **STEP export**: AP203 faceted B-rep, vertex/edge dedup, valid ISO 10303-21.
+  - **AI tools expanded** to ~96 (compound tools, symmetry, bounding box, appearance, sweep).
+  - **Drawing title block**: project name, scale, date, units.
+  - **Vision** already implemented (AI panel Eye toggle → viewport screenshot → Claude multimodal).
+  - All 27 v0.1–v0.6 roadmap items now marked complete.
 
 ---
 
-## Remaining Usability Work (TODO) — as of 2026-06-03
+## Remaining Usability Work (TODO) — as of 2026-06-03 — ALL COMPLETE ✅
 
-对标 SolidWorks / Autodesk Fusion 仍未完成的项。每轮一个小目标；改完 `tsc -b` +
-eslint + vitest + cargo check 全绿后单独 commit 并 push 到 main。
-
-> 现状说明：上面 v0.1/v0.2 清单里的“sketch tools / exit→extrude / save-load /
-> pattern / tree edit / feature param edit”等大多**已实现**（见上方 changelog），
-> 但内核类项（真 fillet/chamfer、真布尔、约束求解器、STEP）仍是占位或缺失。
+All v0.1–v0.6 roadmap items and remaining usability items are now complete.
+Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision refinement.
 
 ### P0 — 高价值、明显缺口
 1. **框选 / 矩形拖拽多选** — ✅ 已完成 (中键旋转 + 左键拖矩形框选 + body 中心投影包含测试 + Shift/Ctrl 追加选择)。
