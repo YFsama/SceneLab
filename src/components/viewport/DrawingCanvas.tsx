@@ -4,6 +4,7 @@ import { useT } from '../../lib/i18n';
 import { projectBody, exportDrawingSVG } from '../../lib/io/drawing';
 import { downloadFile } from '../../lib/io/studio3d';
 import { exportDXF } from '../../lib/io/dxf';
+import { exportCanvasAsPDF } from '../../lib/io/pdf';
 import { showToast } from '../../lib/toast';
 import { Download } from 'lucide-react';
 
@@ -181,6 +182,22 @@ export function DrawingCanvas() {
     showToast('DXF exported', 'success');
   };
 
+  const handleExportPDF = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || views.length === 0) {
+      showToast(t('toast.noBodies'), 'warning');
+      return;
+    }
+    const blob = exportCanvasAsPDF(canvas);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${useStore.getState().projectName || 'drawing'}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('PDF exported', 'success');
+  };
+
   if (bodies.length === 0) {
     return (
       <div className="w-full h-full flex items-center justify-center text-text-muted text-sm">
@@ -215,6 +232,14 @@ export function DrawingCanvas() {
         >
           <Download size={14} />
           DXF
+        </button>
+        <button
+          onClick={handleExportPDF}
+          className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded"
+          aria-label={t('export.pdf')}
+        >
+          <Download size={14} />
+          PDF
         </button>
       </div>
       <div className="flex-1 overflow-hidden">

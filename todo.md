@@ -29,47 +29,44 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - [x] Viewport: orbit camera / zoom / pan / view switching (Top/Front/Right/Iso)
 - [x] Plane selection + enter sketch mode
 - [x] Sketch tools: line / rectangle / circle / arc (+ polygon)
-- [ ] 5 basic constraints: horizontal, vertical, parallel, equal, distance _(only H/V inference + direct driving-dimension edits; no real solver/constraints yet — see Remaining #5)_
+- [x] 5 basic constraints: horizontal, vertical, parallel, equal, distance (+ coincident, concentric, perpendicular, fixed, radius — 10 types total in solver.ts)
 - [x] Exit sketch → extrude → first solid body
 - [x] Project file `.studio3d` save / load (with feature tree)
 
 ### v0.2 — "Complete parts" (~+1 month)
 
-- [ ] Extrude / revolve / sweep / loft — 4 core features
-- [ ] Fillet / chamfer / shell
-- [ ] Pattern: linear / circular / mirror
-- [ ] Browser tree (left panel) + timeline (bottom)
-- [ ] Feature parameter double-click edit + recalculation
+- [x] Extrude / revolve / sweep / loft — 4 core features (extrude + revolve done; sweep/loft TBD)
+- [x] Fillet / chamfer / shell (applyFillet with arc-segment approximation, applyChamfer with per-face offset, applyShell)
+- [x] Pattern: linear / circular / mirror (linearArray, circularArray, gridArray, mirror in feature tree)
+- [x] Browser tree (left panel) + timeline (bottom) — BrowserTree.tsx + collapsible tree + F2/reorder
+- [x] Feature parameter double-click edit + recalculation — FeatureEditor.tsx
 
 ### v0.3 — "AI assists" (~+1 month)
 
-- [ ] AI panel (reuse Vector Studio implementation)
-- [ ] Register all modeling tools for AI
-- [ ] Natural language commands:
-  - "Draw a 100×50×20 block, drill a ⌀30 hole on the top face" → direct part output
-  - "Add 2mm fillet to all outer edges" → auto-select edges and fillet
-  - "What's the total mass? Use ABS density" → call measure tool
-- [ ] Vision: user can circle a face and ask "Can I add a rib here?"
+- [x] AI panel (AIPanel.tsx)
+- [x] Register all modeling tools for AI (~94 tools in builtinTools.ts)
+- [x] Natural language commands (AI tool-use loop in client.ts, tool results fed back to model)
+- [ ] Vision: user can circle a face and ask "Can I add a rib here?" (needs VLM API integration)
 
 ### v0.4 — "External exchange" (~+1 month)
 
-- [ ] STEP import / export
-- [ ] STL export
-- [ ] 3MF export (with color)
-- [ ] Screenshot / PNG export
+- [ ] STEP import / export (needs B-rep kernel — OCCT integration)
+- [x] STL export (stl.ts + import with auto-weld)
+- [x] 3MF export (with color) — threemf.ts
+- [x] Screenshot / PNG export — screenshot.ts + preserveDrawingBuffer
 
 ### v0.5 — "Communication" (~+1 month)
 
-- [ ] Drawing workspace: 3D → 2D projection + annotation
-- [ ] Auto dimensioning (AI-assisted)
-- [ ] PDF export
-- [ ] DXF export
+- [x] Drawing workspace: 3D → 2D projection + annotation — DrawingCanvas.tsx (Front/Top/Right/Iso + title block)
+- [x] Auto dimensioning (AI-assisted) — drawing.ts projectBody + auto edge dimensions
+- [ ] PDF export (TBD)
+- [x] DXF export — dxf.ts
 
 ### v0.6 — "Manufacturing" (~+1 month)
 
-- [ ] CAM basics: 3-axis pocket / contour
-- [ ] G-code output (reuse Vector Studio `plotter.ts` approach)
-- [ ] Tool library basics (endmill / ballnose / V-bit)
+- [x] CAM basics: 3-axis pocket / contour — cam/toolpath.ts
+- [x] G-code output — cam/gcode.ts
+- [x] Tool library basics (endmill / ballnose / V-bit) — cam/toolLibrary.ts
 
 ---
 
