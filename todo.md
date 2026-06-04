@@ -50,7 +50,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ### v0.4 — "External exchange" (~+1 month)
 
-- [ ] STEP import / export — 需 OCCT (OpenCascade) WASM 集成或 jsSTEP 库。B-rep 内核级需求。
+- [x] STEP export — step.ts (AP203 faceted B-rep, vertex/edge dedup, valid ISO 10303-21). STEP import 待 OCCT 集成。
 - [x] STL export (stl.ts + import with auto-weld)
 - [x] 3MF export (with color) — threemf.ts
 - [x] Screenshot / PNG export — screenshot.ts + preserveDrawingBuffer
