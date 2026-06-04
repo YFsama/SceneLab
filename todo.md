@@ -35,7 +35,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ### v0.2 — "Complete parts" (~+1 month)
 
-- [x] Extrude / revolve / sweep / loft — 4 core features (extrude + revolve done; sweep/loft TBD)
+- [x] Extrude / revolve / sweep / loft — 4 core features (extrude + revolve + sweep done; loft TBD)
 - [x] Fillet / chamfer / shell (applyFillet with arc-segment approximation, applyChamfer with per-face offset, applyShell)
 - [x] Pattern: linear / circular / mirror (linearArray, circularArray, gridArray, mirror in feature tree)
 - [x] Browser tree (left panel) + timeline (bottom) — BrowserTree.tsx + collapsible tree + F2/reorder
