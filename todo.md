@@ -46,11 +46,11 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - [x] AI panel (AIPanel.tsx)
 - [x] Register all modeling tools for AI (~94 tools in builtinTools.ts)
 - [x] Natural language commands (AI tool-use loop in client.ts, tool results fed back to model)
-- [ ] Vision: user can circle a face and ask "Can I add a rib here?" (needs VLM API integration)
+- [ ] Vision: user can circle a face and ask "Can I add a rib here?" — 需 VLM API (Claude/GPT-4V) 集成 + 选区截图发送。跨模块长期需求。
 
 ### v0.4 — "External exchange" (~+1 month)
 
-- [ ] STEP import / export (needs B-rep kernel — OCCT integration)
+- [ ] STEP import / export — 需 OCCT (OpenCascade) WASM 集成或 jsSTEP 库。B-rep 内核级需求。
 - [x] STL export (stl.ts + import with auto-weld)
 - [x] 3MF export (with color) — threemf.ts
 - [x] Screenshot / PNG export — screenshot.ts + preserveDrawingBuffer
