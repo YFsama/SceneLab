@@ -71,6 +71,33 @@ describe('addLine', () => {
     expect(sketch.entities.has(line.p1Id)).toBe(true);
     expect(sketch.entities.has(line.p2Id)).toBe(true);
   });
+
+  it('line endpoints are at correct positions', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 5, 10, 20, 30);
+    const p1 = sketch.entities.get(line.p1Id) as { x: number; y: number };
+    const p2 = sketch.entities.get(line.p2Id) as { x: number; y: number };
+    expect(p1.x).toBe(5);
+    expect(p1.y).toBe(10);
+    expect(p2.x).toBe(20);
+    expect(p2.y).toBe(30);
+  });
+
+  it('multiple lines share no endpoints by default', () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0);
+    addLine(sketch, 10, 0, 10, 10);
+    // Second line starts where first ends, but they have separate point entities.
+    const points = [...sketch.entities.values()].filter((e) => e.type === 'point');
+    expect(points.length).toBe(4); // 2 per line, not shared
+  });
+
+  it('creates unique line IDs', () => {
+    const sketch = createSketch('xy');
+    const l1 = addLine(sketch, 0, 0, 10, 0);
+    const l2 = addLine(sketch, 0, 5, 10, 5);
+    expect(l1.id).not.toBe(l2.id);
+  });
 });
 
 describe('addRectangle', () => {
