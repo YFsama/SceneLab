@@ -613,6 +613,36 @@ describe('topology', () => {
     expect(g.isOrientable).toBe(true);
   });
 
+  it('a box is genus 0 (Euler χ = 2)', () => {
+    const g = computeMeshGenus(createBox(10, 10, 10));
+    expect(g.eulerCharacteristic).toBe(2);
+    expect(g.genus).toBe(0);
+    expect(g.handles).toBe(0);
+  });
+
+  it('a sphere is genus 0 (Euler χ = 2)', () => {
+    const g = computeMeshGenus(createSphere(5, 16));
+    expect(g.eulerCharacteristic).toBe(2);
+    expect(g.genus).toBe(0);
+  });
+
+  it('a cylinder is genus 0 (Euler χ = 2)', () => {
+    const g = computeMeshGenus(createCylinder(5, 10, 16));
+    expect(g.eulerCharacteristic).toBe(2);
+    expect(g.genus).toBe(0);
+  });
+
+  it('all genus results are orientable', () => {
+    for (const make of [
+      () => createBox(10, 10, 10),
+      () => createSphere(5, 16),
+      () => createCylinder(5, 10, 16),
+      () => createTorus(10, 3, 16, 8),
+    ]) {
+      expect(computeMeshGenus(make()).isOrientable).toBe(true);
+    }
+  });
+
   it('curved primitives store a complete deduplicated edge list', () => {
     // body.edges (used by many edge-stat functions) must match the faces' edges.
     expect(createSphere(6, 16).edges.length).toBe(240);
