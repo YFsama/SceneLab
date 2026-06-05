@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, findBoundaryLoops } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, createWedge, findBoundaryLoops } from './brep';
 import type { SolidBody } from './types';
 
 describe('findBoundaryLoops', () => {
@@ -44,5 +44,33 @@ describe('findBoundaryLoops', () => {
   it('returns empty loops array for a watertight body', () => {
     const r = findBoundaryLoops(createBox(10, 10, 10));
     expect(r.loops).toEqual([]);
+  });
+
+  it('a watertight torus has no holes', () => {
+    const torus = createTorus(10, 3, 16, 8);
+    const r = findBoundaryLoops(torus);
+    expect(r.holeCount).toBe(0);
+    expect(r.boundaryEdgeCount).toBe(0);
+  });
+
+  it('a watertight wedge has no holes', () => {
+    const wedge = createWedge(10, 6, 4);
+    const r = findBoundaryLoops(wedge);
+    expect(r.holeCount).toBe(0);
+    expect(r.boundaryEdgeCount).toBe(0);
+  });
+
+  it('removing one face from a cylinder creates a hole', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const open: SolidBody = { ...cyl, faces: cyl.faces.slice(1) };
+    const r = findBoundaryLoops(open);
+    expect(r.holeCount).toBeGreaterThan(0);
+  });
+
+  it('hole edge count is always even (each edge shared by two faces)', () => {
+    const box = createBox(10, 10, 10);
+    const open: SolidBody = { ...box, faces: box.faces.slice(1) };
+    const r = findBoundaryLoops(open);
+    expect(r.boundaryEdgeCount % 2).toBe(0);
   });
 });
