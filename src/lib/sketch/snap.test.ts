@@ -41,6 +41,29 @@ describe('sketchSnapPoints', () => {
     expect(snap.snapped).toBe(true);
     expect(snap.point).toEqual({ x: 0, y: 0 });
   });
+
+  it('preserves order: origin first, then endpoints', () => {
+    const pts = sketchSnapPoints([{ x: 5, y: 5 }, { x: 0, y: 0 }]);
+    expect(pts[0]).toEqual({ x: 0, y: 0 });
+    expect(pts[1]).toEqual({ x: 5, y: 5 });
+  });
+
+  it('de-duplicates points at the same location', () => {
+    const pts = sketchSnapPoints([
+      { x: 5, y: 5 },
+      { x: 5, y: 5 },
+      { x: 5, y: 5 },
+    ]);
+    // Origin + 1 unique point = 2 total.
+    expect(pts).toHaveLength(2);
+  });
+
+  it('handles many unique points', () => {
+    const input = Array.from({ length: 20 }, (_, i) => ({ x: (i + 1) * 5, y: 0 }));
+    const pts = sketchSnapPoints(input);
+    // Origin + 20 unique = 21 total.
+    expect(pts).toHaveLength(21);
+  });
 });
 
 describe('snapToPoints', () => {
