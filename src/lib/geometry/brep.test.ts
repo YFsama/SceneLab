@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
 import { mergeBodies } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
 
 describe('computeSolidity', () => {
   it('reports convex solids as fully solid with no cavities', () => {
@@ -942,5 +942,52 @@ describe('createWedge', () => {
 
   it('rejects invalid parameters', () => {
     expect(() => createWedge(0, 6, 4)).toThrow('positive');
+  });
+});
+
+describe('computeCompactness', () => {
+  it('returns high compactness for a sphere (most compact shape)', () => {
+    const sphere = createSphere(5, 32);
+    const info = computeCompactness(sphere);
+    // A sphere has the maximum compactness (surface-to-volume ratio is optimal).
+    expect(info.compactness).toBeGreaterThan(0.9);
+    expect(info.compactness).toBeLessThanOrEqual(1.0 + 1e-6);
+    expect(info.isCompact).toBe(true);
+  });
+
+  it('returns less than 1 for a non-spherical shape', () => {
+    const box = createBox(10, 10, 10);
+    const info = computeCompactness(box);
+    expect(info.compactness).toBeLessThan(1.0);
+    expect(info.compactness).toBeGreaterThan(0);
+  });
+
+  it('is dimensionless (scale-invariant)', () => {
+    const small = computeCompactness(createBox(10, 10, 10));
+    const large = computeCompactness(createBox(100, 100, 100));
+    expect(small.compactness).toBeCloseTo(large.compactness, 6);
+  });
+});
+
+describe('computeRoughness', () => {
+  it('returns low roughness for a box (flat faces)', () => {
+    const box = createBox(10, 10, 10);
+    const info = computeRoughness(box);
+    // A box has flat faces, so roughness should be low.
+    expect(info.roughness).toBeGreaterThanOrEqual(0);
+    expect(info.smoothness).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns positive roughness for a sphere (curved surface)', () => {
+    const sphere = createSphere(5, 16);
+    const info = computeRoughness(sphere);
+    expect(info.roughness).toBeGreaterThan(0);
+  });
+
+  it('higher tessellation sphere has lower roughness', () => {
+    const coarse = computeRoughness(createSphere(5, 8));
+    const fine = computeRoughness(createSphere(5, 32));
+    // Finer tessellation approximates the sphere better → lower roughness.
+    expect(fine.roughness).toBeLessThanOrEqual(coarse.roughness + 1e-6);
   });
 });
