@@ -991,3 +991,55 @@ describe('computeRoughness', () => {
     expect(fine.roughness).toBeLessThanOrEqual(coarse.roughness + 1e-6);
   });
 });
+
+describe('createRevolve edge cases', () => {
+  const profile: Vec3[] = [
+    { x: 1, y: -1, z: 0 },
+    { x: 2, y: -1, z: 0 },
+    { x: 2, y: 1, z: 0 },
+    { x: 1, y: 1, z: 0 },
+  ];
+
+  it('partial revolution (180°) is watertight', () => {
+    const body = createRevolve({ profile, axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } }, angle: Math.PI });
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+  });
+
+  it('partial revolution (90°) is watertight', () => {
+    const body = createRevolve({ profile, axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } }, angle: Math.PI / 2 });
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+  });
+
+  it('revolution around X axis works', () => {
+    const body = createRevolve({ profile, axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } }, angle: Math.PI * 2 });
+    expect(body.vertices.length).toBeGreaterThan(0);
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+  });
+
+  it('revolution around Z axis works', () => {
+    const body = createRevolve({ profile, axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } }, angle: Math.PI * 2 });
+    expect(body.vertices.length).toBeGreaterThan(0);
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+  });
+
+  it('revolution with offset axis produces valid geometry', () => {
+    const body = createRevolve({ profile, axis: { origin: { x: 5, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } }, angle: Math.PI * 2 });
+    expect(body.vertices.length).toBeGreaterThan(0);
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(0);
+  });
+
+  it('full revolution volume matches Pappus theorem', () => {
+    const rect: Vec3[] = [
+      { x: 2, y: 0, z: 0 },
+      { x: 4, y: 0, z: 0 },
+      { x: 4, y: 2, z: 0 },
+      { x: 2, y: 2, z: 0 },
+    ];
+    const body = createRevolve({ profile: rect, axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } }, angle: Math.PI * 2 });
+    // V = area(4) × 2π × centroidRadius(3) = 24π ≈ 75.4
+    const ideal = 24 * Math.PI;
+    const vol = Math.abs(computeVolume(body));
+    expect(vol).toBeGreaterThan(ideal * 0.96);
+    expect(vol).toBeLessThanOrEqual(ideal * 1.001);
+  });
+});
