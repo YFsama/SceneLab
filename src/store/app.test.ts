@@ -1436,6 +1436,18 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().currentSketch!.entities.size).toBe(0);
   });
 
+  it('sketch redo replays a reverted edit', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchLine(0, 0, 5, 0);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(3);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+
+    useStore.getState().sketchRedo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(3);
+  });
+
   it('sketch undo/redo reverts and replays sketch edits', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchLine(0, 0, 5, 0);
