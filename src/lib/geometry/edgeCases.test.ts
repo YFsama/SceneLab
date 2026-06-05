@@ -378,4 +378,67 @@ describe('geometry edge cases', () => {
       expect(volScaled).toBeCloseTo(volOrig * 8, 0); // 2³ = 8
     });
   });
+
+  describe('mergeBodies edge cases', () => {
+    it('merging a single body returns equivalent geometry', () => {
+      const box = createBox(10, 10, 10);
+      const merged = mergeBodies([box]);
+      expect(merged.faces.length).toBe(box.faces.length);
+      expect(merged.vertices.length).toBe(box.vertices.length);
+    });
+
+    it('merging preserves total face count', () => {
+      const a = createBox(10, 10, 10);
+      const b = createBox(10, 10, 10);
+      const merged = mergeBodies([a, b]);
+      expect(merged.faces.length).toBe(a.faces.length + b.faces.length);
+    });
+
+    it('merging preserves total vertex count', () => {
+      const a = createBox(10, 10, 10);
+      const b = createBox(10, 10, 10);
+      const merged = mergeBodies([a, b]);
+      expect(merged.vertices.length).toBe(a.vertices.length + b.vertices.length);
+    });
+
+    it('merged body has a name', () => {
+      const a = createBox(10, 10, 10);
+      const merged = mergeBodies([a]);
+      expect(merged.name).toBeTruthy();
+    });
+  });
+
+  describe('weldVertices edge cases', () => {
+    it('welding maintains or reduces vertex count', () => {
+      const box = createBox(10, 10, 10);
+      const welded = weldVertices(box);
+      // Welding should not increase vertex count.
+      expect(welded.vertices.length).toBeLessThanOrEqual(box.vertices.length);
+    });
+
+    it('welding preserves face count', () => {
+      const box = createBox(10, 10, 10);
+      const welded = weldVertices(box);
+      expect(welded.faces.length).toBe(box.faces.length);
+    });
+
+    it('welding preserves bounding box', () => {
+      const box = createBox(10, 20, 30);
+      const welded = weldVertices(box);
+      const bbOrig = computeBoundingBox(box);
+      const bbWelded = computeBoundingBox(welded);
+      expect(bbWelded.min.x).toBeCloseTo(bbOrig.min.x, 4);
+      expect(bbWelded.max.y).toBeCloseTo(bbOrig.max.y, 4);
+      expect(bbWelded.max.z).toBeCloseTo(bbOrig.max.z, 4);
+    });
+
+    it('welding produces valid mesh', () => {
+      const box = createBox(10, 10, 10);
+      const welded = weldVertices(box);
+      for (const face of welded.faces) {
+        expect(face.vertices.length).toBeGreaterThanOrEqual(3);
+        expect(face.normal).toBeDefined();
+      }
+    });
+  });
 });
