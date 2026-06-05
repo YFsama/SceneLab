@@ -311,3 +311,63 @@ describe('solveConstraints', () => {
     expect(a.y).toBeCloseTo(3, 6);
   });
 });
+
+describe('multiple constraints on same entity', () => {
+  it('horizontal + vertical on the same line makes it a point', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'horizontal', entityIds: ['line1'] });
+    constraints.set('c2', { id: 'c2', type: 'vertical', entityIds: ['line1'] });
+
+    const result = solveConstraints(entities, constraints);
+    // Both constraints force the line to be a single point.
+    const p1 = result.get('p1')!;
+    const p2 = result.get('p2')!;
+    expect(p1.x).toBeCloseTo(p2.x, 4);
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+  });
+
+  it('distance + horizontal on a line', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 5, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'horizontal', entityIds: ['line1'] });
+    constraints.set('c2', { id: 'c2', type: 'distance', entityIds: ['p1', 'p2'], value: 10 });
+
+    const result = solveConstraints(entities, constraints);
+    const p1 = result.get('p1')!;
+    const p2 = result.get('p2')!;
+    // Horizontal: same Y.
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+    // Distance: 10 units apart.
+    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    expect(dist).toBeCloseTo(10, 2);
+  });
+
+  it('fixed + distance: fixed point stays, other moves', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 5, y: 0 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('c2', { id: 'c2', type: 'distance', entityIds: ['p1', 'p2'], value: 10 });
+
+    const result = solveConstraints(entities, constraints);
+    const p1 = result.get('p1')!;
+    const p2 = result.get('p2')!;
+    // p1 is fixed at (0,0).
+    expect(p1.x).toBeCloseTo(0, 6);
+    expect(p1.y).toBeCloseTo(0, 6);
+    // p2 moves to distance 10.
+    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeCloseTo(10, 2);
+  });
+});
