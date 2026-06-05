@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder } from './brep';
 import { mergeBodies, scaleBody } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
 
@@ -1277,5 +1277,34 @@ describe('computeMeshQuality', () => {
     expect(Number.isFinite(q.aspectRatioMax)).toBe(true);
     expect(Number.isFinite(q.skewnessAvg)).toBe(true);
     expect(Number.isFinite(q.skewnessMax)).toBe(true);
+  });
+});
+
+describe('checkWindingOrder', () => {
+  it('box has consistent winding', () => {
+    const box = createBox(10, 10, 10);
+    const w = checkWindingOrder(box);
+    expect(w.consistentWinding).toBe(true);
+    expect(w.degenerateFaces).toBe(0);
+  });
+
+  it('sphere has consistent winding', () => {
+    const sphere = createSphere(5, 16);
+    const w = checkWindingOrder(sphere);
+    expect(w.consistentWinding).toBe(true);
+  });
+
+  it('cylinder has consistent winding', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const w = checkWindingOrder(cyl);
+    expect(w.consistentWinding).toBe(true);
+  });
+
+  it('face counts are non-negative', () => {
+    const box = createBox(10, 10, 10);
+    const w = checkWindingOrder(box);
+    expect(w.clockwiseFaces).toBeGreaterThanOrEqual(0);
+    expect(w.counterClockwiseFaces).toBeGreaterThanOrEqual(0);
+    expect(w.degenerateFaces).toBeGreaterThanOrEqual(0);
   });
 });
