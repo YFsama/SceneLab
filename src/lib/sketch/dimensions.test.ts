@@ -31,6 +31,22 @@ describe('previewDimensionLabel', () => {
   it('returns empty for the select tool', () => {
     expect(previewDimensionLabel('select', o, { x: 1, y: 1 })).toBe('');
   });
+
+  it('returns empty for polyline tool', () => {
+    expect(previewDimensionLabel('polyline', o, { x: 3, y: 4 })).toBe('');
+  });
+
+  it('handles zero-length line', () => {
+    expect(previewDimensionLabel('line', o, { x: 0, y: 0 })).toContain('0.0');
+  });
+
+  it('handles negative coordinates', () => {
+    expect(previewDimensionLabel('line', o, { x: -3, y: -4 })).toContain('5.0');
+  });
+
+  it('rectangle shows absolute dimensions', () => {
+    expect(previewDimensionLabel('rect', o, { x: -10, y: -5 })).toBe('10.0 × 5.0');
+  });
 });
 
 describe('sketch dimensions', () => {
