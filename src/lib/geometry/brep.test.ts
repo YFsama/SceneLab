@@ -416,6 +416,25 @@ describe('computeSymmetry', () => {
     expect(s.hasXSymmetry).toBe(false); // the slope breaks X symmetry
     expect(s.hasYSymmetry).toBe(false);
   });
+
+  it('a cylinder is symmetric on X and Z axes', () => {
+    const s = computeSymmetry(createCylinder(5, 10, 16));
+    expect(s.hasXSymmetry).toBe(true);
+    expect(s.hasZSymmetry).toBe(true);
+  });
+
+  it('a sphere is symmetric on all axes', () => {
+    const s = computeSymmetry(createSphere(5, 16));
+    expect(s.hasXSymmetry).toBe(true);
+    expect(s.hasYSymmetry).toBe(true);
+    expect(s.hasZSymmetry).toBe(true);
+  });
+
+  it('symmetry score is between 0 and 1', () => {
+    const s = computeSymmetry(createBox(10, 10, 10));
+    expect(s.symmetryScore).toBeGreaterThanOrEqual(0);
+    expect(s.symmetryScore).toBeLessThanOrEqual(1);
+  });
 });
 
 describe('computeTotalEdgeLength', () => {
