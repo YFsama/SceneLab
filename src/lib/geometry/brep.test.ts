@@ -330,12 +330,13 @@ describe('computeMassProperties', () => {
     }
   });
 
-  it('inertia tensor is symmetric (ixy = iyx, etc.)', () => {
+  it('products of inertia are zero for axis-aligned box', () => {
     const box = createBox(10, 20, 30);
     const mp = computeMassProperties(box, 1);
-    expect(mp.inertia.ixy).toBeCloseTo(mp.inertia.iyx ?? mp.inertia.ixy, 4);
-    expect(mp.inertia.ixz).toBeCloseTo(mp.inertia.izx ?? mp.inertia.ixz, 4);
-    expect(mp.inertia.iyz).toBeCloseTo(mp.inertia.izy ?? mp.inertia.iyz, 4);
+    // Axis-aligned box has no cross products of inertia.
+    expect(mp.inertia.ixy).toBeCloseTo(0, 4);
+    expect(mp.inertia.ixz).toBeCloseTo(0, 4);
+    expect(mp.inertia.iyz).toBeCloseTo(0, 4);
   });
 });
 
