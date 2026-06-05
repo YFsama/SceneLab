@@ -53,4 +53,28 @@ describe('fitCameraDistance', () => {
   it('handles a degenerate (zero-size) box without dividing by zero', () => {
     expect(Number.isFinite(fitCameraDistance({ x: 0, y: 0, z: 0 }, 50, 1))).toBe(true);
   });
+
+  it('returns a positive distance for any valid input', () => {
+    const distances = [
+      fitCameraDistance({ x: 1, y: 1, z: 1 }, 30, 1),
+      fitCameraDistance({ x: 100, y: 100, z: 100 }, 90, 2),
+      fitCameraDistance({ x: 0.1, y: 0.1, z: 0.1 }, 45, 0.5),
+    ];
+    for (const d of distances) {
+      expect(d).toBeGreaterThan(0);
+      expect(Number.isFinite(d)).toBe(true);
+    }
+  });
+
+  it('wider FOV needs less distance', () => {
+    const narrow = fitCameraDistance({ x: 10, y: 10, z: 10 }, 30, 1);
+    const wide = fitCameraDistance({ x: 10, y: 10, z: 10 }, 90, 1);
+    expect(wide).toBeLessThan(narrow);
+  });
+
+  it('margin scales the distance', () => {
+    const noMargin = fitCameraDistance({ x: 10, y: 10, z: 10 }, 50, 1, 1.0);
+    const withMargin = fitCameraDistance({ x: 10, y: 10, z: 10 }, 50, 1, 1.5);
+    expect(withMargin).toBeCloseTo(noMargin * 1.5, 5);
+  });
 });
