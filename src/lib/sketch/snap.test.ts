@@ -130,6 +130,17 @@ describe('nearestVertexWithin', () => {
   it('returns null with no vertices', () => {
     expect(nearestVertexWithin({ x: 0, y: 0, z: 0 }, [], 1)).toBeNull();
   });
+
+  it('snaps to the closest of multiple vertices', () => {
+    const verts = [{ x: 0, y: 0, z: 0 }, { x: 5, y: 5, z: 5 }, { x: 10, y: 10, z: 10 }];
+    expect(nearestVertexWithin({ x: 4.9, y: 4.9, z: 4.9 }, verts, 1)).toEqual({ x: 5, y: 5, z: 5 });
+  });
+
+  it('returns the vertex when exactly at tolerance boundary', () => {
+    // At exactly distance 1 from vertex — the function uses <= for tolerance.
+    const verts = [{ x: 0, y: 0, z: 0 }];
+    expect(nearestVertexWithin({ x: 1, y: 0, z: 0 }, verts, 1)).toEqual({ x: 0, y: 0, z: 0 });
+  });
 });
 
 describe('angleAtVertex', () => {
@@ -144,6 +155,14 @@ describe('angleAtVertex', () => {
 
   it('returns 0 for a degenerate arm', () => {
     expect(angleAtVertex({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBe(0);
+  });
+
+  it('measures a 45° angle', () => {
+    expect(angleAtVertex({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 1 })).toBeCloseTo(45, 0);
+  });
+
+  it('measures a 60° angle', () => {
+    expect(angleAtVertex({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 0.5, y: 0, z: 0.866 })).toBeCloseTo(60, 0);
   });
 });
 
