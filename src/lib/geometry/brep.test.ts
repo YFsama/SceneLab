@@ -648,6 +648,24 @@ describe('topology', () => {
     expect(topo.genus).toBe(0);
   });
 
+  it('a loft between equal squares is genus 0', () => {
+    const sq = (s: number, y: number) => [
+      { x: -s, y, z: -s }, { x: s, y, z: -s }, { x: s, y, z: s }, { x: -s, y, z: s },
+    ];
+    const topo = computeTopology(createLoft(sq(5, 0), sq(5, 20)));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+  });
+
+  it('a loft between unequal squares is genus 0', () => {
+    const sq = (s: number, y: number) => [
+      { x: -s, y, z: -s }, { x: s, y, z: -s }, { x: s, y, z: s }, { x: -s, y, z: s },
+    ];
+    const topo = computeTopology(createLoft(sq(5, 0), sq(3, 20)));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+  });
+
   it('a torus is genus 1 with one handle (Euler χ = 0)', () => {
     const g = computeMeshGenus(createTorus(10, 3, 32, 16));
     expect(g.eulerCharacteristic).toBe(0);
