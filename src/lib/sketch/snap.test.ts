@@ -22,6 +22,26 @@ describe('inferAlignment', () => {
     expect(r.guideX).toBeNull();
     expect(r.guideY).toBeNull();
   });
+
+  it('works with empty candidates', () => {
+    const r = inferAlignment({ x: 5, y: 5 }, [], 0.3);
+    expect(r.point).toEqual({ x: 5, y: 5 });
+    expect(r.guideX).toBeNull();
+    expect(r.guideY).toBeNull();
+  });
+
+  it('snaps to the closest candidate when multiple exist', () => {
+    const r = inferAlignment({ x: 10.1, y: 0 }, [{ x: 10, y: 5 }, { x: 20, y: 5 }], 0.3);
+    expect(r.point.x).toBeCloseTo(10, 4);
+    expect(r.guideX).toEqual({ x: 10, y: 5 });
+  });
+
+  it('guideY snaps y to the candidate y', () => {
+    const r = inferAlignment({ x: 5, y: 10.1 }, [{ x: 3, y: 10 }], 0.3);
+    expect(r.point).toEqual({ x: 5, y: 10 });
+    expect(r.guideY).toEqual({ x: 3, y: 10 });
+    expect(r.guideX).toBeNull();
+  });
 });
 
 describe('sketchSnapPoints', () => {
