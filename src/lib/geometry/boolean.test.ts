@@ -128,4 +128,31 @@ describe('booleanOp with different body types', () => {
     const r = booleanOp(a, b, 'union', 30);
     expect(r).not.toBeNull();
   });
+
+  it('union preserves total volume for disjoint bodies', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 100, y: 0, z: 0 });
+    const r = booleanOp(a, b, 'union', 30)!;
+    const volA = Math.abs(computeVolume(a));
+    const volB = Math.abs(computeVolume(b));
+    const volR = Math.abs(computeVolume(r));
+    // Voxel approximation has some error, so allow 20% tolerance.
+    expect(volR).toBeGreaterThan((volA + volB) * 0.8);
+    expect(volR).toBeLessThan((volA + volB) * 1.2);
+  });
+
+  it('difference removes volume', () => {
+    const a = createBox(20, 20, 20);
+    const b = createBox(10, 10, 10);
+    const r = booleanOp(a, b, 'difference', 30)!;
+    expect(Math.abs(computeVolume(r))).toBeLessThan(Math.abs(computeVolume(a)));
+  });
+
+  it('intersect volume is less than either input', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 3, y: 0, z: 0 });
+    const r = booleanOp(a, b, 'intersect', 30)!;
+    expect(Math.abs(computeVolume(r))).toBeLessThan(Math.abs(computeVolume(a)));
+    expect(Math.abs(computeVolume(r))).toBeLessThan(Math.abs(computeVolume(b)));
+  });
 });
