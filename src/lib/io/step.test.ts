@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exportSTEP } from './step';
-import { createBox } from '../geometry/brep';
+import { createBox, createCylinder, createSphere } from '../geometry/brep';
 
 describe('exportSTEP', () => {
   it('produces a valid STEP file header', () => {
@@ -134,5 +134,39 @@ describe('exportSTEP', () => {
       defined.add(eid);
     }
     expect(defined.size).toBeGreaterThan(10); // reasonable entity count
+  });
+
+  it('exports a cylinder with valid structure', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const step = exportSTEP(cyl);
+    expect(step).toContain('ISO-10303-21');
+    expect(step).toContain('ADVANCED_FACE');
+    expect(step).toContain('CLOSED_SHELL');
+    const faceCount = (step.match(/ADVANCED_FACE/g) ?? []).length;
+    expect(faceCount).toBeGreaterThan(6); // cylinder has more faces than box
+  });
+
+  it('exports a sphere with valid structure', () => {
+    const sphere = createSphere(5, 16);
+    const step = exportSTEP(sphere);
+    expect(step).toContain('ISO-10303-21');
+    expect(step).toContain('ADVANCED_FACE');
+    expect(step).toContain('CLOSED_SHELL');
+    const faceCount = (step.match(/ADVANCED_FACE/g) ?? []).length;
+    expect(faceCount).toBeGreaterThan(6);
+  });
+
+  it('all exported bodies have valid entity references', () => {
+    for (const make of [() => createBox(10, 10, 10), () => createCylinder(5, 10, 16), () => createSphere(5, 16)]) {
+      const step = exportSTEP(make());
+      const defined = new Set<number>();
+      const defPattern = /#(\d+)=/g;
+      let m;
+      while ((m = defPattern.exec(step)) !== null) defined.add(parseInt(m[1]!));
+      const refPattern = /#(\d+)/g;
+      while ((m = refPattern.exec(step)) !== null) {
+        expect(defined.has(parseInt(m[1]!))).toBe(true);
+      }
+    }
   });
 });
