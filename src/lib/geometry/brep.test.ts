@@ -59,6 +59,23 @@ describe('computeThickness', () => {
     expect(t.isThin).toBe(true);
     expect(t.thinRegions).toBeGreaterThan(0);
   });
+
+  it('cube has equal min and max thickness', () => {
+    const t = computeThickness(createBox(10, 10, 10));
+    expect(t.minThickness).toBeCloseTo(t.maxThickness, 1);
+  });
+
+  it('thickness values are positive', () => {
+    const t = computeThickness(createCylinder(5, 10, 16));
+    expect(t.minThickness).toBeGreaterThan(0);
+    expect(t.maxThickness).toBeGreaterThan(0);
+  });
+
+  it('sphere has consistent thickness', () => {
+    const t = computeThickness(createSphere(7, 16));
+    expect(t.minThickness).toBeGreaterThan(0);
+    expect(t.maxThickness).toBeGreaterThan(0);
+  });
 });
 
 describe('createLoft', () => {
