@@ -161,3 +161,43 @@ describe('direct body round-trip', () => {
     expect(loaded.directBodies).toEqual([]);
   });
 });
+
+describe('feature tree serialization', () => {
+  it('round-trips a sketch feature with entities', () => {
+    const sketch = createSketch('xz');
+    addRectangle(sketch, 0, 0, 10, 5);
+    const sf = createSketchFeature(sketch);
+    const json = saveToFile(serializeProject('Feat', [sf], []));
+    const features = deserializeFeatures(loadFromFile(json));
+    expect(features).toHaveLength(1);
+    expect(features[0]!.type).toBe('sketch');
+  });
+
+  it('round-trips an extrude feature with params', () => {
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 15 },
+      [],
+    );
+    const json = saveToFile(serializeProject('Feat', [ef], []));
+    const features = deserializeFeatures(loadFromFile(json));
+    expect(features).toHaveLength(1);
+    expect(features[0]!.type).toBe('extrude');
+    expect((features[0] as { params: { distance: number } }).params.distance).toBe(15);
+  });
+
+  it('round-trips a multi-feature dependency chain', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, -5, -5, 5, 5);
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 10 },
+      [sf.id],
+    );
+    const json = saveToFile(serializeProject('Chain', [sf, ef], []));
+    const features = deserializeFeatures(loadFromFile(json));
+    expect(features).toHaveLength(2);
+    expect(features[0]!.type).toBe('sketch');
+    expect(features[1]!.type).toBe('extrude');
+    expect(features[1]!.parentIds).toContain(sf.id);
+  });
+});
