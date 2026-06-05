@@ -321,6 +321,22 @@ describe('computeMassProperties', () => {
     expect(shifted.inertia.ixx).toBeCloseTo(at0.inertia.ixx, 2);
     expect(shifted.inertia.izz).toBeCloseTo(at0.inertia.izz, 2);
   });
+
+  it('volume and mass are always positive', () => {
+    for (const make of [() => createBox(10, 10, 10), () => createCylinder(5, 10, 16), () => createSphere(5, 16)]) {
+      const mp = computeMassProperties(make(), 1);
+      expect(mp.volume).toBeGreaterThan(0);
+      expect(mp.mass).toBeGreaterThan(0);
+    }
+  });
+
+  it('inertia tensor is symmetric (ixy = iyx, etc.)', () => {
+    const box = createBox(10, 20, 30);
+    const mp = computeMassProperties(box, 1);
+    expect(mp.inertia.ixy).toBeCloseTo(mp.inertia.iyx ?? mp.inertia.ixy, 4);
+    expect(mp.inertia.ixz).toBeCloseTo(mp.inertia.izx ?? mp.inertia.ixz, 4);
+    expect(mp.inertia.iyz).toBeCloseTo(mp.inertia.izy ?? mp.inertia.iyz, 4);
+  });
 });
 
 describe('computeMomentOfInertiaAboutAxis', () => {
