@@ -236,10 +236,8 @@ describe('createPrism', () => {
     expect(Math.abs(computeVolume(tri))).toBeCloseTo(area * 5, 1);
   });
 
-  it('square prism (4 sides) matches a box', () => {
+  it('square prism (4 sides) produces positive volume', () => {
     const sq = createPrism(4, 10, 5);
-    const box = createBox(20, 5, 20);
-    // Both should have similar volume (though not identical due to orientation).
     expect(Math.abs(computeVolume(sq))).toBeGreaterThan(0);
   });
 
