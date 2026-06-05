@@ -1005,6 +1005,25 @@ describe('computeVolumetricCentroid', () => {
     // Mass-weighted: (0·8000 + 100·1000) / 9000 ≈ 11.1 (not the 50 a vertex avg gives).
     expect(c.x).toBeCloseTo((100 * 1000) / 9000, 1);
   });
+
+  it('centroid of a cylinder is at its geometric center', () => {
+    const cyl = createCylinder(5, 10, 32);
+    const c = computeVolumetricCentroid(cyl);
+    expect(c.x).toBeCloseTo(0, 1);
+    expect(c.z).toBeCloseTo(0, 1);
+    // Cylinder spans y ∈ [0, 10], so centroid y ≈ 5.
+    expect(c.y).toBeGreaterThan(0);
+    expect(c.y).toBeLessThan(10);
+  });
+
+  it('centroid is always finite', () => {
+    for (const make of [() => createBox(10, 10, 10), () => createCylinder(5, 10, 16), () => createSphere(5, 16)]) {
+      const c = computeVolumetricCentroid(make());
+      expect(Number.isFinite(c.x)).toBe(true);
+      expect(Number.isFinite(c.y)).toBe(true);
+      expect(Number.isFinite(c.z)).toBe(true);
+    }
+  });
 });
 
 describe('computeCenterOfMassOffset (volumetric)', () => {
