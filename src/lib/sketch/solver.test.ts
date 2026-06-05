@@ -428,4 +428,32 @@ describe('multiple constraints on same entity', () => {
     expect(p1.x).toBeCloseTo(p2.x, 4);
     expect(p1.y).toBeCloseTo(p2.y, 4);
   });
+
+  it('no constraints leaves points unchanged', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 5, y: 10 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 20, y: 30 });
+    const constraints = new Map<string, SketchConstraint>();
+    const result = solveConstraints(entities, constraints);
+    expect(result.get('p1')!.x).toBeCloseTo(5, 6);
+    expect(result.get('p1')!.y).toBeCloseTo(10, 6);
+    expect(result.get('p2')!.x).toBeCloseTo(20, 6);
+    expect(result.get('p2')!.y).toBeCloseTo(30, 6);
+  });
+
+  it('fixed point stays fixed even with other constraints', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 5, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('c2', { id: 'c2', type: 'horizontal', entityIds: ['line1'] });
+    const result = solveConstraints(entities, constraints);
+    // p1 is fixed at (0,0).
+    expect(result.get('p1')!.x).toBeCloseTo(0, 6);
+    expect(result.get('p1')!.y).toBeCloseTo(0, 6);
+    // p2 should move to same Y as p1 (horizontal constraint).
+    expect(result.get('p2')!.y).toBeCloseTo(0, 4);
+  });
 });
