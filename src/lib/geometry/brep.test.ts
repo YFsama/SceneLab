@@ -552,6 +552,56 @@ describe('createExtrude', () => {
     expect(bb.min.y).toBeCloseTo(-1);
     expect(bb.max.y).toBeCloseTo(1);
   });
+
+  it('extrude along X axis works', () => {
+    const profile: Vec3[] = [
+      { x: 0, y: -1, z: -1 },
+      { x: 0, y: 1, z: -1 },
+      { x: 0, y: 1, z: 1 },
+      { x: 0, y: -1, z: 1 },
+    ];
+    const body = createExtrude({ profile, direction: { x: 1, y: 0, z: 0 }, distance: 5 });
+    const bb = computeBoundingBox(body);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(5, 1);
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+  });
+
+  it('extrude along Z axis works', () => {
+    const profile: Vec3[] = [
+      { x: -1, y: -1, z: 0 },
+      { x: 1, y: -1, z: 0 },
+      { x: 1, y: 1, z: 0 },
+      { x: -1, y: 1, z: 0 },
+    ];
+    const body = createExtrude({ profile, direction: { x: 0, y: 0, z: 1 }, distance: 5 });
+    const bb = computeBoundingBox(body);
+    expect(bb.max.z - bb.min.z).toBeCloseTo(5, 1);
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+  });
+
+  it('extrude along diagonal direction works', () => {
+    const profile: Vec3[] = [
+      { x: -1, y: 0, z: -1 },
+      { x: 1, y: 0, z: -1 },
+      { x: 1, y: 0, z: 1 },
+      { x: -1, y: 0, z: 1 },
+    ];
+    const body = createExtrude({ profile, direction: { x: 1, y: 1, z: 0 }, distance: 5 });
+    expect(checkManifold(body).boundaryEdges).toBe(0);
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(0);
+  });
+
+  it('volume scales linearly with distance', () => {
+    const profile: Vec3[] = [
+      { x: -1, y: 0, z: -1 },
+      { x: 1, y: 0, z: -1 },
+      { x: 1, y: 0, z: 1 },
+      { x: -1, y: 0, z: 1 },
+    ];
+    const short = createExtrude({ profile, direction: { x: 0, y: 1, z: 0 }, distance: 5 });
+    const long = createExtrude({ profile, direction: { x: 0, y: 1, z: 0 }, distance: 10 });
+    expect(Math.abs(computeVolume(long))).toBeCloseTo(Math.abs(computeVolume(short)) * 2, 1);
+  });
 });
 
 describe('createBox', () => {
