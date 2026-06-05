@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { listFaces, angleBetweenFaces } from './query';
-import { createBox } from './brep';
+import { createBox, createCylinder, createSphere } from './brep';
 
 describe('listFaces', () => {
   it('reports a box face: 6 faces, area 100, unit axis normals', () => {
@@ -15,6 +15,31 @@ describe('listFaces', () => {
     const top = faces.find((f) => f.normal.y > 0.99);
     expect(top).toBeDefined();
     expect(top!.centroid.y).toBeCloseTo(10, 4);
+  });
+
+  it('lists faces for a cylinder', () => {
+    const faces = listFaces(createCylinder(5, 10, 16));
+    expect(faces.length).toBeGreaterThan(0);
+    // All faces should have positive area.
+    for (const f of faces) {
+      expect(f.area).toBeGreaterThan(0);
+    }
+  });
+
+  it('lists faces for a sphere', () => {
+    const faces = listFaces(createSphere(7, 16));
+    expect(faces.length).toBeGreaterThan(0);
+    for (const f of faces) {
+      expect(f.area).toBeGreaterThan(0);
+    }
+  });
+
+  it('all face normals are unit vectors', () => {
+    const faces = listFaces(createBox(10, 10, 10));
+    for (const f of faces) {
+      const len = Math.hypot(f.normal.x, f.normal.y, f.normal.z);
+      expect(len).toBeCloseTo(1, 6);
+    }
   });
 });
 
