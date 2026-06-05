@@ -565,3 +565,86 @@ describe('new AI tools', () => {
     useStore.getState().clearScene();
   });
 });
+
+describe('modeling AI tools', () => {
+  beforeEach(() => {
+    useStore.getState().clearScene();
+  });
+
+  it('boolean_op unions two overlapping boxes', async () => {
+    const tool = getTool('boolean_op')!;
+    const { createBox } = await import('../geometry/brep');
+    const a = createBox(10, 10, 10);
+    const b = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([a, b]);
+    const result = (await tool.execute({ bodyIdA: a.id, bodyIdB: b.id, op: 'union' })) as { success: boolean };
+    expect(result.success).toBe(true);
+  });
+
+  it('fillet applies to a body', async () => {
+    const tool = getTool('fillet')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = await tool.execute({ bodyId: box.id, radius: 1 });
+    expect(result).toBeDefined();
+  });
+
+  it('chamfer applies to a body', async () => {
+    const tool = getTool('chamfer')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = await tool.execute({ bodyId: box.id, distance: 1 });
+    expect(result).toBeDefined();
+  });
+
+  it('hollow_body creates a shell', async () => {
+    const tool = getTool('hollow_body')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(20, 20, 20);
+    useStore.getState().addDirectBodies([box]);
+    useStore.getState().selectObject(box.id);
+    const result = (await tool.execute({ wallThickness: 2 })) as { success: boolean; bodyId: string };
+    expect(result.success).toBe(true);
+    expect(result.bodyId).toBeTruthy();
+  });
+
+  it('analyze_symmetry checks axis symmetry', async () => {
+    const tool = getTool('analyze_symmetry')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = (await tool.execute({ bodyId: box.id })) as { symmetricX: boolean; symmetricY: boolean; symmetricZ: boolean };
+    expect(typeof result.symmetricX).toBe('boolean');
+    expect(typeof result.symmetricY).toBe('boolean');
+    expect(typeof result.symmetricZ).toBe('boolean');
+  });
+
+  it('clear_scene removes all bodies', async () => {
+    const tool = getTool('clear_scene')!;
+    const { createBox } = await import('../geometry/brep');
+    useStore.getState().addDirectBodies([createBox(10, 10, 10)]);
+    expect(useStore.getState().bodies.length).toBeGreaterThan(0);
+    await tool.execute({});
+    expect(useStore.getState().bodies.length).toBe(0);
+  });
+
+  it('describe_scene returns body information', async () => {
+    const tool = getTool('describe_scene')!;
+    const { createBox } = await import('../geometry/brep');
+    useStore.getState().addDirectBodies([createBox(10, 10, 10)]);
+    const result = (await tool.execute({})) as { bodyCount: number };
+    expect(result.bodyCount).toBeGreaterThan(0);
+  });
+
+  it('delete_body removes a body by ID', async () => {
+    const tool = getTool('delete_body')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    expect(useStore.getState().bodies.length).toBe(1);
+    await tool.execute({ bodyId: box.id });
+    expect(useStore.getState().bodies.length).toBe(0);
+  });
+});
