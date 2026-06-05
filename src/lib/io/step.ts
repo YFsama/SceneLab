@@ -93,10 +93,9 @@ export function exportSTEP(body: SolidBody): string {
   const emit = (text: string) => entities.push(text);
 
   // Header preamble IDs are fixed.
-  id(); // #1 = context
-
-  // Application context
-  const appCtxId = id();
+  // #1 is the application context root.
+  const appCtxId = 1;
+  nextId = 2; // next entity starts at #2
   emit(`${ref(appCtxId)}=APPLICATION_CONTEXT('core data for automotive mechanical design processes');`);
 
   // Product context

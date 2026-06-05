@@ -99,4 +99,40 @@ describe('exportSTEP', () => {
     expect(step).toContain('ENDSEC;');
     expect(step).toContain('END-ISO-10303-21;');
   });
+
+  it('has valid entity references (no dangling #N)', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    // Extract all entity definitions (#N=...).
+    const defined = new Set<number>();
+    const refPattern = /#(\d+)=/g;
+    let match;
+    while ((match = refPattern.exec(step)) !== null) {
+      defined.add(parseInt(match[1]!));
+    }
+    // Extract all entity references (#N).
+    const refs = new Set<number>();
+    const refUsePattern = /#(\d+)/g;
+    while ((match = refUsePattern.exec(step)) !== null) {
+      refs.add(parseInt(match[1]!));
+    }
+    // All referenced entities should be defined.
+    for (const r of refs) {
+      expect(defined.has(r)).toBe(true);
+    }
+  });
+
+  it('has consistent entity count (no duplicates)', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    const defined = new Set<number>();
+    const refPattern = /#(\d+)=/g;
+    let match;
+    while ((match = refPattern.exec(step)) !== null) {
+      const eid = parseInt(match[1]!);
+      expect(defined.has(eid)).toBe(false); // no duplicate definitions
+      defined.add(eid);
+    }
+    expect(defined.size).toBeGreaterThan(10); // reasonable entity count
+  });
 });
