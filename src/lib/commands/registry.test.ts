@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, initBuiltinCommands, addMidplaneFromSelection } from './registry';
 import { useStore } from '../../store/app';
-import { createBox } from '../geometry';
+import { createBox, createCylinder } from '../geometry';
 
 describe('command registry', () => {
   beforeEach(() => clearCommands());
@@ -98,5 +98,16 @@ describe('addMidplaneFromSelection', () => {
     expect(Number.isFinite(mid.origin.x)).toBe(true);
     expect(Number.isFinite(mid.origin.y)).toBe(true);
     expect(Number.isFinite(mid.origin.z)).toBe(true);
+  });
+
+  it('works with a cylinder body', () => {
+    const cyl = createCylinder(5, 20, 16);
+    useStore.getState().addDirectBody(cyl);
+    const id = addMidplaneFromSelection();
+    expect(id).toBeTruthy();
+    const mid = useStore.getState().planes.find((p) => p.id === id)!;
+    expect(mid).toBeDefined();
+    const nLen = Math.hypot(mid.normal.x, mid.normal.y, mid.normal.z);
+    expect(nLen).toBeCloseTo(1, 6);
   });
 });
