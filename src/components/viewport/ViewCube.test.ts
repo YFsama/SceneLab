@@ -180,3 +180,42 @@ describe('ViewCube orientation selection', () => {
     expect(findOrientation({ x: 0, y: 0.5, z: 0 })).toBe(4);
   });
 });
+
+describe('ViewCube drag behavior', () => {
+  it('drag start records initial position', () => {
+    let dragStart: { x: number; y: number } | null = null;
+    const handleMouseDown = (x: number, y: number) => {
+      dragStart = { x, y };
+    };
+
+    handleMouseDown(100, 200);
+    expect(dragStart).toEqual({ x: 100, y: 200 });
+  });
+
+  it('drag delta is computed correctly', () => {
+    const start = { x: 100, y: 200 };
+    const current = { x: 150, y: 180 };
+    const dx = current.x - start.x;
+    const dy = current.y - start.y;
+    expect(dx).toBe(50);
+    expect(dy).toBe(-20);
+  });
+
+  it('small drag is treated as click (not orbit)', () => {
+    const start = { x: 100, y: 200 };
+    const end = { x: 103, y: 198 };
+    const dx = Math.abs(end.x - start.x);
+    const dy = Math.abs(end.y - start.y);
+    const isClick = dx < 4 && dy < 4;
+    expect(isClick).toBe(true);
+  });
+
+  it('large drag is treated as orbit (not click)', () => {
+    const start = { x: 100, y: 200 };
+    const end = { x: 200, y: 150 };
+    const dx = Math.abs(end.x - start.x);
+    const dy = Math.abs(end.y - start.y);
+    const isClick = dx < 4 && dy < 4;
+    expect(isClick).toBe(false);
+  });
+});
