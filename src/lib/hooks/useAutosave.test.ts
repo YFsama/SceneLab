@@ -29,7 +29,8 @@ describe('useAutosave logic', () => {
     let ticked = false;
     const tick = () => { ticked = true; };
     // When document.hidden is true, tick should be called.
-    if (true) tick(); // simulating document.hidden = true
+    const isHidden = true;
+    if (isHidden) tick();
     expect(ticked).toBe(true);
   });
 

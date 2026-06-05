@@ -22,14 +22,14 @@ describe('MATERIALS', () => {
   });
 
   it('all materials have positive density', () => {
-    for (const [key, mat] of Object.entries(MATERIALS)) {
+    for (const [, mat] of Object.entries(MATERIALS)) {
       expect(mat.density).toBeGreaterThan(0);
       expect(mat.name).toBeTruthy();
     }
   });
 
   it('all materials have non-empty names', () => {
-    for (const [key, mat] of Object.entries(MATERIALS)) {
+    for (const [, mat] of Object.entries(MATERIALS)) {
       expect(mat.name.length).toBeGreaterThan(0);
     }
   });
