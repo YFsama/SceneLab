@@ -279,7 +279,7 @@ describe('removeEntity edge cases', () => {
   it('removing a line keeps shared points', () => {
     const s = createSketch('xy');
     const line1 = addLine(s, 0, 0, 10, 0);
-    const line2 = addLine(s, 10, 0, 10, 10); // shares endpoint with line1
+    addLine(s, 10, 0, 10, 10); // shares endpoint with line1
     removeEntity(s, line1.id);
     // The shared point (10,0) should be kept since line2 references it.
     expect(s.entities.size).toBeGreaterThan(0);
