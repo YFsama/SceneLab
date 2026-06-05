@@ -140,4 +140,28 @@ describe('sketch dimensions', () => {
     expect(dims).toHaveLength(2);
     expect(dims.every((d) => d.kind === 'radius')).toBe(true);
   });
+
+  it('measures 45° angle between lines', () => {
+    const s = createSketch('xy');
+    const a = addLine(s, 0, 0, 10, 0);
+    const b = addLine(s, 0, 0, 10, 10);
+    const d = measureAngleBetweenLines(s, a.id, b.id)!;
+    expect(d.value).toBeCloseTo(45, 0);
+  });
+
+  it('measures 60° angle between lines', () => {
+    const s = createSketch('xy');
+    const a = addLine(s, 0, 0, 10, 0);
+    const b = addLine(s, 0, 0, 5, 8.66); // ~60°
+    const d = measureAngleBetweenLines(s, a.id, b.id)!;
+    expect(d.value).toBeCloseTo(60, 0);
+  });
+
+  it('measures 0° angle for parallel lines', () => {
+    const s = createSketch('xy');
+    const a = addLine(s, 0, 0, 10, 0);
+    const b = addLine(s, 0, 5, 10, 5);
+    const d = measureAngleBetweenLines(s, a.id, b.id)!;
+    expect(d.value).toBeCloseTo(0, 0);
+  });
 });
