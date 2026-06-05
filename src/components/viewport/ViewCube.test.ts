@@ -139,3 +139,44 @@ describe('ViewCube hit detection', () => {
     expect(classifyHit(0.75, 0.75)).toBe('corner');
   });
 });
+
+describe('ViewCube orientation selection', () => {
+  // Simulate the findOrientation logic.
+  const ORIENTATIONS = [
+    { pos: { x: 0, y: 0, z: 1 } },  // Front
+    { pos: { x: 0, y: 0, z: -1 } }, // Back
+    { pos: { x: 1, y: 0, z: 0 } },  // Right
+    { pos: { x: -1, y: 0, z: 0 } }, // Left
+    { pos: { x: 0, y: 1, z: 0 } },  // Top
+    { pos: { x: 0, y: -1, z: 0 } }, // Bottom
+  ];
+
+  const findOrientation = (dir: { x: number; y: number; z: number }): number => {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < ORIENTATIONS.length; i++) {
+      const o = ORIENTATIONS[i]!.pos;
+      const d = Math.sqrt((dir.x - o.x) ** 2 + (dir.y - o.y) ** 2 + (dir.z - o.z) ** 2);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+  };
+
+  it('finds the correct face orientation', () => {
+    expect(findOrientation({ x: 0, y: 0, z: 1 })).toBe(0); // Front
+    expect(findOrientation({ x: 0, y: 0, z: -1 })).toBe(1); // Back
+    expect(findOrientation({ x: 1, y: 0, z: 0 })).toBe(2); // Right
+    expect(findOrientation({ x: -1, y: 0, z: 0 })).toBe(3); // Left
+    expect(findOrientation({ x: 0, y: 1, z: 0 })).toBe(4); // Top
+    expect(findOrientation({ x: 0, y: -1, z: 0 })).toBe(5); // Bottom
+  });
+
+  it('finds the nearest orientation for intermediate directions', () => {
+    // Closer to Front than Back.
+    expect(findOrientation({ x: 0, y: 0, z: 0.5 })).toBe(0);
+    // Closer to Right than Left.
+    expect(findOrientation({ x: 0.5, y: 0, z: 0 })).toBe(2);
+    // Closer to Top than Bottom.
+    expect(findOrientation({ x: 0, y: 0.5, z: 0 })).toBe(4);
+  });
+});
