@@ -566,6 +566,8 @@ describe('primitives have consistent outward normals', () => {
     ['cone', () => createCone(5, 0, 10, 32)],
     ['torus', () => createTorus(10, 3, 32, 16)],
     ['wedge', () => createWedge(10, 6, 4)],
+    ['prism', () => createPrism(6, 10, 5)],
+    ['tube', () => createTube(10, 6, 20, 16)],
   ];
   for (const [name, make] of cases) {
     it(`${name} normals all point outward`, () => {
