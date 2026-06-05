@@ -291,7 +291,6 @@ describe('addConstraint', () => {
   it('multiple constraints can be added to the same entity', () => {
     const sketch = createSketch('xy');
     const p1 = addPoint(sketch, 0, 0);
-    const p2 = addPoint(sketch, 5, 5);
     const line = addLine(sketch, 0, 0, 5, 5);
     addConstraint(sketch, 'horizontal', [line.id]);
     addConstraint(sketch, 'fixed', [p1.id]);
