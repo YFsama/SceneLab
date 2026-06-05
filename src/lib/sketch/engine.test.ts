@@ -118,6 +118,27 @@ describe('addCircle', () => {
     expect(circle.radius).toBe(10);
     expect(sketch.entities.size).toBe(2); // 1 point + 1 circle
   });
+
+  it('circle center is at correct position', () => {
+    const sketch = createSketch('xy');
+    const circle = addCircle(sketch, 7, 13, 5);
+    const center = sketch.entities.get(circle.centerId) as { x: number; y: number };
+    expect(center.x).toBe(7);
+    expect(center.y).toBe(13);
+  });
+
+  it('circle radius is stored correctly', () => {
+    const sketch = createSketch('xy');
+    const circle = addCircle(sketch, 0, 0, 42.5);
+    expect(circle.radius).toBe(42.5);
+  });
+
+  it('multiple circles have unique IDs', () => {
+    const sketch = createSketch('xy');
+    const c1 = addCircle(sketch, 0, 0, 5);
+    const c2 = addCircle(sketch, 10, 10, 3);
+    expect(c1.id).not.toBe(c2.id);
+  });
 });
 
 describe('addArc', () => {
