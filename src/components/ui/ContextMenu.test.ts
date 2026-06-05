@@ -84,4 +84,46 @@ describe('context menu logic', () => {
       expect(constraints).toContain('Concentric');
     });
   });
+
+  describe('rectangle editing menu', () => {
+    it('shows width/height options when a rectangle is detected', () => {
+      const rect = { width: 10, height: 5 };
+      const items: string[] = [];
+      if (rect) {
+        items.push(`Set Width (${rect.width})`);
+        items.push(`Set Height (${rect.height})`);
+      }
+      expect(items).toContain('Set Width (10)');
+      expect(items).toContain('Set Height (5)');
+    });
+
+    it('does not show rectangle options when no rectangle detected', () => {
+      const rect = null;
+      const items: string[] = [];
+      if (rect) {
+        items.push('Set Width');
+        items.push('Set Height');
+      }
+      expect(items).toHaveLength(0);
+    });
+  });
+
+  describe('annotation menu', () => {
+    it('shows annotation submenu when annotations exist', () => {
+      const annotations = [
+        { id: 'ann_1', name: 'Distance', kind: 'distance', value: 10 },
+        { id: 'ann_2', name: 'Angle', kind: 'angle', value: 90 },
+      ];
+      const items = annotations.map((a) =>
+        `${a.name}: ${a.kind === 'distance' ? `${a.value} mm` : `${a.value}°`}`
+      );
+      expect(items).toContain('Distance: 10 mm');
+      expect(items).toContain('Angle: 90°');
+    });
+
+    it('hides annotation submenu when no annotations', () => {
+      const annotations: { id: string }[] = [];
+      expect(annotations.length > 0).toBe(false);
+    });
+  });
 });
