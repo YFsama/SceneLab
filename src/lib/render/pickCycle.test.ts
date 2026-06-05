@@ -33,4 +33,18 @@ describe('pickCycle', () => {
   it('falls back to the front-most with a multi-selection', () => {
     expect(pickCycle(['a', 'b', 'c'], ['a', 'b'])).toBe('a');
   });
+
+  it('handles a single body under cursor', () => {
+    expect(pickCycle(['a'], [])).toBe('a');
+    expect(pickCycle(['a'], ['a'])).toBe('a');
+  });
+
+  it('handles two bodies under cursor', () => {
+    expect(pickCycle(['a', 'b'], ['a'])).toBe('b');
+    expect(pickCycle(['a', 'b'], ['b'])).toBe('a');
+  });
+
+  it('selected body not in ordered list falls back to front', () => {
+    expect(pickCycle(['a', 'b', 'c'], ['z'])).toBe('a');
+  });
 });
