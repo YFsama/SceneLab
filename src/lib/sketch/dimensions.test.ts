@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createSketch, addLine, addCircle, addArc } from './engine';
+import { createSketch, addPoint, addLine, addCircle, addArc } from './engine';
 import {
   measurePointDistance,
   measureLineLength,
@@ -124,5 +124,20 @@ describe('sketch dimensions', () => {
     addLine(s, 0, 0, 5, 0); // length 5
     const dims = listDimensions(s);
     expect(dims).toHaveLength(3);
+  });
+
+  it('returns empty for a point-only sketch', () => {
+    const s = createSketch('xy');
+    addPoint(s, 5, 10);
+    expect(listDimensions(s)).toHaveLength(0);
+  });
+
+  it('measures multiple circles', () => {
+    const s = createSketch('xy');
+    addCircle(s, 0, 0, 3);
+    addCircle(s, 10, 0, 5);
+    const dims = listDimensions(s);
+    expect(dims).toHaveLength(2);
+    expect(dims.every((d) => d.kind === 'radius')).toBe(true);
   });
 });
