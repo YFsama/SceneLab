@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
-import { createBox, computeVolume, translateBody, computeBoundingBoxCenter } from '../lib/geometry';
+import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, computeBoundingBox } from '../lib/geometry';
 import { createSketch, addRectangle, addLine } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
@@ -188,6 +188,53 @@ describe('app store — direct bodies', () => {
     // Pappus: area 4 × 2π × centroidRadius 3 = 24π
     expect(Math.abs(computeVolume(bodies[0]!))).toBeGreaterThan(24 * Math.PI * 0.95);
     expect(useStore.getState().currentSketch).toBeNull();
+  });
+
+  it('updateFeature modifies a feature parameter and recomputes', () => {
+    const ext = createExtrudeFeature(
+      {
+        profile: [
+          { x: -5, y: 0, z: -5 },
+          { x: 5, y: 0, z: -5 },
+          { x: 5, y: 0, z: 5 },
+          { x: -5, y: 0, z: 5 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 10,
+      },
+      [],
+    );
+    useStore.getState().addFeature(ext);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    const bb = computeBoundingBox(useStore.getState().bodies[0]!);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(10, 0);
+
+    // Update distance to 20.
+    useStore.getState().updateFeature(ext.id, (f) =>
+      f.type === 'extrude' ? { ...f, params: { ...f.params, distance: 20 } } : f,
+    );
+    const bb2 = computeBoundingBox(useStore.getState().bodies[0]!);
+    expect(bb2.max.y - bb2.min.y).toBeCloseTo(20, 0);
+  });
+
+  it('removeFeature deletes a feature and its geometry', () => {
+    const ext = createExtrudeFeature(
+      {
+        profile: [
+          { x: -5, y: 0, z: -5 },
+          { x: 5, y: 0, z: -5 },
+          { x: 5, y: 0, z: 5 },
+          { x: -5, y: 0, z: 5 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 10,
+      },
+      [],
+    );
+    useStore.getState().addFeature(ext);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    useStore.getState().removeFeature(ext.id);
+    expect(useStore.getState().bodies).toHaveLength(0);
   });
 
   it('loadProject rebuilds geometry from a saved project file', () => {
