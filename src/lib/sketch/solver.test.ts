@@ -544,4 +544,51 @@ describe('multiple constraints on same entity', () => {
     expect(p1.x).toBeCloseTo(p2.x, 4);
     expect(p1.y).toBeCloseTo(p2.y, 4);
   });
+
+  it('equal constraint on two circles equalizes radii', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c1', { id: 'c1', type: 'point', x: 0, y: 0 });
+    entities.set('c2', { id: 'c2', type: 'point', x: 10, y: 0 });
+    entities.set('circle1', { id: 'circle1', type: 'circle', centerId: 'c1', radius: 3 });
+    entities.set('circle2', { id: 'circle2', type: 'circle', centerId: 'c2', radius: 7 });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c', { id: 'c', type: 'equal', entityIds: ['circle1', 'circle2'] });
+    solveConstraints(entities, constraints);
+    const r1 = (entities.get('circle1') as { radius: number }).radius;
+    const r2 = (entities.get('circle2') as { radius: number }).radius;
+    expect(r1).toBeCloseTo(r2, 4);
+  });
+
+  it('horizontal + distance constrains line to exact length', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 5, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'horizontal', entityIds: ['line1'] });
+    constraints.set('c2', { id: 'c2', type: 'distance', entityIds: ['p1', 'p2'], value: 10 });
+    const result = solveConstraints(entities, constraints);
+    const p1 = result.get('p1')!;
+    const p2 = result.get('p2')!;
+    // Horizontal: same Y.
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+    // Distance: 10 units apart.
+    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    expect(dist).toBeCloseTo(10, 2);
+  });
+
+  it('fixed point stays fixed with vertical constraint on line', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 5, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('c2', { id: 'c2', type: 'vertical', entityIds: ['line1'] });
+    const result = solveConstraints(entities, constraints);
+    expect(result.get('p1')!.x).toBeCloseTo(0, 6);
+    expect(result.get('p1')!.y).toBeCloseTo(0, 6);
+    // p2 should move to same X as p1 (vertical constraint).
+    expect(result.get('p2')!.x).toBeCloseTo(0, 4);
+  });
 });
