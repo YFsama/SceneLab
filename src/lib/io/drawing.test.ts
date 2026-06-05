@@ -39,4 +39,26 @@ describe('exportDrawingSVG', () => {
     expect(svg).toContain('<svg');
     expect(svg).toContain('<line');
   });
+
+  it('SVG has valid XML structure', () => {
+    const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG(view);
+    expect(svg).toContain('xmlns');
+    expect(svg).toContain('viewBox');
+    expect(svg).toContain('</svg>');
+  });
+
+  it('SVG line count is at least edge count', () => {
+    const box = createBox(10, 10, 10);
+    const view = projectBody(box, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG(view);
+    const lineCount = (svg.match(/<line/g) ?? []).length;
+    expect(lineCount).toBeGreaterThanOrEqual(box.edges.length);
+  });
+
+  it('SVG has correct viewBox dimensions', () => {
+    const view = projectBody(createBox(10, 20, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG(view, 800, 600);
+    expect(svg).toContain('viewBox="0 0 800 600"');
+  });
 });
