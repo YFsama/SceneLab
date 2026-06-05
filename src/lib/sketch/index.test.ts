@@ -110,4 +110,27 @@ describe('getEntityPoints', () => {
     const pts = getEntityPoints(line, s.entities);
     expect(pts).toEqual([]);
   });
+
+  it('returns empty for a circle with missing center', () => {
+    const s = createSketch('xy');
+    const circle = { id: 'bad', type: 'circle' as const, centerId: 'missing', radius: 5 };
+    const pts = getEntityPoints(circle, s.entities);
+    expect(pts).toEqual([]);
+  });
+
+  it('returns empty for an arc with missing center', () => {
+    const s = createSketch('xy');
+    const arc = { id: 'bad', type: 'arc' as const, centerId: 'missing', radius: 5, startAngle: 0, endAngle: Math.PI };
+    const pts = getEntityPoints(arc, s.entities);
+    expect(pts).toEqual([]);
+  });
+
+  it('returns correct points for a line with negative coordinates', () => {
+    const s = createSketch('xy');
+    const line = addLine(s, -5, -10, 3, 7);
+    const pts = getEntityPoints(line, s.entities);
+    expect(pts).toHaveLength(2);
+    expect(pts[0]).toEqual({ x: -5, y: -10 });
+    expect(pts[1]).toEqual({ x: 3, y: 7 });
+  });
 });
