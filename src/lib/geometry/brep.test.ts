@@ -1029,6 +1029,34 @@ describe('computeBoundingSphere', () => {
       expect(d).toBeLessThanOrEqual(radius + 1e-9);
     }
   });
+
+  it('encloses all vertices of a cylinder', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const { center, radius } = computeBoundingSphere(cyl);
+    expect(radius).toBeGreaterThan(0);
+    for (const v of cyl.vertices) {
+      const d = Math.hypot(v.x - center.x, v.y - center.y, v.z - center.z);
+      expect(d).toBeLessThanOrEqual(radius + 1e-6);
+    }
+  });
+
+  it('encloses all vertices of a sphere', () => {
+    const sphere = createSphere(5, 16);
+    const { center, radius } = computeBoundingSphere(sphere);
+    expect(radius).toBeGreaterThan(0);
+    for (const v of sphere.vertices) {
+      const d = Math.hypot(v.x - center.x, v.y - center.y, v.z - center.z);
+      expect(d).toBeLessThanOrEqual(radius + 1e-6);
+    }
+  });
+
+  it('center is finite', () => {
+    const box = createBox(10, 20, 30);
+    const { center } = computeBoundingSphere(box);
+    expect(Number.isFinite(center.x)).toBe(true);
+    expect(Number.isFinite(center.y)).toBe(true);
+    expect(Number.isFinite(center.z)).toBe(true);
+  });
 });
 
 describe('computeBoundingBox', () => {
