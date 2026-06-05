@@ -1344,6 +1344,38 @@ describe('app store — direct bodies', () => {
     expect([p2.x, p2.y]).toEqual([7, -3]);
   });
 
+  it('addSketchRect creates 4 lines in the current sketch', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchRect(0, 0, 10, 5);
+    const sketch = useStore.getState().currentSketch!;
+    const lines = [...sketch.entities.values()].filter((e) => e.type === 'line');
+    expect(lines.length).toBe(4);
+  });
+
+  it('addSketchCircle creates a circle entity', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchCircle(0, 0, 5);
+    const sketch = useStore.getState().currentSketch!;
+    const circles = [...sketch.entities.values()].filter((e) => e.type === 'circle');
+    expect(circles.length).toBe(1);
+  });
+
+  it('addSketchArc creates an arc entity', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchArc(0, 0, 5, 0, Math.PI);
+    const sketch = useStore.getState().currentSketch!;
+    const arcs = [...sketch.entities.values()].filter((e) => e.type === 'arc');
+    expect(arcs.length).toBe(1);
+  });
+
+  it('addSketchPolygon creates polygon lines', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchPolygon(0, 0, 5, 6);
+    const sketch = useStore.getState().currentSketch!;
+    const lines = [...sketch.entities.values()].filter((e) => e.type === 'line');
+    expect(lines.length).toBe(6);
+  });
+
   it('setShowShortcuts toggles the shortcuts overlay flag', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
     useStore.getState().setShowShortcuts(true);
