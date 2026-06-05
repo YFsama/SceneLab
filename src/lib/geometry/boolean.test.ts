@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { booleanOp, hollowBody, splitByPlane, mirrorMerge } from './boolean';
-import { createBox, checkManifold, computeVolume } from './brep';
+import { createBox, createCylinder, checkManifold, computeVolume } from './brep';
 import { translateBody } from './operations';
 import { makePlane } from './referenceGeometry';
 
@@ -93,5 +93,39 @@ describe('mirrorMerge', () => {
     let maxX = -Infinity;
     for (const v of merged.vertices) { minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x); }
     expect((minX + maxX) / 2).toBeCloseTo(5, 1);
+  });
+});
+
+describe('booleanOp with different body types', () => {
+  it('unions two cylinders', () => {
+    const a = createCylinder(5, 10, 16);
+    const b = translateBody(createCylinder(5, 10, 16), { x: 8, y: 0, z: 0 });
+    const r = booleanOp(a, b, 'union', 30);
+    expect(r).not.toBeNull();
+    expect(Math.abs(computeVolume(r!))).toBeGreaterThan(0);
+  });
+
+  it('intersects two overlapping cylinders', () => {
+    const a = createCylinder(5, 10, 16);
+    const b = translateBody(createCylinder(5, 10, 16), { x: 3, y: 0, z: 0 });
+    const r = booleanOp(a, b, 'intersect', 30);
+    expect(r).not.toBeNull();
+    expect(Math.abs(computeVolume(r!))).toBeGreaterThan(0);
+  });
+
+  it('differences a box minus a cylinder', () => {
+    const box = createBox(20, 20, 20);
+    const cyl = createCylinder(5, 20, 16);
+    const r = booleanOp(box, cyl, 'difference', 30);
+    expect(r).not.toBeNull();
+    // Volume should be less than the box alone.
+    expect(Math.abs(computeVolume(r!))).toBeLessThan(Math.abs(computeVolume(box)));
+  });
+
+  it('union with disjoint bodies returns non-null', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 100, y: 0, z: 0 });
+    const r = booleanOp(a, b, 'union', 30);
+    expect(r).not.toBeNull();
   });
 });
