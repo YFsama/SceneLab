@@ -67,4 +67,28 @@ describe('computeSceneMassProperties', () => {
     const s = computeSceneMassProperties([], 1);
     expect(s.totalMass).toBe(0);
   });
+
+  it('mass scales with density', () => {
+    const box = createBox(10, 10, 10);
+    const s1 = computeSceneMassProperties([box], 1);
+    const s2 = computeSceneMassProperties([box], 2);
+    expect(s2.totalMass).toBeCloseTo(s1.totalMass * 2, 0);
+  });
+
+  it('mass scales with volume', () => {
+    const small = createBox(10, 10, 10);
+    const large = createBox(20, 20, 20);
+    const s1 = computeSceneMassProperties([small], 1);
+    const s2 = computeSceneMassProperties([large], 1);
+    // Volume scales by 8× (2³).
+    expect(s2.totalMass).toBeCloseTo(s1.totalMass * 8, 0);
+  });
+
+  it('center of mass is at the geometric center for a single symmetric body', () => {
+    const box = createBox(10, 20, 30);
+    const s = computeSceneMassProperties([box], 1);
+    // Box is centered at origin in X/Z, bottom at Y=0.
+    expect(s.centerOfMass.x).toBeCloseTo(0, 1);
+    expect(s.centerOfMass.z).toBeCloseTo(0, 1);
+  });
 });
