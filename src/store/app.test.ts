@@ -1399,6 +1399,24 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().currentSketch!.entities.size).toBe(0);
   });
 
+  it('addSketchCircle creates entities that are undoable', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchCircle(0, 0, 5);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(2); // 1 circle + 1 center point
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
+  it('addSketchArc creates entities that are undoable', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchArc(0, 0, 5, 0, Math.PI);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(2); // 1 arc + 1 center point
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
   it('sketch undo/redo reverts and replays sketch edits', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchLine(0, 0, 5, 0);
