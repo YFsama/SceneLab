@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeSurfaceArea, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder } from './brep';
 import { mergeBodies, scaleBody } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
 
@@ -1555,5 +1555,33 @@ describe('checkWindingOrder', () => {
     expect(w.clockwiseFaces).toBeGreaterThanOrEqual(0);
     expect(w.counterClockwiseFaces).toBeGreaterThanOrEqual(0);
     expect(w.degenerateFaces).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('computeSurfaceArea', () => {
+  it('box surface area = 2*(w*h + h*d + w*d)', () => {
+    const box = createBox(10, 20, 30);
+    const area = computeSurfaceArea(box);
+    expect(area).toBeCloseTo(2 * (10 * 20 + 20 * 30 + 10 * 30), 0);
+  });
+
+  it('sphere surface area ≈ 4πr²', () => {
+    const sphere = createSphere(5, 32);
+    const area = computeSurfaceArea(sphere);
+    const expected = 4 * Math.PI * 25;
+    expect(area).toBeGreaterThan(expected * 0.9);
+    expect(area).toBeLessThan(expected * 1.1);
+  });
+
+  it('surface area is always positive', () => {
+    for (const make of [() => createBox(10, 10, 10), () => createCylinder(5, 10, 16), () => createSphere(5, 16), () => createTorus(10, 3, 16, 8)]) {
+      expect(computeSurfaceArea(make())).toBeGreaterThan(0);
+    }
+  });
+
+  it('surface area scales with size²', () => {
+    const small = computeSurfaceArea(createBox(10, 10, 10));
+    const large = computeSurfaceArea(createBox(20, 20, 20));
+    expect(large).toBeCloseTo(small * 4, 0); // 2² = 4
   });
 });
