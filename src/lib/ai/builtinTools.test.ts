@@ -647,4 +647,63 @@ describe('modeling AI tools', () => {
     await tool.execute({ bodyId: box.id });
     expect(useStore.getState().bodies.length).toBe(0);
   });
+
+  it('move_body translates a body', async () => {
+    const tool = getTool('move_body')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = (await tool.execute({ bodyId: box.id, offset: { x: 50, y: 0, z: 0 } })) as { success: boolean };
+    expect(result.success).toBe(true);
+  });
+
+  it('rotate_body rotates a body', async () => {
+    const tool = getTool('rotate_body')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = (await tool.execute({ bodyId: box.id, axis: { x: 0, y: 0, z: 1 }, angleDeg: 90 })) as { success: boolean };
+    expect(result.success).toBe(true);
+  });
+
+  it('scale_body scales a body', async () => {
+    const tool = getTool('scale_body')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = (await tool.execute({ bodyId: box.id, factor: 2 })) as { success: boolean };
+    expect(result.success).toBe(true);
+  });
+
+  it('center_body centers a body at origin', async () => {
+    const tool = getTool('center_body')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = (await tool.execute({ bodyId: box.id })) as { success: boolean };
+    expect(result.success).toBe(true);
+  });
+
+  it('convex_hull creates a convex hull', async () => {
+    const tool = getTool('convex_hull')!;
+    const { createBox } = await import('../geometry/brep');
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBodies([box]);
+    const result = (await tool.execute({ bodyId: box.id })) as { success: boolean };
+    expect(result.success).toBe(true);
+  });
+
+  it('list_bodies returns body information', async () => {
+    const tool = getTool('list_bodies')!;
+    const { createBox } = await import('../geometry/brep');
+    useStore.getState().addDirectBodies([createBox(10, 10, 10)]);
+    const result = await tool.execute({});
+    expect(result).toBeDefined();
+  });
+
+  it('create_standard_planes adds datum planes', async () => {
+    const tool = getTool('create_standard_planes')!;
+    await tool.execute({});
+    expect(useStore.getState().planes.length).toBe(3);
+  });
 });
