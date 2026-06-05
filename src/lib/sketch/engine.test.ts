@@ -60,6 +60,27 @@ describe('addPoint', () => {
     expect(pt.y).toBe(20);
     expect(sketch.entities.size).toBe(1);
   });
+
+  it('point has correct coordinates', () => {
+    const sketch = createSketch('xy');
+    const pt = addPoint(sketch, -5.5, 3.7);
+    expect(pt.x).toBe(-5.5);
+    expect(pt.y).toBe(3.7);
+  });
+
+  it('point has a unique ID', () => {
+    const sketch = createSketch('xy');
+    const p1 = addPoint(sketch, 0, 0);
+    const p2 = addPoint(sketch, 10, 10);
+    expect(p1.id).not.toBe(p2.id);
+  });
+
+  it('point ID is a string', () => {
+    const sketch = createSketch('xy');
+    const pt = addPoint(sketch, 5, 5);
+    expect(typeof pt.id).toBe('string');
+    expect(pt.id.length).toBeGreaterThan(0);
+  });
 });
 
 describe('addLine', () => {
