@@ -1576,6 +1576,17 @@ describe('app store — direct bodies', () => {
     expect(constraint!.type).toBe('horizontal');
   });
 
+  it('addSketchConstraint is undoable', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().addSketchConstraint('horizontal', [line.id]);
+    expect(useStore.getState().currentSketch!.constraints.size).toBe(1);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.constraints.size).toBe(0);
+  });
+
   it('addSketchConstraint with value stores the value', () => {
     const sketch = createSketch('xy');
     const line = addLine(sketch, 0, 0, 10, 0);
