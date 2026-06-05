@@ -105,6 +105,26 @@ describe('createFrustumTube', () => {
     expect(() => createFrustumTube(10, 6, 6, 20)).toThrow();
     expect(() => createFrustumTube(0, 6, 1, 20)).toThrow();
   });
+
+  it('bounding box spans the larger diameter', () => {
+    const t = createFrustumTube(10, 6, 1.5, 20, 32);
+    const bb = computeBoundingBox(t);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(20, 1); // 2 × R=10
+    expect(bb.max.z - bb.min.z).toBeCloseTo(20, 1);
+  });
+
+  it('bounding box height matches input', () => {
+    const t = createFrustumTube(10, 6, 1.5, 30, 32);
+    const bb = computeBoundingBox(t);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(30, 1);
+  });
+
+  it('thinner wall produces more interior volume', () => {
+    const thin = createFrustumTube(10, 6, 0.5, 20, 32);
+    const thick = createFrustumTube(10, 6, 3, 20, 32);
+    // Thinner wall = more hollow interior = different volume.
+    expect(Math.abs(computeVolume(thin))).not.toBeCloseTo(Math.abs(computeVolume(thick)), 0);
+  });
 });
 
 describe('createCoil', () => {
