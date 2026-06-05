@@ -1384,6 +1384,45 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
   });
 
+  it('toggleSketchConstruction flips the construction flag', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(line.construction).toBeFalsy();
+    useStore.getState().toggleSketchConstruction(line.id);
+    expect(useStore.getState().currentSketch!.entities.get(line.id)?.construction).toBe(true);
+    useStore.getState().toggleSketchConstruction(line.id);
+    expect(useStore.getState().currentSketch!.entities.get(line.id)?.construction).toBe(false);
+  });
+
+  it('detectSketchRectangle returns null for a standalone line', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().detectSketchRectangle(line.id)).toBeNull();
+  });
+
+  it('detectSketchRectangle detects a rectangle from 4 lines', () => {
+    const sketch = createSketch('xy');
+    const { lines } = addRectangle(sketch, 0, 0, 10, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    const rect = useStore.getState().detectSketchRectangle(lines[0]!.id);
+    expect(rect).not.toBeNull();
+    expect(rect!.width).toBeCloseTo(10, 1);
+    expect(rect!.height).toBeCloseTo(5, 1);
+  });
+
+  it('resizeSketchRectangle resizes a detected rectangle', () => {
+    const sketch = createSketch('xy');
+    const { lines } = addRectangle(sketch, 0, 0, 10, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().resizeSketchRectangle(lines[0]!.id, 20, 8);
+    const rect = useStore.getState().detectSketchRectangle(lines[0]!.id);
+    expect(rect).not.toBeNull();
+    expect(rect!.width).toBeCloseTo(20, 1);
+    expect(rect!.height).toBeCloseTo(8, 1);
+  });
+
   it('hollowBodyById replaces a body with a lighter shell, keeping it selected', () => {
     useStore.getState().clearScene();
     const box = createBox(20, 20, 20); // vol 8000
