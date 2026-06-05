@@ -47,4 +47,37 @@ describe('pickCycle', () => {
   it('selected body not in ordered list falls back to front', () => {
     expect(pickCycle(['a', 'b', 'c'], ['z'])).toBe('a');
   });
+
+  it('cycling through all bodies returns to first', () => {
+    const ordered = ['a', 'b', 'c', 'd'];
+    let selected: string[] = [];
+    const results: string[] = [];
+    for (let i = 0; i < ordered.length; i++) {
+      const next = pickCycle(ordered, selected)!;
+      results.push(next);
+      selected = [next];
+    }
+    // Should cycle through all 4 bodies.
+    expect(new Set(results).size).toBe(4);
+    // After cycling through all, should wrap to first.
+    expect(pickCycle(ordered, selected)).toBe(ordered[0]);
+  });
+});
+
+describe('distinctInOrder edge cases', () => {
+  it('handles all undefined', () => {
+    expect(distinctInOrder([undefined, undefined, undefined])).toEqual([]);
+  });
+
+  it('handles single element', () => {
+    expect(distinctInOrder(['a'])).toEqual(['a']);
+  });
+
+  it('deduplicates adjacent duplicates', () => {
+    expect(distinctInOrder(['a', 'a', 'b', 'b'])).toEqual(['a', 'b']);
+  });
+
+  it('preserves order of first occurrence', () => {
+    expect(distinctInOrder(['b', 'a', 'b', 'a'])).toEqual(['b', 'a']);
+  });
 });
