@@ -156,3 +156,41 @@ describe('booleanOp with different body types', () => {
     expect(Math.abs(computeVolume(r))).toBeLessThan(Math.abs(computeVolume(b)));
   });
 });
+
+describe('splitByPlane edge cases', () => {
+  const box = createBox(10, 10, 10);
+
+  it('splits along X axis', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(positive).not.toBeNull();
+    expect(negative).not.toBeNull();
+    const vp = Math.abs(computeVolume(positive!));
+    const vn = Math.abs(computeVolume(negative!));
+    expect(vp + vn).toBeCloseTo(1000, -2);
+  });
+
+  it('splits along Z axis', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(positive).not.toBeNull();
+    expect(negative).not.toBeNull();
+    const vp = Math.abs(computeVolume(positive!));
+    const vn = Math.abs(computeVolume(negative!));
+    expect(vp + vn).toBeCloseTo(1000, -2);
+  });
+
+  it('diagonal plane produces two halves', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(positive).not.toBeNull();
+    expect(negative).not.toBeNull();
+  });
+
+  it('both halves are watertight', () => {
+    const plane = makePlane({ x: 0, y: 5, z: 0 }, { x: 0, y: 1, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(checkManifold(positive!).boundaryEdges).toBe(0);
+    expect(checkManifold(negative!).boundaryEdges).toBe(0);
+  });
+});
