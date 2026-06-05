@@ -150,6 +150,22 @@ describe('createCoil', () => {
     expect(() => createCoil(10, 2, 8, 0)).toThrow();
     expect(() => createCoil(10, 2, 8, 3, 2, 16)).toThrow();
   });
+
+  it('bounding box spans the coil diameter', () => {
+    const R = 10, r = 2;
+    const coil = createCoil(R, r, 8, 3, 32, 8);
+    const bb = computeBoundingBox(coil);
+    // Coil should span roughly 2(R+r) in X and Z.
+    const span = 2 * (R + r);
+    expect(bb.max.x - bb.min.x).toBeGreaterThan(span * 0.8);
+    expect(bb.max.z - bb.min.z).toBeGreaterThan(span * 0.8);
+  });
+
+  it('more turns produce more volume', () => {
+    const few = createCoil(10, 2, 8, 2, 32, 8);
+    const many = createCoil(10, 2, 8, 5, 32, 8);
+    expect(Math.abs(computeVolume(many))).toBeGreaterThan(Math.abs(computeVolume(few)));
+  });
 });
 
 describe('createTube', () => {
