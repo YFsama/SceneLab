@@ -443,6 +443,22 @@ describe('computeTotalEdgeLength', () => {
     expect(box.edges).toHaveLength(12);
     expect(computeTotalEdgeLength(box)).toBeCloseTo(120, 5); // 12 × 10
   });
+
+  it('edge length scales with size', () => {
+    const small = createBox(10, 10, 10);
+    const large = createBox(20, 20, 20);
+    expect(computeTotalEdgeLength(large)).toBeCloseTo(computeTotalEdgeLength(small) * 2, 5);
+  });
+
+  it('cylinder has positive edge length', () => {
+    const cyl = createCylinder(5, 10, 16);
+    expect(computeTotalEdgeLength(cyl)).toBeGreaterThan(0);
+  });
+
+  it('sphere has positive edge length', () => {
+    const sphere = createSphere(5, 16);
+    expect(computeTotalEdgeLength(sphere)).toBeGreaterThan(0);
+  });
 });
 
 describe('primitives are manifold with no isolated vertices', () => {
