@@ -149,6 +149,28 @@ describe('addArc', () => {
     expect(arc.radius).toBe(5);
     expect(sketch.entities.size).toBe(2); // 1 point + 1 arc
   });
+
+  it('arc center is at correct position', () => {
+    const sketch = createSketch('xy');
+    const arc = addArc(sketch, 7, 13, 5, 0, Math.PI);
+    const center = sketch.entities.get(arc.centerId) as { x: number; y: number };
+    expect(center.x).toBe(7);
+    expect(center.y).toBe(13);
+  });
+
+  it('arc stores start and end angles', () => {
+    const sketch = createSketch('xy');
+    const arc = addArc(sketch, 0, 0, 5, Math.PI / 4, Math.PI * 3 / 4);
+    expect(arc.startAngle).toBeCloseTo(Math.PI / 4, 6);
+    expect(arc.endAngle).toBeCloseTo(Math.PI * 3 / 4, 6);
+  });
+
+  it('multiple arcs have unique IDs', () => {
+    const sketch = createSketch('xy');
+    const a1 = addArc(sketch, 0, 0, 5, 0, Math.PI);
+    const a2 = addArc(sketch, 10, 0, 3, 0, Math.PI / 2);
+    expect(a1.id).not.toBe(a2.id);
+  });
 });
 
 describe('addPolygon', () => {
