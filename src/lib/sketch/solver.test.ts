@@ -456,4 +456,37 @@ describe('multiple constraints on same entity', () => {
     // p2 should move to same Y as p1 (horizontal constraint).
     expect(result.get('p2')!.y).toBeCloseTo(0, 4);
   });
+
+  it('equal constraint makes two lines the same length', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 0 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 0, y: 5 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 3, y: 5 });
+    entities.set('l1', { id: 'l1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('l2', { id: 'l2', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c', { id: 'c', type: 'equal', entityIds: ['l1', 'l2'] });
+    const result = solveConstraints(entities, constraints);
+    const d1 = Math.hypot(result.get('p2')!.x - result.get('p1')!.x, result.get('p2')!.y - result.get('p1')!.y);
+    const d2 = Math.hypot(result.get('p4')!.x - result.get('p3')!.x, result.get('p4')!.y - result.get('p3')!.y);
+    expect(d1).toBeCloseTo(d2, 2);
+  });
+
+  it('perpendicular constraint makes two lines 90°', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 0 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 0, y: 0 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 5, y: 5 });
+    entities.set('l1', { id: 'l1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('l2', { id: 'l2', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c', { id: 'c', type: 'perpendicular', entityIds: ['l1', 'l2'] });
+    const result = solveConstraints(entities, constraints);
+    const d1 = { x: result.get('p2')!.x - result.get('p1')!.x, y: result.get('p2')!.y - result.get('p1')!.y };
+    const d2 = { x: result.get('p4')!.x - result.get('p3')!.x, y: result.get('p4')!.y - result.get('p3')!.y };
+    const dot = d1.x * d2.x + d1.y * d2.y;
+    expect(Math.abs(dot)).toBeLessThan(1); // approximately perpendicular
+  });
 });
