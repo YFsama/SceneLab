@@ -201,3 +201,70 @@ describe('feature tree serialization', () => {
     expect(features[1]!.parentIds).toContain(sf.id);
   });
 });
+
+describe('reference geometry serialization', () => {
+  it('round-trips standard planes', () => {
+    const refGeo = {
+      planes: standardPlanes(),
+      axes: [],
+      points: [],
+      coordSystems: [],
+      annotations: [],
+    };
+    const json = saveToFile(serializeProject('Ref', [], [], [], refGeo));
+    const rg = deserializeReferenceGeometry(loadFromFile(json));
+    expect(rg.planes).toHaveLength(3);
+  });
+
+  it('round-trips axes', () => {
+    const refGeo = {
+      planes: [],
+      axes: [makeAxis({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 'Y Axis')],
+      points: [],
+      coordSystems: [],
+      annotations: [],
+    };
+    const json = saveToFile(serializeProject('Ref', [], [], [], refGeo));
+    const rg = deserializeReferenceGeometry(loadFromFile(json));
+    expect(rg.axes).toHaveLength(1);
+    expect(rg.axes[0]!.name).toBe('Y Axis');
+  });
+
+  it('round-trips points', () => {
+    const refGeo = {
+      planes: [],
+      axes: [],
+      points: [makePoint({ x: 5, y: 10, z: 15 }, 'Test Point')],
+      coordSystems: [],
+      annotations: [],
+    };
+    const json = saveToFile(serializeProject('Ref', [], [], [], refGeo));
+    const rg = deserializeReferenceGeometry(loadFromFile(json));
+    expect(rg.points).toHaveLength(1);
+    expect(rg.points[0]!.position).toEqual({ x: 5, y: 10, z: 15 });
+  });
+
+  it('round-trips coordinate systems', () => {
+    const refGeo = {
+      planes: [],
+      axes: [],
+      points: [],
+      coordSystems: [makeCoordinateSystem({ x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 'CS')],
+      annotations: [],
+    };
+    const json = saveToFile(serializeProject('Ref', [], [], [], refGeo));
+    const rg = deserializeReferenceGeometry(loadFromFile(json));
+    expect(rg.coordSystems).toHaveLength(1);
+    expect(rg.coordSystems[0]!.name).toBe('CS');
+  });
+
+  it('defaults to empty arrays for old files', () => {
+    const json = saveToFile(serializeProject('Old', [], []));
+    const rg = deserializeReferenceGeometry(loadFromFile(json));
+    expect(rg.planes).toEqual([]);
+    expect(rg.axes).toEqual([]);
+    expect(rg.points).toEqual([]);
+    expect(rg.coordSystems).toEqual([]);
+    expect(rg.annotations).toEqual([]);
+  });
+});
