@@ -58,4 +58,45 @@ describe('exportSTEP', () => {
     const axisCount = (step.match(/AXIS2_PLACEMENT_3D/g) ?? []).length;
     expect(axisCount).toBe(6); // one per face
   });
+
+  it('has MANIFOLD_SURFACE_SHAPE_REPRESENTATION', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    expect(step).toContain('MANIFOLD_SURFACE_SHAPE_REPRESENTATION');
+  });
+
+  it('has SHAPE_REPRESENTATION_RELATIONSHIP', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    expect(step).toContain('SHAPE_REPRESENTATION_RELATIONSHIP');
+  });
+
+  it('contains LINE entities for edges', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    expect(step).toContain('LINE');
+  });
+
+  it('contains DIRECTION entities', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    expect(step).toContain('DIRECTION');
+  });
+
+  it('contains VECTOR entities', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    expect(step).toContain('VECTOR');
+  });
+
+  it('produces valid file structure with DATA section', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    const lines = step.split('\n');
+    expect(lines[0]).toBe('ISO-10303-21;');
+    expect(step).toContain('HEADER;');
+    expect(step).toContain('DATA;');
+    expect(step).toContain('ENDSEC;');
+    expect(step).toContain('END-ISO-10303-21;');
+  });
 });
