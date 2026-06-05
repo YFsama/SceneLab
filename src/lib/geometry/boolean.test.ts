@@ -194,3 +194,36 @@ describe('splitByPlane edge cases', () => {
     expect(checkManifold(negative!).boundaryEdges).toBe(0);
   });
 });
+
+describe('hollowBody edge cases', () => {
+  it('hollow body has less volume than solid', () => {
+    const box = createBox(20, 20, 20);
+    const hollow = hollowBody(box, 2, 40)!;
+    expect(hollow).not.toBeNull();
+    expect(Math.abs(computeVolume(hollow))).toBeLessThan(Math.abs(computeVolume(box)));
+  });
+
+  it('hollow body has positive volume', () => {
+    const box = createBox(20, 20, 20);
+    const hollow = hollowBody(box, 2, 40)!;
+    expect(hollow).not.toBeNull();
+    expect(Math.abs(computeVolume(hollow))).toBeGreaterThan(0);
+  });
+
+  it('throws on non-positive wall thickness', () => {
+    const box = createBox(20, 20, 20);
+    expect(() => hollowBody(box, 0, 40)).toThrow('positive');
+    expect(() => hollowBody(box, -1, 40)).toThrow('positive');
+  });
+
+  it('thicker wall produces different volume than thinner wall', () => {
+    const box = createBox(20, 20, 20);
+    const thin = hollowBody(box, 1, 40)!;
+    const thick = hollowBody(box, 4, 40)!;
+    // Both should have positive volume.
+    expect(Math.abs(computeVolume(thin))).toBeGreaterThan(0);
+    expect(Math.abs(computeVolume(thick))).toBeGreaterThan(0);
+    // They should be different.
+    expect(Math.abs(computeVolume(thick))).not.toBeCloseTo(Math.abs(computeVolume(thin)), 0);
+  });
+});
