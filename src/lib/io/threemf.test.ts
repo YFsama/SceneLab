@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { export3MF } from './threemf';
-import { createBox } from '../geometry/brep';
+import { createBox, createCylinder, createSphere } from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
 
 describe('export3MF', () => {
@@ -33,5 +33,38 @@ describe('export3MF', () => {
       expect(idx).toBeGreaterThanOrEqual(0);
       expect(idx).toBeLessThan(8);
     }
+  });
+
+  it('exports a cylinder with vertices and triangles', () => {
+    const xml = export3MF([createCylinder(5, 10, 16)]);
+    expect(xml).toContain('<vertices>');
+    expect(xml).toContain('<triangles>');
+    expect((xml.match(/<vertex /g) ?? []).length).toBeGreaterThan(0);
+    expect((xml.match(/<triangle /g) ?? []).length).toBeGreaterThan(0);
+  });
+
+  it('exports a sphere with vertices and triangles', () => {
+    const xml = export3MF([createSphere(5, 16)]);
+    expect(xml).toContain('<vertices>');
+    expect(xml).toContain('<triangles>');
+    expect((xml.match(/<vertex /g) ?? []).length).toBeGreaterThan(0);
+    expect((xml.match(/<triangle /g) ?? []).length).toBeGreaterThan(0);
+  });
+
+  it('exports multiple bodies in one file', () => {
+    const box = createBox(10, 10, 10);
+    const cyl = translateBody(createCylinder(5, 10, 16), { x: 20, y: 0, z: 0 });
+    const xml = export3MF([box, cyl]);
+    expect((xml.match(/<object /g) ?? []).length).toBe(2);
+    expect((xml.match(/<vertices>/g) ?? []).length).toBe(2);
+    expect((xml.match(/<triangles>/g) ?? []).length).toBe(2);
+  });
+
+  it('all triangle indices are valid for multiple bodies', () => {
+    const box = createBox(10, 10, 10);
+    const sphere = createSphere(5, 8);
+    const xml = export3MF([box, sphere]);
+    // No -1 indices (which would indicate missing vertices).
+    expect(xml).not.toContain('"-1"');
   });
 });
