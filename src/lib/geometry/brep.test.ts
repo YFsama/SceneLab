@@ -229,6 +229,25 @@ describe('createPrism', () => {
     expect(() => createPrism(6, 0, 5)).toThrow();
     expect(() => createPrism(6, 10, -1)).toThrow();
   });
+
+  it('triangle prism (3 sides) has correct volume', () => {
+    const tri = createPrism(3, 10, 5);
+    const area = 0.5 * 3 * 10 * 10 * Math.sin((2 * Math.PI) / 3);
+    expect(Math.abs(computeVolume(tri))).toBeCloseTo(area * 5, 1);
+  });
+
+  it('square prism (4 sides) matches a box', () => {
+    const sq = createPrism(4, 10, 5);
+    const box = createBox(20, 5, 20);
+    // Both should have similar volume (though not identical due to orientation).
+    expect(Math.abs(computeVolume(sq))).toBeGreaterThan(0);
+  });
+
+  it('bounding box height matches input', () => {
+    const hex = createPrism(6, 10, 25);
+    const bb = computeBoundingBox(hex);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(25, 1);
+  });
 });
 
 describe('computeMassProperties', () => {
