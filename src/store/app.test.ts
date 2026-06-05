@@ -1427,6 +1427,15 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().currentSketch!.entities.size).toBe(0);
   });
 
+  it('addSketchRect creates entities that are undoable', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchRect(0, 0, 10, 5);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(8); // 4 lines + 4 points
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
   it('sketch undo/redo reverts and replays sketch edits', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchLine(0, 0, 5, 0);
