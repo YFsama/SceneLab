@@ -3,16 +3,19 @@ import { generateGCode, generateMultiToolGCode, estimateMachiningTime } from './
 import type { Toolpath } from './types';
 
 const makeToolpath = (overrides: Partial<Toolpath> = {}): Toolpath => ({
+  id: 'tp-test',
   name: 'Test Toolpath',
   operation: 'pocket',
-  tool: { id: 'em-6mm', name: '6mm Endmill', diameter: 6, flutes: 2, type: 'endmill' },
-  params: { feedRate: 1000, spindleSpeed: 10000, stockTop: 0, stepDown: 2 },
+  tool: { id: 'em-6mm', name: '6mm Endmill', diameter: 6, flutes: 2, type: 'endmill', fluteLength: 20, overallLength: 50, material: 'carbide' },
+  params: { feedRate: 1000, plungeRate: 500, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -10 },
   points: [
     { x: 0, y: 0, z: 10, rapid: true },
     { x: 0, y: 0, z: 0, rapid: false },
     { x: 10, y: 0, z: 0, rapid: false },
     { x: 10, y: 10, z: 0, rapid: false },
   ],
+  rapidMoves: [],
+  cuttingMoves: [],
   ...overrides,
 });
 
@@ -51,7 +54,7 @@ describe('generateGCode', () => {
   });
 
   it('retracts to stockTop + 10', () => {
-    const tp = makeToolpath({ params: { feedRate: 1000, spindleSpeed: 10000, stockTop: 5, stepDown: 2 } });
+    const tp = makeToolpath({ params: { feedRate: 1000, plungeRate: 500, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 5, stockBottom: -5 } });
     const gcode = generateGCode(tp);
     expect(gcode).toContain('G0 Z15.0');
   });

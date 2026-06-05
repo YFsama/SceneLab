@@ -9,15 +9,19 @@ const tool: ToolDefinition = {
   diameter: 6,
   flutes: 2,
   type: 'endmill',
+  fluteLength: 20,
+  overallLength: 50,
+  material: 'carbide',
 };
 
 const params: CAMParameters = {
   feedRate: 1000,
+  plungeRate: 500,
   spindleSpeed: 10000,
+  depthOfCut: 2,
+  stepover: 3,
   stockTop: 0,
   stockBottom: -10,
-  stepDown: 2,
-  stepover: 3,
 };
 
 describe('generatePocketToolpath', () => {
