@@ -605,6 +605,19 @@ describe('topology', () => {
     expect(topo.isSphereLike).toBe(true);
   });
 
+  it('a sphere is genus 0 and sphere-like', () => {
+    const topo = computeTopology(createSphere(5, 16));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+    expect(topo.isSphereLike).toBe(true);
+  });
+
+  it('a cylinder is genus 0 and sphere-like', () => {
+    const topo = computeTopology(createCylinder(5, 10, 16));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+  });
+
   it('a torus is genus 1 with one handle (Euler χ = 0)', () => {
     const g = computeMeshGenus(createTorus(10, 3, 32, 16));
     expect(g.eulerCharacteristic).toBe(0);
