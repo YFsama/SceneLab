@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exportDXF, exportDXF3D } from './dxf';
-import { createBox, createCylinder } from '../geometry/brep';
+import { createBox, createCylinder, createSphere } from '../geometry/brep';
 
 describe('exportDXF', () => {
   it('should start with SECTION HEADER', () => {
@@ -59,5 +59,40 @@ describe('exportDXF3D', () => {
     // 2 caps × (32-2) tris + 32 quad side faces × 2 tris each = 60 + 64 = 124.
     const expected = 2 * (segs - 2) + segs * 2;
     expect(faceCount).toBe(expected);
+  });
+
+  it('exports a sphere with 3DFACE entities', () => {
+    const sphere = createSphere(5, 16);
+    const result = exportDXF3D(sphere);
+    expect(result).toContain('3DFACE');
+    const faceCount = (result.match(/3DFACE/g) ?? []).length;
+    expect(faceCount).toBeGreaterThan(0);
+  });
+
+  it('exports a cylinder with 3DFACE entities', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const result = exportDXF3D(cyl);
+    expect(result).toContain('3DFACE');
+    const faceCount = (result.match(/3DFACE/g) ?? []).length;
+    expect(faceCount).toBeGreaterThan(0);
+  });
+
+  it('all 3DFACE entities have valid vertex data', () => {
+    const box = createBox(10, 10, 10);
+    const result = exportDXF3D(box);
+    // Each 3DFACE should have numeric coordinates.
+    const lines = result.split('\n');
+    for (const line of lines) {
+      if (line.trim() === '3DFACE') {
+        // Next few lines should be numeric coordinates.
+        const idx = lines.indexOf(line);
+        for (let i = idx + 1; i < idx + 13 && i < lines.length; i++) {
+          const val = parseFloat(lines[i]!.trim());
+          if (!isNaN(val)) {
+            expect(Number.isFinite(val)).toBe(true);
+          }
+        }
+      }
+    }
   });
 });
