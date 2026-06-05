@@ -237,6 +237,28 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().bodies).toHaveLength(0);
   });
 
+  it('addFeature with multiple features builds a dependency chain', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, -5, -5, 5, 5);
+    const sf = createSketchFeature(sketch);
+    const ext = createExtrudeFeature(
+      {
+        profile: [
+          { x: -5, y: 0, z: -5 },
+          { x: 5, y: 0, z: -5 },
+          { x: 5, y: 0, z: 5 },
+          { x: -5, y: 0, z: 5 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 10,
+      },
+      [sf.id],
+    );
+    useStore.getState().addFeature(sf);
+    useStore.getState().addFeature(ext);
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
   it('loadProject rebuilds geometry from a saved project file', () => {
     // Author a part, save it, then load it back through the store.
     const sketch = createSketch('xy');
