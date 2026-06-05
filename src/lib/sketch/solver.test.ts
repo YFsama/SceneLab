@@ -370,4 +370,30 @@ describe('multiple constraints on same entity', () => {
     // p2 moves to distance 10.
     expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeCloseTo(10, 2);
   });
+
+  it('parallel + equal length on two lines', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 0 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 0, y: 5 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 8, y: 7 });
+    entities.set('l1', { id: 'l1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('l2', { id: 'l2', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'parallel', entityIds: ['l1', 'l2'] });
+    constraints.set('c2', { id: 'c2', type: 'equal', entityIds: ['l1', 'l2'] });
+
+    const result = solveConstraints(entities, constraints);
+    // Both lines should have similar length after equal constraint.
+    const d1 = Math.hypot(
+      (result.get('p2')!.x - result.get('p1')!.x),
+      (result.get('p2')!.y - result.get('p1')!.y),
+    );
+    const d2 = Math.hypot(
+      (result.get('p4')!.x - result.get('p3')!.x),
+      (result.get('p4')!.y - result.get('p3')!.y),
+    );
+    expect(d1).toBeCloseTo(d2, 2);
+  });
 });
