@@ -91,6 +91,27 @@ describe('geometry edge cases', () => {
       expect(bbWelded.max.y).toBeCloseTo(bbOrig.max.y, 4);
       expect(bbWelded.max.z).toBeCloseTo(bbOrig.max.z, 4);
     });
+
+    it('preserves face count', () => {
+      const box = createBox(10, 10, 10);
+      const welded = weldVertices(box);
+      expect(welded.faces.length).toBe(box.faces.length);
+    });
+
+    it('preserves edge count', () => {
+      const box = createBox(10, 10, 10);
+      const welded = weldVertices(box);
+      expect(welded.edges.length).toBe(box.edges.length);
+    });
+
+    it('produces a valid mesh (non-degenerate faces)', () => {
+      const box = createBox(10, 10, 10);
+      const welded = weldVertices(box);
+      for (const face of welded.faces) {
+        expect(face.vertices.length).toBeGreaterThanOrEqual(3);
+        expect(face.normal).toBeDefined();
+      }
+    });
   });
 
   describe('checkManifold', () => {
