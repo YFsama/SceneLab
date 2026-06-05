@@ -25,6 +25,23 @@ describe('computeSolidity', () => {
     // A torus is one connected surface — no enclosed voids.
     expect(s.internalCavities).toBe(0);
   });
+
+  it('cylinder is solid', () => {
+    const s = computeSolidity(createCylinder(5, 10, 16));
+    expect(s.isSolid).toBe(true);
+    expect(s.internalCavities).toBe(0);
+  });
+
+  it('sphere is solid', () => {
+    const s = computeSolidity(createSphere(5, 16));
+    expect(s.isSolid).toBe(true);
+    expect(s.internalCavities).toBe(0);
+  });
+
+  it('solidity is 1 for a convex solid', () => {
+    const s = computeSolidity(createBox(10, 10, 10));
+    expect(s.solidity).toBeCloseTo(1, 4);
+  });
 });
 
 describe('computeThickness', () => {
