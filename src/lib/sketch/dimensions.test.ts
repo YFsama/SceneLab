@@ -102,4 +102,27 @@ describe('sketch dimensions', () => {
     expect(dims.some((d) => d.kind === 'length' && Math.abs(d.value - 5) < 1e-6)).toBe(true);
     expect(dims.some((d) => d.kind === 'radius' && Math.abs(d.value - 2) < 1e-6)).toBe(true);
   });
+
+  it('lists dimensions for arcs', () => {
+    const s = createSketch('xy');
+    addArc(s, 0, 0, 5, 0, Math.PI);
+    const dims = listDimensions(s);
+    expect(dims).toHaveLength(1);
+    expect(dims[0]!.kind).toBe('radius');
+    expect(dims[0]!.value).toBeCloseTo(5, 6);
+  });
+
+  it('returns empty for empty sketch', () => {
+    const s = createSketch('xy');
+    expect(listDimensions(s)).toHaveLength(0);
+  });
+
+  it('lists dimensions for multiple lines', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 3, 0); // length 3
+    addLine(s, 0, 0, 0, 4); // length 4
+    addLine(s, 0, 0, 5, 0); // length 5
+    const dims = listDimensions(s);
+    expect(dims).toHaveLength(3);
+  });
 });
