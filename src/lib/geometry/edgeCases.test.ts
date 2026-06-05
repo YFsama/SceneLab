@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, createTube, computeVolume, computeBoundingBox, checkManifold } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, createTube, createCoil, computeVolume, computeBoundingBox, checkManifold } from './brep';
 import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
@@ -315,6 +315,28 @@ describe('geometry edge cases', () => {
       const cyl = createCylinder(R, h, 32);
       const tube = createTube(R, 3, h, 32);
       expect(Math.abs(computeVolume(tube))).toBeLessThan(Math.abs(computeVolume(cyl)));
+    });
+  });
+
+  describe('coil operations', () => {
+    it('coil has non-zero volume', () => {
+      const coil = createCoil(10, 2, 5, 16);
+      const vol = Math.abs(computeVolume(coil));
+      expect(vol).toBeGreaterThan(0);
+    });
+
+    it('coil bounding box spans the coil radius', () => {
+      const R = 10;
+      const coil = createCoil(R, 2, 5, 16);
+      const bb = computeBoundingBox(coil);
+      // Coil should span roughly 2R in X and Z.
+      expect(bb.max.x - bb.min.x).toBeGreaterThan(R);
+      expect(bb.max.z - bb.min.z).toBeGreaterThan(R);
+    });
+
+    it('coil is manifold', () => {
+      const coil = createCoil(10, 2, 5, 16);
+      expect(checkManifold(coil).boundaryEdges).toBe(0);
     });
   });
 });
