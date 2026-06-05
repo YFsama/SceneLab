@@ -34,10 +34,8 @@ describe('polyline tool', () => {
   });
 
   it('polylineLast tracks the chain progress', () => {
-    let polylineLast: { x: number; y: number } | null = null;
-
     // First click: set polylineLast.
-    polylineLast = { x: 0, y: 0 };
+    let polylineLast: { x: number; y: number } | null = { x: 0, y: 0 };
     expect(polylineLast).toEqual({ x: 0, y: 0 });
 
     // Second click: commit segment, update polylineLast.
