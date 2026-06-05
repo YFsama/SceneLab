@@ -171,3 +171,24 @@ describe('snapToPoints edge cases', () => {
     expect(result.point).toEqual({ x: 5, y: 5 });
   });
 });
+
+describe('inferLineEnd edge cases', () => {
+  const s = { x: 0, y: 0 };
+
+  it('preserves diagonal lines (no constraint)', () => {
+    const r = inferLineEnd(s, { x: 10, y: 10 });
+    expect(r.constraint).toBeNull();
+    expect(r.point).toEqual({ x: 10, y: 10 });
+  });
+
+  it('snaps near-vertical lines', () => {
+    const r = inferLineEnd(s, { x: 0.3, y: 10 });
+    expect(r.constraint).toBe('vertical');
+    expect(r.point).toEqual({ x: 0, y: 10 });
+  });
+
+  it('handles zero-length line', () => {
+    const r = inferLineEnd(s, { x: 0, y: 0 });
+    expect(r.point).toEqual({ x: 0, y: 0 });
+  });
+});
