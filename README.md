@@ -16,6 +16,20 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | 3D Rendering | Three.js r170+ (WebGPU, WebGL2 fallback) |
 | Icons | lucide-react |
 
+## Key Features
+
+- **Perspective/orthographic projection toggle** (Shift+P)
+- **Interactive 3D ViewCube** with 26 orientations (faces/edges/corners)
+- **Box selection** (left-drag rectangle, middle-button orbit)
+- **Face selection** (Ctrl+click on body faces)
+- **Construction geometry** (centerlines excluded from extrude/revolve)
+- **Polyline tool** (Shift+L, click-to-chain line segments)
+- **Persistent measurement annotations** (saved with project)
+- **Non-uniform scaling** (per-axis X/Y/Z)
+- **Rectangle width/height editing** (detect and resize)
+- **Multi-plane sketch support** (XY, XZ, YZ planes)
+- **PDF export** from drawing workspace
+
 ### Geometry / Solver
 
 | Module | Choice |
@@ -63,10 +77,12 @@ src/
 - **Primitives**: box, cylinder, sphere, cone/frustum, torus, wedge — all with
   analytic outward normals and consistent winding (correct, translation-invariant
   volumes; watertightness is asserted in tests).
-- **Feature tree**: sketch → extrude / revolve, plus fillet, chamfer, shell,
-  linear & circular arrays, and mirror, evaluated as a DAG. Consuming ops replace
-  their parent so the output stays a single solid. Sketch profiles support lines
-  (chained into an ordered loop), rectangles, circles and arcs.
+- **Feature tree**: sketch → extrude / revolve / sweep, plus fillet (arc-segment
+  approximation), chamfer (per-face offset), shell, linear & circular arrays,
+  and mirror, evaluated as a DAG. Consuming ops replace their parent so the
+  output stays a single solid. Sketch profiles support lines (chained into an
+  ordered loop), polylines, rectangles, circles and arcs. Construction geometry
+  (centerlines) excluded from profiles.
 - **Body ops**: translate, rotate (Rodrigues), uniform scale, mirror, merge
   bodies, weld near-coincident vertices (mesh repair), bounding-box stock block,
   and arrange-on-plate packing.
@@ -83,14 +99,14 @@ and a one-call **print-readiness** assessment.
 
 ### AI (`lib/ai`)
 
-~45 operations are registered as Claude tools and run through a proper tool-use
+~96 operations are registered as Claude tools and run through a proper tool-use
 loop (the model is system-prompted with role + units, sees each tool's result,
 and can chain steps). The assistant can create primitives, sketch/extrude/
-revolve, edit & pattern bodies, move/rotate/scale/orient them, arrange on the
-plate, import/export meshes (STL/OBJ text), repair & inspect, manage the scene
-(delete/clear/describe), measure, and answer print questions ("how much
-filament?", "will it tip?", "is it ready to print?", "best orientation?",
-"feeds & speeds for this tool?").
+revolve/sweep, edit & pattern bodies, move/rotate/scale/orient them, arrange
+on the plate, import/export meshes (STL/OBJ/STEP text), repair & inspect,
+manage the scene (delete/clear/describe), measure, apply constraints, set
+materials, and answer print questions. **Vision**: toggle the Eye icon to
+attach a viewport screenshot to the next message (Claude multimodal).
 
 ### CAM (`lib/cam`)
 
@@ -106,7 +122,8 @@ key persist across reloads.
 ### IO (`lib/io`)
 
 studio3d (JSON project) · STL (import auto-welds vertices / export) ·
-OBJ (import/export, polygon-preserving) · 3MF · DXF · PNG · SVG.
+OBJ (import/export, polygon-preserving) · 3MF · STEP (AP203 export) ·
+DXF · PDF · PNG · SVG.
 
 ## Scripts
 
@@ -168,7 +185,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (390+ tests) plus Rust unit tests
+- Every `lib/*` module has vitest tests (1295+ tests, 105 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops)
