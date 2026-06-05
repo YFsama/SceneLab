@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality } from './brep';
 import { mergeBodies, scaleBody } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
 
@@ -1246,5 +1246,36 @@ describe('computeLargestFace', () => {
     const largest = computeLargestFace(box);
     expect(largest!.faceId).toBeTruthy();
     expect(box.faces.some((f) => f.id === largest!.faceId)).toBe(true);
+  });
+});
+
+describe('computeMeshQuality', () => {
+  it('returns quality metrics for a box', () => {
+    const box = createBox(10, 10, 10);
+    const q = computeMeshQuality(box);
+    expect(q.aspectRatioAvg).toBeGreaterThan(0);
+    expect(q.aspectRatioMax).toBeGreaterThan(0);
+  });
+
+  it('returns quality metrics for a sphere', () => {
+    const sphere = createSphere(5, 16);
+    const q = computeMeshQuality(sphere);
+    expect(q.aspectRatioAvg).toBeGreaterThan(0);
+  });
+
+  it('box has low aspect ratio (all faces are squares)', () => {
+    const box = createBox(10, 10, 10);
+    const q = computeMeshQuality(box);
+    // Box faces are squares, so aspect ratio should be close to 1.
+    expect(q.aspectRatioAvg).toBeLessThan(2);
+  });
+
+  it('quality metrics are finite', () => {
+    const box = createBox(10, 10, 10);
+    const q = computeMeshQuality(box);
+    expect(Number.isFinite(q.aspectRatioAvg)).toBe(true);
+    expect(Number.isFinite(q.aspectRatioMax)).toBe(true);
+    expect(Number.isFinite(q.skewnessAvg)).toBe(true);
+    expect(Number.isFinite(q.skewnessMax)).toBe(true);
   });
 });
