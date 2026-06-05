@@ -227,3 +227,29 @@ describe('hollowBody edge cases', () => {
     expect(Math.abs(computeVolume(thick))).not.toBeCloseTo(Math.abs(computeVolume(thin)), 0);
   });
 });
+
+describe('mirrorMerge edge cases', () => {
+  it('mirror merge doubles the volume', () => {
+    const box = createBox(10, 10, 10);
+    const merged = mirrorMerge(box, { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }, 30)!;
+    expect(merged).not.toBeNull();
+    const volOrig = Math.abs(computeVolume(box));
+    const volMerged = Math.abs(computeVolume(merged));
+    // Mirror merge should approximately double the volume.
+    expect(volMerged).toBeGreaterThan(volOrig * 1.5);
+  });
+
+  it('mirror merge produces watertight result', () => {
+    const box = createBox(10, 10, 10);
+    const merged = mirrorMerge(box, { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }, 30)!;
+    expect(merged).not.toBeNull();
+    expect(checkManifold(merged).boundaryEdges).toBe(0);
+  });
+
+  it('mirror merge across Y axis', () => {
+    const box = createBox(10, 10, 10);
+    const merged = mirrorMerge(box, { origin: { x: 0, y: 5, z: 0 }, normal: { x: 0, y: 1, z: 0 } }, 30)!;
+    expect(merged).not.toBeNull();
+    expect(Math.abs(computeVolume(merged))).toBeGreaterThan(0);
+  });
+});
