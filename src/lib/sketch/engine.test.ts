@@ -289,6 +289,25 @@ describe('removeConstraint', () => {
     removeConstraint(sketch, c.id);
     expect(sketch.constraints.size).toBe(0);
   });
+
+  it('removing a non-existent constraint is a no-op', () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0);
+    const sizeBefore = sketch.constraints.size;
+    removeConstraint(sketch, 'nonexistent');
+    expect(sketch.constraints.size).toBe(sizeBefore);
+  });
+
+  it('removing one constraint keeps others', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 5);
+    const c1 = addConstraint(sketch, 'horizontal', [line.id]);
+    addConstraint(sketch, 'distance', [line.p1Id, line.p2Id], 15);
+    expect(sketch.constraints.size).toBe(2);
+
+    removeConstraint(sketch, c1.id);
+    expect(sketch.constraints.size).toBe(1);
+  });
 });
 
 describe('solveSketch', () => {
