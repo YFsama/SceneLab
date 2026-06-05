@@ -818,30 +818,8 @@ export function sweepBody(profile: { x: number; y: number }[], path: Vec3[], twi
     prevUp = up;
   }
 
-  // Place the profile at each path point and connect with quads.
+  // Place the profile at each path point, oriented perpendicular to the tangent.
   const rings: Vec3[][] = [];
-  for (let i = 0; i < pathN; i++) {
-    const p = path[i]!;
-    const { up, right } = frames[i]!;
-    const angle = (twist * i) / (pathN - 1);
-    const cosA = Math.cos(angle), sinA = Math.sin(angle);
-    const ring: Vec3[] = [];
-    for (const pt of profile) {
-      // Rotate by twist, then orient in 3D.
-      const lx = pt.x * cosA - pt.y * sinA;
-      const ly = pt.x * sinA + pt.y * cosA;
-      ring.push({
-        x: p.x + right.x * lx + up.x * ly,
-        y: p.y + right.x * lx + up.y * ly, // BUG: should be right.y
-        z: p.z + right.z * lx + up.z * ly,
-      });
-    }
-    rings.push(ring);
-  }
-
-  // Fix the y component bug above — let me rewrite the placement.
-  // Actually, let me just fix it inline:
-  rings.length = 0;
   for (let i = 0; i < pathN; i++) {
     const p = path[i]!;
     const { up, right } = frames[i]!;
