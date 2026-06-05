@@ -202,4 +202,21 @@ describe('sketch dimensions', () => {
     const d = measureAngleBetweenLines(s, a.id, b.id)!;
     expect(d.label).toContain('°');
   });
+
+  it('previewDimensionLabel shows polygon with different side counts', () => {
+    const o = { x: 0, y: 0 };
+    expect(previewDimensionLabel('polygon', o, { x: 3, y: 4 }, 3)).toBe('R5.0 · 3');
+    expect(previewDimensionLabel('polygon', o, { x: 3, y: 4 }, 6)).toBe('R5.0 · 6');
+    expect(previewDimensionLabel('polygon', o, { x: 3, y: 4 }, 8)).toBe('R5.0 · 8');
+  });
+
+  it('previewDimensionLabel shows radius for arc with negative coords', () => {
+    const o = { x: 0, y: 0 };
+    expect(previewDimensionLabel('arc', o, { x: -6, y: -8 })).toBe('R10.0');
+  });
+
+  it('previewDimensionLabel shows absolute rectangle dimensions', () => {
+    const o = { x: 0, y: 0 };
+    expect(previewDimensionLabel('rect', o, { x: -10, y: -5 })).toBe('10.0 × 5.0');
+  });
 });
