@@ -642,6 +642,27 @@ describe('topology', () => {
     // A coil is an open swept tube capped at both ends → topologically a ball.
     expect(computeMeshGenus(createCoil(10, 2, 8, 3, 48, 16)).genus).toBe(0);
   });
+
+  it('box has correct face and vertex counts', () => {
+    const s = computeMeshStatistics(createBox(10, 10, 10));
+    expect(s.faceCount).toBe(6);
+    expect(s.vertexCount).toBeGreaterThan(0);
+    expect(s.edgeCount).toBe(12);
+  });
+
+  it('sphere has positive counts', () => {
+    const s = computeMeshStatistics(createSphere(5, 16));
+    expect(s.faceCount).toBeGreaterThan(0);
+    expect(s.vertexCount).toBeGreaterThan(0);
+    expect(s.edgeCount).toBeGreaterThan(0);
+  });
+
+  it('statistics are consistent (Euler formula for genus 0)', () => {
+    const box = createBox(10, 10, 10);
+    const s = computeMeshStatistics(box);
+    // For a genus-0 closed mesh: V - E + F = 2 (Euler characteristic).
+    expect(s.vertexCount - s.edgeCount + s.faceCount).toBe(2);
+  });
 });
 import type { Vec3, SolidBody } from './types';
 
