@@ -28,7 +28,7 @@ describe('MoveDialog validation', () => {
   describe('move modes', () => {
     it('relative mode applies offset', () => {
       const mode = 'relative';
-      const x = 10, y = 0, z = 0;
+      const x = 10;
       // Relative: nudgeSelected(x, y, z)
       expect(mode).toBe('relative');
       expect(x).toBe(10);
@@ -36,7 +36,7 @@ describe('MoveDialog validation', () => {
 
     it('absolute mode moves to position', () => {
       const mode = 'absolute';
-      const x = 50, y = 25, z = 10;
+      const x = 50;
       // Absolute: moveSelectionTo({ x, y, z })
       expect(mode).toBe('absolute');
       expect(x).toBe(50);
