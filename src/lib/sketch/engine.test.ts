@@ -5,6 +5,28 @@ import {
   detectRectangle, resizeRectangle,
 } from './engine';
 
+describe('createSketch', () => {
+  it('creates a sketch with the specified plane ID', () => {
+    const s = createSketch('xz');
+    expect(s.planeId).toBe('xz');
+    expect(s.entities.size).toBe(0);
+    expect(s.constraints.size).toBe(0);
+  });
+
+  it('creates a sketch with a unique ID', () => {
+    const s1 = createSketch('xy');
+    const s2 = createSketch('xy');
+    expect(s1.id).not.toBe(s2.id);
+  });
+
+  it('creates sketches for all standard planes', () => {
+    for (const plane of ['xy', 'xz', 'yz'] as const) {
+      const s = createSketch(plane);
+      expect(s.planeId).toBe(plane);
+    }
+  });
+});
+
 describe('snapTargets', () => {
   it('returns each point plus every line midpoint', () => {
     const s = createSketch('xy');
