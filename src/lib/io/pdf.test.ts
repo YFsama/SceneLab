@@ -22,4 +22,47 @@ describe('pdf module', () => {
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.type).toBe('application/pdf');
   });
+
+  it('PDF blob has non-zero size', async () => {
+    const mockCanvas = {
+      width: 800,
+      height: 600,
+      toDataURL: () => 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==',
+    } as unknown as HTMLCanvasElement;
+
+    const { exportCanvasAsPDF } = await import('./pdf');
+    const blob = exportCanvasAsPDF(mockCanvas);
+    expect(blob.size).toBeGreaterThan(0);
+  });
+
+  it('PDF blob has correct MIME type', async () => {
+    const mockCanvas = {
+      width: 800,
+      height: 600,
+      toDataURL: () => 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==',
+    } as unknown as HTMLCanvasElement;
+
+    const { exportCanvasAsPDF } = await import('./pdf');
+    const blob = exportCanvasAsPDF(mockCanvas);
+    expect(blob.type).toBe('application/pdf');
+  });
+
+  it('PDF blob is larger for bigger canvases', async () => {
+    const smallCanvas = {
+      width: 100,
+      height: 100,
+      toDataURL: () => 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==',
+    } as unknown as HTMLCanvasElement;
+
+    const largeCanvas = {
+      width: 1600,
+      height: 1200,
+      toDataURL: () => 'data:image/jpeg;base64,' + 'A'.repeat(1000),
+    } as unknown as HTMLCanvasElement;
+
+    const { exportCanvasAsPDF } = await import('./pdf');
+    const smallBlob = exportCanvasAsPDF(smallCanvas);
+    const largeBlob = exportCanvasAsPDF(largeCanvas);
+    expect(largeBlob.size).toBeGreaterThanOrEqual(smallBlob.size);
+  });
 });
