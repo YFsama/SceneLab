@@ -43,4 +43,19 @@ describe('exportSTEP', () => {
     const step = exportSTEP(box);
     expect(step).toContain('TestPart');
   });
+
+  it('has correct entity count for a box (6 faces)', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    // Count ADVANCED_FACE entities — should be 6 for a box.
+    const faceCount = (step.match(/ADVANCED_FACE/g) ?? []).length;
+    expect(faceCount).toBe(6);
+  });
+
+  it('contains AXIS2_PLACEMENT_3D for each face plane', () => {
+    const box = createBox(10, 10, 10);
+    const step = exportSTEP(box);
+    const axisCount = (step.match(/AXIS2_PLACEMENT_3D/g) ?? []).length;
+    expect(axisCount).toBe(6); // one per face
+  });
 });
