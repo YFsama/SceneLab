@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace } from './brep';
 import { mergeBodies, scaleBody } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
 
@@ -1195,5 +1195,56 @@ describe('createRevolve edge cases', () => {
     const vol = Math.abs(computeVolume(body));
     expect(vol).toBeGreaterThan(ideal * 0.96);
     expect(vol).toBeLessThanOrEqual(ideal * 1.001);
+  });
+});
+
+describe('computeFaceAreas', () => {
+  it('returns one area per face for a box', () => {
+    const box = createBox(10, 20, 30);
+    const areas = computeFaceAreas(box);
+    expect(areas).toHaveLength(box.faces.length);
+    for (const a of areas) {
+      expect(a.area).toBeGreaterThan(0);
+      expect(a.faceId).toBeTruthy();
+    }
+  });
+
+  it('box face areas sum to total surface area', () => {
+    const box = createBox(10, 20, 30);
+    const areas = computeFaceAreas(box);
+    const total = areas.reduce((sum, a) => sum + a.area, 0);
+    // Surface area of 10×20×30 box = 2*(10*20 + 20*30 + 10*30) = 2200
+    expect(total).toBeCloseTo(2200, 0);
+  });
+
+  it('all areas are positive', () => {
+    const sphere = createSphere(5, 16);
+    const areas = computeFaceAreas(sphere);
+    for (const a of areas) {
+      expect(a.area).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('computeLargestFace', () => {
+  it('returns null for empty faces', () => {
+    const body = createBox(10, 10, 10);
+    const empty: SolidBody = { ...body, faces: [] };
+    expect(computeLargestFace(empty)).toBeNull();
+  });
+
+  it('returns the largest face for a box', () => {
+    const box = createBox(10, 20, 30);
+    const largest = computeLargestFace(box);
+    expect(largest).not.toBeNull();
+    // The largest faces are 20×30 = 600.
+    expect(largest!.area).toBeCloseTo(600, 0);
+  });
+
+  it('returns a valid face ID', () => {
+    const box = createBox(10, 10, 10);
+    const largest = computeLargestFace(box);
+    expect(largest!.faceId).toBeTruthy();
+    expect(box.faces.some((f) => f.id === largest!.faceId)).toBe(true);
   });
 });
