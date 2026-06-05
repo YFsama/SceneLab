@@ -516,3 +516,51 @@ describe('builtin analysis tools', () => {
     await expect(tool.execute({ bodyId: 'nope' })).rejects.toThrow('not found');
   });
 });
+
+describe('new AI tools', () => {
+  it('set_projection switches projection mode', async () => {
+    const tool = getTool('set_projection')!;
+    await tool.execute({ mode: 'orthographic' });
+    expect(useStore.getState().projection).toBe('orthographic');
+    await tool.execute({ mode: 'perspective' });
+    expect(useStore.getState().projection).toBe('perspective');
+  });
+
+  it('set_view changes view direction', async () => {
+    const tool = getTool('set_view')!;
+    await tool.execute({ direction: 'top' });
+    expect(useStore.getState().viewDirection).toBe('top');
+    await tool.execute({ direction: 'iso' });
+    expect(useStore.getState().viewDirection).toBe('iso');
+  });
+
+  it('sketch_rectangle_and_extrude creates a body', async () => {
+    const tool = getTool('sketch_rectangle_and_extrude')!;
+    const result = await tool.execute({ width: 10, depth: 20, height: 30 });
+    expect(result.success).toBe(true);
+    expect(result.bodyId).toBeTruthy();
+    // Clean up.
+    useStore.getState().clearScene();
+  });
+
+  it('get_bounding_box returns min/max/size/center', async () => {
+    // Add a body first.
+    useStore.getState().addDirectBodies([{ id: 'test_bb', name: 'Test', vertices: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 20, z: 30 }], faces: [], edges: [] }]);
+    const tool = getTool('get_bounding_box')!;
+    const result = await tool.execute({ bodyId: 'test_bb' });
+    expect(result.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(result.max).toEqual({ x: 10, y: 20, z: 30 });
+    expect(result.size).toEqual({ x: 10, y: 20, z: 30 });
+    expect(result.center).toEqual({ x: 5, y: 10, z: 15 });
+    useStore.getState().clearScene();
+  });
+
+  it('export_body supports step format', async () => {
+    useStore.getState().addDirectBodies([{ id: 'test_exp', name: 'Test', vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }], faces: [{ id: 'f1', vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }], normal: { x: 0, y: 0, z: 1 } }], edges: [] }]);
+    const tool = getTool('export_body')!;
+    const result = await tool.execute({ bodyId: 'test_exp', format: 'step' });
+    expect(result.format).toBe('step');
+    expect(result.content).toContain('ISO-10303-21');
+    useStore.getState().clearScene();
+  });
+});
