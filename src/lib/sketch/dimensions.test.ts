@@ -180,4 +180,26 @@ describe('sketch dimensions', () => {
     const d = measureAngleBetweenLines(s, a.id, b.id)!;
     expect(d.value).toBeCloseTo(0, 0);
   });
+
+  it('diameter label includes ⌀ symbol', () => {
+    const s = createSketch('xy');
+    const c = addCircle(s, 0, 0, 5);
+    const d = measureRadius(s, c.id, true)!;
+    expect(d.label).toContain('⌀');
+  });
+
+  it('length label includes mm unit', () => {
+    const s = createSketch('xy');
+    const line = addLine(s, 0, 0, 3, 4);
+    const d = measureLineLength(s, line.id)!;
+    expect(d.label).toContain('mm');
+  });
+
+  it('angle label includes ° symbol', () => {
+    const s = createSketch('xy');
+    const a = addLine(s, 0, 0, 10, 0);
+    const b = addLine(s, 0, 0, 0, 10);
+    const d = measureAngleBetweenLines(s, a.id, b.id)!;
+    expect(d.label).toContain('°');
+  });
 });
