@@ -5,7 +5,7 @@ import { createBox, createCylinder } from '../geometry/brep';
 describe('face selection support', () => {
   it('triFaceIds correctly maps triangles to face IDs for a box', () => {
     const box = createBox(10, 10, 10);
-    const { indices, triFaceIds } = buildBodyMeshArrays(box);
+    const { triFaceIds } = buildBodyMeshArrays(box);
 
     // Each face should have exactly 2 triangles (quad → 2 tris).
     const faceCounts = new Map<string, number>();
@@ -20,7 +20,7 @@ describe('face selection support', () => {
 
   it('triFaceIds indices align with the index buffer', () => {
     const box = createBox(10, 10, 10);
-    const { indices, triFaceIds } = buildBodyMeshArrays(box);
+    const { triFaceIds } = buildBodyMeshArrays(box);
 
     // For each triangle, the face ID should correspond to one of the body's faces.
     const faceIds = new Set(box.faces.map((f) => f.id));

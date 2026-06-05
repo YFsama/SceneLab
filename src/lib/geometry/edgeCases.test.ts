@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createBox, createCylinder, createSphere, computeVolume, computeBoundingBox, checkManifold } from './brep';
-import { scaleBody, scaleBodyXYZ, translateBody, rotateBody, mergeBodies, weldVertices } from './operations';
-import type { SolidBody } from './types';
+import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
   describe('scaleBody', () => {

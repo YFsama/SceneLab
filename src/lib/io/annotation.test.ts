@@ -30,7 +30,7 @@ describe('annotation persistence', () => {
   });
 
   it('defaults to empty annotations for old files', () => {
-    const project = serializeProject('Old', [], [], [], { planes: [], axes: [], points: [], coordSystems: [] });
+    const project = serializeProject('Old', [], [], [], { planes: [], axes: [], points: [], coordSystems: [], annotations: [] });
     const json = saveToFile(project);
     const loaded = loadFromFile(json);
     const rg = deserializeReferenceGeometry(loaded);
