@@ -189,6 +189,25 @@ describe('createTube', () => {
     expect(() => createTube(5, 8, 10)).toThrow();
     expect(() => createTube(10, 6, 0)).toThrow();
   });
+
+  it('bounding box spans the outer diameter', () => {
+    const tube = createTube(10, 6, 20, 32);
+    const bb = computeBoundingBox(tube);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(20, 1); // 2 × R=10
+    expect(bb.max.z - bb.min.z).toBeCloseTo(20, 1);
+  });
+
+  it('bounding box height matches input', () => {
+    const tube = createTube(10, 6, 30, 32);
+    const bb = computeBoundingBox(tube);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(30, 1);
+  });
+
+  it('thinner tube has less volume', () => {
+    const thick = createTube(10, 6, 20, 32);
+    const thin = createTube(10, 9, 20, 32);
+    expect(Math.abs(computeVolume(thin))).toBeLessThan(Math.abs(computeVolume(thick)));
+  });
 });
 
 describe('createPrism', () => {
