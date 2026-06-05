@@ -72,4 +72,18 @@ describe('polygonPoints edge cases', () => {
       expect(dist).toBeGreaterThan(0);
     }
   });
+
+  it('points are at correct distance from center', () => {
+    const pts = polygonPoints(3, 4, 7, 8);
+    for (const p of pts) {
+      const dist = Math.hypot(p.x - 3, p.y - 4);
+      expect(dist).toBeCloseTo(7, 5);
+    }
+  });
+
+  it('creates unique points for each side', () => {
+    const pts = polygonPoints(0, 0, 5, 6);
+    const keys = pts.map((p) => `${p.x.toFixed(6)},${p.y.toFixed(6)}`);
+    expect(new Set(keys).size).toBe(6);
+  });
 });
