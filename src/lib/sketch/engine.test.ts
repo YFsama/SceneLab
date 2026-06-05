@@ -108,6 +108,32 @@ describe('addRectangle', () => {
     expect(lines.length).toBe(4);
     expect(sketch.entities.size).toBe(8); // 4 points + 4 lines
   });
+
+  it('rectangle points form a closed loop', () => {
+    const sketch = createSketch('xy');
+    const { lines } = addRectangle(sketch, 0, 0, 10, 5);
+    // Each line connects to the next, forming a closed rectangle.
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      const nextLine = lines[(i + 1) % lines.length]!;
+      // Current line's p2 should be next line's p1.
+      expect(line.p2Id).toBe(nextLine.p1Id);
+    }
+  });
+
+  it('creates unique line IDs', () => {
+    const sketch = createSketch('xy');
+    const { lines } = addRectangle(sketch, 0, 0, 10, 5);
+    const ids = lines.map((l) => l.id);
+    expect(new Set(ids).size).toBe(4);
+  });
+
+  it('creates unique point IDs', () => {
+    const sketch = createSketch('xy');
+    const { points } = addRectangle(sketch, 0, 0, 10, 5);
+    const ids = points.map((p) => p.id);
+    expect(new Set(ids).size).toBe(4);
+  });
 });
 
 describe('addCircle', () => {
