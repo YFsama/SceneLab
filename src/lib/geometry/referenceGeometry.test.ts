@@ -259,3 +259,26 @@ describe('coordinate systems', () => {
     expect(local.z).toBeCloseTo(0, 6);
   });
 });
+
+describe('signedDistanceToPlane edge cases', () => {
+  it('distance is zero for a point on the plane', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    expect(signedDistanceToPlane(plane, { x: 5, y: 0, z: 5 })).toBeCloseTo(0, 6);
+  });
+
+  it('distance is positive for a point on the normal side', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    expect(signedDistanceToPlane(plane, { x: 0, y: 10, z: 0 })).toBeCloseTo(10, 6);
+  });
+
+  it('distance is negative for a point on the opposite side', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    expect(signedDistanceToPlane(plane, { x: 0, y: -5, z: 0 })).toBeCloseTo(-5, 6);
+  });
+
+  it('works with non-axis-aligned planes', () => {
+    const plane = makePlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 0 });
+    // Point at (1,1,0) should have positive distance along the normal.
+    expect(signedDistanceToPlane(plane, { x: 1, y: 1, z: 0 })).toBeGreaterThan(0);
+  });
+});
