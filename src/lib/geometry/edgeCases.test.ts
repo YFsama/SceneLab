@@ -130,4 +130,38 @@ describe('geometry edge cases', () => {
       expect(checkManifold(sphere).boundaryEdges).toBe(0);
     });
   });
+
+  describe('sphere operations', () => {
+    it('sphere volume approximates 4/3πr³', () => {
+      const sphere = createSphere(5, 32);
+      const vol = Math.abs(computeVolume(sphere));
+      const expected = (4 / 3) * Math.PI * 125; // 4/3 * π * 5³
+      expect(vol).toBeGreaterThan(expected * 0.85);
+      expect(vol).toBeLessThan(expected * 1.15);
+    });
+
+    it('sphere bounding box is roughly cubic', () => {
+      const sphere = createSphere(7, 16);
+      const bb = computeBoundingBox(sphere);
+      const dx = bb.max.x - bb.min.x;
+      const dy = bb.max.y - bb.min.y;
+      const dz = bb.max.z - bb.min.z;
+      expect(Math.abs(dx - dy)).toBeLessThan(1);
+      expect(Math.abs(dy - dz)).toBeLessThan(1);
+    });
+
+    it('scaled sphere has correct bounding box', () => {
+      const sphere = createSphere(5, 16);
+      const scaled = scaleBody(sphere, 2);
+      const bb = computeBoundingBox(scaled);
+      expect(bb.max.x - bb.min.x).toBeCloseTo(20, 0);
+    });
+
+    it('translated sphere moves correctly', () => {
+      const sphere = createSphere(5, 16);
+      const moved = translateBody(sphere, { x: 100, y: 0, z: 0 });
+      const bb = computeBoundingBox(moved);
+      expect(bb.min.x).toBeGreaterThan(90);
+    });
+  });
 });
