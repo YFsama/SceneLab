@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, createTorus, computeVolume, computeBoundingBox, checkManifold } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, createWedge, computeVolume, computeBoundingBox, checkManifold } from './brep';
 import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
@@ -226,6 +226,39 @@ describe('geometry edge cases', () => {
     it('torus is manifold', () => {
       const torus = createTorus(10, 3, 16, 8);
       expect(checkManifold(torus).boundaryEdges).toBe(0);
+    });
+  });
+
+  describe('wedge operations', () => {
+    it('wedge volume is ½·w·h·d', () => {
+      const w = 10, h = 6, d = 4;
+      const wedge = createWedge(w, h, d);
+      const vol = Math.abs(computeVolume(wedge));
+      const expected = 0.5 * w * h * d;
+      expect(vol).toBeCloseTo(expected, 0);
+    });
+
+    it('wedge bounding box has correct dimensions', () => {
+      const w = 10, h = 6, d = 4;
+      const wedge = createWedge(w, h, d);
+      const bb = computeBoundingBox(wedge);
+      expect(bb.max.x - bb.min.x).toBeCloseTo(w, 4);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(h, 4);
+      expect(bb.max.z - bb.min.z).toBeCloseTo(d, 4);
+    });
+
+    it('wedge is manifold', () => {
+      const wedge = createWedge(10, 6, 4);
+      expect(checkManifold(wedge).boundaryEdges).toBe(0);
+    });
+
+    it('scaled wedge preserves volume ratio', () => {
+      const wedge = createWedge(10, 6, 4);
+      const scaled = scaleBody(wedge, 2);
+      const volOrig = Math.abs(computeVolume(wedge));
+      const volScaled = Math.abs(computeVolume(scaled));
+      // Volume scales by factor³ = 8.
+      expect(volScaled).toBeCloseTo(volOrig * 8, 0);
     });
   });
 });
