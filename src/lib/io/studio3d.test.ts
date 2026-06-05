@@ -125,3 +125,39 @@ describe('saveToFile / loadFromFile', () => {
     expect(() => loadFromFile('{"version":1,"name":"test"}')).toThrow('missing features array');
   });
 });
+
+describe('direct body round-trip', () => {
+  it('round-trips direct bodies through save/load', () => {
+    const box = createBox(10, 20, 30);
+    const json = saveToFile(serializeProject('Direct', [], [], [box]));
+    const loaded = loadFromFile(json);
+    expect(loaded.directBodies).toBeDefined();
+    expect(loaded.directBodies!.length).toBe(1);
+    expect(loaded.directBodies![0]!.name).toBe(box.name);
+  });
+
+  it('preserves body vertices through round-trip', () => {
+    const box = createBox(10, 20, 30);
+    const json = saveToFile(serializeProject('Direct', [], [], [box]));
+    const loaded = loadFromFile(json);
+    const restored = loaded.directBodies![0]!;
+    expect(restored.vertices.length).toBe(box.vertices.length);
+    expect(Math.abs(computeVolume(restored))).toBeCloseTo(Math.abs(computeVolume(box)), 0);
+  });
+
+  it('preserves body color and opacity', () => {
+    const box = createBox(10, 10, 10);
+    box.color = 0xff0000;
+    box.opacity = 0.5;
+    const json = saveToFile(serializeProject('Direct', [], [], [box]));
+    const loaded = loadFromFile(json);
+    expect(loaded.directBodies![0]!.color).toBe(0xff0000);
+    expect(loaded.directBodies![0]!.opacity).toBe(0.5);
+  });
+
+  it('handles empty direct bodies array', () => {
+    const json = saveToFile(serializeProject('Empty', [], [], []));
+    const loaded = loadFromFile(json);
+    expect(loaded.directBodies).toEqual([]);
+  });
+});
