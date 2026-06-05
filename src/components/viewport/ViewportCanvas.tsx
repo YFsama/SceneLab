@@ -1602,7 +1602,7 @@ export function ViewportCanvas() {
     });
     items.push({ label: t('sketch.exit'), separatorBefore: true, onClick: () => useStore.getState().exitSketch() });
     return items;
-  }, [selectedSketchId, t]);
+  }, [selectedSketchId, t, currentSketch]);
 
   const bodyMenuItems = useCallback(
     (bodyId: string | null): ContextMenuItem[] => {
@@ -2082,7 +2082,7 @@ export function ViewportCanvas() {
 
       setDrawStart(null);
     },
-    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart],
+    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, selRect, setPolylineLast],
   );
 
   return (
