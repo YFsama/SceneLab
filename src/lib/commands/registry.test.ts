@@ -76,4 +76,27 @@ describe('addMidplaneFromSelection', () => {
     const id = addMidplaneFromSelection();
     expect(id).toBeTruthy();
   });
+
+  it('adds the plane to the store', () => {
+    const box = createBox(10, 20, 10);
+    useStore.getState().addDirectBody(box);
+    const before = useStore.getState().planes.length;
+    addMidplaneFromSelection();
+    expect(useStore.getState().planes.length).toBe(before + 1);
+  });
+
+  it('midplane has a valid origin and normal', () => {
+    const box = createBox(10, 20, 30);
+    useStore.getState().addDirectBody(box);
+    const id = addMidplaneFromSelection();
+    expect(id).toBeTruthy();
+    const mid = useStore.getState().planes.find((p) => p.id === id)!;
+    // Midplane should have a unit normal.
+    const nLen = Math.hypot(mid.normal.x, mid.normal.y, mid.normal.z);
+    expect(nLen).toBeCloseTo(1, 6);
+    // Origin should be finite.
+    expect(Number.isFinite(mid.origin.x)).toBe(true);
+    expect(Number.isFinite(mid.origin.y)).toBe(true);
+    expect(Number.isFinite(mid.origin.z)).toBe(true);
+  });
 });
