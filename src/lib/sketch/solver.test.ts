@@ -591,4 +591,43 @@ describe('multiple constraints on same entity', () => {
     // p2 should move to same X as p1 (vertical constraint).
     expect(result.get('p2')!.x).toBeCloseTo(0, 4);
   });
+
+  it('radius constraint on a circle updates the radius', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c', { id: 'c', type: 'point', x: 0, y: 0 });
+    entities.set('circle1', { id: 'circle1', type: 'circle', centerId: 'c', radius: 3 });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('cr', { id: 'cr', type: 'radius', entityIds: ['circle1'], value: 7 });
+    solveConstraints(entities, constraints);
+    expect((entities.get('circle1') as { radius: number }).radius).toBeCloseTo(7, 4);
+  });
+
+  it('concentric constraint merges circle centers', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c1', { id: 'c1', type: 'point', x: 0, y: 0 });
+    entities.set('c2', { id: 'c2', type: 'point', x: 10, y: 5 });
+    entities.set('circle1', { id: 'circle1', type: 'circle', centerId: 'c1', radius: 3 });
+    entities.set('circle2', { id: 'circle2', type: 'circle', centerId: 'c2', radius: 5 });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('cc', { id: 'cc', type: 'concentric', entityIds: ['circle1', 'circle2'] });
+    const result = solveConstraints(entities, constraints);
+    const p1 = result.get('c1')!;
+    const p2 = result.get('c2')!;
+    expect(p1.x).toBeCloseTo(p2.x, 4);
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+  });
+
+  it('equal constraint on two circles equalizes radii', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c1', { id: 'c1', type: 'point', x: 0, y: 0 });
+    entities.set('c2', { id: 'c2', type: 'point', x: 10, y: 0 });
+    entities.set('circle1', { id: 'circle1', type: 'circle', centerId: 'c1', radius: 3 });
+    entities.set('circle2', { id: 'circle2', type: 'circle', centerId: 'c2', radius: 7 });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('eq', { id: 'eq', type: 'equal', entityIds: ['circle1', 'circle2'] });
+    solveConstraints(entities, constraints);
+    const r1 = (entities.get('circle1') as { radius: number }).radius;
+    const r2 = (entities.get('circle2') as { radius: number }).radius;
+    expect(r1).toBeCloseTo(r2, 4);
+  });
 });
