@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops } from './brep';
-import { mergeBodies } from './operations';
+import { mergeBodies, scaleBody } from './operations';
 import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
 
 describe('computeSolidity', () => {
@@ -1085,6 +1085,19 @@ describe('createWedge', () => {
 
   it('rejects invalid parameters', () => {
     expect(() => createWedge(0, 6, 4)).toThrow('positive');
+  });
+
+  it('is manifold (watertight)', () => {
+    const wedge = createWedge(10, 6, 4);
+    expect(checkManifold(wedge).boundaryEdges).toBe(0);
+  });
+
+  it('scaled wedge preserves volume ratio', () => {
+    const wedge = createWedge(10, 6, 4);
+    const scaled = scaleBody(wedge, 3);
+    const volOrig = Math.abs(computeVolume(wedge));
+    const volScaled = Math.abs(computeVolume(scaled));
+    expect(volScaled).toBeCloseTo(volOrig * 27, 0); // 3³ = 27
   });
 });
 
