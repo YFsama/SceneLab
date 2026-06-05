@@ -1035,6 +1035,23 @@ describe('computeCenterOfMassOffset (volumetric)', () => {
     expect(info.centroid.y).toBeLessThan(3.2);
     expect(info.offset.y).toBeCloseTo(-3, 0); // 3 - 6
   });
+
+  it('symmetric box has zero offset', () => {
+    const box = createBox(10, 10, 10);
+    const info = computeCenterOfMassOffset(box);
+    // Box is symmetric, so centroid ≈ bbox center → offset ≈ 0.
+    expect(Math.abs(info.offset.x)).toBeLessThan(1);
+    expect(Math.abs(info.offset.z)).toBeLessThan(1);
+  });
+
+  it('offset is finite for all body types', () => {
+    for (const make of [() => createBox(10, 10, 10), () => createCylinder(5, 10, 16), () => createSphere(5, 16)]) {
+      const info = computeCenterOfMassOffset(make());
+      expect(Number.isFinite(info.offset.x)).toBe(true);
+      expect(Number.isFinite(info.offset.y)).toBe(true);
+      expect(Number.isFinite(info.offset.z)).toBe(true);
+    }
+  });
 });
 
 describe('computeBoundingSphere', () => {
