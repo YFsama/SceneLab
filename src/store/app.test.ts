@@ -1699,4 +1699,108 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().placeBodyInCoordinateSystem('nope', 'nope')).toBeNull();
     });
   });
+
+  describe('projection toggle', () => {
+    it('defaults to perspective', () => {
+      expect(useStore.getState().projection).toBe('perspective');
+    });
+
+    it('toggles to orthographic and back', () => {
+      useStore.getState().toggleProjection();
+      expect(useStore.getState().projection).toBe('orthographic');
+      useStore.getState().toggleProjection();
+      expect(useStore.getState().projection).toBe('perspective');
+    });
+
+    it('setProjection sets directly', () => {
+      useStore.getState().setProjection('orthographic');
+      expect(useStore.getState().projection).toBe('orthographic');
+      useStore.getState().setProjection('perspective');
+      expect(useStore.getState().projection).toBe('perspective');
+    });
+  });
+
+  describe('selectedFaceIds', () => {
+    it('defaults to empty', () => {
+      expect(useStore.getState().selectedFaceIds).toEqual([]);
+    });
+
+    it('setSelectedFaceIds sets face selection', () => {
+      useStore.getState().setSelectedFaceIds(['f1', 'f2']);
+      expect(useStore.getState().selectedFaceIds).toEqual(['f1', 'f2']);
+    });
+
+    it('selectObject clears face selection', () => {
+      useStore.getState().setSelectedFaceIds(['f1']);
+      useStore.getState().selectObject('body1');
+      expect(useStore.getState().selectedFaceIds).toEqual([]);
+    });
+
+    it('deselectAll clears face selection', () => {
+      useStore.getState().setSelectedFaceIds(['f1']);
+      useStore.getState().deselectAll();
+      expect(useStore.getState().selectedFaceIds).toEqual([]);
+    });
+  });
+
+  describe('polyline state', () => {
+    it('polylineLast defaults to null', () => {
+      expect(useStore.getState().polylineLast).toBeNull();
+    });
+
+    it('setPolylineLast sets the last point', () => {
+      useStore.getState().setPolylineLast({ x: 5, y: 10 });
+      expect(useStore.getState().polylineLast).toEqual({ x: 5, y: 10 });
+    });
+
+    it('setPolylineLast(null) clears the chain', () => {
+      useStore.getState().setPolylineLast({ x: 5, y: 10 });
+      useStore.getState().setPolylineLast(null);
+      expect(useStore.getState().polylineLast).toBeNull();
+    });
+  });
+
+  describe('lastCommand / repeatLastCommand', () => {
+    it('lastCommand defaults to null', () => {
+      expect(useStore.getState().lastCommand).toBeNull();
+    });
+
+    it('setPendingPrimitive tracks last command', () => {
+      useStore.getState().setPendingPrimitive('box');
+      expect(useStore.getState().lastCommand).toEqual({ type: 'primitive', kind: 'box' });
+      useStore.getState().setPendingPrimitive(null);
+    });
+
+    it('repeatLastCommand re-opens the last primitive dialog', () => {
+      useStore.getState().setPendingPrimitive('sphere');
+      useStore.getState().setPendingPrimitive(null);
+      expect(useStore.getState().pendingPrimitive).toBeNull();
+      useStore.getState().repeatLastCommand();
+      expect(useStore.getState().pendingPrimitive).toBe('sphere');
+      useStore.getState().setPendingPrimitive(null);
+    });
+  });
+
+  describe('annotations', () => {
+    it('defaults to empty', () => {
+      expect(useStore.getState().annotations).toEqual([]);
+    });
+
+    it('addAnnotation adds an annotation', () => {
+      useStore.getState().addAnnotation({ id: 'ann_test', name: 'Test', points: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }], value: 10, kind: 'distance' });
+      expect(useStore.getState().annotations).toHaveLength(1);
+      expect(useStore.getState().annotations[0]!.id).toBe('ann_test');
+    });
+
+    it('removeAnnotation removes by id', () => {
+      useStore.getState().removeAnnotation('ann_test');
+      expect(useStore.getState().annotations).toEqual([]);
+    });
+
+    it('clearScene clears annotations', () => {
+      useStore.getState().addAnnotation({ id: 'ann_1', name: 'Test', points: [], value: 0, kind: 'distance' });
+      useStore.getState().clearScene();
+      expect(useStore.getState().annotations).toEqual([]);
+    });
+  });
 });
