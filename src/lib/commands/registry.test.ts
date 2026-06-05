@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, initBuiltinCommands, addMidplaneFromSelection } from './registry';
 import { useStore } from '../../store/app';
-import { createBox, createCylinder } from '../geometry';
+import { createBox, createCylinder, createTorus } from '../geometry';
 
 describe('command registry', () => {
   beforeEach(() => clearCommands());
@@ -103,6 +103,17 @@ describe('addMidplaneFromSelection', () => {
   it('works with a cylinder body', () => {
     const cyl = createCylinder(5, 20, 16);
     useStore.getState().addDirectBody(cyl);
+    const id = addMidplaneFromSelection();
+    expect(id).toBeTruthy();
+    const mid = useStore.getState().planes.find((p) => p.id === id)!;
+    expect(mid).toBeDefined();
+    const nLen = Math.hypot(mid.normal.x, mid.normal.y, mid.normal.z);
+    expect(nLen).toBeCloseTo(1, 6);
+  });
+
+  it('works with a torus body', () => {
+    const torus = createTorus(10, 3, 16, 8);
+    useStore.getState().addDirectBody(torus);
     const id = addMidplaneFromSelection();
     expect(id).toBeTruthy();
     const mid = useStore.getState().planes.find((p) => p.id === id)!;
