@@ -1718,6 +1718,20 @@ describe('app store — direct bodies', () => {
       useStore.getState().setProjection('perspective');
       expect(useStore.getState().projection).toBe('perspective');
     });
+
+    it('setProjection is idempotent', () => {
+      useStore.getState().setProjection('orthographic');
+      useStore.getState().setProjection('orthographic');
+      expect(useStore.getState().projection).toBe('orthographic');
+    });
+
+    it('toggleProjection changes exactly once per call', () => {
+      const initial = useStore.getState().projection;
+      useStore.getState().toggleProjection();
+      expect(useStore.getState().projection).not.toBe(initial);
+      useStore.getState().toggleProjection();
+      expect(useStore.getState().projection).toBe(initial);
+    });
   });
 
   describe('selectedFaceIds', () => {
