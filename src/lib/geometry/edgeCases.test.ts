@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, createTube, createCoil, computeVolume, computeBoundingBox, checkManifold } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, createTube, createCoil, createCone, computeVolume, computeBoundingBox, checkManifold } from './brep';
 import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
@@ -337,6 +337,45 @@ describe('geometry edge cases', () => {
     it('coil is manifold', () => {
       const coil = createCoil(10, 2, 5, 16);
       expect(checkManifold(coil).boundaryEdges).toBe(0);
+    });
+  });
+
+  describe('cone operations', () => {
+    it('cone volume approximates πr²h/3', () => {
+      const r = 5, h = 20;
+      const cone = createCone(r, 0, h, 32);
+      const vol = Math.abs(computeVolume(cone));
+      const expected = (Math.PI * r * r * h) / 3;
+      expect(vol).toBeGreaterThan(expected * 0.85);
+      expect(vol).toBeLessThan(expected * 1.15);
+    });
+
+    it('cone bounding box has correct height', () => {
+      const cone = createCone(5, 0, 20, 16);
+      const bb = computeBoundingBox(cone);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(20, 1);
+    });
+
+    it('cone is manifold', () => {
+      const cone = createCone(5, 0, 10, 16);
+      expect(checkManifold(cone).boundaryEdges).toBe(0);
+    });
+
+    it('frustum (cone with top radius) has more volume than tapering cone', () => {
+      const r = 5, h = 20;
+      const taperCone = createCone(r, 0, h, 32);
+      const frustum = createCone(r, 2, h, 32);
+      // A frustum keeps material at the top, so it has more volume than a cone
+      // that tapers to a point.
+      expect(Math.abs(computeVolume(frustum))).toBeGreaterThan(Math.abs(computeVolume(taperCone)));
+    });
+
+    it('scaled cone preserves volume ratio', () => {
+      const cone = createCone(5, 0, 10, 16);
+      const scaled = scaleBody(cone, 2);
+      const volOrig = Math.abs(computeVolume(cone));
+      const volScaled = Math.abs(computeVolume(scaled));
+      expect(volScaled).toBeCloseTo(volOrig * 8, 0); // 2³ = 8
     });
   });
 });
