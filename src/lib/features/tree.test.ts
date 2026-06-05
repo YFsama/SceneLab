@@ -3,6 +3,7 @@ import {
   FeatureTree,
   createSketchFeature,
   createExtrudeFeature,
+  createRevolveFeature,
   createFilletFeature,
   createChamferFeature,
   createShellFeature,
@@ -293,5 +294,35 @@ describe('createExtrudeFeature', () => {
     expect(feat.name).toBe('Extrude');
     expect(feat.params.distance).toBe(10);
     expect(feat.parentIds).toEqual(['sketch1']);
+  });
+});
+
+describe('createRevolveFeature', () => {
+  it('should create a revolve feature', () => {
+    const feat = createRevolveFeature(360, ['sketch1']);
+    expect(feat.type).toBe('revolve');
+    expect(feat.name).toBe('Revolve');
+    expect(feat.params.angle).toBe(360);
+    expect(feat.parentIds).toEqual(['sketch1']);
+  });
+
+  it('should create a partial revolve feature', () => {
+    const feat = createRevolveFeature(180, ['sketch2']);
+    expect(feat.params.angle).toBe(180);
+  });
+
+  it('should evaluate a revolve from a circle sketch', () => {
+    const tree = new FeatureTree();
+    const sketch = createSketch('xz');
+    // Draw a circle offset from the Y-axis (will revolve around Y).
+    addCircle(sketch, 5, 5, 2);
+    const sketchFeat = createSketchFeature(sketch);
+    tree.addFeature(sketchFeat);
+    const revolveFeat = createRevolveFeature(360, [sketchFeat.id]);
+    tree.addFeature(revolveFeat);
+    tree.recompute();
+    const bodies = tree.getLatestBodies();
+    expect(bodies.length).toBe(1);
+    expect(Math.abs(computeVolume(bodies[0]!))).toBeGreaterThan(0);
   });
 });
