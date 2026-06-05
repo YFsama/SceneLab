@@ -46,4 +46,30 @@ describe('computeConvexHull', () => {
     const coplanar = [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 0, z: 1 }, { x: 0, y: 0, z: 1 }];
     expect(computeConvexHull(coplanar)).toBeNull();
   });
+
+  it('returns null for empty input', () => {
+    expect(computeConvexHull([])).toBeNull();
+  });
+
+  it('handles a single point', () => {
+    expect(computeConvexHull([{ x: 5, y: 5, z: 5 }])).toBeNull();
+  });
+
+  it('hulls a tetrahedron (4 non-coplanar points)', () => {
+    const pts = [
+      { x: 0, y: 0, z: 0 },
+      { x: 10, y: 0, z: 0 },
+      { x: 5, y: 10, z: 0 },
+      { x: 5, y: 5, z: 10 },
+    ];
+    const h = computeConvexHull(pts)!;
+    expect(h).not.toBeNull();
+    expect(h.vertices.length).toBe(4);
+    expect(h.volume).toBeGreaterThan(0);
+  });
+
+  it('hull volume is always positive', () => {
+    const h = computeConvexHull(createBox(10, 20, 30).vertices)!;
+    expect(h.volume).toBeGreaterThan(0);
+  });
 });
