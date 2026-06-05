@@ -23,4 +23,27 @@ describe('estimatePrintCost', () => {
     expect(est.totalCost).toBeCloseTo(est.materialCost + est.machineCost, 1);
     expect(est.machineCost).toBeGreaterThan(0);
   });
+
+  it('reduces mass with lower infill', () => {
+    const solid = estimatePrintCost(box, { infill: 1, material: 'PLA', pricePerKg: 25 });
+    const sparse = estimatePrintCost(box, { infill: 0.2, material: 'PLA', pricePerKg: 25 });
+    expect(sparse.filamentMassG).toBeLessThan(solid.filamentMassG);
+    expect(sparse.materialCost).toBeLessThan(solid.materialCost);
+  });
+
+  it('different infill produces different print times', () => {
+    const solid = estimatePrintCost(box, { infill: 1, material: 'PLA', pricePerKg: 25 });
+    const sparse = estimatePrintCost(box, { infill: 0.2, material: 'PLA', pricePerKg: 25 });
+    // Less material = faster print.
+    expect(sparse.printTimeMinutes).toBeLessThan(solid.printTimeMinutes);
+  });
+
+  it('all costs are non-negative', () => {
+    const est = estimatePrintCost(box, { infill: 0.5, material: 'PLA', pricePerKg: 20, hourlyRate: 50 });
+    expect(est.materialCost).toBeGreaterThanOrEqual(0);
+    expect(est.machineCost).toBeGreaterThanOrEqual(0);
+    expect(est.totalCost).toBeGreaterThanOrEqual(0);
+    expect(est.filamentMassG).toBeGreaterThanOrEqual(0);
+    expect(est.printTimeMinutes).toBeGreaterThanOrEqual(0);
+  });
 });
