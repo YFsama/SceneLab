@@ -71,6 +71,23 @@ describe('snapToPoints', () => {
     expect(snapToPoints({ x: 10, y: 0 }, pts, 1e-6).snapped).toBe(true);
     expect(snapToPoints({ x: 9.9, y: 0 }, pts, 1e-6).snapped).toBe(false);
   });
+
+  it('snaps to the closest of multiple candidates', () => {
+    const r = snapToPoints({ x: 5.1, y: 5.1 }, [{ x: 10, y: 10 }, { x: 5, y: 5 }], 1);
+    expect(r.snapped).toBe(true);
+    expect(r.point).toEqual({ x: 5, y: 5 });
+  });
+
+  it('does not snap when outside tolerance', () => {
+    const r = snapToPoints({ x: 5.5, y: 5.5 }, [{ x: 5, y: 5 }], 0.3);
+    expect(r.snapped).toBe(false);
+  });
+
+  it('snaps to origin when near (0,0)', () => {
+    const r = snapToPoints({ x: 0.1, y: 0.1 }, [{ x: 0, y: 0 }], 0.5);
+    expect(r.snapped).toBe(true);
+    expect(r.point).toEqual({ x: 0, y: 0 });
+  });
 });
 
 describe('inferLineEnd', () => {
