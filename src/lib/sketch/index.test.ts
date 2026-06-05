@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc,
   addConstraint, removeEntity, removeConstraint, solveSketch, getEntityPoints,
-  solveConstraints, addPolygon,
+  solveConstraints,
 } from './index';
 
 describe('sketch module exports', () => {
@@ -96,7 +96,7 @@ describe('getEntityPoints', () => {
 
   it('returns four corner points for a rectangle entity', () => {
     const s = createSketch('xy');
-    const rect = addRectangle(s, 0, 0, 10, 5);
+    addRectangle(s, 0, 0, 10, 5);
     const rectEntity = [...s.entities.values()].find(e => e.type === 'rectangle');
     if (rectEntity) {
       const pts = getEntityPoints(rectEntity, s.entities);
