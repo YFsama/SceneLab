@@ -1423,6 +1423,25 @@ describe('app store — direct bodies', () => {
     expect(rect!.height).toBeCloseTo(8, 1);
   });
 
+  it('addSketchConstraint adds a constraint to the current sketch', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().addSketchConstraint('horizontal', [line.id]);
+    expect(useStore.getState().currentSketch!.constraints.size).toBe(1);
+    const constraint = [...useStore.getState().currentSketch!.constraints.values()][0];
+    expect(constraint!.type).toBe('horizontal');
+  });
+
+  it('addSketchConstraint with value stores the value', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().addSketchConstraint('distance', [line.p1Id, line.p2Id], 15);
+    const constraint = [...useStore.getState().currentSketch!.constraints.values()][0];
+    expect(constraint!.value).toBe(15);
+  });
+
   it('hollowBodyById replaces a body with a lighter shell, keeping it selected', () => {
     useStore.getState().clearScene();
     const box = createBox(20, 20, 20); // vol 8000
