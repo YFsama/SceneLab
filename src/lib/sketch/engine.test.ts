@@ -499,3 +499,40 @@ describe('removeEntity edge cases', () => {
     expect(s.entities.size).toBe(0);
   });
 });
+
+describe('solveSketch with multiple constraints', () => {
+  it('horizontal + vertical on same line collapses to a point', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 5);
+    addConstraint(sketch, 'horizontal', [line.id]);
+    addConstraint(sketch, 'vertical', [line.id]);
+    const result = solveSketch(sketch);
+    const p1 = result.get(line.p1Id)!;
+    const p2 = result.get(line.p2Id)!;
+    expect(p1.x).toBeCloseTo(p2.x, 4);
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+  });
+
+  it('fixed + horizontal: fixed point stays, other aligns', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 5);
+    addConstraint(sketch, 'fixed', [line.p1Id]);
+    addConstraint(sketch, 'horizontal', [line.id]);
+    const result = solveSketch(sketch);
+    const p1 = result.get(line.p1Id)!;
+    const p2 = result.get(line.p2Id)!;
+    expect(p1.x).toBeCloseTo(0, 6);
+    expect(p1.y).toBeCloseTo(0, 6);
+    expect(p2.y).toBeCloseTo(0, 4);
+  });
+
+  it('distance constraint moves points to target distance', () => {
+    const sketch = createSketch('xy');
+    const p1 = addPoint(sketch, 0, 0);
+    const p2 = addPoint(sketch, 5, 0);
+    addConstraint(sketch, 'distance', [p1.id, p2.id], 10);
+    const result = solveSketch(sketch);
+    const dist = Math.hypot(result.get(p2.id)!.x - result.get(p1.id)!.x, result.get(p2.id)!.y - result.get(p1.id)!.y);
+    expect(dist).toBeCloseTo(10, 2);
+  });
+});
