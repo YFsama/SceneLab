@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, computeVolume, computeBoundingBox, checkManifold } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, createTube, computeVolume, computeBoundingBox, checkManifold } from './brep';
 import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
@@ -286,6 +286,35 @@ describe('geometry edge cases', () => {
       const volOrig = Math.abs(computeVolume(prism));
       const volScaled = Math.abs(computeVolume(scaled));
       expect(volScaled).toBeCloseTo(volOrig * 27, 0); // 3³ = 27
+    });
+  });
+
+  describe('tube operations', () => {
+    it('tube volume approximates π(R²-r²)h', () => {
+      const R = 5, r = 3, h = 20;
+      const tube = createTube(R, r, h, 32);
+      const vol = Math.abs(computeVolume(tube));
+      const expected = Math.PI * (R * R - r * r) * h;
+      expect(vol).toBeGreaterThan(expected * 0.9);
+      expect(vol).toBeLessThan(expected * 1.1);
+    });
+
+    it('tube bounding box has correct height', () => {
+      const tube = createTube(5, 3, 20, 16);
+      const bb = computeBoundingBox(tube);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(20, 1);
+    });
+
+    it('tube is manifold', () => {
+      const tube = createTube(5, 3, 10, 16);
+      expect(checkManifold(tube).boundaryEdges).toBe(0);
+    });
+
+    it('tube has less volume than solid cylinder', () => {
+      const R = 5, h = 10;
+      const cyl = createCylinder(R, h, 32);
+      const tube = createTube(R, 3, h, 32);
+      expect(Math.abs(computeVolume(tube))).toBeLessThan(Math.abs(computeVolume(cyl)));
     });
   });
 });
