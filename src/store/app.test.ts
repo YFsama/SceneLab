@@ -1417,6 +1417,16 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().currentSketch!.entities.size).toBe(0);
   });
 
+  it('addSketchPolygon creates entities that are undoable', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchPolygon(0, 0, 5, 6);
+    const afterAdd = useStore.getState().currentSketch!.entities.size;
+    expect(afterAdd).toBeGreaterThan(0);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
   it('sketch undo/redo reverts and replays sketch edits', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchLine(0, 0, 5, 0);
