@@ -396,4 +396,36 @@ describe('multiple constraints on same entity', () => {
     );
     expect(d1).toBeCloseTo(d2, 2);
   });
+
+  it('radius constraint on an arc', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('center', { id: 'center', type: 'point', x: 0, y: 0 });
+    entities.set('arc1', { id: 'arc1', type: 'arc', centerId: 'center', radius: 5, startAngle: 0, endAngle: Math.PI });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'radius', entityIds: ['arc1'], value: 10 });
+
+    const result = solveConstraints(entities, constraints);
+    // Arc radius should be updated to 10.
+    const arc = entities.get('arc1') as { radius: number };
+    expect(arc.radius).toBeCloseTo(10, 4);
+  });
+
+  it('concentric constraint moves circle center', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('c1', { id: 'c1', type: 'point', x: 0, y: 0 });
+    entities.set('c2', { id: 'c2', type: 'point', x: 10, y: 5 });
+    entities.set('circle1', { id: 'circle1', type: 'circle', centerId: 'c1', radius: 3 });
+    entities.set('circle2', { id: 'circle2', type: 'circle', centerId: 'c2', radius: 5 });
+
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('cstr', { id: 'cstr', type: 'concentric', entityIds: ['circle1', 'circle2'] });
+
+    const result = solveConstraints(entities, constraints);
+    // Both centers should converge.
+    const p1 = result.get('c1')!;
+    const p2 = result.get('c2')!;
+    expect(p1.x).toBeCloseTo(p2.x, 4);
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+  });
 });
