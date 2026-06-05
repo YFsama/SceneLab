@@ -94,3 +94,48 @@ describe('ViewCube orientations', () => {
     expect(unique.size).toBe(CORNER_DIRS.length);
   });
 });
+
+describe('ViewCube hit detection', () => {
+  // Simulate the hit classification logic from InteractiveViewCube.
+  const classifyHit = (u: number, v: number): 'face' | 'edge' | 'corner' => {
+    const au = Math.abs(u);
+    const av = Math.abs(v);
+    const EDGE_THRESHOLD = 0.72;
+    const CORNER_THRESHOLD = 0.72;
+
+    if (au > CORNER_THRESHOLD && av > CORNER_THRESHOLD) return 'corner';
+    if (au > EDGE_THRESHOLD || av > EDGE_THRESHOLD) return 'edge';
+    return 'face';
+  };
+
+  it('center of face classifies as face', () => {
+    expect(classifyHit(0, 0)).toBe('face');
+    expect(classifyHit(0.3, 0.3)).toBe('face');
+    expect(classifyHit(-0.3, 0.3)).toBe('face');
+  });
+
+  it('near edge classifies as edge', () => {
+    expect(classifyHit(0.8, 0.3)).toBe('edge');
+    expect(classifyHit(-0.8, 0.3)).toBe('edge');
+    expect(classifyHit(0.3, 0.8)).toBe('edge');
+    expect(classifyHit(0.3, -0.8)).toBe('edge');
+  });
+
+  it('near corner classifies as corner', () => {
+    expect(classifyHit(0.8, 0.8)).toBe('corner');
+    expect(classifyHit(-0.8, 0.8)).toBe('corner');
+    expect(classifyHit(0.8, -0.8)).toBe('corner');
+    expect(classifyHit(-0.8, -0.8)).toBe('corner');
+  });
+
+  it('boundary between face and edge', () => {
+    // Exactly at threshold should be face (not > threshold).
+    expect(classifyHit(0.72, 0.3)).toBe('face');
+    expect(classifyHit(0.73, 0.3)).toBe('edge');
+  });
+
+  it('boundary between edge and corner', () => {
+    // Both axes above edge threshold but below corner threshold.
+    expect(classifyHit(0.75, 0.75)).toBe('corner');
+  });
+});
