@@ -1463,6 +1463,17 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().showShortcuts).toBe(false);
   });
 
+  it('sketch undo reverts construction toggle', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(line.construction).toBeFalsy();
+    useStore.getState().toggleSketchConstruction(line.id);
+    expect(useStore.getState().currentSketch!.entities.get(line.id)?.construction).toBe(true);
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.get(line.id)?.construction).toBeFalsy();
+  });
+
   it('toggleSketchConstruction flips the construction flag', () => {
     const sketch = createSketch('xy');
     const line = addLine(sketch, 0, 0, 10, 0);
