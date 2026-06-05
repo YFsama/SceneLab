@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exportOBJ, importOBJ } from './obj';
-import { createBox, computeVolume, findBoundaryLoops } from '../geometry/brep';
+import { createBox, createCylinder, createSphere, computeVolume, findBoundaryLoops } from '../geometry/brep';
 
 describe('exportOBJ', () => {
   it('emits v and polygon f lines', () => {
@@ -36,5 +36,33 @@ describe('importOBJ', () => {
     expect(body.name).toBe('widget');
     expect(body.vertices).toHaveLength(3);
     expect(body.faces).toHaveLength(1);
+  });
+
+  it('round-trips a cylinder', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const imported = importOBJ(exportOBJ(cyl));
+    expect(imported.vertices.length).toBeGreaterThan(0);
+    expect(imported.faces.length).toBeGreaterThan(0);
+  });
+
+  it('round-trips a sphere', () => {
+    const sphere = createSphere(5, 16);
+    const imported = importOBJ(exportOBJ(sphere));
+    expect(imported.vertices.length).toBeGreaterThan(0);
+    expect(imported.faces.length).toBeGreaterThan(0);
+  });
+
+  it('preserves face count for a box', () => {
+    const box = createBox(10, 10, 10);
+    const obj = exportOBJ(box);
+    const imported = importOBJ(obj);
+    expect(imported.faces.length).toBe(box.faces.length);
+  });
+
+  it('handles empty face lines gracefully', () => {
+    const obj = 'v 0 0 0\nv 1 0 0\nv 0 1 0\n';
+    const body = importOBJ(obj);
+    expect(body.vertices).toHaveLength(3);
+    expect(body.faces).toHaveLength(0);
   });
 });
