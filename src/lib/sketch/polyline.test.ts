@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { createSketch, addLine, solveSketch } from './engine';
-import type { Sketch } from './types';
 
 describe('polyline tool', () => {
   it('creates connected line segments', () => {
