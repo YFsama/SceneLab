@@ -38,4 +38,30 @@ describe('buildBodyMeshArrays', () => {
     expect(positions).toHaveLength(0);
     expect(indices).toHaveLength(0);
   });
+
+  it('triFaceIds maps each triangle to a face ID', () => {
+    const box = createBox(10, 10, 10);
+    const { indices, triFaceIds } = buildBodyMeshArrays(box);
+    expect(triFaceIds.length).toBe(indices.length / 3);
+    // All face IDs should be non-empty strings.
+    for (const fid of triFaceIds) {
+      expect(fid.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('triFaceIds contains unique face IDs for a box', () => {
+    const box = createBox(10, 10, 10);
+    const { triFaceIds } = buildBodyMeshArrays(box);
+    const uniqueIds = new Set(triFaceIds);
+    expect(uniqueIds.size).toBe(6); // 6 faces
+  });
+
+  it('triFaceIds references valid face IDs from the body', () => {
+    const box = createBox(10, 10, 10);
+    const { triFaceIds } = buildBodyMeshArrays(box);
+    const faceIds = new Set(box.faces.map((f) => f.id));
+    for (const fid of triFaceIds) {
+      expect(faceIds.has(fid)).toBe(true);
+    }
+  });
 });
