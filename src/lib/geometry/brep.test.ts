@@ -420,6 +420,30 @@ describe('computePrincipalMoments', () => {
     const expected = (m * L * L) / 6;
     for (const mom of pm.moments) expect(mom).toBeCloseTo(expected, 1);
   });
+
+  it('principal moments are always positive', () => {
+    for (const make of [() => createBox(10, 20, 30), () => createCylinder(5, 10, 16), () => createSphere(5, 16)]) {
+      const pm = computePrincipalMoments(make(), 1);
+      for (const mom of pm.moments) {
+        expect(mom).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('radii of gyration are always positive', () => {
+    const pm = computePrincipalMoments(createBox(10, 20, 30), 1);
+    for (const r of pm.radiiOfGyration) {
+      expect(r).toBeGreaterThan(0);
+      expect(Number.isFinite(r)).toBe(true);
+    }
+  });
+
+  it('moments are sorted descending', () => {
+    const pm = computePrincipalMoments(createBox(10, 20, 30), 1);
+    for (let i = 1; i < pm.moments.length; i++) {
+      expect(pm.moments[i - 1]!).toBeGreaterThanOrEqual(pm.moments[i]!);
+    }
+  });
 });
 
 describe('computeConvexity', () => {
