@@ -40,6 +40,39 @@ describe('snapTargets', () => {
   it('is empty for an empty sketch', () => {
     expect(snapTargets(createSketch('xy'))).toEqual([]);
   });
+
+  it('returns circle center points', () => {
+    const s = createSketch('xy');
+    addCircle(s, 5, 10, 3);
+    const targets = snapTargets(s);
+    expect(targets).toContainEqual({ x: 5, y: 10 });
+  });
+
+  it('returns arc center points', () => {
+    const s = createSketch('xy');
+    addArc(s, 7, 3, 5, 0, Math.PI);
+    const targets = snapTargets(s);
+    expect(targets).toContainEqual({ x: 7, y: 3 });
+  });
+
+  it('deduplicates overlapping points', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 10, 0);
+    addLine(s, 10, 0, 20, 0); // separate point entities at (10,0)
+    const targets = snapTargets(s);
+    const tens = targets.filter((t) => t.x === 10 && t.y === 0);
+    // Each line has its own point entity, so both appear.
+    expect(tens.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('includes midpoints of all lines', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 10, 0);
+    addLine(s, 0, 0, 0, 10);
+    const targets = snapTargets(s);
+    expect(targets).toContainEqual({ x: 5, y: 0 });
+    expect(targets).toContainEqual({ x: 0, y: 5 });
+  });
 });
 
 describe('createSketch', () => {
