@@ -268,3 +268,30 @@ describe('reference geometry serialization', () => {
     expect(rg.annotations).toEqual([]);
   });
 });
+
+describe('project metadata', () => {
+  it('preserves the project name', () => {
+    const json = saveToFile(serializeProject('My Project', [], []));
+    const loaded = loadFromFile(json);
+    expect(loaded.name).toBe('My Project');
+  });
+
+  it('has version 1', () => {
+    const json = saveToFile(serializeProject('V', [], []));
+    const loaded = loadFromFile(json);
+    expect(loaded.version).toBe(1);
+  });
+
+  it('has metadata with timestamps', () => {
+    const json = saveToFile(serializeProject('Meta', [], []));
+    const loaded = loadFromFile(json);
+    expect(loaded.metadata.created).toBeTruthy();
+    expect(loaded.metadata.modified).toBeTruthy();
+    expect(loaded.metadata.appVersion).toBeTruthy();
+  });
+
+  it('rejects wrong version', () => {
+    const json = '{"version":2,"name":"test","features":[],"bodies":[]}';
+    expect(() => loadFromFile(json)).toThrow('Unsupported file version');
+  });
+});
