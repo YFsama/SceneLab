@@ -1383,6 +1383,22 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().setSketchEntityRadius(line.id, 7)).toBe(false); // not a circle/arc
   });
 
+  it('addSketchLine creates entities that are undoable', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchLine(0, 0, 10, 0);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(3); // 1 line + 2 points
+
+    useStore.getState().addSketchLine(10, 0, 10, 10);
+    const afterSecond = useStore.getState().currentSketch!.entities.size;
+    expect(afterSecond).toBeGreaterThan(3);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(3);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
   it('sketch undo/redo reverts and replays sketch edits', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchLine(0, 0, 5, 0);
