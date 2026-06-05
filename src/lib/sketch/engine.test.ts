@@ -257,3 +257,46 @@ describe('resizeRectangle', () => {
     expect(rect2!.height).toBeCloseTo(8, 1);
   });
 });
+
+describe('removeEntity edge cases', () => {
+  it('removing a point keeps referencing lines (they become dangling)', () => {
+    const s = createSketch('xy');
+    const line = addLine(s, 0, 0, 10, 0);
+    const p1 = s.entities.get(line.p1Id)!;
+    removeEntity(s, p1.id);
+    // The line still exists (with a dangling reference).
+    expect(s.entities.has(line.id)).toBe(true);
+  });
+
+  it('removing a line removes orphaned points', () => {
+    const s = createSketch('xy');
+    const line = addLine(s, 0, 0, 10, 0);
+    removeEntity(s, line.id);
+    // Both endpoints should be removed since they're orphaned.
+    expect(s.entities.size).toBe(0);
+  });
+
+  it('removing a line keeps shared points', () => {
+    const s = createSketch('xy');
+    const line1 = addLine(s, 0, 0, 10, 0);
+    const line2 = addLine(s, 10, 0, 10, 10); // shares endpoint with line1
+    removeEntity(s, line1.id);
+    // The shared point (10,0) should be kept since line2 references it.
+    expect(s.entities.size).toBeGreaterThan(0);
+  });
+
+  it('removing a circle removes its center point', () => {
+    const s = createSketch('xy');
+    const circle = addCircle(s, 5, 5, 3);
+    removeEntity(s, circle.id);
+    // Center point should be removed since it's orphaned.
+    expect(s.entities.size).toBe(0);
+  });
+
+  it('removing an arc removes its center point', () => {
+    const s = createSketch('xy');
+    const arc = addArc(s, 5, 5, 3, 0, Math.PI);
+    removeEntity(s, arc.id);
+    expect(s.entities.size).toBe(0);
+  });
+});
