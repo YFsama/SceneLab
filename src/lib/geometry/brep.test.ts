@@ -384,6 +384,29 @@ describe('computeConvexity', () => {
     }
     expect(computeConvexity(createTorus(10, 3, 32, 16)).isConvex).toBe(false);
   });
+
+  it('convexity is between 0 and 1', () => {
+    const box = createBox(10, 10, 10);
+    const c = computeConvexity(box);
+    expect(c.convexity).toBeGreaterThanOrEqual(0);
+    expect(c.convexity).toBeLessThanOrEqual(1);
+  });
+
+  it('sphere has convexity close to 1', () => {
+    const sphere = createSphere(5, 32);
+    const c = computeConvexity(sphere);
+    expect(c.convexity).toBeGreaterThan(0.9);
+  });
+
+  it('prism is convex', () => {
+    const prism = createPrism(6, 10, 5);
+    expect(computeConvexity(prism).isConvex).toBe(true);
+  });
+
+  it('tube is not convex', () => {
+    const tube = createTube(10, 6, 20, 16);
+    expect(computeConvexity(tube).isConvex).toBe(false);
+  });
 });
 
 describe('computeElongation', () => {
