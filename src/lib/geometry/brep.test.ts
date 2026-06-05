@@ -364,6 +364,20 @@ describe('computeMomentOfInertiaAboutAxis', () => {
     const iPivot = computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 }, 1, pivot);
     expect(iPivot).toBeCloseTo(iCom + mp.mass * 49, 4); // I_cm + m·d², d=7
   });
+
+  it('moment of inertia is always positive for a non-degenerate body', () => {
+    for (const make of [() => createBox(10, 10, 10), () => createCylinder(5, 10, 16), () => createSphere(5, 16)]) {
+      const i = computeMomentOfInertiaAboutAxis(make(), { x: 0, y: 1, z: 0 });
+      expect(i).toBeGreaterThan(0);
+    }
+  });
+
+  it('moment of inertia scales with density', () => {
+    const box = createBox(10, 10, 10);
+    const i1 = computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 }, 1);
+    const i2 = computeMomentOfInertiaAboutAxis(box, { x: 0, y: 1, z: 0 }, 2);
+    expect(i2).toBeCloseTo(i1 * 2, 4);
+  });
 });
 
 describe('computePendulumPeriod', () => {
