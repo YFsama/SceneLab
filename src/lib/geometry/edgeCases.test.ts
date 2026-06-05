@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, createTorus, createWedge, computeVolume, computeBoundingBox, checkManifold } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, createWedge, createPrism, computeVolume, computeBoundingBox, checkManifold } from './brep';
 import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
@@ -259,6 +259,33 @@ describe('geometry edge cases', () => {
       const volScaled = Math.abs(computeVolume(scaled));
       // Volume scales by factor³ = 8.
       expect(volScaled).toBeCloseTo(volOrig * 8, 0);
+    });
+  });
+
+  describe('prism operations', () => {
+    it('prism has non-zero volume', () => {
+      const prism = createPrism(5, 6, 10);
+      const vol = Math.abs(computeVolume(prism));
+      expect(vol).toBeGreaterThan(0);
+    });
+
+    it('prism bounding box has correct height', () => {
+      const prism = createPrism(5, 6, 10);
+      const bb = computeBoundingBox(prism);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(10, 1);
+    });
+
+    it('prism is manifold', () => {
+      const prism = createPrism(5, 6, 10);
+      expect(checkManifold(prism).boundaryEdges).toBe(0);
+    });
+
+    it('scaled prism preserves volume ratio', () => {
+      const prism = createPrism(5, 6, 10);
+      const scaled = scaleBody(prism, 3);
+      const volOrig = Math.abs(computeVolume(prism));
+      const volScaled = Math.abs(computeVolume(scaled));
+      expect(volScaled).toBeCloseTo(volOrig * 27, 0); // 3³ = 27
     });
   });
 });
