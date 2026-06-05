@@ -1436,6 +1436,23 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().currentSketch!.entities.size).toBe(0);
   });
 
+  it('sketch undo works across multiple operations', () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    useStore.getState().addSketchLine(0, 0, 10, 0);
+    useStore.getState().addSketchLine(10, 0, 10, 10);
+    useStore.getState().addSketchCircle(5, 5, 3);
+    const afterAll = useStore.getState().currentSketch!.entities.size;
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBeLessThan(afterAll);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBeLessThan(afterAll);
+
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
   it('sketch redo replays a reverted edit', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchLine(0, 0, 5, 0);
