@@ -3,6 +3,7 @@ import { registerBuiltinTools } from './builtinTools';
 import { getTool, getAllTools, clearTools } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createBox } from '../geometry';
+import type { Vec3 } from '../geometry/types';
 import { createSketch, addRectangle } from '../sketch/engine';
 
 describe('registerBuiltinTools registration', () => {
@@ -536,7 +537,7 @@ describe('new AI tools', () => {
 
   it('sketch_rectangle_and_extrude creates a body', async () => {
     const tool = getTool('sketch_rectangle_and_extrude')!;
-    const result = await tool.execute({ width: 10, depth: 20, height: 30 });
+    const result = (await tool.execute({ width: 10, depth: 20, height: 30 })) as { success: boolean; bodyId: string };
     expect(result.success).toBe(true);
     expect(result.bodyId).toBeTruthy();
     // Clean up.
@@ -547,7 +548,7 @@ describe('new AI tools', () => {
     // Add a body first.
     useStore.getState().addDirectBodies([{ id: 'test_bb', name: 'Test', vertices: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 20, z: 30 }], faces: [], edges: [] }]);
     const tool = getTool('get_bounding_box')!;
-    const result = await tool.execute({ bodyId: 'test_bb' });
+    const result = (await tool.execute({ bodyId: 'test_bb' })) as { min: Vec3; max: Vec3; size: Vec3; center: Vec3 };
     expect(result.min).toEqual({ x: 0, y: 0, z: 0 });
     expect(result.max).toEqual({ x: 10, y: 20, z: 30 });
     expect(result.size).toEqual({ x: 10, y: 20, z: 30 });
@@ -558,7 +559,7 @@ describe('new AI tools', () => {
   it('export_body supports step format', async () => {
     useStore.getState().addDirectBodies([{ id: 'test_exp', name: 'Test', vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }], faces: [{ id: 'f1', vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }], normal: { x: 0, y: 0, z: 1 } }], edges: [] }]);
     const tool = getTool('export_body')!;
-    const result = await tool.execute({ bodyId: 'test_exp', format: 'step' });
+    const result = (await tool.execute({ bodyId: 'test_exp', format: 'step' })) as { format: string; content: string };
     expect(result.format).toBe('step');
     expect(result.content).toContain('ISO-10303-21');
     useStore.getState().clearScene();
