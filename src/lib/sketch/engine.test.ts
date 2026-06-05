@@ -272,6 +272,31 @@ describe('addConstraint', () => {
     const c = addConstraint(sketch, 'distance', [p1.id, p2.id], 10);
     expect(c.value).toBe(10);
   });
+
+  it('constraint has a unique ID', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    const c1 = addConstraint(sketch, 'horizontal', [line.id]);
+    const c2 = addConstraint(sketch, 'vertical', [line.id]);
+    expect(c1.id).not.toBe(c2.id);
+  });
+
+  it('constraint stores entity IDs correctly', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    const c = addConstraint(sketch, 'horizontal', [line.id]);
+    expect(c.entityIds).toEqual([line.id]);
+  });
+
+  it('multiple constraints can be added to the same entity', () => {
+    const sketch = createSketch('xy');
+    const p1 = addPoint(sketch, 0, 0);
+    const p2 = addPoint(sketch, 5, 5);
+    const line = addLine(sketch, 0, 0, 5, 5);
+    addConstraint(sketch, 'horizontal', [line.id]);
+    addConstraint(sketch, 'fixed', [p1.id]);
+    expect(sketch.constraints.size).toBe(2);
+  });
 });
 
 describe('removeEntity', () => {
