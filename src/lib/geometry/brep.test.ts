@@ -422,6 +422,22 @@ describe('computeElongation', () => {
     expect(cube.isElongated).toBe(false);
     expect(cube.isFlat).toBe(false);
   });
+
+  it('cylinder is elongated when height >> diameter', () => {
+    const tall = computeElongation(createCylinder(2, 20, 16));
+    expect(tall.isElongated).toBe(true);
+  });
+
+  it('flat cylinder is flat', () => {
+    const flat = computeElongation(createCylinder(10, 1, 16));
+    expect(flat.isFlat).toBe(true);
+  });
+
+  it('elongation values are finite', () => {
+    const e = computeElongation(createBox(10, 20, 30));
+    expect(Number.isFinite(e.elongation)).toBe(true);
+    expect(Number.isFinite(e.flatness)).toBe(true);
+  });
 });
 
 describe('computeSymmetry', () => {
