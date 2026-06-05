@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { combinedBounds, fitCameraDistance, framingBodies } from './fitView';
-import { createBox } from '../geometry/brep';
+import { createBox, createCylinder, createSphere } from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
 
 describe('framingBodies', () => {
@@ -76,5 +76,46 @@ describe('fitCameraDistance', () => {
     const noMargin = fitCameraDistance({ x: 10, y: 10, z: 10 }, 50, 1, 1.0);
     const withMargin = fitCameraDistance({ x: 10, y: 10, z: 10 }, 50, 1, 1.5);
     expect(withMargin).toBeCloseTo(noMargin * 1.5, 5);
+  });
+
+  it('handles non-uniform size (flat plate)', () => {
+    const d = fitCameraDistance({ x: 100, y: 1, z: 100 }, 50, 1);
+    expect(d).toBeGreaterThan(0);
+    expect(Number.isFinite(d)).toBe(true);
+  });
+
+  it('handles very small size', () => {
+    const d = fitCameraDistance({ x: 0.001, y: 0.001, z: 0.001 }, 50, 1);
+    expect(d).toBeGreaterThan(0);
+  });
+
+  it('handles very large aspect ratio', () => {
+    const d = fitCameraDistance({ x: 10, y: 10, z: 10 }, 50, 10);
+    expect(d).toBeGreaterThan(0);
+    expect(Number.isFinite(d)).toBe(true);
+  });
+});
+
+describe('combinedBounds with different body types', () => {
+  it('works with cylinders', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const bb = combinedBounds([cyl]);
+    expect(bb).not.toBeNull();
+    expect(bb!.max.y - bb!.min.y).toBeCloseTo(10, 1);
+  });
+
+  it('works with spheres', () => {
+    const sphere = createSphere(5, 16);
+    const bb = combinedBounds([sphere]);
+    expect(bb).not.toBeNull();
+    expect(bb!.max.x - bb!.min.x).toBeCloseTo(10, 1);
+  });
+
+  it('combines bounds of mixed body types', () => {
+    const box = createBox(10, 10, 10);
+    const cyl = translateBody(createCylinder(5, 10, 16), { x: 20, y: 0, z: 0 });
+    const bb = combinedBounds([box, cyl]);
+    expect(bb).not.toBeNull();
+    expect(bb!.max.x - bb!.min.x).toBeGreaterThan(20);
   });
 });
