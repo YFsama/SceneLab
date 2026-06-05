@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, findBoundaryLoops } from './brep';
+import { createBox, createCylinder, createSphere, findBoundaryLoops } from './brep';
 import type { SolidBody } from './types';
 
 describe('findBoundaryLoops', () => {
@@ -25,5 +25,24 @@ describe('findBoundaryLoops', () => {
     const r = findBoundaryLoops(open);
     expect(r.holeCount).toBe(2);
     expect(r.boundaryEdgeCount).toBe(8);
+  });
+
+  it('a watertight cylinder has no holes', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const r = findBoundaryLoops(cyl);
+    expect(r.holeCount).toBe(0);
+    expect(r.boundaryEdgeCount).toBe(0);
+  });
+
+  it('a watertight sphere has no holes', () => {
+    const sphere = createSphere(7, 16);
+    const r = findBoundaryLoops(sphere);
+    expect(r.holeCount).toBe(0);
+    expect(r.boundaryEdgeCount).toBe(0);
+  });
+
+  it('returns empty loops array for a watertight body', () => {
+    const r = findBoundaryLoops(createBox(10, 10, 10));
+    expect(r.loops).toEqual([]);
   });
 });
