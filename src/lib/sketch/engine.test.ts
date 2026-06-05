@@ -395,4 +395,20 @@ describe('removeEntity edge cases', () => {
     removeEntity(s, arc.id);
     expect(s.entities.size).toBe(0);
   });
+
+  it('removing a non-existent entity is a no-op', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 10, 0);
+    const sizeBefore = s.entities.size;
+    removeEntity(s, 'nonexistent');
+    expect(s.entities.size).toBe(sizeBefore);
+  });
+
+  it('removing a circle removes its center and the circle entity', () => {
+    const s = createSketch('xy');
+    const circle = addCircle(s, 5, 5, 3);
+    expect(s.entities.size).toBe(2); // 1 circle + 1 center point
+    removeEntity(s, circle.id);
+    expect(s.entities.size).toBe(0);
+  });
 });
