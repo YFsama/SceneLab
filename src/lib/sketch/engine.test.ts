@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createSketch, addPoint, addLine, addRectangle, addCircle, addArc,
+  createSketch, addPoint, addLine, addRectangle, addCircle, addArc, addPolygon,
   addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
   detectRectangle, resizeRectangle,
 } from './engine';
@@ -100,6 +100,42 @@ describe('addArc', () => {
     expect(arc.type).toBe('arc');
     expect(arc.radius).toBe(5);
     expect(sketch.entities.size).toBe(2); // 1 point + 1 arc
+  });
+});
+
+describe('addPolygon', () => {
+  it('should add a polygon with the specified number of sides', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 5, 6);
+    // Returns 6 line IDs.
+    expect(ids.length).toBe(6);
+  });
+
+  it('should create a triangle (3 sides)', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 5, 3);
+    expect(ids.length).toBe(3);
+  });
+
+  it('should create a square (4 sides)', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 5, 4);
+    expect(ids.length).toBe(4);
+  });
+
+  it('should have all line entities', () => {
+    const sketch = createSketch('xy');
+    addPolygon(sketch, 0, 0, 5, 6);
+    const lines = [...sketch.entities.values()].filter((e) => e.type === 'line');
+    expect(lines.length).toBe(6);
+  });
+
+  it('line IDs reference valid entities', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 5, 6);
+    for (const id of ids) {
+      expect(sketch.entities.has(id)).toBe(true);
+    }
   });
 });
 
