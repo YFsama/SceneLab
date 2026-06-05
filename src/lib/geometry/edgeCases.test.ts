@@ -164,4 +164,36 @@ describe('geometry edge cases', () => {
       expect(bb.min.x).toBeGreaterThan(90);
     });
   });
+
+  describe('cylinder operations', () => {
+    it('cylinder volume approximates πr²h', () => {
+      const cyl = createCylinder(5, 20, 32);
+      const vol = Math.abs(computeVolume(cyl));
+      const expected = Math.PI * 25 * 20; // π * 5² * 20
+      expect(vol).toBeGreaterThan(expected * 0.9);
+      expect(vol).toBeLessThan(expected * 1.1);
+    });
+
+    it('cylinder bounding box has correct height', () => {
+      const cyl = createCylinder(5, 20, 16);
+      const bb = computeBoundingBox(cyl);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(20, 1);
+    });
+
+    it('cylinder bounding box has correct diameter', () => {
+      const cyl = createCylinder(5, 20, 32);
+      const bb = computeBoundingBox(cyl);
+      expect(bb.max.x - bb.min.x).toBeCloseTo(10, 1);
+      expect(bb.max.z - bb.min.z).toBeCloseTo(10, 1);
+    });
+
+    it('scaled cylinder has correct dimensions', () => {
+      const cyl = createCylinder(5, 10, 16);
+      const scaled = scaleBodyXYZ(cyl, 2, 1, 3);
+      const bb = computeBoundingBox(scaled);
+      expect(bb.max.x - bb.min.x).toBeCloseTo(20, 1);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(10, 1);
+      expect(bb.max.z - bb.min.z).toBeCloseTo(30, 1);
+    });
+  });
 });
