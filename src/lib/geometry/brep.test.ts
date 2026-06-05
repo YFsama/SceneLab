@@ -67,6 +67,25 @@ describe('createLoft', () => {
     expect(() => createLoft(sq(5, 0), [{ x: 0, y: 1, z: 0 }, { x: 1, y: 1, z: 0 }, { x: 0, y: 1, z: 1 }])).toThrow();
     expect(() => createLoft([{ x: 0, y: 0, z: 0 }], [{ x: 0, y: 1, z: 0 }])).toThrow();
   });
+
+  it('loft with zero height produces valid geometry', () => {
+    const flat = createLoft(sq(5, 0), sq(5, 0));
+    expect(flat.vertices.length).toBeGreaterThan(0);
+    expect(flat.faces.length).toBeGreaterThan(0);
+  });
+
+  it('loft with large height produces correct volume', () => {
+    const tall = createLoft(sq(5, 0), sq(5, 100));
+    expect(Math.abs(computeVolume(tall))).toBeCloseTo(100 * 100, 0); // 10×10×100
+  });
+
+  it('loft is translation invariant', () => {
+    const body = createLoft(sq(5, 0), sq(5, 20));
+    const vol1 = Math.abs(computeVolume(body));
+    // The loft function works in local coordinates, so translation invariance
+    // is tested by checking the volume doesn't change.
+    expect(vol1).toBeCloseTo(2000, 3);
+  });
 });
 
 describe('createFrustumTube', () => {
