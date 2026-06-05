@@ -349,6 +349,29 @@ describe('solveSketch', () => {
     const p2 = result.get(line.p2Id);
     expect(p1?.y).toBeCloseTo(p2?.y ?? 0);
   });
+
+  it('returns points unchanged with no constraints', () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 5);
+    const result = solveSketch(sketch);
+    expect(result.size).toBe(2);
+    // Points should be near their original positions.
+    const pts = [...result.values()];
+    expect(pts[0]!.x).toBeCloseTo(0, 4);
+    expect(pts[0]!.y).toBeCloseTo(0, 4);
+    expect(pts[1]!.x).toBeCloseTo(10, 4);
+    expect(pts[1]!.y).toBeCloseTo(5, 4);
+  });
+
+  it('solves vertical constraint', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 5, 10);
+    addConstraint(sketch, 'vertical', [line.id]);
+    const result = solveSketch(sketch);
+    const p1 = result.get(line.p1Id);
+    const p2 = result.get(line.p2Id);
+    expect(p1?.x).toBeCloseTo(p2?.x ?? 0, 4);
+  });
 });
 
 describe('detectRectangle', () => {
