@@ -405,7 +405,7 @@ describe('multiple constraints on same entity', () => {
     const constraints = new Map<string, SketchConstraint>();
     constraints.set('c1', { id: 'c1', type: 'radius', entityIds: ['arc1'], value: 10 });
 
-    const result = solveConstraints(entities, constraints);
+    solveConstraints(entities, constraints);
     // Arc radius should be updated to 10.
     const arc = entities.get('arc1') as { radius: number };
     expect(arc.radius).toBeCloseTo(10, 4);
