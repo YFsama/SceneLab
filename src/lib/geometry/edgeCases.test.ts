@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBox, createCylinder, createSphere, computeVolume, computeBoundingBox, checkManifold } from './brep';
+import { createBox, createCylinder, createSphere, createTorus, computeVolume, computeBoundingBox, checkManifold } from './brep';
 import { scaleBody, scaleBodyXYZ, translateBody, mergeBodies, weldVertices } from './operations';
 
 describe('geometry edge cases', () => {
@@ -194,6 +194,38 @@ describe('geometry edge cases', () => {
       expect(bb.max.x - bb.min.x).toBeCloseTo(20, 1);
       expect(bb.max.y - bb.min.y).toBeCloseTo(10, 1);
       expect(bb.max.z - bb.min.z).toBeCloseTo(30, 1);
+    });
+  });
+
+  describe('torus operations', () => {
+    it('torus volume approximates 2π²Rr²', () => {
+      const R = 10, r = 3;
+      const torus = createTorus(R, r, 32, 16);
+      const vol = Math.abs(computeVolume(torus));
+      const expected = 2 * Math.PI * Math.PI * R * r * r;
+      expect(vol).toBeGreaterThan(expected * 0.85);
+      expect(vol).toBeLessThan(expected * 1.15);
+    });
+
+    it('torus bounding box spans 2(R+r) in X and Z', () => {
+      const R = 10, r = 3;
+      const torus = createTorus(R, r, 32, 16);
+      const bb = computeBoundingBox(torus);
+      const expectedSpan = 2 * (R + r);
+      expect(bb.max.x - bb.min.x).toBeCloseTo(expectedSpan, 1);
+      expect(bb.max.z - bb.min.z).toBeCloseTo(expectedSpan, 1);
+    });
+
+    it('torus bounding box spans 2r in Y', () => {
+      const R = 10, r = 3;
+      const torus = createTorus(R, r, 32, 16);
+      const bb = computeBoundingBox(torus);
+      expect(bb.max.y - bb.min.y).toBeCloseTo(2 * r, 1);
+    });
+
+    it('torus is manifold', () => {
+      const torus = createTorus(10, 3, 16, 8);
+      expect(checkManifold(torus).boundaryEdges).toBe(0);
     });
   });
 });
