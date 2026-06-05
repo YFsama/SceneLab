@@ -30,4 +30,32 @@ describe('splitAcrossAxis', () => {
     }
     expect(total).toBeCloseTo(1000, -2);
   });
+
+  it('splits along X axis', () => {
+    const halves = splitAcrossAxis(box, 'x', 40);
+    expect(halves).toHaveLength(2);
+    let total = 0;
+    for (const h of halves) {
+      total += Math.abs(computeVolume(h));
+    }
+    expect(total).toBeCloseTo(1000, -2);
+  });
+
+  it('splits along Z axis', () => {
+    const halves = splitAcrossAxis(box, 'z', 40);
+    expect(halves).toHaveLength(2);
+    let total = 0;
+    for (const h of halves) {
+      total += Math.abs(computeVolume(h));
+    }
+    expect(total).toBeCloseTo(1000, -2);
+  });
+
+  it('each half has roughly half the volume', () => {
+    const halves = splitAcrossAxis(box, 'y', 40);
+    expect(halves).toHaveLength(2);
+    for (const h of halves) {
+      expect(Math.abs(computeVolume(h))).toBeCloseTo(500, -2);
+    }
+  });
 });
