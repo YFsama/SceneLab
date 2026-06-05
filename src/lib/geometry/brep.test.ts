@@ -636,6 +636,18 @@ describe('topology', () => {
     expect(topo.genus).toBe(0);
   });
 
+  it('a tube is genus 1 (has a hole through it)', () => {
+    const topo = computeTopology(createTube(10, 6, 20, 16));
+    expect(topo.eulerCharacteristic).toBe(0);
+    expect(topo.genus).toBe(1);
+  });
+
+  it('a coil is genus 0 (open swept tube with caps)', () => {
+    const topo = computeTopology(createCoil(10, 2, 8, 3, 32, 8));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+  });
+
   it('a torus is genus 1 with one handle (Euler χ = 0)', () => {
     const g = computeMeshGenus(createTorus(10, 3, 32, 16));
     expect(g.eulerCharacteristic).toBe(0);
