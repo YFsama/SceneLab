@@ -622,6 +622,16 @@ describe('app store — direct bodies', () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(5, 4);
   });
 
+  it('setSketchPlaneId changes the sketch plane', () => {
+    expect(useStore.getState().sketchPlaneId).toBe('xy');
+    useStore.getState().setSketchPlaneId('xz');
+    expect(useStore.getState().sketchPlaneId).toBe('xz');
+    useStore.getState().setSketchPlaneId('yz');
+    expect(useStore.getState().sketchPlaneId).toBe('yz');
+    useStore.getState().setSketchPlaneId('xy');
+    expect(useStore.getState().sketchPlaneId).toBe('xy');
+  });
+
   it('exitSketch leaves sketch mode and returns to the model workspace', () => {
     useStore.setState({ sketchActive: true, sketchTool: 'rect', drawStart: { x: 1, y: 1 }, workspace: 'sketch' });
     useStore.getState().exitSketch();
