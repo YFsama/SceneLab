@@ -129,3 +129,28 @@ describe('angleAtVertex', () => {
     expect(angleAtVertex({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBe(0);
   });
 });
+
+describe('snapToPoints edge cases', () => {
+  it('returns raw point when no candidates', () => {
+    const result = snapToPoints({ x: 5, y: 5 }, [], 1);
+    expect(result.snapped).toBe(false);
+    expect(result.point).toEqual({ x: 5, y: 5 });
+  });
+
+  it('snaps to the nearest candidate within tolerance', () => {
+    const result = snapToPoints({ x: 5.1, y: 5.1 }, [{ x: 5, y: 5 }], 0.5);
+    expect(result.snapped).toBe(true);
+    expect(result.point).toEqual({ x: 5, y: 5 });
+  });
+
+  it('does not snap when outside tolerance', () => {
+    const result = snapToPoints({ x: 5.5, y: 5.5 }, [{ x: 5, y: 5 }], 0.3);
+    expect(result.snapped).toBe(false);
+  });
+
+  it('snaps to the closest of multiple candidates', () => {
+    const result = snapToPoints({ x: 5.1, y: 5.1 }, [{ x: 10, y: 10 }, { x: 5, y: 5 }], 1);
+    expect(result.snapped).toBe(true);
+    expect(result.point).toEqual({ x: 5, y: 5 });
+  });
+});
