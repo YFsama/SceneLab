@@ -463,6 +463,30 @@ describe('primitives have consistent outward normals', () => {
       expect(nc.inwardFaces).toBe(0);
     });
   }
+
+  it('torus normals are consistent', () => {
+    const nc = checkNormalConsistency(createTorus(10, 3, 16, 8));
+    expect(nc.consistent).toBe(true);
+    expect(nc.inwardFaces).toBe(0);
+  });
+
+  it('wedge normals are consistent', () => {
+    const nc = checkNormalConsistency(createWedge(10, 6, 4));
+    expect(nc.consistent).toBe(true);
+    expect(nc.inwardFaces).toBe(0);
+  });
+
+  it('prism normals are consistent', () => {
+    const nc = checkNormalConsistency(createPrism(6, 10, 5));
+    expect(nc.consistent).toBe(true);
+    expect(nc.inwardFaces).toBe(0);
+  });
+
+  it('tube normals are consistent', () => {
+    const nc = checkNormalConsistency(createTube(10, 6, 20, 16));
+    expect(nc.consistent).toBe(true);
+    expect(nc.inwardFaces).toBe(0);
+  });
 });
 
 describe('topology', () => {
