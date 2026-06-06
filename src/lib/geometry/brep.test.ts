@@ -1721,3 +1721,33 @@ describe('computeSurfaceArea', () => {
     expect(large).toBeCloseTo(small * 4, 0); // 2² = 4
   });
 });
+
+describe('topology edge cases', () => {
+  it('torus is genus 1 (Euler χ = 0)', () => {
+    const topo = computeTopology(createTorus(10, 3, 16, 8));
+    expect(topo.eulerCharacteristic).toBe(0);
+    expect(topo.genus).toBe(1);
+  });
+
+  it('prism is genus 0', () => {
+    const topo = computeTopology(createPrism(6, 10, 5));
+    expect(topo.eulerCharacteristic).toBe(2);
+    expect(topo.genus).toBe(0);
+  });
+
+  it('tube is genus 1', () => {
+    const topo = computeTopology(createTube(10, 6, 20, 16));
+    expect(topo.eulerCharacteristic).toBe(0);
+    expect(topo.genus).toBe(1);
+  });
+
+  it('all genus values are non-negative', () => {
+    for (const make of [
+      () => createBox(10, 10, 10),
+      () => createSphere(5, 16),
+      () => createTorus(10, 3, 16, 8),
+    ]) {
+      expect(computeTopology(make()).genus).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
