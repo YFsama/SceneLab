@@ -630,4 +630,42 @@ describe('multiple constraints on same entity', () => {
     const r2 = (entities.get('circle2') as { radius: number }).radius;
     expect(r1).toBeCloseTo(r2, 4);
   });
+
+  it('fixed + equal: fixed point stays, other moves to match length', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 10, y: 0 });
+    entities.set('p3', { id: 'p3', type: 'point', x: 0, y: 5 });
+    entities.set('p4', { id: 'p4', type: 'point', x: 3, y: 5 });
+    entities.set('l1', { id: 'l1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    entities.set('l2', { id: 'l2', type: 'line', p1Id: 'p3', p2Id: 'p4' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'fixed', entityIds: ['p1'] });
+    constraints.set('c2', { id: 'c2', type: 'equal', entityIds: ['l1', 'l2'] });
+    const result = solveConstraints(entities, constraints);
+    // p1 stays fixed at (0,0).
+    expect(result.get('p1')!.x).toBeCloseTo(0, 6);
+    expect(result.get('p1')!.y).toBeCloseTo(0, 6);
+    // Both lines should have similar length.
+    const d1 = Math.hypot(result.get('p2')!.x - result.get('p1')!.x, result.get('p2')!.y - result.get('p1')!.y);
+    const d2 = Math.hypot(result.get('p4')!.x - result.get('p3')!.x, result.get('p4')!.y - result.get('p3')!.y);
+    expect(d1).toBeCloseTo(d2, 2);
+  });
+
+  it('horizontal + vertical + distance on a line', () => {
+    const entities = new Map<string, SketchEntity>();
+    entities.set('p1', { id: 'p1', type: 'point', x: 0, y: 0 });
+    entities.set('p2', { id: 'p2', type: 'point', x: 5, y: 5 });
+    entities.set('line1', { id: 'line1', type: 'line', p1Id: 'p1', p2Id: 'p2' });
+    const constraints = new Map<string, SketchConstraint>();
+    constraints.set('c1', { id: 'c1', type: 'horizontal', entityIds: ['line1'] });
+    constraints.set('c2', { id: 'c2', type: 'vertical', entityIds: ['line1'] });
+    constraints.set('c3', { id: 'c3', type: 'distance', entityIds: ['p1', 'p2'], value: 10 });
+    const result = solveConstraints(entities, constraints);
+    // Horizontal + vertical collapses to a point; distance is irrelevant.
+    const p1 = result.get('p1')!;
+    const p2 = result.get('p2')!;
+    expect(p1.x).toBeCloseTo(p2.x, 4);
+    expect(p1.y).toBeCloseTo(p2.y, 4);
+  });
 });
