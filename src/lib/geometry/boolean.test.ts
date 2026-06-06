@@ -270,6 +270,28 @@ describe('mirrorMerge edge cases', () => {
     expect(merged).not.toBeNull();
     expect(Math.abs(computeVolume(merged))).toBeGreaterThan(0);
   });
+
+  it('mirror merge across Z axis', () => {
+    const box = createBox(10, 10, 10);
+    const merged = mirrorMerge(box, { origin: { x: 0, y: 0, z: 5 }, normal: { x: 0, y: 0, z: 1 } }, 30)!;
+    expect(merged).not.toBeNull();
+    expect(Math.abs(computeVolume(merged))).toBeGreaterThan(0);
+  });
+
+  it('mirror merge of a cylinder produces valid result', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const merged = mirrorMerge(cyl, { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }, 30)!;
+    expect(merged).not.toBeNull();
+    expect(Math.abs(computeVolume(merged))).toBeGreaterThan(0);
+  });
+
+  it('mirror merge preserves volume (approximately doubles)', () => {
+    const box = createBox(10, 10, 10);
+    const volOrig = Math.abs(computeVolume(box));
+    const merged = mirrorMerge(box, { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }, 40)!;
+    const volMerged = Math.abs(computeVolume(merged));
+    expect(volMerged).toBeCloseTo(volOrig * 2, -1);
+  });
 });
 
 describe('hollowBody wall thickness edge cases', () => {
