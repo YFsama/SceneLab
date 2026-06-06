@@ -569,3 +569,33 @@ describe('solveSketch with multiple constraints', () => {
     expect(dist).toBeCloseTo(10, 2);
   });
 });
+
+describe('addPolygon edge cases', () => {
+  it('polygon with many sides (12)', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 5, 12);
+    expect(ids).toHaveLength(12);
+  });
+
+  it('polygon at non-origin center', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 10, 20, 5, 6);
+    expect(ids).toHaveLength(6);
+    // All line IDs should reference valid entities.
+    for (const id of ids) {
+      expect(sketch.entities.has(id)).toBe(true);
+    }
+  });
+
+  it('polygon with small radius', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 0.1, 6);
+    expect(ids).toHaveLength(6);
+  });
+
+  it('polygon with large radius', () => {
+    const sketch = createSketch('xy');
+    const ids = addPolygon(sketch, 0, 0, 100, 8);
+    expect(ids).toHaveLength(8);
+  });
+});
