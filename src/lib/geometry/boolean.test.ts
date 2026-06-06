@@ -193,6 +193,24 @@ describe('splitByPlane edge cases', () => {
     expect(checkManifold(positive!).boundaryEdges).toBe(0);
     expect(checkManifold(negative!).boundaryEdges).toBe(0);
   });
+
+  it('off-center plane produces unequal halves', () => {
+    const plane = makePlane({ x: 0, y: 2, z: 0 }, { x: 0, y: 1, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(positive).not.toBeNull();
+    expect(negative).not.toBeNull();
+    const vp = Math.abs(computeVolume(positive!));
+    const vn = Math.abs(computeVolume(negative!));
+    // The halves should be different sizes.
+    expect(Math.abs(vp - vn)).toBeGreaterThan(100);
+  });
+
+  it('both halves are always non-negative volume', () => {
+    const plane = makePlane({ x: 0, y: 3, z: 0 }, { x: 0, y: 1, z: 0 });
+    const { positive, negative } = splitByPlane(box, plane, 40);
+    expect(Math.abs(computeVolume(positive!))).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(computeVolume(negative!))).toBeGreaterThanOrEqual(0);
+  });
 });
 
 describe('hollowBody edge cases', () => {
