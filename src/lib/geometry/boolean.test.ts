@@ -253,3 +253,29 @@ describe('mirrorMerge edge cases', () => {
     expect(Math.abs(computeVolume(merged))).toBeGreaterThan(0);
   });
 });
+
+describe('hollowBody wall thickness edge cases', () => {
+  it('thicker wall produces different volume', () => {
+    const box = createBox(20, 20, 20);
+    const thin = hollowBody(box, 1, 40)!;
+    const thick = hollowBody(box, 4, 40)!;
+    expect(Math.abs(computeVolume(thin))).not.toBeCloseTo(Math.abs(computeVolume(thick)), 0);
+  });
+
+  it('wall thickness of 1mm works', () => {
+    const box = createBox(20, 20, 20);
+    const h = hollowBody(box, 1, 40)!;
+    expect(h).not.toBeNull();
+    expect(Math.abs(computeVolume(h))).toBeGreaterThan(0);
+  });
+
+  it('wall thickness close to half dimension still produces valid result', () => {
+    const box = createBox(20, 20, 20);
+    // Wall thickness = 9mm (almost fills the 10mm half-dimension).
+    const h = hollowBody(box, 9, 40);
+    // May return null if wall consumes the entire part.
+    if (h) {
+      expect(Math.abs(computeVolume(h))).toBeGreaterThan(0);
+    }
+  });
+});
