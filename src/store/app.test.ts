@@ -1743,6 +1743,26 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().projectDirty).toBe(true);
   });
 
+  it('removeDirectBody is a no-op for unknown id', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    const countBefore = useStore.getState().bodies.length;
+    useStore.getState().removeDirectBody('nonexistent');
+    expect(useStore.getState().bodies.length).toBe(countBefore);
+  });
+
+  it('addDirectBody preserves body properties', () => {
+    const box = createBox(10, 10, 10);
+    box.color = 0xff0000;
+    box.opacity = 0.5;
+    box.material = 'aluminum';
+    useStore.getState().addDirectBody(box);
+    const added = useStore.getState().bodies[0]!;
+    expect(added.color).toBe(0xff0000);
+    expect(added.opacity).toBe(0.5);
+    expect(added.material).toBe('aluminum');
+  });
+
   describe('datum planes', () => {
     beforeEach(() => useStore.getState().clearScene());
 
