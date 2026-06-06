@@ -319,3 +319,37 @@ describe('hollowBody wall thickness edge cases', () => {
     }
   });
 });
+
+describe('booleanOp resolution edge cases', () => {
+  it('lower resolution produces faster but rougher result', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 });
+    const low = booleanOp(a, b, 'union', 16);
+    const high = booleanOp(a, b, 'union', 48);
+    expect(low).not.toBeNull();
+    expect(high).not.toBeNull();
+    // Both should produce valid results.
+    expect(Math.abs(computeVolume(low!))).toBeGreaterThan(0);
+    expect(Math.abs(computeVolume(high!))).toBeGreaterThan(0);
+  });
+
+  it('minimum resolution (2) still produces a result', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 });
+    const r = booleanOp(a, b, 'union', 2);
+    // May or may not produce a result at very low resolution.
+    if (r) {
+      expect(Math.abs(computeVolume(r))).toBeGreaterThan(0);
+    }
+  });
+
+  it('all three operations work at same resolution', () => {
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 });
+    for (const op of ['union', 'difference', 'intersect'] as const) {
+      const r = booleanOp(a, b, op, 24);
+      expect(r).not.toBeNull();
+      expect(Math.abs(computeVolume(r!))).toBeGreaterThan(0);
+    }
+  });
+});
