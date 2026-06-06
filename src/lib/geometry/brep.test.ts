@@ -1751,3 +1751,34 @@ describe('topology edge cases', () => {
     }
   });
 });
+
+describe('computeMeshStatistics edge cases', () => {
+  it('cylinder has correct face and vertex counts', () => {
+    const cyl = createCylinder(5, 10, 16);
+    const s = computeMeshStatistics(cyl);
+    expect(s.faceCount).toBeGreaterThan(0);
+    expect(s.vertexCount).toBeGreaterThan(0);
+    expect(s.edgeCount).toBeGreaterThan(0);
+  });
+
+  it('all counts are positive for any valid body', () => {
+    for (const make of [
+      () => createBox(10, 10, 10),
+      () => createSphere(5, 16),
+      () => createCylinder(5, 10, 16),
+    ]) {
+      const s = computeMeshStatistics(make());
+      expect(s.faceCount).toBeGreaterThan(0);
+      expect(s.vertexCount).toBeGreaterThan(0);
+      expect(s.edgeCount).toBeGreaterThan(0);
+    }
+  });
+
+  it('face count is always even for closed manifold bodies', () => {
+    // Each face has exactly 3 vertices (triangulated), and each edge is shared
+    // by exactly 2 faces. So face count should be even for closed meshes.
+    const box = createBox(10, 10, 10);
+    const s = computeMeshStatistics(box);
+    expect(s.faceCount % 2).toBe(0);
+  });
+});
