@@ -405,6 +405,23 @@ describe('computePendulumPeriod', () => {
     // Axis through the CoM → no restoring torque → infinite period.
     expect(computePendulumPeriod(rod, { x: 0, y: 10, z: 0 }, axis)).toBe(Infinity);
   });
+
+  it('period is always positive for a valid pendulum', () => {
+    const box = createBox(10, 20, 10);
+    const t = computePendulumPeriod(box, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 9810);
+    expect(t).toBeGreaterThan(0);
+    expect(Number.isFinite(t)).toBe(true);
+  });
+
+  it('longer rod has longer period', () => {
+    const short = createBox(2, 10, 2);
+    const long = createBox(2, 20, 2);
+    const pivot = { x: 0, y: 0, z: 0 };
+    const axis = { x: 0, y: 0, z: 1 };
+    const tShort = computePendulumPeriod(short, pivot, axis, 9810);
+    const tLong = computePendulumPeriod(long, pivot, axis, 9810);
+    expect(tLong).toBeGreaterThan(tShort);
+  });
 });
 
 describe('computePrincipalMoments', () => {
