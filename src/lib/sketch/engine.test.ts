@@ -599,3 +599,32 @@ describe('addPolygon edge cases', () => {
     expect(ids).toHaveLength(8);
   });
 });
+
+describe('addRectangle edge cases', () => {
+  it('rectangle with negative coordinates', () => {
+    const sketch = createSketch('xy');
+    const { lines, points } = addRectangle(sketch, -10, -5, 10, 5);
+    expect(points.length).toBe(4);
+    expect(lines.length).toBe(4);
+    expect(sketch.entities.size).toBe(8);
+  });
+
+  it('rectangle with reversed corners', () => {
+    const sketch = createSketch('xy');
+    const { lines, points } = addRectangle(sketch, 10, 5, 0, 0);
+    expect(points.length).toBe(4);
+    expect(lines.length).toBe(4);
+  });
+
+  it('square rectangle (equal dimensions)', () => {
+    const sketch = createSketch('xy');
+    const { lines } = addRectangle(sketch, 0, 0, 10, 10);
+    expect(lines.length).toBe(4);
+  });
+
+  it('very small rectangle', () => {
+    const sketch = createSketch('xy');
+    const { lines } = addRectangle(sketch, 0, 0, 0.01, 0.01);
+    expect(lines.length).toBe(4);
+  });
+});

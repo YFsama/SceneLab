@@ -211,6 +211,12 @@ See the original design document for full tech stack rationale. Key choices:
   - **Drawing title block**: project name, scale, date, units.
   - **Vision** already implemented (AI panel Eye toggle → viewport screenshot → Claude multimodal).
   - All 27 v0.1–v0.6 roadmap items now marked complete.
+- `2026-06-16`: v0.4.0 release — comprehensive edge-case testing and quality assurance.
+  - **Test suite expanded** from 1295+ to 1607+ tests across 105 files (all passing).
+  - **Edge-case testing campaign**: extensive boundary condition coverage for geometry operations (booleanOp, mirrorMerge, splitByPlane, hollowBody), mass properties (inertia tensor, centroid, bounding sphere, surface area), solver constraints (fixed, equal, distance, concentric, radius), and sketch tools (addPolygon, addRectangle).
+  - **Bug fix**: corrected inertia tensor test for axis-aligned box (products of inertia should be zero).
+  - **Quality assurance**: all 1607 tests passing, lint clean, TypeScript strict mode, build successful.
+  - **Version synchronized** across package.json, Cargo.toml, and tauri.conf.json.
 
 ---
 
