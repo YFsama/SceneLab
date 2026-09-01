@@ -12,6 +12,7 @@ import { StatusBar } from './components/ui/StatusBar';
 import { ToastHost } from './components/ui/ToastHost';
 import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { ExtrudeDialog } from './components/ui/ExtrudeDialog';
+import { NumericPromptDialog } from './components/ui/NumericPrompt';
 import { RevolveDialog } from './components/ui/RevolveDialog';
 import { AIPanel } from './components/panels/AIPanel';
 import { CAMPanel } from './components/panels/CAMPanel';
@@ -89,6 +90,7 @@ export default function App() {
       {/* Overlay UI */}
       <ToastHost />
       <ConfirmDialog />
+      <NumericPromptDialog />
       <ExtrudeDialog />
       <RevolveDialog />
       <CommandPalette />

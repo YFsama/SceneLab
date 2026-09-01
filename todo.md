@@ -430,3 +430,18 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
 2. #7 透视/正交 或 #8 ViewCube（中等、独立、纯前端）
 3. #1 框选（价值最高，但需先确认“旋转改中键”，最好能交互验证）
 4. 内核类 #3/#4/#5/#6 单独立项（长期工程）
+- `2026-09-01`: Pass #6 — user-convenience round (1670 tests / 111 files green; lint/tsc/build/E2E OK).
+  - **In-app numeric prompts everywhere**: generic store-driven NumericPromptDialog
+    (Esc cancel, Enter apply, inline min validation, initial value preselected) replaces
+    all 10 window.prompt() uses (constraint radius/distance, corner fillet, rect W/H,
+    sweep distance→twist chain, feature fillet/chamfer/shell). No more blocking
+    browser dialogs mid-CAD.
+  - **Type-ahead sketch dimensions** (Fusion-style): while drawing a line/rect/circle,
+    typing digits builds a size buffer shown live at the viewport corner — Enter commits
+    the entity at the exact size (line length along the cursor direction, rect W or WxH,
+    circle radius); Backspace edits, Esc clears. Plain number keys are suppressed for
+    view shortcuts while a draw is in progress so digits feed the buffer.
+  - **Discoverability hints** in the status bar: with a body selected it shows
+    "Alt+click: edge · Ctrl+click: face" (with a tooltip explaining edge-scoped
+    fillet/chamfer and shell open faces); in sketch mode it reminds that typed
+    sizes + Enter work while drawing.

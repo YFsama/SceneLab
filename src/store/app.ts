@@ -323,6 +323,20 @@ interface AppState {
   setShowExtrudeDialog: (v: boolean) => void;
   showRevolveDialog: boolean;
   setShowRevolveDialog: (v: boolean) => void;
+  /**
+   * Generic numeric input dialog (the in-app window.prompt replacement).
+   * Context menus open it from event handlers; onApply runs after close.
+   */
+  numericPrompt: {
+    titleKey: string;
+    labelKey: string;
+    initial: number | string;
+    min?: number;
+    step?: number;
+    onApply: (value: number) => void;
+  } | null;
+  openNumericPrompt: (p: NonNullable<AppState['numericPrompt']>) => void;
+  closeNumericPrompt: () => void;
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (v: boolean) => void;
   /** Whether the keyboard-shortcuts help overlay is open. */
@@ -1709,6 +1723,9 @@ export const useStore = create<AppState>((set, get) => {
   setShowExtrudeDialog: (showExtrudeDialog) => set({ showExtrudeDialog }),
   showRevolveDialog: false,
   setShowRevolveDialog: (showRevolveDialog) => set({ showRevolveDialog }),
+  numericPrompt: null,
+  openNumericPrompt: (numericPrompt) => set({ numericPrompt }),
+  closeNumericPrompt: () => set({ numericPrompt: null }),
   commandPaletteOpen: false,
   setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
   showShortcuts: false,

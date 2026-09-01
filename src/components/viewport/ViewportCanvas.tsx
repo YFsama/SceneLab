@@ -113,6 +113,10 @@ export function ViewportCanvas() {
   const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
   const visionDragRef = useRef<{ x: number; y: number } | null>(null); // AI vision crop drag origin
   const visionSelectActive = useStore((s) => s.visionSelectActive);
+  // Type-ahead sketch dimensions: keystrokes accumulated while a draw is in
+  // progress ("25" or "20x30"); Enter commits the entity at that exact size.
+  const [dimBuffer, setDimBuffer] = useState('');
+  const mouseSketchRef = useRef<{ x: number; y: number } | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
   // Lets the (earlier-declared) context menu call fitView without a TDZ.
@@ -1584,6 +1588,8 @@ export function ViewportCanvas() {
       }
       const pt = getSketchPoint(e);
       setMousePos(pt);
+      // Latest sketch-space cursor for type-ahead dimension entry (Enter).
+      mouseSketchRef.current = pt;
     },
     [sketchActive, measureActive, bodies, getSketchPoint, setHoveredId],
   );
@@ -1673,8 +1679,11 @@ export function ViewportCanvas() {
             const r = ent.radius;
             constraintItems.push(
               { label: t('constraint.radius'), onClick: () => {
-                const val = parseFloat(prompt(t('constraint.radiusPrompt'), String(r)) ?? '');
-                if (Number.isFinite(val) && val > 0) store.addSketchConstraint('radius', [selectedSketchId], val);
+                store.openNumericPrompt({
+                  titleKey: 'constraint.radius', labelKey: 'constraint.radiusPrompt',
+                  initial: r, min: 0.01,
+                  onApply: (val) => useStore.getState().addSketchConstraint('radius', [selectedSketchId], val),
+                });
               }},
             );
           }
@@ -1693,8 +1702,11 @@ export function ViewportCanvas() {
               { label: t('constraint.perpendicular'), onClick: () => { store.addSketchConstraint('perpendicular', [a.id, b.id]); } },
               { label: t('constraint.equal'), onClick: () => { store.addSketchConstraint('equal', [a.id, b.id]); } },
               { label: t('sketch.filletCorner'), onClick: () => {
-                const val = parseFloat(prompt(t('sketch.filletCornerPrompt'), '3') ?? '');
-                if (Number.isFinite(val) && val > 0) store.filletSketchCorner(a.id, b.id, val);
+                store.openNumericPrompt({
+                  titleKey: 'sketch.filletCorner', labelKey: 'sketch.filletCornerPrompt',
+                  initial: 3, min: 0.01,
+                  onApply: (val) => useStore.getState().filletSketchCorner(a.id, b.id, val),
+                });
               } },
             );
           }
@@ -1714,8 +1726,11 @@ export function ViewportCanvas() {
               { label: t('constraint.coincident'), onClick: () => { store.addSketchConstraint('coincident', [a.id, b.id]); } },
               { label: t('constraint.distance'), onClick: () => {
                 const cur = Math.hypot(a.x - b.x, a.y - b.y);
-                const val = parseFloat(prompt(t('constraint.distancePrompt'), cur.toFixed(2)) ?? '');
-                if (Number.isFinite(val) && val >= 0) store.addSketchConstraint('distance', [a.id, b.id], val);
+                store.openNumericPrompt({
+                  titleKey: 'constraint.distance', labelKey: 'constraint.distancePrompt',
+                  initial: cur.toFixed(2), min: 0,
+                  onApply: (val) => useStore.getState().addSketchConstraint('distance', [a.id, b.id], val),
+                });
               }},
             );
           }
@@ -1740,12 +1755,18 @@ export function ViewportCanvas() {
               separatorBefore: true,
               submenu: [
                 { label: `${t('sketch.setWidth')} (${rect.width.toFixed(1)})`, onClick: () => {
-                  const val = parseFloat(prompt(t('sketch.widthPrompt'), String(rect.width.toFixed(1))) ?? '');
-                  if (Number.isFinite(val) && val > 0) store.resizeSketchRectangle(selectedSketchId, val, rect.height);
+                  store.openNumericPrompt({
+                    titleKey: 'sketch.setWidth', labelKey: 'sketch.widthPrompt',
+                    initial: rect.width.toFixed(1), min: 0.01,
+                    onApply: (val) => useStore.getState().resizeSketchRectangle(selectedSketchId, val, rect.height),
+                  });
                 }},
                 { label: `${t('sketch.setHeight')} (${rect.height.toFixed(1)})`, onClick: () => {
-                  const val = parseFloat(prompt(t('sketch.heightPrompt'), String(rect.height.toFixed(1))) ?? '');
-                  if (Number.isFinite(val) && val > 0) store.resizeSketchRectangle(selectedSketchId, rect.width, val);
+                  store.openNumericPrompt({
+                    titleKey: 'sketch.setHeight', labelKey: 'sketch.heightPrompt',
+                    initial: rect.height.toFixed(1), min: 0.01,
+                    onApply: (val) => useStore.getState().resizeSketchRectangle(selectedSketchId, rect.width, val),
+                  });
                 }},
               ],
             });
@@ -1766,11 +1787,17 @@ export function ViewportCanvas() {
       label: t('sketch.sweep'),
       separatorBefore: true,
       onClick: () => {
-        const distance = parseFloat(prompt(t('sketch.sweepDistancePrompt'), '20') ?? '');
-        if (!Number.isFinite(distance) || distance <= 0) return;
-        const twist = parseFloat(prompt(t('sketch.sweepTwistPrompt'), '0') ?? '');
-        if (!Number.isFinite(twist)) return;
-        useStore.getState().performSweep(distance, twist);
+        useStore.getState().openNumericPrompt({
+          titleKey: 'sketch.sweep', labelKey: 'sketch.sweepDistancePrompt',
+          initial: 20, min: 0.1,
+          onApply: (distance) => {
+            useStore.getState().openNumericPrompt({
+              titleKey: 'sketch.sweep', labelKey: 'sketch.sweepTwistPrompt',
+              initial: 0, min: -3600, step: 5,
+              onApply: (twist) => useStore.getState().performSweep(distance, twist),
+            });
+          },
+        });
       },
     });
     items.push({ label: t('sketch.exit'), separatorBefore: true, onClick: () => useStore.getState().exitSketch() });
@@ -1874,25 +1901,34 @@ export function ViewportCanvas() {
           label: t('menu.feature'),
           submenu: [
             { label: t('feature.fillet'), onClick: pre(() => {
-              const v = parseFloat(prompt(t('feature.filletPrompt'), '2') ?? '');
-              if (Number.isFinite(v) && v > 0) {
-                const ok = st().applyFilletFeature(v);
-                showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
-              }
+              useStore.getState().openNumericPrompt({
+                titleKey: 'feature.fillet', labelKey: 'feature.filletPrompt',
+                initial: 2, min: 0.01,
+                onApply: (v) => {
+                  const ok = useStore.getState().applyFilletFeature(v);
+                  showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                },
+              });
             }) },
             { label: t('feature.chamfer'), onClick: pre(() => {
-              const v = parseFloat(prompt(t('feature.chamferPrompt'), '2') ?? '');
-              if (Number.isFinite(v) && v > 0) {
-                const ok = st().applyChamferFeature(v);
-                showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
-              }
+              useStore.getState().openNumericPrompt({
+                titleKey: 'feature.chamfer', labelKey: 'feature.chamferPrompt',
+                initial: 2, min: 0.01,
+                onApply: (v) => {
+                  const ok = useStore.getState().applyChamferFeature(v);
+                  showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                },
+              });
             }) },
             { label: t('feature.shell'), onClick: pre(() => {
-              const v = parseFloat(prompt(t('feature.shellPrompt'), '1.5') ?? '');
-              if (Number.isFinite(v) && v > 0) {
-                const ok = st().applyShellFeature(v);
-                showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
-              }
+              useStore.getState().openNumericPrompt({
+                titleKey: 'feature.shell', labelKey: 'feature.shellPrompt',
+                initial: 1.5, min: 0.01,
+                onApply: (v) => {
+                  const ok = useStore.getState().applyShellFeature(v);
+                  showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                },
+              });
             }) },
             {
               label: t('feature.mirror'),
@@ -2077,6 +2113,63 @@ export function ViewportCanvas() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      // Type-ahead dimensions while a sketch draw is in progress: digits and
+      // the WxH separator accumulate; Enter commits the entity at that exact
+      // size (line length, rect WxH, circle radius) — Fusion-style entry.
+      const st0 = useStore.getState();
+      const dimmable = st0.sketchActive && drawStart && ['line', 'rect', 'circle'].includes(st0.sketchTool);
+      if (dimmable) {
+        if (/^[0-9.]$/.test(e.key) || ((e.key === 'x' || e.key === 'X' || e.key === '*') && st0.sketchTool === 'rect')) {
+          e.preventDefault();
+          setDimBuffer((b) => (b.length < 12 ? b + e.key : b));
+          return;
+        }
+        if (e.key === 'Backspace' && dimBuffer.length > 0) {
+          e.preventDefault();
+          setDimBuffer((b) => b.slice(0, -1));
+          return;
+        }
+        if (e.key === 'Escape' && dimBuffer.length > 0) {
+          setDimBuffer('');
+          return;
+        }
+        if (e.key === 'Enter' && dimBuffer.length > 0) {
+          e.preventDefault();
+          const start = drawStart!;
+          const tool = st0.sketchTool;
+          if (tool === 'line') {
+            const len = parseFloat(dimBuffer);
+            if (Number.isFinite(len) && len > 0) {
+              const cur = mouseSketchRef.current ?? { x: start.x + 1, y: start.y };
+              let dx = cur.x - start.x, dy = cur.y - start.y;
+              const dl = Math.hypot(dx, dy);
+              if (dl < 1e-9) { dx = 1; dy = 0; } else { dx /= dl; dy /= dl; }
+              useStore.getState().addSketchLine(start.x, start.y, start.x + dx * len, start.y + dy * len);
+              useStore.getState().setDrawStart(null);
+            }
+          } else if (tool === 'rect') {
+            const m = /^([\d.]+)[xX*]([\d.]+)$/.exec(dimBuffer);
+            const single = parseFloat(dimBuffer);
+            const w = m ? parseFloat(m[1]!) : NaN;
+            const h = m ? parseFloat(m[2]!) : NaN;
+            if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+              useStore.getState().addSketchRect(start.x, start.y, start.x + w, start.y + h);
+              useStore.getState().setDrawStart(null);
+            } else if (Number.isFinite(single) && single > 0) {
+              useStore.getState().addSketchRect(start.x, start.y, start.x + single, start.y + single);
+              useStore.getState().setDrawStart(null);
+            }
+          } else if (tool === 'circle') {
+            const r = parseFloat(dimBuffer);
+            if (Number.isFinite(r) && r > 0) {
+              useStore.getState().addSketchCircle(start.x, start.y, r);
+              useStore.getState().setDrawStart(null);
+            }
+          }
+          setDimBuffer('');
+          return;
+        }
+      }
       // F = zoom to fit (all); Shift+F = zoom to selection. Standard-view number
       // keys and Esc are handled by the central shortcut map (initShortcuts).
       if (e.key === 'f') { e.preventDefault(); fitView(false); }
@@ -2158,7 +2251,7 @@ export function ViewportCanvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView, resetView, sketchActive, nudgeSelected]);
+  }, [fitView, resetView, sketchActive, nudgeSelected, drawStart, dimBuffer]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -2337,6 +2430,7 @@ export function ViewportCanvas() {
       }
 
       setDrawStart(null);
+      setDimBuffer('');
     },
     [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, selRect, setPolylineLast, t],
   );
@@ -2375,6 +2469,19 @@ export function ViewportCanvas() {
           aria-hidden="true"
         >
           {hoverLabel.name}
+        </div>
+      )}
+      {/* Type-ahead dimension entry: shows the buffered value and the tool's
+          expected format while a draw is in progress. */}
+      {dimBuffer && sketchActive && drawStart && (
+        <div
+          className="absolute z-20 top-14 left-3 px-2 py-1 rounded bg-panel/90 backdrop-blur-sm border border-accent/60 text-xs text-text-primary pointer-events-none font-mono"
+          aria-live="polite"
+        >
+          <span className="text-accent">{dimBuffer}</span>
+          <span className="text-text-muted ml-1.5">
+            {sketchTool === 'rect' ? '↵ W[xH]' : sketchTool === 'circle' ? '↵ R' : '↵ L'}
+          </span>
         </div>
       )}
       {bodies.length === 0 && !sketchActive && (

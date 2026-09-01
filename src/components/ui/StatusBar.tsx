@@ -152,6 +152,16 @@ export function StatusBar() {
         {oneBodyDims && <span className="font-mono text-text-secondary">{oneBodyDims}</span>}
         {oneBodyMaterial && <span className="text-text-muted">{oneBodyMaterial}</span>}
         {multiDims && <span className="font-mono text-text-secondary">{multiDims}</span>}
+        {/* Discoverability hints for the sub-selection modifiers and sketch
+            dimension entry — otherwise these interactions stay invisible. */}
+        {selectedCount > 0 && (
+          <span className="text-text-muted hidden md:inline" title={t('status.subSelectHint')}>
+            {t('status.subSelect')}
+          </span>
+        )}
+        {sketchActive && selectedCount === 0 && (
+          <span className="text-text-muted hidden lg:inline">{t('status.sketchDimHint')}</span>
+        )}
       </div>
       <div className="flex items-center gap-1">
         <button

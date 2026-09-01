@@ -31,6 +31,15 @@ export function useKeyboardShortcuts() {
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
         return;
       }
+      // Type-ahead sketch dimensions own the plain number keys while a draw is
+      // in progress — they build the exact-size buffer, not view switching.
+      const st = useStore.getState();
+      if (
+        st.sketchActive && st.drawStart &&
+        /^[0-9.]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey
+      ) {
+        return;
+      }
 
       const key = [
         e.ctrlKey || e.metaKey ? 'ctrl' : '',
