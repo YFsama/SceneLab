@@ -355,6 +355,22 @@ See the original design document for full tech stack rationale. Key choices:
     (chromium, with-deps, report artifact on failure).
   - **Remaining open**: VLM face-picking, drawing editable annotations,
     OCCT-grade curved STEP import.
+- `2026-09-01`: Pass #5 — history parity, sub-selection shell, vision region capture.
+  - **Undo/redo covers the feature tree** (real gap): snapshots now carry the feature
+    list alongside direct bodies/visibility, and every tree mutation entry point
+    (performExtrude/Revolve/Sweep/LoftFromSketches, parametric applyModifyFeature,
+    addFeature/removeFeature/updateFeature) pushes history. Sketch→extrude→Ctrl+Z
+    now actually reverts (previously a no-op — the history only knew direct bodies).
+    Fixed an ordering bug found by the new tests: the redo snapshot must be captured
+    BEFORE restoring (applyUndoSnapshot clears the shared feature array in place).
+    Tree+direct edits interleave in LIFO order (tested).
+  - **Shell uses the Ctrl+click face sub-selection** as its open faces
+    (scopedFaceIds mirrors scopedEdgeIds); empty selection keeps the old behaviour.
+  - **Vision region capture** ("circle a face"): a Crop button in the AI panel arms a
+    one-shot viewport rectangle drag (crosshair cursor, Escape cancels); the captured
+    region is cropped out of the WebGL canvas and attached to the next message instead
+    of the full screenshot, with a clear-region button beside it. Normalized coords so
+    the crop survives viewport resizes between capture and send.
 
 ---
 

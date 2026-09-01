@@ -245,10 +245,16 @@ interface AppState {
   cutSelected: () => number;
   /** Paste the clipboard as offset copies, select them; returns the new ids. */
   paste: () => string[];
-  /** Undo/redo history for scene-body edits (create/transform/delete). */
-  undoStack: { directBodies: SolidBody[]; hiddenIds: string[] }[];
-  redoStack: { directBodies: SolidBody[]; hiddenIds: string[] }[];
-  /** Revert the last scene-body change; returns true if something was undone. */
+  /**
+   * Undo/redo history. Snapshots cover direct bodies, visibility AND the
+   * feature list — sketch/extrude/fillet/… tree edits are first-class undoable
+   * changes, like Fusion/SolidWorks timelines. Feature objects are treated as
+   * immutable once in the tree (edits replace them via updateFeature), so a
+   * shallow array copy is a complete snapshot.
+   */
+  undoStack: { directBodies: SolidBody[]; hiddenIds: string[]; features: Feature[] }[];
+  redoStack: { directBodies: SolidBody[]; hiddenIds: string[]; features: Feature[] }[];
+  /** Revert the last change (scene or feature tree); returns true if something was undone. */
   undo: () => boolean;
   /** Re-apply the last undone change; returns true if something was redone. */
   redo: () => boolean;
@@ -343,6 +349,17 @@ interface AppState {
   /** Measure tool: when on, clicking points in the viewport measures distance. */
   measureActive: boolean;
   setMeasureActive: (v: boolean) => void;
+  /**
+   * AI vision region capture ("circle a face"): when active, the next left-drag
+   * in the viewport defines a rectangle (normalized 0..1 of the viewport) that
+   * crops the screenshot attached to the next AI message. One-shot — cleared
+   * when the drag completes.
+   */
+  visionSelectActive: boolean;
+  setVisionSelectActive: (v: boolean) => void;
+  /** Captured crop region (normalized), or null for the full viewport. */
+  visionRegion: { x: number; y: number; w: number; h: number } | null;
+  setVisionRegion: (r: { x: number; y: number; w: number; h: number } | null) => void;
   /** Points picked by the measure tool (0–3); a fourth pick restarts. */
   measurePts: Vec3[];
   addMeasurePoint: (p: Vec3) => void;
@@ -444,7 +461,23 @@ export const useStore = create<AppState>((set, get) => {
   // clearing the redo stack (a new edit invalidates the redo branch). Capped so
   // history can't grow without bound.
   const pushUndo = () => {
-    set((s) => ({ undoStack: [...s.undoStack, { directBodies: s.directBodies, hiddenIds: s.hiddenIds }].slice(-50), redoStack: [] }));
+    set((s) => ({
+      undoStack: [...s.undoStack, {
+        directBodies: s.directBodies,
+        hiddenIds: s.hiddenIds,
+        features: [...s.featureTree.features],
+      }].slice(-50),
+      redoStack: [],
+    }));
+  };
+  /** Restore a snapshot: direct bodies, visibility, and the feature list. */
+  const applyUndoSnapshot = (snap: { directBodies: SolidBody[]; hiddenIds: string[]; features: Feature[] }) => {
+    const tree = get().featureTree;
+    tree.features.length = 0;
+    tree.features.push(...snap.features);
+    tree.recompute();
+    set({ featureTree: tree, directBodies: snap.directBodies, hiddenIds: snap.hiddenIds });
+    recombine();
   };
   // Separate history for sketch edits — Ctrl+Z while sketching undoes the sketch.
   const pushSketchUndo = () => {
@@ -473,6 +506,21 @@ export const useStore = create<AppState>((set, get) => {
     const body = selectedBody();
     return body ? scopedEdgeIdsFor(body) : [];
   };
+  /**
+   * Face ids from the Ctrl+click sub-selection that live on the selected body —
+   * the shell feature's open faces. [] (no faces removed → solid inward offset)
+   * when nothing face-scoped is selected.
+   */
+  const scopedFaceIdsFor = (body: SolidBody): string[] => {
+    const sel = get().selectedFaceIds;
+    if (sel.length === 0) return [];
+    const ids = body.faces.filter((f) => sel.includes(f.id)).map((f) => f.id);
+    return ids.length > 0 ? ids : [];
+  };
+  const scopedFaceIds = (): string[] => {
+    const body = selectedBody();
+    return body ? scopedFaceIdsFor(body) : [];
+  };
   const axisDirection = (axis: 'x' | 'y' | 'z'): Vec3 =>
     axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
   const planeNormal = (plane: 'xy' | 'xz' | 'yz'): Vec3 =>
@@ -493,6 +541,7 @@ export const useStore = create<AppState>((set, get) => {
     const tree = get().featureTree;
     const parentId = tree.findFeatureIdForBody(body.id);
     if (parentId) {
+      pushUndo();
       tree.addFeature(buildFeature([parentId]));
       tree.recompute();
       set({ featureTree: tree, projectDirty: true });
@@ -747,6 +796,7 @@ export const useStore = create<AppState>((set, get) => {
   bodies: [],
   directBodies: [],
   addFeature: (feature) => {
+    pushUndo();
     const tree = get().featureTree;
     tree.addFeature(feature);
     tree.recompute();
@@ -754,6 +804,7 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
   },
   removeFeature: (id) => {
+    pushUndo();
     const tree = get().featureTree;
     tree.removeFeature(id);
     tree.recompute();
@@ -761,6 +812,7 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
   },
   updateFeature: (id, mutator) => {
+    pushUndo();
     const tree = get().featureTree;
     tree.updateFeature(id, mutator);
     tree.recompute();
@@ -1394,33 +1446,37 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies, hiddenIds } = get();
+    const { undoStack, directBodies, hiddenIds, featureTree } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
+    // Capture the current state BEFORE restoring — applyUndoSnapshot clears
+    // the (shared) feature array in place.
+    const current = { directBodies, hiddenIds, features: [...featureTree.features] };
+    applyUndoSnapshot(prev);
     set((s) => ({
-      directBodies: prev.directBodies,
-      hiddenIds: prev.hiddenIds,
       undoStack: s.undoStack.slice(0, -1),
-      redoStack: [...s.redoStack, { directBodies, hiddenIds }],
+      redoStack: [...s.redoStack, current],
       selectedIds: [],
+      selectedFaceIds: [],
+      selectedEdgeIds: [],
       projectDirty: true,
     }));
-    recombine();
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies, hiddenIds } = get();
+    const { redoStack, directBodies, hiddenIds, featureTree } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
+    const current = { directBodies, hiddenIds, features: [...featureTree.features] };
+    applyUndoSnapshot(next);
     set((s) => ({
-      directBodies: next.directBodies,
-      hiddenIds: next.hiddenIds,
       redoStack: s.redoStack.slice(0, -1),
-      undoStack: [...s.undoStack, { directBodies, hiddenIds }],
+      undoStack: [...s.undoStack, current],
       selectedIds: [],
+      selectedFaceIds: [],
+      selectedEdgeIds: [],
       projectDirty: true,
     }));
-    recombine();
     return true;
   },
   clearScene: () => {
@@ -1689,12 +1745,18 @@ export const useStore = create<AppState>((set, get) => {
   addMeasurePoint: (p) => set((s) => ({ measurePts: s.measurePts.length >= 3 ? [p] : [...s.measurePts, p] })),
   removeLastMeasurePoint: () => set((s) => ({ measurePts: s.measurePts.slice(0, -1) })),
 
+  visionSelectActive: false,
+  setVisionSelectActive: (visionSelectActive) => set({ visionSelectActive }),
+  visionRegion: null,
+  setVisionRegion: (visionRegion) => set({ visionRegion }),
+
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
     // The dialog clamps to ≥0.1 mm; enforce the same floor for AI/programmatic
     // callers so a degenerate distance can't enter the tree as a failing feature.
     if (!(distance > 0)) return;
+    pushUndo();
 
     // Create features
     const sketchFeat = createSketchFeature(sketch);
@@ -1723,6 +1785,7 @@ export const useStore = create<AppState>((set, get) => {
   performRevolve: (angle) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
+    pushUndo();
 
     const sketchFeat = createSketchFeature(sketch);
     const revolveFeat = createRevolveFeature(angle, [sketchFeat.id]);
@@ -1746,6 +1809,7 @@ export const useStore = create<AppState>((set, get) => {
   performSweep: (distance, twistDegrees) => {
     const sketch = get().currentSketch;
     if (!sketch || !(distance > 0)) return;
+    pushUndo();
 
     // Subdivide the straight path so the twist is applied gradually. One big
     // step per end can map a symmetric profile's corner set onto itself,
@@ -1795,8 +1859,8 @@ export const useStore = create<AppState>((set, get) => {
 
   applyShellFeature: (thickness) =>
     applyModifyFeature(
-      (parentIds) => createShellFeature([], thickness, parentIds),
-      (body) => applyShell(body, [], thickness),
+      (parentIds) => createShellFeature(scopedFaceIds(), thickness, parentIds),
+      (body) => applyShell(body, scopedFaceIdsFor(body), thickness),
     ),
 
   applyLinearArrayFeature: (count, spacing, axis) =>
@@ -1834,6 +1898,7 @@ export const useStore = create<AppState>((set, get) => {
       .map((id) => tree.getFeature(id))
       .filter((f): f is Extract<Feature, { type: 'sketch' }> => f?.type === 'sketch');
     if (parents.length < 2) return false;
+    pushUndo();
     tree.addFeature(createLoftFeature({}, parents.map((p) => p.id)));
     tree.recompute();
     set({ featureTree: tree, projectDirty: true });

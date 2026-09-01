@@ -200,3 +200,106 @@ describe('sketch corner fillet (store)', () => {
     expect([...useStore.getState().currentSketch!.entities.values()].filter((e) => e.type === 'arc')).toHaveLength(0);
   });
 });
+
+describe('feature-tree undo/redo', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
+      currentSketch: null,
+      sketchActive: false,
+    });
+  });
+
+  it('undo reverts a performExtrude feature edit', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performExtrude(10, false);
+    expect(useStore.getState().featureTree.features.length).toBe(2);
+    expect(useStore.getState().bodies).toHaveLength(1);
+
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().featureTree.features.length).toBe(0);
+    expect(useStore.getState().bodies).toHaveLength(0);
+
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().featureTree.features.length).toBe(2);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(computeVolume(useStore.getState().bodies[0]!)).toBeCloseTo(1000, 0);
+  });
+
+  it('undo reverts a parametric fillet added to a tree body', () => {
+    // Build a tree body via extrude.
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performExtrude(10, false);
+    const treeBody = useStore.getState().bodies[0]!;
+    useStore.getState().selectObject(treeBody.id);
+    const plainFaces = treeBody.faces.length;
+
+    expect(useStore.getState().applyFilletFeature(1)).toBe(true);
+    expect(useStore.getState().featureTree.features.length).toBe(3);
+    expect(useStore.getState().bodies[0]!.faces.length).toBeGreaterThan(plainFaces);
+
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().featureTree.features.length).toBe(2);
+    expect(useStore.getState().bodies[0]!.faces.length).toBe(plainFaces);
+  });
+
+  it('undo reverts updateFeature parameter edits', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performExtrude(10, false);
+    const extrudeId = useStore.getState().featureTree.features.find((f) => f.type === 'extrude')!.id;
+    useStore.getState().updateFeature(extrudeId, (f) =>
+      f.type === 'extrude' ? { ...f, params: { ...f.params, distance: 20 } } : f,
+    );
+    expect(computeVolume(useStore.getState().bodies[0]!)).toBeCloseTo(2000, 0);
+
+    useStore.getState().undo();
+    expect(computeVolume(useStore.getState().bodies[0]!)).toBeCloseTo(1000, 0);
+  });
+
+  it('undo history interleaves tree and direct-body edits correctly', () => {
+    // Direct edit first, then a tree edit — undo peels them in LIFO order.
+    const box = createBox(5, 5, 5);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.getState().applyFilletFeature(0.5); // direct edit (no tree parent)
+    const filleted = useStore.getState().bodies[0]!;
+
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 4, 4);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performExtrude(6, false); // tree edit
+
+    expect(useStore.getState().bodies).toHaveLength(2);
+    useStore.getState().undo();
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(useStore.getState().bodies[0]!.id).toBe(filleted.id);
+    useStore.getState().undo();
+    expect(useStore.getState().bodies[0]!.id).toBe(box.id);
+    expect(useStore.getState().bodies[0]!.faces.length).toBe(box.faces.length);
+  });
+
+  it('shell scopes to the Ctrl+click face selection', () => {
+    const box = createBox(20, 20, 20);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.getState().setSelectedFaceIds([box.faces[0]!.id]);
+    useStore.getState().applyShellFeature(2);
+    const shelled = useStore.getState().bodies.find((b) => b.id === box.id)!;
+    // The chosen face is removed and bridged to an inward offset: the mesh
+    // grows by the inner face + side walls. (An open shell is not watertight,
+    // so its signed volume is not a meaningful check — face count is.)
+    expect(shelled.faces.length).toBeGreaterThan(box.faces.length);
+  });
+});

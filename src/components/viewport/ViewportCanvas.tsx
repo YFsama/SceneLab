@@ -111,6 +111,8 @@ export function ViewportCanvas() {
   const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const selRectStartRef = useRef<{ x: number; y: number; hitBody: boolean } | null>(null);
   const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
+  const visionDragRef = useRef<{ x: number; y: number } | null>(null); // AI vision crop drag origin
+  const visionSelectActive = useStore((s) => s.visionSelectActive);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
   // Lets the (earlier-declared) context menu call fitView without a TDZ.
@@ -1534,8 +1536,9 @@ export function ViewportCanvas() {
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      // Update selection rectangle while dragging.
-      if (selRectStartRef.current && !selRectStartRef.current.hitBody) {
+      // Update selection rectangle while dragging (box-select and the AI
+      // vision region crop share the same rubber-band).
+      if (visionDragRef.current || (selRectStartRef.current && !selRectStartRef.current.hitBody)) {
         const container = containerRef.current;
         if (container) {
           const rect = container.getBoundingClientRect();
@@ -2146,6 +2149,12 @@ export function ViewportCanvas() {
         e.preventDefault();
         useStore.getState().setPolylineLast(null);
       }
+      // Escape cancels a pending AI vision region capture.
+      if (e.key === 'Escape' && useStore.getState().visionSelectActive) {
+        useStore.getState().setVisionSelectActive(false);
+        visionDragRef.current = null;
+        setSelRect(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -2156,6 +2165,16 @@ export function ViewportCanvas() {
       if (sketchActive && sketchTool !== 'select') {
         const pt = getSketchPoint(e);
         if (pt) setDrawStart(pt);
+        return;
+      }
+      // AI vision region capture: the next left-drag defines the crop sent with
+      // the next message. Takes precedence over body picking / box selection.
+      if (e.button === 0 && !sketchActive && useStore.getState().visionSelectActive) {
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        visionDragRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        setSelRect({ x1: e.clientX - rect.left, y1: e.clientY - rect.top, x2: e.clientX - rect.left, y2: e.clientY - rect.top });
         return;
       }
       // In model mode, left-click on empty space starts a selection rectangle.
@@ -2182,6 +2201,32 @@ export function ViewportCanvas() {
 
   const handleMouseUp = useCallback(
     (e: React.MouseEvent) => {
+      // AI vision region: finalize the crop rectangle (normalized 0..1).
+      if (visionDragRef.current && selRect) {
+        const container = containerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const ex = Math.min(Math.max(e.clientX - rect.left, 0), rect.width);
+          const ey = Math.min(Math.max(e.clientY - rect.top, 0), rect.height);
+          const sx = visionDragRef.current.x;
+          const sy = visionDragRef.current.y;
+          const w = Math.abs(ex - sx);
+          const h = Math.abs(ey - sy);
+          if (w > 5 && h > 5) {
+            useStore.getState().setVisionRegion({
+              x: Math.min(sx, ex) / rect.width,
+              y: Math.min(sy, ey) / rect.height,
+              w: w / rect.width,
+              h: h / rect.height,
+            });
+            showToast(t('ai.regionCaptured'), 'success');
+          }
+          useStore.getState().setVisionSelectActive(false);
+        }
+        visionDragRef.current = null;
+        setSelRect(null);
+        return;
+      }
       // Box selection: if we were drawing a selection rectangle, finalize it.
       if (selRectStartRef.current && !selRectStartRef.current.hitBody && selRect) {
         const container = containerRef.current;
@@ -2293,14 +2338,14 @@ export function ViewportCanvas() {
 
       setDrawStart(null);
     },
-    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, selRect, setPolylineLast],
+    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, selRect, setPolylineLast, t],
   );
 
   return (
     <div className="relative w-full h-full">
       <div
         ref={containerRef}
-        className={`w-full h-full bg-surface ${hoveredId && !sketchActive ? 'cursor-pointer' : ''}`}
+        className={`w-full h-full bg-surface ${visionSelectActive ? 'cursor-crosshair' : hoveredId && !sketchActive ? 'cursor-pointer' : ''}`}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onMouseDown={handleMouseDown}

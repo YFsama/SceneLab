@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useT } from '../../lib/i18n';
+import { useStore } from '../../store/app';
 import { sendMessageWithTools, executeToolCall, registerBuiltinTools } from '../../lib/ai';
 import type { AIMessage } from '../../lib/ai';
 import { showToast } from '../../lib/toast';
-import { Bot, Send, Settings, X, Loader2, Eye } from 'lucide-react';
+import { Bot, Send, Settings, X, Loader2, Eye, Crop } from 'lucide-react';
 
 let toolsRegistered = false;
 
@@ -18,6 +19,8 @@ export function AIPanel() {
   const [showSettings, setShowSettings] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [visionEnabled, setVisionEnabled] = useState(false);
+  const visionSelectActive = useStore((s) => s.visionSelectActive);
+  const visionRegion = useStore((s) => s.visionRegion);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -64,14 +67,35 @@ export function AIPanel() {
 
     try {
       // Capture viewport screenshot if vision is enabled. Target the tagged
-      // WebGL canvas, not whichever canvas is first in the DOM.
+      // WebGL canvas, not whichever canvas is first in the DOM. When a region
+      // was circled in the viewport, crop to it — "look at THIS face".
       let screenshot: string | undefined;
       if (visionEnabled) {
         const canvas =
           document.querySelector<HTMLCanvasElement>('#viewport-canvas') ??
           document.querySelector('canvas');
         if (canvas) {
-          screenshot = canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+          const region = useStore.getState().visionRegion;
+          if (region && region.w > 0.01 && region.h > 0.01) {
+            const px = Math.round(canvas.width * region.w);
+            const py = Math.round(canvas.height * region.h);
+            if (px > 1 && py > 1) {
+              const crop = document.createElement('canvas');
+              crop.width = px;
+              crop.height = py;
+              crop.getContext('2d')?.drawImage(
+                canvas,
+                Math.round(canvas.width * region.x),
+                Math.round(canvas.height * region.y),
+                px, py,
+                0, 0, px, py,
+              );
+              screenshot = crop.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+            }
+          }
+          if (screenshot === undefined) {
+            screenshot = canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+          }
         }
       }
 
@@ -234,6 +258,35 @@ export function AIPanel() {
           >
             <Eye size={14} />
           </button>
+          {/* Circle a region: the next viewport drag becomes the crop attached
+              to the next message (Fusion-style "look here" interaction). */}
+          <button
+            onClick={() => {
+              if (!visionEnabled) setVisionEnabled(true);
+              useStore.getState().setVisionSelectActive(true);
+              useStore.getState().setVisionRegion(null);
+            }}
+            className={`p-1.5 rounded transition-colors relative ${
+              visionRegion !== null || visionSelectActive
+                ? 'bg-accent text-white'
+                : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
+            }`}
+            aria-label={t('ai.regionSelect')}
+            aria-pressed={visionSelectActive}
+            title={t('ai.regionSelectHint')}
+          >
+            <Crop size={14} />
+          </button>
+          {visionRegion && !visionSelectActive && (
+            <button
+              onClick={() => useStore.getState().setVisionRegion(null)}
+              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover"
+              aria-label={t('ai.regionClear')}
+              title={t('ai.regionClear')}
+            >
+              <X size={12} />
+            </button>
+          )}
           <button
             onClick={handleSend}
             disabled={loading || !input.trim()}
