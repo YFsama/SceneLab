@@ -669,3 +669,128 @@ describe('multiple constraints on same entity', () => {
     expect(p1.y).toBeCloseTo(p2.y, 4);
   });
 });
+
+describe('equal radius across circles and arcs', () => {
+  it('averages the radii of two circles', () => {
+    const entities = new Map<string, SketchEntity>([
+      ['c1', { id: 'c1', type: 'circle', centerId: 'cp', radius: 4 }],
+      ['c2', { id: 'c2', type: 'circle', centerId: 'cp', radius: 10 }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['k', { id: 'k', type: 'equal', entityIds: ['c1', 'c2'] }],
+    ]);
+    solveConstraints(entities, constraints);
+    expect((entities.get('c1') as { radius: number }).radius).toBeCloseTo(7, 5);
+    expect((entities.get('c2') as { radius: number }).radius).toBeCloseTo(7, 5);
+  });
+
+  it('equalizes an arc and a circle (mixed types)', () => {
+    const entities = new Map<string, SketchEntity>([
+      ['a', { id: 'a', type: 'arc', centerId: 'ap', startAngle: 0, endAngle: Math.PI / 2, radius: 2 }],
+      ['c', { id: 'c', type: 'circle', centerId: 'cp', radius: 6 }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['k', { id: 'k', type: 'equal', entityIds: ['a', 'c'] }],
+    ]);
+    solveConstraints(entities, constraints);
+    expect((entities.get('a') as { radius: number }).radius).toBeCloseTo(4, 5);
+    expect((entities.get('c') as { radius: number }).radius).toBeCloseTo(4, 5);
+  });
+
+  it('parallel keeps the reference line untouched', () => {
+    const entities = new Map<string, SketchEntity>([
+      ['a1', { id: 'a1', type: 'point', x: 0, y: 0 }],
+      ['a2', { id: 'a2', type: 'point', x: 10, y: 0 }],
+      ['b1', { id: 'b1', type: 'point', x: 0, y: 4 }],
+      ['b2', { id: 'b2', type: 'point', x: 10, y: 6 }],
+      ['la', { id: 'la', type: 'line', p1Id: 'a1', p2Id: 'a2' }],
+      ['lb', { id: 'lb', type: 'line', p1Id: 'b1', p2Id: 'b2' }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['k', { id: 'k', type: 'parallel', entityIds: ['la', 'lb'] }],
+    ]);
+    const result = solveConstraints(entities, constraints);
+    const y = (id: string) => result.get(id)!.y;
+    // Reference line stays at y=0; the second line collapses to a parallel y=const.
+    expect(y('a1')).toBeCloseTo(0, 5);
+    expect(y('b1')).toBeCloseTo(y('b2'), 5);
+    expect(y('b1')).not.toBeCloseTo(6, 2); // actually converged, not unchanged
+  });
+});
+
+describe('tangent and symmetric constraints', () => {
+  it('tangent slides a line to exactly touch the circle', () => {
+    // Circle r=5 centred at the origin; line y=8 sits 3 above tangency.
+    const entities = new Map<string, SketchEntity>([
+      ['cp', { id: 'cp', type: 'point', x: 0, y: 0 }],
+      ['p1', { id: 'p1', type: 'point', x: 0, y: 8 }],
+      ['p2', { id: 'p2', type: 'point', x: 10, y: 8 }],
+      ['c', { id: 'c', type: 'circle', centerId: 'cp', radius: 5 }],
+      ['l', { id: 'l', type: 'line', p1Id: 'p1', p2Id: 'p2' }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['k', { id: 'k', type: 'tangent', entityIds: ['l', 'c'] }],
+    ]);
+    const result = solveConstraints(entities, constraints, 200, 1e-10);
+    expect(result.get('p1')!.y).toBeCloseTo(5, 5);
+    expect(result.get('p2')!.y).toBeCloseTo(5, 5);
+    // The circle is untouched.
+    expect((entities.get('c') as { radius: number }).radius).toBe(5);
+  });
+
+  it('tangent works in either entity order', () => {
+    const entities = new Map<string, SketchEntity>([
+      ['cp', { id: 'cp', type: 'point', x: 0, y: 0 }],
+      ['p1', { id: 'p1', type: 'point', x: 0, y: 2 }],
+      ['p2', { id: 'p2', type: 'point', x: 10, y: 2 }],
+      ['c', { id: 'c', type: 'circle', centerId: 'cp', radius: 5 }],
+      ['l', { id: 'l', type: 'line', p1Id: 'p1', p2Id: 'p2' }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['k', { id: 'k', type: 'tangent', entityIds: ['c', 'l'] }],
+    ]);
+    const result = solveConstraints(entities, constraints, 200, 1e-10);
+    expect(result.get('p1')!.y).toBeCloseTo(5, 5);
+  });
+
+  it('symmetric mirrors two points about a line', () => {
+    // Mirror = the Y axis (from (0,0) to (0,10)). Points skewed off-symmetry.
+    const entities = new Map<string, SketchEntity>([
+      ['m1', { id: 'm1', type: 'point', x: 0, y: 0 }],
+      ['m2', { id: 'm2', type: 'point', x: 0, y: 10 }],
+      ['a', { id: 'a', type: 'point', x: 2, y: 3 }],
+      ['b', { id: 'b', type: 'point', x: -3, y: 3.5 }],
+      ['l', { id: 'l', type: 'line', p1Id: 'm1', p2Id: 'm2' }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['k', { id: 'k', type: 'symmetric', entityIds: ['a', 'b', 'l'] }],
+    ]);
+    const result = solveConstraints(entities, constraints, 200, 1e-9);
+    const pa = result.get('a')!;
+    const pb = result.get('b')!;
+    // Midpoint sits on the mirror line (x = 0).
+    expect((pa.x + pb.x) / 2).toBeCloseTo(0, 4);
+    // Join is perpendicular to the mirror line (purely horizontal).
+    expect(pa.y).toBeCloseTo(pb.y, 4);
+    // Symmetric offsets.
+    expect(pa.x).toBeCloseTo(-pb.x, 4);
+  });
+
+  it('symmetric with a fixed point moves only the free one', () => {
+    const entities = new Map<string, SketchEntity>([
+      ['m1', { id: 'm1', type: 'point', x: 0, y: 0 }],
+      ['m2', { id: 'm2', type: 'point', x: 0, y: 10 }],
+      ['a', { id: 'a', type: 'point', x: 4, y: 2 }],
+      ['b', { id: 'b', type: 'point', x: -2, y: 2 }],
+      ['l', { id: 'l', type: 'line', p1Id: 'm1', p2Id: 'm2' }],
+    ]);
+    const constraints = new Map<string, SketchConstraint>([
+      ['f', { id: 'f', type: 'fixed', entityIds: ['a'] }],
+      ['k', { id: 'k', type: 'symmetric', entityIds: ['a', 'b', 'l'] }],
+    ]);
+    const result = solveConstraints(entities, constraints, 200, 1e-9);
+    expect(result.get('a')!.x).toBeCloseTo(4, 6);
+    expect(result.get('b')!.x).toBeCloseTo(-4, 3);
+    expect(result.get('b')!.y).toBeCloseTo(2, 3);
+  });
+});

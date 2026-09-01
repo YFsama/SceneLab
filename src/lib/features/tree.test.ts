@@ -10,9 +10,13 @@ import {
   createLinearArrayFeature,
   createCircularArrayFeature,
   createMirrorFeature,
+  createSweepFeature,
+  createLoftFeature,
 } from './tree';
 import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
 import { computeVolume } from '../geometry/brep';
+import type { SweepFeature, LoftFeature } from './types';
+import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from '../io/studio3d';
 
 /** A standalone extrude feature that produces a box-like body (no parent sketch). */
 function boxExtrude() {
@@ -324,5 +328,145 @@ describe('createRevolveFeature', () => {
     const bodies = tree.getLatestBodies();
     expect(bodies.length).toBe(1);
     expect(Math.abs(computeVolume(bodies[0]!))).toBeGreaterThan(0);
+  });
+});
+
+describe('sweep and loft features', () => {
+  // 2D profile for sweep (sketch coordinates, like extrude profiles).
+  const squareProfile = [
+    { x: -5, y: -5 }, { x: 5, y: -5 },
+    { x: 5, y: 5 }, { x: -5, y: 5 },
+  ];
+  // 3D sections for loft.
+  const squareSection = (half: number, y: number) => [
+    { x: -half, y, z: -half }, { x: half, y, z: -half },
+    { x: half, y, z: half }, { x: -half, y, z: half },
+  ];
+
+  it('sweep feature extrudes along its path (untwisted = prism volume)', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(createSweepFeature(
+      { path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 20, z: 0 }], twist: 0, profile: squareProfile },
+      [],
+    ));
+    tree.recompute();
+    const result = tree.getResult(tree.features[0]!.id)!;
+    expect(result.error).toBeUndefined();
+    expect(computeVolume(result.bodies[0]!)).toBeCloseTo(100 * 20, 0);
+  });
+
+  it('sweep without a profile throws a clear error', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(createSweepFeature({ path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 10, z: 0 }], twist: 0 }, []));
+    tree.recompute();
+    expect(tree.getResult(tree.features[0]!.id)!.error).toBeTruthy();
+  });
+
+  it('loft feature skins between explicit sections', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(createLoftFeature({
+      sections: [squareSection(5, 0), squareSection(3, 20)],
+    }));
+    tree.recompute();
+    const result = tree.getResult(tree.features[0]!.id)!;
+    expect(result.error).toBeUndefined();
+    // Frustum between 10x10 and 6x6 over height 20.
+    const v = (20 / 3) * (100 + 36 + 60);
+    expect(computeVolume(result.bodies[0]!)).toBeCloseTo(v, 0);
+  });
+
+  it('loft with fewer than two usable sections reports an error', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(createLoftFeature({ sections: [squareSection(5, 0)] }));
+    tree.recompute();
+    expect(tree.getResult(tree.features[0]!.id)!.error).toBeTruthy();
+  });
+
+  it('sweep and loft features survive a project round-trip', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(createSweepFeature(
+      { path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 20, z: 0 }], twist: Math.PI, profile: squareProfile },
+      [],
+    ));
+    tree.addFeature(createLoftFeature({ sections: [squareSection(5, 0), squareSection(5, 20)] }));
+    const json = saveToFile(serializeProject('Part', tree.features, []));
+    const features = deserializeFeatures(loadFromFile(json));
+    expect(features.map((f) => f.type)).toEqual(['sweep', 'loft']);
+    const sweep = features[0] as SweepFeature;
+    expect(sweep.params.twist).toBeCloseTo(Math.PI, 6);
+    expect(sweep.params.path).toHaveLength(2);
+    const loft = features[1] as LoftFeature;
+    expect(loft.params.sections).toHaveLength(2);
+  });
+});
+
+describe('incremental recompute', () => {
+  function boxExtrudeFeature(height: number) {
+    return createExtrudeFeature(
+      {
+        profile: [
+          { x: -5, y: 0, z: -5 }, { x: 5, y: 0, z: -5 },
+          { x: 5, y: 0, z: 5 }, { x: -5, y: 0, z: 5 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: height,
+        symmetric: false,
+      },
+      [],
+    );
+  }
+
+  it('reuses body references for unchanged features across recomputes', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(boxExtrudeFeature(10));
+    tree.recompute();
+    const first = tree.getLatestBodies()[0]!;
+    tree.recompute();
+    const second = tree.getLatestBodies()[0]!;
+    // Same object → the viewport mesh cache can skip rebuilding this body.
+    expect(second).toBe(first);
+  });
+
+  it('re-evaluates only the edited feature and its dependents', () => {
+    const tree = new FeatureTree();
+    const base = boxExtrudeFeature(10);
+    tree.addFeature(base);
+    tree.addFeature(createFilletFeature([], 1, [base.id]));
+    tree.recompute();
+    const baseBody1 = tree.getResult(base.id)!.bodies[0]!;
+    const fillet1 = tree.getResult(tree.features[1]!.id)!.bodies[0]!;
+
+    // Edit the base feature — both must re-evaluate.
+    tree.updateFeature(base.id, (f) =>
+      f.type === 'extrude' ? { ...f, params: { ...f.params, distance: 20 } } : f,
+    );
+    tree.recompute();
+    const baseBody2 = tree.getResult(base.id)!.bodies[0]!;
+    const fillet2 = tree.getResult(tree.features[1]!.id)!.bodies[0]!;
+    expect(baseBody2).not.toBe(baseBody1);
+    expect(fillet2).not.toBe(fillet1);
+    expect(computeVolume(baseBody2)).toBeCloseTo(2000, 0);
+    // The arc-segment fillet overlays material on the original faces, so the
+    // volume lands slightly above the exact prism volume.
+    expect(computeVolume(fillet2)).toBeCloseTo(2000, -2);
+
+    // Unrelated recompute keeps both reused again.
+    tree.recompute();
+    expect(tree.getResult(base.id)!.bodies[0]).toBe(baseBody2);
+    expect(tree.getResult(tree.features[1]!.id)!.bodies[0]).toBe(fillet2);
+  });
+
+  it('replays a downstream feature when a parent flips validity', () => {
+    const tree = new FeatureTree();
+    const base = boxExtrudeFeature(10);
+    const child = createFilletFeature([], 1, [base.id]);
+    tree.addFeature(base);
+    tree.addFeature(child);
+    tree.recompute();
+    expect(tree.getResult(child.id)!.bodies.length).toBe(1);
+    // Suppress the base — the child's parent result disappears → re-evaluated to an error.
+    tree.updateFeature(base.id, (f) => ({ ...f, suppressed: true }));
+    tree.recompute();
+    expect(tree.getResult(child.id)!.error).toBeTruthy();
   });
 });

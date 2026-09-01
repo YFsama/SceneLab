@@ -117,6 +117,36 @@ export function isPointInsideBody(body: SolidBody, p: Vec3): boolean {
   let crossings = 0;
   for (const f of body.faces) {
     const vs = f.vertices;
+    // Cheap ray-vs-face-AABB slab test first: the voxel engines cast millions
+    // of these rays, and the conservative reject skips the triangle math for
+    // the vast majority of faces at any given query point.
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const v of vs) {
+      if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+      if (v.z < minZ) minZ = v.z; if (v.z > maxZ) maxZ = v.z;
+    }
+    let t0 = 0;
+    let t1 = Infinity;
+    let hit = true;
+    const slab = (o: number, d: number, lo: number, hi: number): boolean => {
+      if (d > 1e-12 || d < -1e-12) {
+        let ta = (lo - o) / d;
+        let tb = (hi - o) / d;
+        if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+        if (ta > t0) t0 = ta;
+        if (tb < t1) t1 = tb;
+        if (t0 > t1) return false;
+      } else if (o < lo || o > hi) {
+        return false;
+      }
+      return true;
+    };
+    if (!slab(p.x, dir.x, minX, maxX) || !slab(p.y, dir.y, minY, maxY) || !slab(p.z, dir.z, minZ, maxZ)) {
+      hit = false;
+    }
+    if (!hit) continue;
     for (let i = 1; i < vs.length - 1; i++) {
       if (rayHitsTriangle(p, dir, vs[0]!, vs[i]!, vs[i + 1]!)) crossings++;
     }

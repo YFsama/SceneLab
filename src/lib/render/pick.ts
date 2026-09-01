@@ -56,3 +56,72 @@ export function pickBody(bodies: SolidBody[], origin: Vec3, direction: Vec3): Pi
   }
   return best;
 }
+
+export interface EdgePickResult {
+  bodyId: string;
+  edgeId: string;
+  /** Distance along the ray to the closest-approach point. */
+  distance: number;
+  point: Vec3;
+}
+
+/**
+ * Closest approach between a ray and a line segment (Ericson 5.1.9 adapted):
+ * returns null if they don't come within `threshold` world units, or if the
+ * closest point lies behind the ray origin. Used for CAD edge picking, where a
+ * click "hits" the nearest edge it passes close to.
+ */
+export function pickEdge(
+  bodies: SolidBody[],
+  origin: Vec3,
+  direction: Vec3,
+  threshold: number,
+): EdgePickResult | null {
+  // Segment B is far enough along the ray that the clamped solution is exact
+  // for any practical click distance.
+  const big = Math.max(1e3, threshold * 1e4);
+  const b1 = { x: origin.x, y: origin.y, z: origin.z };
+  const b2 = { x: origin.x + direction.x * big, y: origin.y + direction.y * big, z: origin.z + direction.z * big };
+
+  let best: EdgePickResult | null = null;
+  for (const body of bodies) {
+    for (const edge of body.edges) {
+      // Segment A: the edge itself.
+      const d1 = { x: b2.x - b1.x, y: b2.y - b1.y, z: b2.z - b1.z };
+      const d2 = { x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z };
+      const r = { x: b1.x - edge.start.x, y: b1.y - edge.start.y, z: b1.z - edge.start.z };
+      const a = d1.x * d1.x + d1.y * d1.y + d1.z * d1.z;
+      const e = d2.x * d2.x + d2.y * d2.y + d2.z * d2.z;
+      const f = d2.x * r.x + d2.y * r.y + d2.z * r.z;
+      let s: number;
+      let t: number;
+      if (a <= 1e-12 || e <= 1e-12) continue;
+      const c = d1.x * r.x + d1.y * r.y + d1.z * r.z;
+      const b = d1.x * d2.x + d1.y * d2.y + d1.z * d2.z;
+      const denom = a * e - b * b;
+      if (denom > 1e-12) {
+        s = Math.min(1, Math.max(0, (b * f - c * e) / denom));
+      } else {
+        s = 0;
+      }
+      t = (b * s + f) / e;
+      if (t < 0) {
+        t = 0;
+        s = Math.min(1, Math.max(0, -c / a));
+      }
+      const p1 = { x: b1.x + d1.x * s, y: b1.y + d1.y * s, z: b1.z + d1.z * s };
+      const p2 = { x: edge.start.x + d2.x * t, y: edge.start.y + d2.y * t, z: edge.start.z + d2.z * t };
+      const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y, p1.z - p2.z);
+      if (dist > threshold) continue;
+      if (!best || s < best.distance) {
+        best = {
+          bodyId: body.id,
+          edgeId: edge.id,
+          distance: s,
+          point: p2,
+        };
+      }
+    }
+  }
+  return best;
+}

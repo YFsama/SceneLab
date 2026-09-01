@@ -68,3 +68,40 @@ describe('export3MF', () => {
     expect(xml).not.toContain('"-1"');
   });
 });
+
+describe('3MF package round-trip', () => {
+  it('packages a spec ZIP and reads it back with exact volume', async () => {
+    const { export3MFPackage, import3MF } = await import('./threemf');
+    const { unzipSync, strFromU8 } = await import('fflate');
+    const box = createBox(10, 10, 10);
+    const pkg = export3MFPackage([box]);
+    // ZIP magic + contains the model part.
+    expect(pkg[0]).toBe(0x50);
+    expect(pkg[1]).toBe(0x4b);
+    const files = unzipSync(pkg);
+    expect(Object.keys(files)).toContain('3D/3dmodel.model');
+    expect(strFromU8(files['3D/3dmodel.model']!)).toContain('unit="millimeter"');
+
+    const back = import3MF(pkg);
+    expect(back).toHaveLength(1);
+    const { computeVolume } = await import('../geometry/brep');
+    expect(computeVolume(back[0]!)).toBeCloseTo(1000, 3);
+  });
+
+  it('imports multiple objects as separate bodies', async () => {
+    const { export3MFPackage, import3MF } = await import('./threemf');
+    const { translateBody } = await import('../geometry/operations');
+    const two = export3MFPackage([createBox(10, 10, 10), translateBody(createCylinder(5, 10, 16), { x: 30, y: 0, z: 0 })]);
+    const bodies = import3MF(two);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]!.name).toBeTruthy();
+  });
+
+  it('imports a bare model document too', async () => {
+    const { import3MF } = await import('./threemf');
+    const bodies = import3MF(export3MF([createBox(4, 4, 4)]));
+    expect(bodies).toHaveLength(1);
+    const { computeVolume } = await import('../geometry/brep');
+    expect(computeVolume(bodies[0]!)).toBeCloseTo(64, 3);
+  });
+});

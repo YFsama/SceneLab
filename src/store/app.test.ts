@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, computeBoundingBox } from '../lib/geometry';
-import { createSketch, addRectangle, addLine } from '../lib/sketch/engine';
+import { createSketch, addRectangle, addLine, closestPointPair } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
 describe('uniqueBodyName', () => {
@@ -1625,34 +1625,34 @@ describe('app store — direct bodies', () => {
     expect(constraint!.value).toBe(15);
   });
 
-  it('hollowBodyById replaces a body with a lighter shell, keeping it selected', () => {
+  it('hollowBodyById replaces a body with a lighter shell, keeping it selected', async () => {
     useStore.getState().clearScene();
     const box = createBox(20, 20, 20); // vol 8000
     useStore.getState().addDirectBody(box);
     useStore.getState().selectObject(box.id);
-    const id = useStore.getState().hollowBodyById(box.id, 2);
+    const id = await useStore.getState().hollowBodyById(box.id, 2);
     expect(id).toBeTruthy();
     expect(useStore.getState().selectedIds).toEqual([id]);
     const shell = useStore.getState().bodies.find((b) => b.id === id)!;
     expect(Math.abs(computeVolume(shell))).toBeLessThan(8000 * 0.75); // material removed
   });
 
-  it('hollowBodyById returns null for a missing body or non-positive thickness', () => {
+  it('hollowBodyById returns null for a missing body or non-positive thickness', async () => {
     useStore.getState().clearScene();
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);
-    expect(useStore.getState().hollowBodyById('nope', 2)).toBeNull();
-    expect(useStore.getState().hollowBodyById(box.id, 0)).toBeNull();
+    expect(await useStore.getState().hollowBodyById('nope', 2)).toBeNull();
+    expect(await useStore.getState().hollowBodyById(box.id, 0)).toBeNull();
   });
 
-  it('combineSelected unions the first two selected bodies into one', () => {
+  it('combineSelected unions the first two selected bodies into one', async () => {
     useStore.getState().clearScene();
     const a = createBox(10, 10, 10);
     const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 }); // overlapping
     useStore.getState().addDirectBodies([a, b]);
     useStore.getState().selectObject(a.id);
     useStore.getState().toggleSelect(b.id);
-    const id = useStore.getState().combineSelected('union');
+    const id = await useStore.getState().combineSelected('union');
     expect(id).toBeTruthy();
     expect(useStore.getState().bodies).toHaveLength(1); // a and b replaced by the union
     expect(useStore.getState().selectedIds).toEqual([id]);
@@ -1678,12 +1678,12 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().joinSelected()).toBeNull();
   });
 
-  it('combineSelected returns null with fewer than two selected', () => {
+  it('combineSelected returns null with fewer than two selected', async () => {
     useStore.getState().clearScene();
     const a = createBox(5, 5, 5);
     useStore.getState().addDirectBody(a);
     useStore.getState().selectObject(a.id);
-    expect(useStore.getState().combineSelected('union')).toBeNull();
+    expect(await useStore.getState().combineSelected('union')).toBeNull();
   });
 
   it('toggleSelect adds and removes ids for multi-select', () => {
@@ -2109,5 +2109,62 @@ describe('app store — direct bodies', () => {
       useStore.getState().clearScene();
       expect(useStore.getState().annotations).toEqual([]);
     });
+  });
+});
+
+describe('sketch multi-selection', () => {
+  it('setSelectedSketchId wraps the single-selection array', () => {
+    const sketch = createSketch('xy');
+    const a = addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(a.id);
+    expect(useStore.getState().selectedSketchIds).toEqual([a.id]);
+    useStore.getState().setSelectedSketchId(null);
+    expect(useStore.getState().selectedSketchIds).toEqual([]);
+    expect(useStore.getState().selectedSketchId).toBeNull();
+  });
+
+  it('toggleSketchSelection builds a multi-selection and updates the primary', () => {
+    const sketch = createSketch('xy');
+    const a = addLine(sketch, 0, 0, 10, 0);
+    const b = addLine(sketch, 0, 5, 10, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(a.id);
+    useStore.getState().toggleSketchSelection(b.id);
+    expect(useStore.getState().selectedSketchIds).toEqual([a.id, b.id]);
+    expect(useStore.getState().selectedSketchId).toBe(b.id);
+    // Toggling the last one again removes it and clears the primary.
+    useStore.getState().toggleSketchSelection(b.id);
+    expect(useStore.getState().selectedSketchIds).toEqual([a.id]);
+    expect(useStore.getState().selectedSketchId).toBeNull();
+  });
+
+  it('multi-selection enables a two-entity constraint via closestPointPair', () => {
+    const sketch = createSketch('xy');
+    const a = addLine(sketch, 0, 0, 10, 0);
+    const b = addLine(sketch, 12, 3, 20, 3);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(a.id);
+    useStore.getState().toggleSketchSelection(b.id);
+    const ids = useStore.getState().selectedSketchIds;
+    expect(ids).toHaveLength(2);
+    // Coincident resolves to the closest endpoint pair, like SolidWorks.
+    const pair = closestPointPair(useStore.getState().currentSketch!, ids[0]!, ids[1]!);
+    useStore.getState().addSketchConstraint('coincident', pair!);
+    const constraint = [...useStore.getState().currentSketch!.constraints.values()][0]!;
+    expect(constraint.type).toBe('coincident');
+    expect(constraint.entityIds).toEqual(pair);
+    expect(pair).not.toContain(a.id); // point ids, not the whole line
+  });
+
+  it('removeSketchEntity cleans the multi-selection', () => {
+    const sketch = createSketch('xy');
+    const a = addLine(sketch, 0, 0, 10, 0);
+    const b = addLine(sketch, 0, 5, 10, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(a.id);
+    useStore.getState().toggleSketchSelection(b.id);
+    useStore.getState().removeSketchEntity(a.id);
+    expect(useStore.getState().selectedSketchIds).toEqual([b.id]);
   });
 });

@@ -217,6 +217,126 @@ See the original design document for full tech stack rationale. Key choices:
   - **Bug fix**: corrected inertia tensor test for axis-aligned box (products of inertia should be zero).
   - **Quality assurance**: all 1607 tests passing, lint clean, TypeScript strict mode, build successful.
   - **Version synchronized** across package.json, Cargo.toml, and tauri.conf.json.
+- `2026-08-30`: Project audit — test env fix + honest gap inventory.
+  - **Environment fix (10 failing tests on Node 24+)**: Node ≥24 ships an experimental global
+    `localStorage` that is unusable without `--localstorage-file` and, sitting on globalThis as an
+    accessor, shadows the working one vitest's jsdom environment provides (suite was green on older
+    Node only). Fixed via `src/test/setup.ts` (setupFiles shim exposing a jsdom-backed
+    Storage; added `@types/jsdom`). 1607/1607 green again on Node v26.
+  - **Audit finding — README "Geometry / Solver" table is aspirational, not real**: Replicad,
+    planegcs, manifold-3d, three-mesh-bvh, WebGPU, Web Workers, and MCP are NOT installed/used
+    anywhere. Reality: hand-rolled mesh B-rep (`lib/geometry/brep.ts`), hand-rolled relaxation
+    solver (`lib/sketch/solver.ts`), voxel booleans at resolution 32 (`lib/geometry/boolean.ts`),
+    raycaster picking, direct Anthropic fetch (`lib/ai/client.ts`).
+  - **True remaining gaps** (beyond the "Future work" line): STEP import (export only);
+    3MF import (export only); loft feature (absent); sweep not parametric (direct body only);
+    edge selection (face only); multi-entity constraint UI (solver has 10 types, UI exposes
+    single-entity subset; tangent/symmetric not even in solver); Drawing workspace renders only
+    `bodies[0]`, no section/detail/editable annotations (title block still says "SceneLab v0.1");
+    feature tree can only create sketch/extrude/revolve via UI (fillet/chamfer/shell/arrays/mirror
+    exist only as evaluators + AI direct-body ops); vestigial 'assembly' workspace mode; all 4
+    Tauri Rust commands are dead code from the frontend (fs/dialog/shell plugins unused);
+    several component tests are tautological (assert literals, never import the component).
+- `2026-08-30`: Deep-completion pass #1 — exact booleans, parametric modify features, sketch multi-select, drawing/AI fixes (tests 1607 → 1642, 108 files, all green; lint + tsc strict clean; vite build OK).
+  - **Exact WASM booleans**: integrated **manifold-3d** (`lib/geometry/booleanManifold.ts`).
+    `booleanOp` now computes watertight exact results (union/difference/intersect) once the
+    engine warms up at app start (`main.tsx` → `warmUpBooleanEngine()`), falling back to the
+    voxel path when the engine isn't ready or the input mesh can't be converted. Verified to
+    closed-form volumes (cube difference = exactly 875 mm³) and watertightness. Fixed a real
+    bug found on the way: `sweepBody` side/cap faces had inconsistent winding and inward
+    normals (signed volume was 1/3 of true) — all faces now oriented outward + rewound.
+  - **BVH-accelerated picking**: three-mesh-bvh installed and wired into `ViewportCanvas`
+    (bounds trees computed per body mesh, disposed on rebuild; non-body geometries fall back
+    to the default raycast). The README performance claims for booleans + BVH are now true.
+  - **Parametric modify features (Fusion-timeline style)**: fillet / chamfer / shell /
+    circular-array / mirror join the feature tree when applied to a tree-produced body
+    (store `apply*Feature` actions + `FeatureTree.findFeatureIdForBody` reverse lookup);
+    on direct bodies they apply as undoable direct edits. `applyFillet`/`applyChamfer`
+    treat an empty edge list as "all edges" (UI has no edge picking yet). Entry: body
+    right-click → Feature menu; params editable via new FeatureEditor numeric dialogs.
+  - **Multi-entity sketch constraints (SolidWorks style)**: Ctrl/Shift+click builds a
+    multi-selection (`selectedSketchIds` + `toggleSketchSelection`); with two entities the
+    constraint menu offers parallel / perpendicular / equal / concentric / coincident
+    (nearest endpoints via new `closestPointPair`) / distance (point pairs). Also fixed:
+    the old single-pick "concentric" menu item was a silent no-op (needs two ids); solver
+    `equal` now works for arc↔circle; zh translation for vertical corrected to 竖直.
+  - **Sweep + loft**: new `sweep` / `loft` feature types with evaluators, creators and
+    project round-trip; `createLoftSections` skins N sections (perimeter resampling +
+    ring alignment, watertight caps); sketch exit menu gains "Sweep (twisted extrude)…"
+    (straight path + twist). Loft-from-multiple-sketches UI pending (needs multi-sketch
+    picking); loft geometry + feature are in place.
+  - **Drawing workspace**: renders ALL bodies (merged bounds + spanning dimensions, new
+    `projectBodies`), SVG export writes all four views in a grid (was first view only),
+    DXF export accepts multi-body scenes, title block shows the real app version
+    (`__APP_VERSION__` injected from package.json via vite/vitest define) and an honest
+    "Auto (fit)" scale instead of a hardcoded 1:1.
+  - **Misc**: AI vision capture targets `#viewport-canvas` (was first canvas in DOM);
+    vestigial 'assembly' workspace removed (mode, toolbar entry, i18n keys — Toolbar test
+    now imports the real workspace table instead of re-declaring it); studio3d metadata
+    version from package.json (was hardcoded 0.1.0).
+  - **Still open** (updated): STEP import, 3MF import, loft multi-sketch UI, edge
+    selection, tangent/symmetric constraints, Drawing section/detail views + editable
+    annotations, Web Worker offloading, Tauri native commands unused, VLM face-picking.
+- `2026-08-30`: Deep-completion pass #2 — performance round (tests 1642 → 1648, all green;
+  lint + tsc strict clean; vite build OK).
+  - **Exact planar split**: `splitByPlane` now cuts via Manifold (body ∩ two world-space
+    half-space boxes built from the plane frame) — clean planar cut surfaces, exact half
+    volumes (500/500 verified), correct empty-side nulls. Voxel partition remains as the
+    fallback when the engine is cold or the body is not convertible. Gotcha fixed along
+    the way: Manifold requires a topologically shared mesh — the half-space box must use
+    8 shared corner indices (per-face duplicated corners read as six disjoint patches →
+    "Not manifold"), and quad orientation must be decided geometrically because sketch
+    plane frames can be left-handed (u×v = −n).
+  - **isPointInsideBody accelerated**: per-face ray-vs-AABB slab test rejects most faces
+    before any triangle math. Benefits every remaining voxel path (hollowBody, mirrorMerge
+    cold-start, interference checks).
+  - **Incremental DAG recompute**: `FeatureTree.recompute` now memoizes per feature OBJECT
+    (result + parent result references + consumed parents). Unchanged features with
+    unchanged parent results reuse their cached bodies — so after editing one feature only
+    its subtree re-evaluates, and the viewport's body-reference mesh cache reuses every
+    unaffected mesh instead of rebuilding/re-uploading the whole scene. Consumption marks
+    (fillet/shell/array replacing their parent) are recorded and replayed on cache reuse.
+    Covered by reuse/invalidate/suppress-flip tests.
+  - Perf regression guards: exact-split volume tests, 100-sphere-cuts timing test.
+- `2026-09-01`: Deep-completion pass #3 — the full remaining-TODO sweep (110 test files, all green;
+  lint + tsc strict clean; vite + cargo check OK).
+  - **Edge selection (Alt+click)**: `pickEdge` (ray–segment closest approach) + `selectedEdgeIds`
+    store state + viewport overlay highlight. Fillet/chamfer now scope to the picked edges when any
+    are selected (empty selection still = whole body). Sibling of the existing Ctrl+click face pick.
+  - **Tangent & symmetric constraints**: solver grows to 12 types. Tangent (line ↔ circle/arc) slides
+    the line along its normal to exact touch, keeping the circle untouched; symmetric (point, point,
+    mirror-line) lands the pair's midpoint on the line and removes tangential skew. Exposed in the
+    2-entity / 3-entity constraint menus.
+  - **STEP import** (`stepImport.ts`): parses faceted B-rep (ADVANCED_FACE → EDGE_LOOP →
+    ORIENTED_EDGE → EDGE_CURVE → VERTEX_POINT) from our own or foreign writers; wired into
+    ProjectMenu (.step/.stp) and the AI import_mesh tool. **Fixed a real export bug found via the
+    round-trip**: ORIENTED_EDGE always wrote .T. even when the deduplicated EDGE_CURVE runs against
+    the loop direction — faces collapsed/degenerated on re-import and in external tools.
+  - **3MF made real**: export now emits a spec OPC ZIP ([Content_Types].xml + _rels + 3D/3dmodel.model
+    via fflate) — the old "export" wrote bare XML that no 3MF consumer opens. import3MF reads ZIP
+    packages or bare model XML, one body per object; ProjectMenu/AI wired.
+  - **Web Worker offload**: voxel kernels extracted to `booleanVoxel.ts`; `geometryWorker.ts` +
+    client run them off-thread (RPC, structured clone). `asyncBooleanOp`/`asyncHollowBody`/
+    `asyncSplitByPlane` = exact main-thread first, worker voxel fallback, synchronous fallback where
+    Workers don't exist (tests). Store boolean-combine and hollow now await these — seconds-long
+    occupancy sampling no longer freezes the UI. Vite emits the worker chunk.
+  - **Tauri actually native**: fixed isTauri() (Tauri 2 injects __TAURI_INTERNALS__, not __TAURI__);
+    new Rust commands save_project_file / open_project_file (dialog + fs in Rust, bypassing fs-plugin
+    capability scoping); Save/Open use native dialogs on desktop and fall back to browser flows.
+  - **Loft multi-sketch UI**: FeatureEditor ctrl+click multi-selects sketch features → "Create Loft"
+    button → parametric loft over the selected sketches (`performLoftFromSketches`).
+  - **Drawing section views**: SectionPlane half-space clip in projectBodies (segment clip +
+    Sutherland–Hodgman face clip + on-plane segment chaining into cross-section loops); DrawingCanvas
+    toolbar selects Off/X/Y/Z at mid-bounds; cut faces hatched 45° on canvas and via SVG pattern.
+  - **Fake tests replaced with real ones**: FeatureEditor (all-11-type project round-trip + suppress),
+    BrowserTree (rename/visibility/duplicate/reorder through the store), ExtrudeDialog (performExtrude
+    end-to-end incl. symmetric centring + the performSweep twist path), AIPanel (tool registry +
+    builtin surface incl. STEP import), hooks (i18n en/zh parity). Two real fixes fell out:
+    performExtrude now rejects non-positive distances (dialog floor enforced store-side), and
+    performSweep subdivides its path so large twists apply gradually (a one-step 90° twist mapped a
+    symmetric profile's corners onto themselves — degenerate side faces, volume read ⅓ of true).
+  - **Remaining open**: VLM face-picking ("circle a face"), drawing editable annotations, sketch
+    fillet on arcs, OCCT-grade curved STEP import.
 
 ---
 

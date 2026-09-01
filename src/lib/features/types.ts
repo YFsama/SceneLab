@@ -5,6 +5,8 @@ export type FeatureType =
   | 'sketch'
   | 'extrude'
   | 'revolve'
+  | 'sweep'
+  | 'loft'
   | 'fillet'
   | 'chamfer'
   | 'shell'
@@ -34,6 +36,27 @@ export interface RevolveFeature extends FeatureBase {
   type: 'revolve';
   params: {
     angle: number;
+  };
+}
+
+/** Sweep the parent sketch's profile along an explicit 3D path. */
+export interface SweepFeature extends FeatureBase {
+  type: 'sweep';
+  params: {
+    path: Vec3[];
+    /** Cumulative twist in radians from the first to the last path point. */
+    twist: number;
+    /** Fallback profile (2D sketch coordinates) when the feature has no parent sketch. */
+    profile?: { x: number; y: number }[];
+  };
+}
+
+/** Loft (skin) between the profiles of two or more parent sketches, in order. */
+export interface LoftFeature extends FeatureBase {
+  type: 'loft';
+  params: {
+    /** Fallback sections when no parent sketches provide profiles. */
+    sections?: { x: number; y: number; z: number }[][];
   };
 }
 
@@ -91,6 +114,8 @@ export type Feature =
   | SketchFeature
   | ExtrudeFeature
   | RevolveFeature
+  | SweepFeature
+  | LoftFeature
   | FilletFeature
   | ChamferFeature
   | ShellFeature

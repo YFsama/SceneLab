@@ -77,7 +77,126 @@ function applyConstraint(
       return applyConcentric(constraint, points, entities);
     case 'fixed':
       return 0; // Handled by anchoring points before the solve loop.
+    case 'tangent':
+      return applyTangent(constraint, points, entities);
+    case 'symmetric':
+      return applySymmetric(constraint, points, entities);
   }
+}
+
+/**
+ * Tangency between a line and a circle/arc: the circle centre must sit exactly
+ * one radius away from the infinite line. The line slides (perpendicular to
+ * itself) to satisfy it — circles keep their radius, the less destructive edit.
+ */
+function applyTangent(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+  entities: Map<string, SketchEntity>,
+): number {
+  const [id1, id2] = constraint.entityIds;
+  if (!id1 || !id2) return 0;
+  const e1 = entities.get(id1);
+  const e2 = entities.get(id2);
+  if (!e1 || !e2) return 0;
+
+  const line = e1.type === 'line' ? e1 : e2.type === 'line' ? e2 : null;
+  const round = (e: SketchEntity): (SketchEntity & { radius: number; centerId: string }) | null =>
+    e.type === 'circle' || e.type === 'arc' ? e : null;
+  const circle = round(e1) ?? round(e2);
+  if (!line || !circle) return 0;
+
+  const eps = getLineEndpoints(line.id, entities, points);
+  const c = points.get(circle.centerId);
+  if (!eps || !c) return 0;
+  const [a1, a2] = eps;
+
+  const dx = a2.x - a1.x;
+  const dy = a2.y - a1.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-10) return 0;
+  // Unit normal of the line.
+  const nx = -dy / len;
+  const ny = dx / len;
+  // Signed distance from the centre to the infinite line (along the normal).
+  const d = (c.x - a1.x) * nx + (c.y - a1.y) * ny;
+  // Keep the circle on the same side it already occupies: the target signed
+  // distance is ±radius, matching the sign of d.
+  const t = d - Math.sign(d) * circle.radius;
+  if (Math.abs(t) < 1e-12) return 0;
+  // Translate the line along its normal (half each end per iteration →
+  // geometric relaxation; a single free end pivots instead).
+  let maxDelta = 0;
+  if (!a1.fixed && !a2.fixed) {
+    a1.x += nx * t / 2; a1.y += ny * t / 2;
+    a2.x += nx * t / 2; a2.y += ny * t / 2;
+    maxDelta = Math.abs(t) / 2;
+  } else if (!a1.fixed) {
+    a1.x += nx * t; a1.y += ny * t;
+    maxDelta = Math.abs(t);
+  } else if (!a2.fixed) {
+    a2.x += nx * t; a2.y += ny * t;
+    maxDelta = Math.abs(t);
+  }
+  return maxDelta;
+}
+
+/**
+ * Symmetry of two entities about a line: their midpoints' average must lie ON
+ * the mirror line and the join between them must be perpendicular to it. Each
+ * iteration nudges both symmetrically (half-steps so it relaxes like the other
+ * constraints instead of overshooting).
+ */
+function applySymmetric(
+  constraint: SketchConstraint,
+  points: Map<string, SolverPoint>,
+  entities: Map<string, SketchEntity>,
+): number {
+  // [a, b, line] — a and b are points (or entities resolved to their first point).
+  const [ida, idb, idl] = constraint.entityIds;
+  if (!ida || !idb || !idl) return 0;
+
+  const resolve = (id: string): SolverPoint | undefined => {
+    const e = entities.get(id);
+    if (!e) return undefined;
+    if (e.type === 'point') return points.get(e.id);
+    const pid = (e.type === 'line' ? e.p1Id : e.type === 'circle' || e.type === 'arc' ? e.centerId : undefined);
+    return pid ? points.get(pid) : undefined;
+  };
+  const pa = resolve(ida);
+  const pb = resolve(idb);
+  const line = entities.get(idl);
+  if (!pa || !pb || !line || line.type !== 'line') return 0;
+  const eps = getLineEndpoints(idl, entities, points);
+  if (!eps) return 0;
+  const [l1, l2] = eps;
+  const tx = l2.x - l1.x;
+  const ty = l2.y - l1.y;
+  const tlen = Math.hypot(tx, ty);
+  if (tlen < 1e-10) return 0;
+  const ux = tx / tlen;
+  const uy = ty / tlen;
+
+  let maxDelta = 0;
+  // 1) Land the pair's midpoint on the mirror line.
+  const mx = (pa.x + pb.x) / 2;
+  const my = (pa.y + pb.y) / 2;
+  const along = (mx - l1.x) * ux + (my - l1.y) * uy;
+  const px = l1.x + ux * along;
+  const py = l1.y + uy * along;
+  const ddx = (px - mx) / 2;
+  const ddy = (py - my) / 2;
+  if (!pa.fixed) { pa.x += ddx; pa.y += ddy; maxDelta = Math.max(maxDelta, Math.hypot(ddx, ddy)); }
+  if (!pb.fixed) { pb.x += ddx; pb.y += ddy; maxDelta = Math.max(maxDelta, Math.hypot(ddx, ddy)); }
+
+  // 2) Make the join perpendicular to the mirror line (remove tangential skew).
+  const vx = pb.x - pa.x;
+  const vy = pb.y - pa.y;
+  const vt = (vx * ux + vy * uy) / 4; // quarter each end
+  if (!pa.fixed) { pa.x += ux * vt; pa.y += uy * vt; }
+  if (!pb.fixed) { pb.x -= ux * vt; pb.y -= uy * vt; }
+  maxDelta = Math.max(maxDelta, Math.abs(vt));
+  return maxDelta;
 }
 
 /** Make two circles/arcs share a center by snapping their center points together. */
@@ -342,12 +461,16 @@ function applyEqual(
     return Math.max(d1, d2);
   }
 
-  // Equal radius for circles
-  if (e1.type === 'circle' && e2.type === 'circle') {
-    const avgR = (e1.radius + e2.radius) / 2;
-    const delta = Math.abs(e1.radius - e2.radius) / 2;
-    e1.radius = avgR;
-    e2.radius = avgR;
+  // Equal radius for circles/arcs (any combination)
+  const radiusOf = (e: SketchEntity): number | null =>
+    e.type === 'circle' || e.type === 'arc' ? e.radius : null;
+  const r1 = radiusOf(e1);
+  const r2 = radiusOf(e2);
+  if (r1 !== null && r2 !== null) {
+    const avgR = (r1 + r2) / 2;
+    const delta = Math.abs(r1 - r2) / 2;
+    if (e1.type === 'circle' || e1.type === 'arc') e1.radius = avgR;
+    if (e2.type === 'circle' || e2.type === 'arc') e2.radius = avgR;
     return delta;
   }
 

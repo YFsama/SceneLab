@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, exportSTLBinary, exportOBJ, export3MF } from '../../lib/io';
+import { downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, importSTEP, import3MF, exportSTLBinary, exportOBJ, export3MFPackage } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../../lib/projectActions';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
@@ -21,12 +21,24 @@ export function ProjectMenu() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const isObj = file.name.toLowerCase().endsWith('.obj');
-      const body = isObj
-        ? importOBJ(await readFileAsText(file))
-        : importSTL(await readFileAsArrayBuffer(file));
-      if (body.faces.length === 0) throw new Error('No faces parsed');
-      addDirectBody(body);
+      const lower = file.name.toLowerCase();
+      const isText = lower.endsWith('.obj') || lower.endsWith('.step') || lower.endsWith('.stp');
+      if (lower.endsWith('.3mf')) {
+        // 3MF: a ZIP package → one body per model object.
+        const bytes = new Uint8Array(await readFileAsArrayBuffer(file));
+        for (const body of import3MF(bytes)) addDirectBody(body);
+      } else if (isText) {
+        const text = await readFileAsText(file);
+        const body = lower.endsWith('.obj')
+          ? importOBJ(text)
+          : importSTEP(text, file.name.replace(/\.(step|stp)$/i, ''));
+        if (body.faces.length === 0) throw new Error('No faces parsed');
+        addDirectBody(body);
+      } else {
+        const body = importSTL(await readFileAsArrayBuffer(file));
+        if (body.faces.length === 0) throw new Error('No faces parsed');
+        addDirectBody(body);
+      }
       showToast(`${t('toast.loaded')} "${file.name}"`, 'success');
     } catch (err) {
       showToast(`${t('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -83,8 +95,8 @@ export function ProjectMenu() {
       return;
     }
     try {
-      const xml = export3MF(targets);
-      const blob = new Blob([xml], { type: 'application/xml' });
+      const pkg = export3MFPackage(targets);
+      const blob = new Blob([pkg as BlobPart], { type: 'model/3mf' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -205,7 +217,7 @@ export function ProjectMenu() {
       <input
         ref={meshInputRef}
         type="file"
-        accept=".stl,.obj"
+        accept=".stl,.obj,.3mf,.step,.stp"
         onChange={handleImportMesh}
         className="hidden"
         aria-hidden="true"

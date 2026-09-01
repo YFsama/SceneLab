@@ -1,62 +1,90 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { useStore } from '../../store/app';
+import { FeatureTree } from '../../lib/features/tree';
+import { createSketch, addRectangle } from '../../lib/sketch/engine';
+import { computeVolume, findBoundaryLoops } from '../../lib/geometry/brep';
 
-// ExtrudeDialog is a React component — test the validation logic directly.
+// Real coverage for the flows the ExtrudeDialog drives: the dialog collects a
+// distance + symmetric flag and calls performExtrude — test that store action
+// (and its sweep sibling) end to end. Previously this file re-implemented the
+// clamp locally and tested the copy.
 
-describe('ExtrudeDialog validation', () => {
-  const validateDistance = (value: number): number => {
-    return Math.max(0.1, value);
-  };
-
-  const isValidDistance = (value: number): boolean => {
-    return Number.isFinite(value) && value >= 0.1;
-  };
-
-  describe('distance validation', () => {
-    it('accepts valid distances', () => {
-      expect(isValidDistance(10)).toBe(true);
-      expect(isValidDistance(0.1)).toBe(true);
-      expect(isValidDistance(100)).toBe(true);
-    });
-
-    it('rejects distances below minimum', () => {
-      expect(isValidDistance(0.05)).toBe(false);
-      expect(isValidDistance(0)).toBe(false);
-      expect(isValidDistance(-5)).toBe(false);
-    });
-
-    it('rejects non-finite values', () => {
-      expect(isValidDistance(Infinity)).toBe(false);
-      expect(isValidDistance(NaN)).toBe(false);
+describe('performExtrude (what the dialog submits to)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
     });
   });
 
-  describe('distance clamping', () => {
-    it('clamps to minimum 0.1', () => {
-      expect(validateDistance(0.05)).toBe(0.1);
-      expect(validateDistance(0)).toBe(0.1);
-      expect(validateDistance(-5)).toBe(0.1);
-    });
+  const rectangleSketch = () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 5);
+    return sketch;
+  };
 
-    it('preserves valid values', () => {
-      expect(validateDistance(10)).toBe(10);
-      expect(validateDistance(0.5)).toBe(0.5);
+  it('extrudes the current sketch into a parametric feature and a body', () => {
+    useStore.getState().setCurrentSketch(rectangleSketch());
+    useStore.getState().performExtrude(8, false);
+    const s = useStore.getState();
+    expect(s.sketchActive).toBe(false);
+    expect(s.workspace).toBe('model');
+    const types = s.featureTree.features.map((f) => f.type);
+    expect(types).toContain('sketch');
+    expect(types).toContain('extrude');
+    expect(s.bodies).toHaveLength(1);
+    expect(computeVolume(s.bodies[0]!)).toBeCloseTo(10 * 5 * 8, 0);
+  });
+
+  it('symmetric extrude centers the profile on the sketch plane', () => {
+    useStore.getState().setCurrentSketch(rectangleSketch());
+    useStore.getState().performExtrude(10, true);
+    const body = useStore.getState().bodies[0]!;
+    const ys = body.vertices.map((v) => v.y);
+    expect(Math.min(...ys)).toBeCloseTo(-5, 3);
+    expect(Math.max(...ys)).toBeCloseTo(5, 3);
+  });
+
+  it('non-positive distance is refused (no features added)', () => {
+    useStore.getState().setCurrentSketch(rectangleSketch());
+    useStore.getState().performExtrude(0, false);
+    expect(useStore.getState().featureTree.features).toHaveLength(0);
+  });
+});
+
+describe('performSweep (twisted extrude)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      currentSketch: null,
     });
   });
 
-  describe('extrude modes', () => {
-    it('one-direction extrude uses distance as-is', () => {
-      const symmetric = false;
-      const distance = 10;
-      expect(symmetric).toBe(false);
-      expect(distance).toBe(10);
-    });
-
-    it('symmetric extrude doubles the effective distance', () => {
-      const symmetric = true;
-      const distance = 10;
-      // Symmetric: extends distance/2 in each direction
-      expect(symmetric).toBe(true);
-      expect(distance / 2).toBe(5);
-    });
+  it('sweeps the sketch profile into a sweep feature with twist', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, -5, -5, 5, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performSweep(20, 90);
+    const s = useStore.getState();
+    const sweep = s.featureTree.features.find((f) => f.type === 'sweep');
+    expect(sweep && sweep.type === 'sweep' && sweep.params.twist).toBeCloseTo(Math.PI / 2, 5);
+    expect(s.bodies).toHaveLength(1);
+    const body = s.bodies[0]!;
+    // The path is subdivided so the 90° twist applies gradually; a bilinear
+    // sweep through rotated rings constricts the section, landing between the
+    // untwisted prism volume (2000) and a conservative lower bound.
+    const volume = computeVolume(body);
+    expect(volume).toBeGreaterThan(1500);
+    expect(volume).toBeLessThanOrEqual(2000 + 1e-6);
+    // Watertight despite the twist.
+    expect(findBoundaryLoops(body).loops.length).toBe(0);
   });
 });

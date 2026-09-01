@@ -135,14 +135,17 @@ export function exportSTEP(body: SolidBody): string {
     return vtx.id;
   };
 
-  // Build edges: deduplicate by sorted vertex pair.
-  const edgeMap = new Map<string, number>(); // "v1id,v2id" → edge_curve id
+  // Build edges: deduplicate by sorted vertex pair. The stored direction may
+  // be the reverse of a given face's traversal — the ORIENTED_EDGE flag below
+  // carries that flip so consumers walk every loop in order.
+  const edgeMap = new Map<string, { id: number; fromId: number }>();
 
-  const getEdge = (v1: Vec3, v2: Vec3): number => {
+  const getEdge = (v1: Vec3, v2: Vec3): { id: number; fromId: number } => {
     const v1id = getVertex(v1);
     const v2id = getVertex(v2);
     const key = v1id < v2id ? `${v1id},${v2id}` : `${v2id},${v1id}`;
-    if (edgeMap.has(key)) return edgeMap.get(key)!;
+    const cached = edgeMap.get(key);
+    if (cached) return cached;
     // Create a LINE for the edge (uses p1 as the line origin).
     const p1 = ptMap.get(`${v1.x.toFixed(6)},${v1.y.toFixed(6)},${v1.z.toFixed(6)}`)!;
     const dir = direction(v2.x - v1.x, v2.y - v1.y, v2.z - v1.z);
@@ -154,8 +157,9 @@ export function exportSTEP(body: SolidBody): string {
     emit(`${ref(lineId)}=LINE('',${ref(p1)},${ref(vec.id)});`);
     const ec = edgeCurve(v1id, v2id, lineId);
     emit(ec.text);
-    edgeMap.set(key, ec.id);
-    return ec.id;
+    const entry = { id: ec.id, fromId: v1id };
+    edgeMap.set(key, entry);
+    return entry;
   };
 
   // Build faces.
@@ -168,10 +172,11 @@ export function exportSTEP(body: SolidBody): string {
     for (let i = 0; i < face.vertices.length; i++) {
       const v1 = face.vertices[i]!;
       const v2 = face.vertices[(i + 1) % face.vertices.length]!;
-      const edgeId = getEdge(v1, v2);
+      const edge = getEdge(v1, v2);
       const v1id = getVertex(v1);
       const v2id = getVertex(v2);
-      const oe = orientedEdge(edgeId, v1id, v2id, true);
+      // Forward only when the traversal matches the stored edge direction.
+      const oe = orientedEdge(edge.id, v1id, v2id, edge.fromId === v1id);
       emit(oe.text);
       oeIds.push(oe.id);
     }

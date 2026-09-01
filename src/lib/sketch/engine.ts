@@ -158,6 +158,43 @@ export function pointIdsOf(entity: SketchEntity): string[] {
   }
 }
 
+/**
+ * The two closest point ids of two entities. Constraints like coincident and
+ * distance operate on points, but users pick whole entities (SolidWorks
+ * behaviour: the nearest endpoints snap together). Circles/arcs contribute
+ * their centre; points contribute themselves.
+ */
+export function closestPointPair(
+  sketch: Sketch,
+  idA: string,
+  idB: string,
+): [string, string] | null {
+  const entityPoints = (id: string): { pid: string; x: number; y: number }[] => {
+    const e = sketch.entities.get(id);
+    if (!e) return [];
+    if (e.type === 'point') return [{ pid: e.id, x: e.x, y: e.y }];
+    return pointIdsOf(e)
+      .map((pid) => {
+        const p = sketch.entities.get(pid);
+        return p && p.type === 'point' ? { pid, x: p.x, y: p.y } : null;
+      })
+      .filter((p): p is { pid: string; x: number; y: number } => p !== null);
+  };
+
+  let best: [string, string] | null = null;
+  let bestDist = Infinity;
+  for (const a of entityPoints(idA)) {
+    for (const b of entityPoints(idB)) {
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = [a.pid, b.pid];
+      }
+    }
+  }
+  return best;
+}
+
 export function removeEntity(sketch: Sketch, entityId: string): void {
   const entity = sketch.entities.get(entityId);
   if (!entity) return;

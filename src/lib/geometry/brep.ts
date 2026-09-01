@@ -4136,3 +4136,164 @@ export function findBoundaryLoops(body: SolidBody, tolerance = 1e-6): BoundaryLo
 
   return { holeCount: loops.length, boundaryEdgeCount: dirEdges.length, loops };
 }
+
+/**
+ * Loft (skin) a solid through two or more closed planar sections. Each section
+ * is resampled to a common vertex count along its perimeter and the ring start
+ * is aligned to the previous ring (nearest vertex), so differently sized or
+ * rotated profiles produce a clean ruled surface. Caps close the first and
+ * last rings; the result is a watertight polyhedron (every edge shared by
+ * exactly two faces).
+ */
+export function createLoftSections(sections: Vec3[][], name = 'Loft'): SolidBody {
+  if (sections.length < 2) throw new Error('Loft needs at least 2 sections');
+  for (const s of sections) {
+    if (s.length < 3) throw new Error('Each loft section needs at least 3 points');
+  }
+
+  // Resample a closed ring to `count` points, uniformly by arc length.
+  const resample = (ring: Vec3[], count: number): Vec3[] => {
+    const n = ring.length;
+    const segLen: number[] = [];
+    let perimeter = 0;
+    for (let i = 0; i < n; i++) {
+      const a = ring[i]!;
+      const b = ring[(i + 1) % n]!;
+      const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+      segLen.push(len);
+      perimeter += len;
+    }
+    const out: Vec3[] = [];
+    let seg = 0;
+    let acc = 0;
+    for (let i = 0; i < count; i++) {
+      const target = (i / count) * perimeter;
+      while (acc + segLen[seg]! < target && seg < n - 1) {
+        acc += segLen[seg]!;
+        seg++;
+      }
+      const a = ring[seg]!;
+      const b = ring[(seg + 1) % n]!;
+      const t = segLen[seg]! > 1e-12 ? (target - acc) / segLen[seg]! : 0;
+      out.push({
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        z: a.z + (b.z - a.z) * t,
+      });
+    }
+    return out;
+  };
+
+  const n = Math.max(...sections.map((s) => s.length));
+  const rings: Vec3[][] = sections.map((s) => resample(s, n));
+
+  // Align each ring's start vertex to the closest vertex of the previous ring
+  // so the skin doesn't twist when the profiles are rotated relative to each
+  // other. Applied from the second ring onward, sequentially.
+  for (let r = 1; r < rings.length; r++) {
+    const prev = rings[r - 1]![0]!;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < n; i++) {
+      const p = rings[r]![i]!;
+      const d = (p.x - prev.x) ** 2 + (p.y - prev.y) ** 2 + (p.z - prev.z) ** 2;
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    if (best !== 0) {
+      rings[r] = rings[r]!.slice(best).concat(rings[r]!.slice(0, best));
+    }
+  }
+
+  const vertices: Vec3[] = rings.flat();
+  const faces: Face[] = [];
+  const edges: Edge[] = [];
+
+  // Centroid for outward-normal orientation of side quads.
+  const center: Vec3 = { x: 0, y: 0, z: 0 };
+  for (const v of vertices) {
+    center.x += v.x;
+    center.y += v.y;
+    center.z += v.z;
+  }
+  center.x /= vertices.length;
+  center.y /= vertices.length;
+  center.z /= vertices.length;
+
+  const ringVertex = (r: number, i: number): Vec3 => vertices[r * n + ((i % n + n) % n)]!;
+
+  // Side quads between consecutive rings.
+  for (let r = 0; r < rings.length - 1; r++) {
+    for (let i = 0; i < n; i++) {
+      const a = ringVertex(r, i);
+      const b = ringVertex(r, i + 1);
+      const c = ringVertex(r + 1, i + 1);
+      const d = ringVertex(r + 1, i);
+      const normal = computeFaceNormal(a, b, c);
+      const fc = {
+        x: (a.x + b.x + c.x + d.x) / 4 - center.x,
+        y: (a.y + b.y + c.y + d.y) / 4 - center.y,
+        z: (a.z + b.z + c.z + d.z) / 4 - center.z,
+      };
+      if (normal.x * fc.x + normal.y * fc.y + normal.z * fc.z < 0) {
+        normal.x = -normal.x;
+        normal.y = -normal.y;
+        normal.z = -normal.z;
+      }
+      faces.push({ id: genId('face'), vertices: [a, b, c, d], normal });
+      edges.push({ id: genId('edge'), start: a, end: b });
+      edges.push({ id: genId('edge'), start: a, end: d });
+    }
+  }
+
+  // Cap the first and last ring with a fan triangulation. The fan's raw
+  // winding is arbitrary, so each cap normal is flipped away from the body
+  // centroid like the side quads (alignWindingToNormal then rewinds the
+  // vertices to match).
+  const capRing = (r: number): Face[] => {
+    const ringFaces: Face[] = [];
+    const v0 = ringVertex(r, 0);
+    for (let i = 1; i < n - 1; i++) {
+      const a = ringVertex(r, i);
+      const b = ringVertex(r, i + 1);
+      const normal = computeFaceNormal(v0, a, b);
+      const fc = {
+        x: (v0.x + a.x + b.x) / 3 - center.x,
+        y: (v0.y + a.y + b.y) / 3 - center.y,
+        z: (v0.z + a.z + b.z) / 3 - center.z,
+      };
+      if (normal.x * fc.x + normal.y * fc.y + normal.z * fc.z < 0) {
+        normal.x = -normal.x;
+        normal.y = -normal.y;
+        normal.z = -normal.z;
+      }
+      ringFaces.push({
+        id: genId('face'),
+        vertices: [v0, a, b],
+        normal,
+      });
+    }
+    return ringFaces;
+  };
+  faces.push(...capRing(0));
+  faces.push(...capRing(rings.length - 1));
+
+  // Boundary edges of the end rings (each already has one side face).
+  for (let i = 0; i < n; i++) {
+    edges.push({ id: genId('edge'), start: ringVertex(0, i), end: ringVertex(0, i + 1) });
+    const last = rings.length - 1;
+    edges.push({ id: genId('edge'), start: ringVertex(last, i), end: ringVertex(last, i + 1) });
+  }
+
+  alignWindingToNormal(faces);
+
+  return {
+    id: genId('body'),
+    name,
+    vertices,
+    faces,
+    edges,
+  };
+}

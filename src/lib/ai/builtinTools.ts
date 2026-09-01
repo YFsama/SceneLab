@@ -7,7 +7,7 @@ import { booleanOp, hollowBody, mirrorMerge } from '../geometry/boolean';
 import { listFaces, angleBetweenFaces } from '../geometry/query';
 import { listDimensions } from '../sketch/dimensions';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
-import { importSTLAscii, importOBJ, exportSTLAscii, exportOBJ, export3MF } from '../io';
+import { importSTLAscii, importOBJ, importSTEP, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { exportSTEP } from '../io/step';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
@@ -834,23 +834,23 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'import_mesh',
-    description: 'Import an ASCII STL or OBJ mesh from text and add it to the scene (format auto-detected).',
+    description: 'Import an ASCII STL, OBJ, or faceted STEP mesh from text and add it to the scene (format auto-detected).',
     parameters: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: 'The STL (ASCII) or OBJ file contents' },
-        format: { type: 'string', enum: ['stl', 'obj'], description: 'Override format detection' },
+        content: { type: 'string', description: 'The STL (ASCII), OBJ or STEP file contents' },
+        format: { type: 'string', enum: ['stl', 'obj', 'step'], description: 'Override format detection' },
       },
       required: ['content'],
     },
     execute: async (args) => {
       const content = assertString(args.content, 'content');
-      let format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj'] as const, 'format') : undefined;
+      let format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj', 'step'] as const, 'format') : undefined;
       if (!format) {
         const head = content.trimStart().slice(0, 200).toLowerCase();
-        format = head.startsWith('solid') && content.includes('facet') ? 'stl' : 'obj';
+        format = head.includes('iso-10303') ? 'step' : head.startsWith('solid') && content.includes('facet') ? 'stl' : 'obj';
       }
-      const body = format === 'stl' ? importSTLAscii(content) : importOBJ(content);
+      const body = format === 'stl' ? importSTLAscii(content) : format === 'step' ? importSTEP(content) : importOBJ(content);
       if (body.faces.length === 0) throw new Error('No faces parsed from the mesh');
       useStore.getState().addDirectBody(body);
       return { success: true, bodyId: body.id, faces: body.faces.length, vertices: body.vertices.length };

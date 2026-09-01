@@ -1,74 +1,78 @@
 import { describe, it, expect } from 'vitest';
-import type { FeatureType } from '../../lib/features/types';
+import {
+  FeatureTree,
+  createSketchFeature,
+  createExtrudeFeature,
+  createRevolveFeature,
+  createSweepFeature,
+  createLoftFeature,
+  createFilletFeature,
+  createChamferFeature,
+  createShellFeature,
+  createLinearArrayFeature,
+  createCircularArrayFeature,
+  createMirrorFeature,
+} from '../../lib/features/tree';
+import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from '../../lib/io';
+import { createSketch, addRectangle } from '../../lib/sketch/engine';
 
-// FeatureEditor is a React component — test the feature type structure.
+// Real coverage: every feature type the FeatureEditor can list must survive a
+// full project round-trip (serialize → deserialize), so editing/suppressing
+// any of them keeps working after a save/reload. Previously this file
+// re-declared a literal array and asserted it against itself.
 
-describe('FeatureEditor feature types', () => {
-  const FEATURE_TYPES: FeatureType[] = [
-    'sketch', 'extrude', 'revolve', 'fillet', 'chamfer', 'shell',
-    'linearArray', 'circularArray', 'mirror',
-  ];
+describe('feature round-trip for every type', () => {
+  function buildTreeWithEveryType(): FeatureTree {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    const sf = createSketchFeature(sketch);
+    const tree = new FeatureTree();
+    tree.addFeature(sf);
+    tree.addFeature(createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 5, symmetric: false },
+      [sf.id],
+    ));
+    tree.addFeature(createRevolveFeature(Math.PI, [sf.id]));
+    tree.addFeature(createSweepFeature({ path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 10, z: 0 }], twist: 0.5 }, [sf.id]));
+    tree.addFeature(createLoftFeature({}, [sf.id]));
+    tree.addFeature(createFilletFeature([], 2, [sf.id]));
+    tree.addFeature(createChamferFeature([], 1, [sf.id]));
+    tree.addFeature(createShellFeature([], 1.5, [sf.id]));
+    tree.addFeature(createLinearArrayFeature({ x: 1, y: 0, z: 0 }, 3, 10, [sf.id]));
+    tree.addFeature(createCircularArrayFeature({ origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } }, 6, [sf.id]));
+    tree.addFeature(createMirrorFeature({ origin: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } }, [sf.id]));
+    return tree;
+  }
 
-  it('has 9 feature types', () => {
-    expect(FEATURE_TYPES).toHaveLength(9);
+  it('creates one feature of each of the 11 types', () => {
+    const tree = buildTreeWithEveryType();
+    expect(tree.features).toHaveLength(11);
+    const types = new Set(tree.features.map((f) => f.type));
+    expect(types.has('sweep')).toBe(true);
+    expect(types.has('loft')).toBe(true);
   });
 
-  it('includes sketch type', () => {
-    expect(FEATURE_TYPES).toContain('sketch');
+  it('every feature type survives serialize → deserialize', () => {
+    const tree = buildTreeWithEveryType();
+    const json = saveToFile(serializeProject('All', tree.features, []));
+    const back = deserializeFeatures(loadFromFile(json));
+    expect(back.map((f) => f.type)).toEqual(tree.features.map((f) => f.type));
+    // Parameters survive too (spot-check the numeric ones).
+    const fillet = back.find((f) => f.type === 'fillet');
+    expect(fillet && fillet.type === 'fillet' && fillet.params.radius).toBe(2);
+    const array = back.find((f) => f.type === 'linearArray');
+    expect(array && array.type === 'linearArray' && array.params.count).toBe(3);
+    const mirror = back.find((f) => f.type === 'mirror');
+    expect(mirror && mirror.type === 'mirror' && mirror.params.keepOriginal).toBe(true);
   });
 
-  it('includes extrude type', () => {
-    expect(FEATURE_TYPES).toContain('extrude');
-  });
-
-  it('includes revolve type', () => {
-    expect(FEATURE_TYPES).toContain('revolve');
-  });
-
-  it('includes fillet type', () => {
-    expect(FEATURE_TYPES).toContain('fillet');
-  });
-
-  it('includes chamfer type', () => {
-    expect(FEATURE_TYPES).toContain('chamfer');
-  });
-
-  it('includes shell type', () => {
-    expect(FEATURE_TYPES).toContain('shell');
-  });
-
-  it('includes linearArray type', () => {
-    expect(FEATURE_TYPES).toContain('linearArray');
-  });
-
-  it('includes circularArray type', () => {
-    expect(FEATURE_TYPES).toContain('circularArray');
-  });
-
-  it('includes mirror type', () => {
-    expect(FEATURE_TYPES).toContain('mirror');
-  });
-});
-
-describe('FeatureEditor feature operations', () => {
-  it('suppress toggle flips the suppressed flag', () => {
-    const feature = { id: 'f1', name: 'Extrude', type: 'extrude' as const, suppressed: false, parentIds: [], params: {} };
-    const toggled = { ...feature, suppressed: !feature.suppressed };
-    expect(toggled.suppressed).toBe(true);
-    expect(toggled.name).toBe('Extrude');
-  });
-
-  it('double suppress returns to original state', () => {
-    const feature = { id: 'f1', name: 'Extrude', type: 'extrude' as const, suppressed: false, parentIds: [], params: {} };
-    const toggled = { ...feature, suppressed: !feature.suppressed };
-    const toggledBack = { ...toggled, suppressed: !toggled.suppressed };
-    expect(toggledBack.suppressed).toBe(false);
-  });
-
-  it('feature name can be edited', () => {
-    const feature = { id: 'f1', name: 'Extrude', type: 'extrude' as const, suppressed: false, parentIds: [], params: {} };
-    const renamed = { ...feature, name: 'My Extrude' };
-    expect(renamed.name).toBe('My Extrude');
-    expect(renamed.id).toBe('f1');
+  it('suppressing a feature removes its bodies from the tree output', () => {
+    const tree = buildTreeWithEveryType();
+    tree.recompute();
+    const before = tree.getLatestBodies().length;
+    tree.updateFeature(tree.features[1]!.id, (f) => ({ ...f, suppressed: true }));
+    tree.recompute();
+    // The extrude feature (and its dependents) no longer produce bodies.
+    expect(tree.getLatestBodies().length).toBeLessThan(before);
   });
 });

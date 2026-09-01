@@ -1,9 +1,16 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, saveToFile, loadFromFile } from './studio3d';
 import { createBox, computeVolume } from '../geometry/brep';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
 import { standardPlanes, makeAxis, makePoint, makeCoordinateSystem } from '../geometry/referenceGeometry';
+
+function pkgVersion(): string {
+  // vitest runs with the package root as cwd.
+  const raw = readFileSync('package.json', 'utf-8');
+  return (JSON.parse(raw) as { version: string }).version;
+}
 
 describe('project round-trip (parametric)', () => {
   it('rebuilds the feature tree and geometry from a saved project', () => {
@@ -50,7 +57,8 @@ describe('serializeProject', () => {
     expect(project.version).toBe(1);
     expect(project.bodies.length).toBe(1);
     expect(project.bodies[0]?.name).toBe('Box');
-    expect(project.metadata.appVersion).toBe('0.1.0');
+    // App version is injected from package.json — keep them in lockstep.
+    expect(project.metadata.appVersion).toBe(pkgVersion());
   });
 
   it('should serialize empty project', () => {

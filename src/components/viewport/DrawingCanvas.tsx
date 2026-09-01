@@ -1,28 +1,50 @@
-import { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect, useMemo, useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { projectBody, exportDrawingSVG } from '../../lib/io/drawing';
+import { projectBodies, exportDrawingSVG, type SectionPlane } from '../../lib/io/drawing';
 import { downloadFile } from '../../lib/io/studio3d';
 import { exportDXF } from '../../lib/io/dxf';
 import { exportCanvasAsPDF } from '../../lib/io/pdf';
 import { showToast } from '../../lib/toast';
 import { Download } from 'lucide-react';
 
+type SectionAxis = 'off' | 'x' | 'y' | 'z';
+
 export function DrawingCanvas() {
   const { t } = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bodies = useStore((s) => s.bodies);
+  const [sectionAxis, setSectionAxis] = useState<SectionAxis>('off');
+
+  // Section plane: cuts the bodies in half at the middle of their combined
+  // bounds along the chosen axis, removing the positive side (SolidWorks
+  // "Section View" on a mid plane).
+  const section: SectionPlane | undefined = useMemo(() => {
+    if (sectionAxis === 'off' || bodies.length === 0) return undefined;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const b of bodies) {
+      for (const v of b.vertices) {
+        const c = sectionAxis === 'x' ? v.x : sectionAxis === 'y' ? v.y : v.z;
+        min = Math.min(min, c);
+        max = Math.max(max, c);
+      }
+    }
+    const normal =
+      sectionAxis === 'x' ? { x: 1, y: 0, z: 0 } : sectionAxis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+    return { normal, offset: (min + max) / 2 };
+  }, [sectionAxis, bodies]);
 
   const views = useMemo(() => {
     if (bodies.length === 0) return [];
-    const body = bodies[0]!;
+    const suffix = sectionAxis === 'off' ? '' : ` — ${t('drawing.section')} ${sectionAxis.toUpperCase()}`;
     return [
-      projectBody(body, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50), // Front
-      projectBody(body, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: -1 }, 50), // Top
-      projectBody(body, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 50), // Right
-      projectBody(body, { x: 0.577, y: 0.577, z: 0.577 }, { x: 0, y: 1, z: 0 }, 50), // Iso
+      projectBodies(bodies, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50, `Front${suffix}`, section), // Front
+      projectBodies(bodies, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: -1 }, 50, `Top${suffix}`, section), // Top
+      projectBodies(bodies, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 50, `Right${suffix}`, section), // Right
+      projectBodies(bodies, { x: 0.577, y: 0.577, z: 0.577 }, { x: 0, y: 1, z: 0 }, 50, `Iso${suffix}`, section), // Iso
     ];
-  }, [bodies]);
+  }, [bodies, section, sectionAxis, t]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -86,6 +108,38 @@ export function DrawingCanvas() {
         ctx.stroke();
       }
 
+      // Section cut faces: hatched fill (45°, drafting convention).
+      if (view.sectionFaces && view.sectionFaces.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 0.5;
+        for (const face of view.sectionFaces) {
+          const pts = face.map(transform);
+          if (pts.length < 3) continue;
+          ctx.beginPath();
+          ctx.moveTo(pts[0]!.x, pts[0]!.y);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
+          ctx.closePath();
+          ctx.stroke();
+          ctx.save();
+          ctx.clip();
+          // Hatch: 45° lines spaced 6 px, clipped to the face polygon above.
+          const xs = pts.map((p) => p.x);
+          const ys = pts.map((p) => p.y);
+          const minX = Math.min(...xs), maxX = Math.max(...xs);
+          const minY = Math.min(...ys), maxY = Math.max(...ys);
+          const height = maxY - minY;
+          ctx.beginPath();
+          for (let c = minX - height; c < maxX; c += 6) {
+            ctx.moveTo(c, minY);
+            ctx.lineTo(c + height, maxY);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+        ctx.restore();
+      }
+
       // Draw dimensions
       ctx.strokeStyle = 'red';
       ctx.fillStyle = 'red';
@@ -140,11 +194,11 @@ export function DrawingCanvas() {
     ctx.fillText(t('drawing.title'), tbX + 5, tbY + 18);
     ctx.font = '10px sans-serif';
     ctx.fillText(useStore.getState().projectName || 'Untitled', tbX + 5, tbY + 35);
-    ctx.fillText(`${t('drawing.scale')}: 1:1`, tbX + 5, tbY + 52);
+    ctx.fillText(`${t('drawing.scale')}: ${t('drawing.autoScale')}`, tbX + 5, tbY + 52);
     ctx.textAlign = 'left';
     ctx.fillText(`${t('drawing.date')}: ${new Date().toLocaleDateString()}`, tbX + tbW * 0.4 + 5, tbY + 18);
     ctx.fillText(`${t('drawing.units')}: mm`, tbX + tbW * 0.4 + 5, tbY + 35);
-    ctx.fillText(`SceneLab v0.1`, tbX + tbW * 0.4 + 5, tbY + 52);
+    ctx.fillText(`SceneLab v${__APP_VERSION__}`, tbX + tbW * 0.4 + 5, tbY + 52);
   }, [views, t]);
 
   const handleExportSVG = () => {
@@ -152,7 +206,7 @@ export function DrawingCanvas() {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
-    const svg = exportDrawingSVG(views[0]!, 800, 600);
+    const svg = exportDrawingSVG(views, 800, 600);
     downloadFile(svg, 'drawing.svg');
     showToast('SVG exported', 'success');
   };
@@ -177,7 +231,7 @@ export function DrawingCanvas() {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
-    const dxf = exportDXF(bodies[0]!);
+    const dxf = exportDXF(bodies);
     downloadFile(dxf, 'drawing.dxf');
     showToast('DXF exported', 'success');
   };
@@ -209,6 +263,21 @@ export function DrawingCanvas() {
   return (
     <div className="w-full h-full flex flex-col">
       <div className="flex items-center gap-2 p-2 border-b border-panel-border">
+        <label className="text-xs text-text-secondary" htmlFor="section-axis">
+          {t('drawing.section')}:
+        </label>
+        <select
+          id="section-axis"
+          value={sectionAxis}
+          onChange={(e) => setSectionAxis(e.target.value as SectionAxis)}
+          className="px-2 py-1 text-xs bg-surface border border-panel-border rounded text-text-primary"
+        >
+          <option value="off">{t('drawing.sectionOff')}</option>
+          <option value="x">X</option>
+          <option value="y">Y</option>
+          <option value="z">Z</option>
+        </select>
+        <div className="w-px h-4 bg-panel-border" aria-hidden="true" />
         <button
           onClick={handleExportSVG}
           className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded"

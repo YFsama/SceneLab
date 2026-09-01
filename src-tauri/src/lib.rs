@@ -37,6 +37,50 @@ fn get_app_dir() -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// Native Save-as: modal save dialog + fs write, so the desktop app writes real
+/// files (browsers can only download). Returns the chosen path, or None when
+/// the user cancels. Doing both in Rust sidesteps the fs plugin's capability
+/// scoping, which would otherwise forbid arbitrary user-chosen paths.
+#[tauri::command]
+fn save_project_file(
+    app: tauri::AppHandle,
+    json: String,
+    default_name: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name(default_name)
+        .add_filter("SceneLab project", &["studio3d"])
+        .blocking_save_file();
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+/// Native Open: modal pick dialog + fs read. Returns (json, file name), or
+/// None when the user cancels.
+#[tauri::command]
+fn open_project_file(app: tauri::AppHandle) -> Result<Option<(String, String)>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("SceneLab project", &["studio3d", "json"])
+        .blocking_pick_file();
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    let json = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Untitled")
+        .to_string();
+    Ok(Some((json, name)))
+}
+
 #[tauri::command]
 fn autosave_snapshot(data: String) -> Result<String, String> {
     let dir = dirs::data_dir()
@@ -99,6 +143,8 @@ pub fn run() {
             write_project,
             get_app_dir,
             autosave_snapshot,
+            save_project_file,
+            open_project_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

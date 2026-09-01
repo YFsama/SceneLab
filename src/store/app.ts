@@ -2,12 +2,13 @@ import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, type DetectedRectangle } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
-import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature } from '../lib/features/tree';
+import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
-import { splitByPlane, booleanOp, hollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
+import { splitByPlane, asyncBooleanOp, asyncHollowBody, type BooleanOp } from '../lib/geometry/boolean';
+import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
+import { computeBoundingBoxCenter } from '../lib/geometry/brep';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 
@@ -50,7 +51,7 @@ export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | '
 
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
-export type WorkspaceMode = 'sketch' | 'model' | 'assembly' | 'drawing' | 'cam';
+export type WorkspaceMode = 'sketch' | 'model' | 'drawing' | 'cam';
 export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'polyline' | 'constraint';
 export type ViewDirection = 'top' | 'front' | 'right' | 'iso' | 'back' | 'bottom' | 'left';
 export type ProjectionMode = 'perspective' | 'orthographic';
@@ -106,6 +107,10 @@ interface AppState {
   /** Currently-selected sketch entity (for highlight/deletion); null if none. */
   selectedSketchId: string | null;
   setSelectedSketchId: (id: string | null) => void;
+  /** All currently-selected sketch entities (Ctrl/Shift+click multi-select, used for multi-entity constraints). */
+  selectedSketchIds: string[];
+  /** Toggle an entity in the multi-selection; it becomes the primary selection. */
+  toggleSketchSelection: (id: string) => void;
   /** Remove a sketch entity from the current sketch. */
   removeSketchEntity: (id: string) => void;
   /** Set a sketch line's length by moving its 2nd endpoint along the line; false if not a line. */
@@ -220,7 +225,7 @@ interface AppState {
   hollowDialogBody: string | null;
   setHollowDialogBody: (bodyId: string | null) => void;
   /** Hollow a body into a shell of the given wall thickness, replacing it; null if it failed. */
-  hollowBodyById: (bodyId: string, wallThickness: number) => string | null;
+  hollowBodyById: (bodyId: string, wallThickness: number) => Promise<string | null>;
   /** Linear-pattern a body along an axis, replacing it with the copies; returns the new ids. */
   linearPatternBody: (bodyId: string, axis: 'x' | 'y' | 'z', count: number, spacing: number) => string[];
   /** Circular-pattern a body around the world axis through the origin; returns the new ids. */
@@ -300,7 +305,7 @@ interface AppState {
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
   splitBodyByPlane: (bodyId: string, planeId: string) => string[];
   /** Boolean-combine the first two selected direct bodies (a op b), replacing them; null if it failed. */
-  combineSelected: (op: BooleanOp) => string | null;
+  combineSelected: (op: BooleanOp) => Promise<string | null>;
   /** Merge the selected direct bodies into one mesh (no boolean — exact, for disjoint parts); null if <2. */
   joinSelected: () => string | null;
 
@@ -342,6 +347,30 @@ interface AppState {
   removeLastMeasurePoint: () => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
+  /**
+   * Sweep the current sketch along a straight path (its extrude direction) with
+   * an accumulated twist, producing a parametric sweep feature — a twisted
+   * column that a plain extrude can't make.
+   */
+  performSweep: (distance: number, twistDegrees: number) => void;
+
+  // Modify features (Fusion-style: parametric on tree bodies, direct edit with
+  // undo on AI/imported bodies). Each returns false when nothing is selected.
+  applyFilletFeature: (radius: number) => boolean;
+  applyChamferFeature: (distance: number) => boolean;
+  applyShellFeature: (thickness: number) => boolean;
+  /** Linear array along a world axis. */
+  applyLinearArrayFeature: (count: number, spacing: number, axis: 'x' | 'y' | 'z') => boolean;
+  /** Circular array about the world Z axis through the body's bounding-box centre. */
+  applyCircularArrayFeature: (count: number) => boolean;
+  /** Mirror across a world plane through the body's bounding-box centre. */
+  applyMirrorFeature: (plane: 'xy' | 'xz' | 'yz', keepOriginal: boolean) => boolean;
+  /**
+   * Loft between two or more existing sketch features (Fusion loft sections):
+   * adds a loft feature parenting those sketches, in the given order. False
+   * when fewer than two of the ids resolve to sketch features.
+   */
+  performLoftFromSketches: (sketchFeatureIds: string[]) => boolean;
 
   // Viewport
   viewDirection: ViewDirection;
@@ -355,6 +384,9 @@ interface AppState {
   selectedIds: string[];
   selectedFaceIds: string[];
   setSelectedFaceIds: (ids: string[]) => void;
+  /** CAD edge sub-selection (Alt+click) — scopes fillet/chamfer features. */
+  selectedEdgeIds: string[];
+  setSelectedEdgeIds: (ids: string[]) => void;
   addObject: (id: string) => void;
   selectObject: (id: string) => void;
   /** Set the selection to exactly the given ids (box-select, etc.). */
@@ -417,6 +449,65 @@ export const useStore = create<AppState>((set, get) => {
     if (s) set((st) => ({ sketchUndoStack: [...st.sketchUndoStack, cloneSketch(s)].slice(-50), sketchRedoStack: [] }));
   };
 
+  /** The first selected body, or undefined. */
+  const selectedBody = (): SolidBody | undefined => {
+    const s = get();
+    const id = s.selectedIds[0];
+    return id ? s.bodies.find((b) => b.id === id) : undefined;
+  };
+  /**
+   * Edge ids from the Alt+click sub-selection that live on the selected body —
+   * fillet/chamfer scope to these when any are picked (SolidWorks edge
+   * fillets). Returns [] (= every edge) when nothing edge-scoped is selected.
+   */
+  const scopedEdgeIdsFor = (body: SolidBody): string[] => {
+    const sel = get().selectedEdgeIds;
+    if (sel.length === 0) return [];
+    const ids = body.edges.filter((e) => sel.includes(e.id)).map((e) => e.id);
+    return ids.length > 0 ? ids : [];
+  };
+  const scopedEdgeIds = (): string[] => {
+    const body = selectedBody();
+    return body ? scopedEdgeIdsFor(body) : [];
+  };
+  const axisDirection = (axis: 'x' | 'y' | 'z'): Vec3 =>
+    axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+  const planeNormal = (plane: 'xy' | 'xz' | 'yz'): Vec3 =>
+    plane === 'xy' ? { x: 0, y: 0, z: 1 } : plane === 'xz' ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  /**
+   * Run a modify feature on the current selection: parametric (a child feature
+   * the tree replays on recompute) when the body came from the tree, otherwise
+   * an undoable direct edit. `replaceDirect` false keeps the original direct
+   * body and adds the results alongside it (mirror with keepOriginal).
+   */
+  const applyModifyFeature = (
+    buildFeature: (parentIds: string[]) => Feature,
+    directOp: (body: SolidBody) => SolidBody | SolidBody[],
+    replaceDirect = true,
+  ): boolean => {
+    const body = selectedBody();
+    if (!body) return false;
+    const tree = get().featureTree;
+    const parentId = tree.findFeatureIdForBody(body.id);
+    if (parentId) {
+      tree.addFeature(buildFeature([parentId]));
+      tree.recompute();
+      set({ featureTree: tree, projectDirty: true });
+      recombine();
+      return true;
+    }
+    pushUndo();
+    const out = directOp(body);
+    const results = Array.isArray(out) ? out : [out];
+    set((s) => ({
+      directBodies: replaceDirect
+        ? s.directBodies.flatMap((b) => (b.id === body.id ? results : [b]))
+        : [...s.directBodies, ...results],
+    }));
+    recombine();
+    return true;
+  };
+
   return {
   theme: (stored('scenelab.theme') as ThemeMode) ?? 'dark',
   locale: (stored('scenelab.locale') as Locale) ?? 'en',
@@ -436,7 +527,7 @@ export const useStore = create<AppState>((set, get) => {
   setSketchTool: (sketchTool) => set({ sketchTool }),
   sketchActive: false,
   setSketchActive: (sketchActive) => set({ sketchActive }),
-  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, polylineLast: null, selectedSketchId: null, workspace: 'model' }),
+  exitSketch: () => set({ sketchActive: false, sketchTool: 'select', drawStart: null, polylineLast: null, selectedSketchId: null, selectedSketchIds: [], workspace: 'model' }),
   currentSketch: null,
   // Starting/exiting a sketch begins a fresh edit history.
   setCurrentSketch: (currentSketch) => set({ currentSketch, sketchUndoStack: [], sketchRedoStack: [] }),
@@ -451,6 +542,7 @@ export const useStore = create<AppState>((set, get) => {
       sketchUndoStack: s.sketchUndoStack.slice(0, -1),
       sketchRedoStack: [...s.sketchRedoStack, cloneSketch(currentSketch)],
       selectedSketchId: null,
+      selectedSketchIds: [],
       projectDirty: true,
     }));
     return true;
@@ -464,6 +556,7 @@ export const useStore = create<AppState>((set, get) => {
       sketchRedoStack: s.sketchRedoStack.slice(0, -1),
       sketchUndoStack: [...s.sketchUndoStack, cloneSketch(currentSketch)],
       selectedSketchId: null,
+      selectedSketchIds: [],
       projectDirty: true,
     }));
     return true;
@@ -532,13 +625,28 @@ export const useStore = create<AppState>((set, get) => {
     set({ currentSketch: { ...sketch }, projectDirty: true });
   },
   selectedSketchId: null,
-  setSelectedSketchId: (selectedSketchId) => set({ selectedSketchId }),
+  selectedSketchIds: [],
+  setSelectedSketchId: (selectedSketchId) =>
+    set({ selectedSketchId, selectedSketchIds: selectedSketchId ? [selectedSketchId] : [] }),
+  toggleSketchSelection: (id) =>
+    set((s) => {
+      const has = s.selectedSketchIds.includes(id);
+      const selectedSketchIds = has
+        ? s.selectedSketchIds.filter((x) => x !== id)
+        : [...s.selectedSketchIds, id];
+      return { selectedSketchIds, selectedSketchId: has ? null : id };
+    }),
   removeSketchEntity: (id) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
     pushSketchUndo();
     removeEntity(sketch, id);
-    set((s) => ({ currentSketch: { ...sketch }, selectedSketchId: s.selectedSketchId === id ? null : s.selectedSketchId, projectDirty: true }));
+    set((s) => ({
+      currentSketch: { ...sketch },
+      selectedSketchId: s.selectedSketchId === id ? null : s.selectedSketchId,
+      selectedSketchIds: s.selectedSketchIds.filter((x) => x !== id),
+      projectDirty: true,
+    }));
   },
   setSketchLineLength: (id, length) => {
     const sketch = get().currentSketch;
@@ -1112,12 +1220,13 @@ export const useStore = create<AppState>((set, get) => {
   setScaleDialogOpen: (scaleDialogOpen) => set({ scaleDialogOpen }),
   hollowDialogBody: null,
   setHollowDialogBody: (hollowDialogBody) => set({ hollowDialogBody }),
-  hollowBodyById: (bodyId, wallThickness) => {
+  hollowBodyById: async (bodyId, wallThickness) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(wallThickness > 0)) return null;
-    let result: SolidBody | null = null;
+    // Voxel hollowing takes seconds — it runs in the geometry worker.
+    let result: SolidBody | null;
     try {
-      result = hollowBody(body, wallThickness);
+      result = await asyncHollowBody(body, wallThickness);
     } catch {
       return null;
     }
@@ -1327,7 +1436,7 @@ export const useStore = create<AppState>((set, get) => {
   },
   newProject: () => {
     get().clearScene();
-    set({ projectName: 'Untitled', projectDirty: false, workspace: 'model', selectedSketchId: null });
+    set({ projectName: 'Untitled', projectDirty: false, workspace: 'model', selectedSketchId: null, selectedSketchIds: [] });
   },
   loadProject: (features, name, directBodies = [], referenceGeometry) => {
     const tree = new FeatureTree();
@@ -1470,7 +1579,7 @@ export const useStore = create<AppState>((set, get) => {
     return placed.id;
   },
 
-  combineSelected: (op) => {
+  combineSelected: async (op) => {
     const { selectedIds, directBodies } = get();
     // Operate on the first two selected direct bodies, in selection order
     // (difference is a − b).
@@ -1479,7 +1588,9 @@ export const useStore = create<AppState>((set, get) => {
       .filter((b): b is SolidBody => !!b);
     if (sel.length < 2) return null;
     const [a, b] = sel as [SolidBody, SolidBody];
-    const result = booleanOp(a, b, op);
+    // Exact when Manifold is warm (main thread, ms); voxel sampling otherwise
+    // runs in the geometry worker so the viewport keeps responding.
+    const result = await asyncBooleanOp(a, b, op);
     if (!result) return null;
     result.color = a.color;
     result.name = `${a.name} ${op === 'union' ? '+' : op === 'difference' ? '−' : '∩'} ${b.name}`;
@@ -1569,6 +1680,9 @@ export const useStore = create<AppState>((set, get) => {
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
+    // The dialog clamps to ≥0.1 mm; enforce the same floor for AI/programmatic
+    // callers so a degenerate distance can't enter the tree as a failing feature.
+    if (!(distance > 0)) return;
 
     // Create features
     const sketchFeat = createSketchFeature(sketch);
@@ -1617,6 +1731,104 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
   },
 
+  performSweep: (distance, twistDegrees) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(distance > 0)) return;
+
+    // Subdivide the straight path so the twist is applied gradually. One big
+    // step per end can map a symmetric profile's corner set onto itself,
+    // collapsing the side quads (degenerate faces, wrong signed volume).
+    const twist = (twistDegrees * Math.PI) / 180;
+    const steps = Math.max(2, Math.ceil(Math.abs(twist) / (Math.PI / 8)));
+    const path = Array.from({ length: steps + 1 }, (_, i) => ({
+      x: 0,
+      y: (distance * i) / steps,
+      z: 0,
+    }));
+
+    const sketchFeat = createSketchFeature(sketch);
+    const sweepFeat = createSweepFeature({ path, twist }, [sketchFeat.id]);
+
+    const tree = get().featureTree;
+    tree.addFeature(sketchFeat);
+    tree.addFeature(sweepFeat);
+    tree.recompute();
+
+    set({
+      featureTree: tree,
+      sketchActive: false,
+      currentSketch: null,
+      workspace: 'model',
+      projectDirty: true,
+    });
+    recombine();
+  },
+
+  // Modify features: when the selected body was produced by a feature, add a
+  // parametric child feature (Fusion timeline style — recompute replays it);
+  // otherwise edit the direct body in place, undoable like other direct edits.
+  // Fillet/chamfer scope to the Alt+click edge sub-selection when present
+  // (empty selection = every edge, whole-body treatment).
+  applyFilletFeature: (radius) =>
+    applyModifyFeature(
+      (parentIds) => createFilletFeature(scopedEdgeIds(), radius, parentIds),
+      (body) => applyFillet(body, scopedEdgeIdsFor(body), radius),
+    ),
+
+  applyChamferFeature: (distance) =>
+    applyModifyFeature(
+      (parentIds) => createChamferFeature(scopedEdgeIds(), distance, parentIds),
+      (body) => applyChamfer(body, scopedEdgeIdsFor(body), distance),
+    ),
+
+  applyShellFeature: (thickness) =>
+    applyModifyFeature(
+      (parentIds) => createShellFeature([], thickness, parentIds),
+      (body) => applyShell(body, [], thickness),
+    ),
+
+  applyLinearArrayFeature: (count, spacing, axis) =>
+    applyModifyFeature(
+      (parentIds) =>
+        createLinearArrayFeature(axisDirection(axis), count, spacing, parentIds),
+      (body) => applyLinearArray(body, axisDirection(axis), count, spacing),
+    ),
+
+  applyCircularArrayFeature: (count) =>
+    applyModifyFeature(
+      (parentIds) => {
+        const body = selectedBody();
+        const origin = body ? computeBoundingBoxCenter(body) : { x: 0, y: 0, z: 0 };
+        return createCircularArrayFeature({ origin, direction: { x: 0, y: 0, z: 1 } }, count, parentIds);
+      },
+      (body) => applyCircularArray(body, { origin: computeBoundingBoxCenter(body), direction: { x: 0, y: 0, z: 1 } }, count),
+    ),
+
+  applyMirrorFeature: (plane, keepOriginal) =>
+    applyModifyFeature(
+      (parentIds) => {
+        const body = selectedBody();
+        const origin = body ? computeBoundingBoxCenter(body) : { x: 0, y: 0, z: 0 };
+        return createMirrorFeature({ origin, normal: planeNormal(plane) }, parentIds, keepOriginal);
+      },
+      (body) => applyMirror(body, { origin: computeBoundingBoxCenter(body), normal: planeNormal(plane) }),
+      // Keeping the original means the mirrored copy is added alongside it.
+      !keepOriginal,
+    ),
+
+  performLoftFromSketches: (sketchFeatureIds) => {
+    const tree = get().featureTree;
+    const parents = sketchFeatureIds
+      .map((id) => tree.getFeature(id))
+      .filter((f): f is Extract<Feature, { type: 'sketch' }> => f?.type === 'sketch');
+    if (parents.length < 2) return false;
+    tree.addFeature(createLoftFeature({}, parents.map((p) => p.id)));
+    tree.recompute();
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
+    return true;
+  },
+
   viewDirection: 'iso',
   setViewDirection: (viewDirection) => set({ viewDirection }),
   projection: 'perspective',
@@ -1627,9 +1839,11 @@ export const useStore = create<AppState>((set, get) => {
   selectedIds: [],
   selectedFaceIds: [],
   setSelectedFaceIds: (ids) => set({ selectedFaceIds: ids }),
+  selectedEdgeIds: [],
+  setSelectedEdgeIds: (selectedEdgeIds) => set({ selectedEdgeIds }),
   addObject: (id) => set((s) => ({ objectIds: [...s.objectIds, id] })),
-  selectObject: (id) => set({ selectedIds: [id], selectedFaceIds: [] }),
-  setSelectedIds: (ids) => set({ selectedIds: ids, selectedFaceIds: [] }),
+  selectObject: (id) => set({ selectedIds: [id], selectedFaceIds: [], selectedEdgeIds: [] }),
+  setSelectedIds: (ids) => set({ selectedIds: ids, selectedFaceIds: [], selectedEdgeIds: [] }),
   toggleSelect: (id) =>
     set((s) => ({
       selectedIds: s.selectedIds.includes(id)
@@ -1639,7 +1853,7 @@ export const useStore = create<AppState>((set, get) => {
   // Select all *visible* bodies — hidden bodies stay out of the selection, as
   // in SolidWorks (Ctrl+A doesn't grab what you can't see).
   selectAll: () => set((s) => ({ selectedIds: s.bodies.filter((b) => !s.hiddenIds.includes(b.id)).map((b) => b.id) })),
-  deselectAll: () => set({ selectedIds: [], selectedFaceIds: [] }),
+  deselectAll: () => set({ selectedIds: [], selectedFaceIds: [], selectedEdgeIds: [] }),
   hoveredId: null,
   // Guarded so a mousemove over the same body doesn't churn subscribers.
   setHoveredId: (id) => { if (get().hoveredId !== id) set({ hoveredId: id }); },

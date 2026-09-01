@@ -1,14 +1,24 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+
+// BVH-accelerated raycasting for body picking (three-mesh-bvh). Geometries
+// without a computed bounds tree (sketch lines, datum planes, …) fall back to
+// the default raycast inside `acceleratedRaycast`.
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
-import { createSketch, polygonPoints, snapTargets } from '../../lib/sketch/engine';
+import { createSketch, polygonPoints, snapTargets, closestPointPair } from '../../lib/sketch/engine';
 import { previewDimensionLabel } from '../../lib/sketch/dimensions';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
 import { buildEdgePositions, edgeMidpoints, faceCenters } from '../../lib/render/edgeGeometry';
 import { datumPlaneTriangles, datumPlaneOutline } from '../../lib/render/datumPlane';
 import { combinedBounds, fitCameraDistance, framingBodies } from '../../lib/render/fitView';
 import { pickCycle, distinctInOrder } from '../../lib/render/pickCycle';
+import { pickEdge } from '../../lib/render/pick';
 import { MATERIALS } from '../../lib/materials';
 import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
@@ -17,6 +27,7 @@ import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { Maximize2, Check, Box } from 'lucide-react';
 import { useT } from '../../lib/i18n';
+import { showToast } from '../../lib/toast';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
   top: { pos: new THREE.Vector3(0, 10, 0), up: new THREE.Vector3(0, 0, -1) },
@@ -89,6 +100,7 @@ export function ViewportCanvas() {
   const csGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const edgesGroupRef = useRef<THREE.Group | null>(null);
+  const edgeHighlightRef = useRef<THREE.Group | null>(null);
   const comGroupRef = useRef<THREE.Group | null>(null);
   const sketchGroupRef = useRef<THREE.Group | null>(null);
   const sketchDimGroupRef = useRef<THREE.Group | null>(null);
@@ -116,6 +128,7 @@ export function ViewportCanvas() {
   const setPolylineLast = useStore((s) => s.setPolylineLast);
   const gridSize = useStore((s) => s.gridSize);
   const selectedSketchId = useStore((s) => s.selectedSketchId);
+  const selectedSketchIds = useStore((s) => s.selectedSketchIds);
   const polygonSides = useStore((s) => s.polygonSides);
   const bodies = useStore((s) => s.bodies);
   const hiddenIds = useStore((s) => s.hiddenIds);
@@ -128,6 +141,7 @@ export function ViewportCanvas() {
   const coordSystems = useStore((s) => s.coordSystems);
   const selectedIds = useStore((s) => s.selectedIds);
   const selectedFaceIds = useStore((s) => s.selectedFaceIds);
+  const selectedEdgeIds = useStore((s) => s.selectedEdgeIds);
   const selectObject = useStore((s) => s.selectObject);
   const toggleSelect = useStore((s) => s.toggleSelect);
   const nudgeSelected = useStore((s) => s.nudgeSelected);
@@ -233,6 +247,9 @@ export function ViewportCanvas() {
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setClearColor(0x1e1e2e);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Stable id so AI vision capture (and tests) can find the WebGL canvas
+    // instead of whichever canvas happens to be first in the DOM.
+    renderer.domElement.id = 'viewport-canvas';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -345,6 +362,11 @@ export function ViewportCanvas() {
     edgesGroup.name = 'body-edges';
     scene.add(edgesGroup);
     edgesGroupRef.current = edgesGroup;
+
+    const edgeHighlightGroup = new THREE.Group();
+    edgeHighlightGroup.name = 'edge-highlight';
+    scene.add(edgeHighlightGroup);
+    edgeHighlightRef.current = edgeHighlightGroup;
 
     const comGroup = new THREE.Group();
     comGroup.name = 'center-of-mass';
@@ -627,9 +649,9 @@ export function ViewportCanvas() {
     const pointMat = sketchPointMatRef.current;
     const constructionMat = sketchConstructionMatRef.current;
     const constructionPtMat = sketchConstructionPtMatRef.current;
-    // Selected entity draws in the highlight colour; construction entities use dashed grey.
+    // Selected entities draw in the highlight colour; construction entities use dashed grey.
     const matFor = (entity: import('../../lib/sketch/types').SketchEntity) => {
-      if (entity.id === selectedSketchId) return sketchHlMatRef.current;
+      if (selectedSketchIds.includes(entity.id)) return sketchHlMatRef.current;
       if (entity.construction) return constructionMat;
       return sketchLineMatRef.current;
     };
@@ -705,7 +727,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [currentSketch, sketchActive, selectedSketchId, sketchPlaneId]);
+  }, [currentSketch, sketchActive, selectedSketchId, selectedSketchIds, sketchPlaneId]);
 
   // Live rubber-band preview of the shape being drawn (from the mouse-down point
   // to the current cursor) so you can see the line/rect/circle/arc before
@@ -870,7 +892,7 @@ export function ViewportCanvas() {
       }
     }
     dirtyRef.current = true;
-  }, [currentSketch, sketchActive, selectedSketchId, sketchPlaneId]);
+  }, [currentSketch, sketchActive, selectedSketchId, selectedSketchIds, sketchPlaneId]);
 
   // Incremental body + edge rendering: diff against the cache so only
   // changed/new/removed bodies rebuild geometry. This avoids a full teardown
@@ -887,6 +909,7 @@ export function ViewportCanvas() {
     for (const [id, entry] of cache) {
       if (!visibleIds.has(id)) {
         bodiesGroup.remove(entry.mesh);
+        entry.mesh.geometry.disposeBoundsTree();
         entry.mesh.geometry.dispose();
         (entry.mesh.material as THREE.Material).dispose();
         if (entry.edges) {
@@ -911,6 +934,7 @@ export function ViewportCanvas() {
       // Dispose old mesh/edges if rebuilding.
       if (cached) {
         bodiesGroup.remove(cached.mesh);
+        cached.mesh.geometry.disposeBoundsTree();
         cached.mesh.geometry.dispose();
         (cached.mesh.material as THREE.Material).dispose();
         if (cached.edges) {
@@ -926,6 +950,8 @@ export function ViewportCanvas() {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setIndex(indices);
       geo.computeVertexNormals();
+      // BVH for the accelerated raycaster (body/face picking).
+      geo.computeBoundsTree();
       // Initialize vertex colors to the base body color.
       const baseR = 0x89 / 255, baseG = 0xb4 / 255, baseB = 0xfa / 255;
       const colors = new Float32Array(positions.length);
@@ -1062,6 +1088,38 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [bodies, selectedIds, hoveredId, sketchActive, selectedFaceIds]);
+
+  // Selected CAD edges glow on top of everything — a small overlay rebuilt on
+  // selection change only (a handful of segments), so it costs nothing to keep
+  // in sync with the mesh cache.
+  useEffect(() => {
+    const group = edgeHighlightRef.current;
+    if (!group) return;
+    while (group.children.length > 0) {
+      const child = group.children[0]!;
+      group.remove(child);
+      if (child instanceof THREE.Line) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+    const sel = new Set(selectedEdgeIds);
+    if (sel.size > 0) {
+      const pos: number[] = [];
+      for (const b of bodies) {
+        for (const edge of b.edges) {
+          if (!sel.has(edge.id)) continue;
+          pos.push(edge.start.x, edge.start.y, edge.start.z, edge.end.x, edge.end.y, edge.end.z);
+        }
+      }
+      if (pos.length > 0) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        group.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xfab387, depthTest: false, transparent: true })));
+      }
+    }
+    dirtyRef.current = true;
+  }, [bodies, selectedEdgeIds]);
 
   // Render the store's datum/reference planes as translucent outlined quads.
   useEffect(() => {
@@ -1352,10 +1410,16 @@ export function ViewportCanvas() {
 
       if (sketchActive) {
         // In the select tool, clicking near an entity selects it (for deletion).
+        // Ctrl/Shift+click toggles multi-select for two-entity constraints
+        // (SolidWorks: select a pair, then pick the constraint).
         if (sketchTool === 'select' && currentSketch) {
           const p = getSketchPoint(e);
           const id = p ? pickSketchEntity(currentSketch, p, Math.max(gridSize, 0.4)) : null;
-          useStore.getState().setSelectedSketchId(id);
+          if (id && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+            useStore.getState().toggleSketchSelection(id);
+          } else {
+            useStore.getState().setSelectedSketchId(id);
+          }
         }
         return;
       }
@@ -1366,6 +1430,28 @@ export function ViewportCanvas() {
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
       const bodiesGroup = bodiesGroupRef.current;
+
+      // Alt+click picks the edge under the cursor (sub-entity selection, like
+      // Ctrl+click for faces). Selected edges scope fillet/chamfer features.
+      if (e.altKey) {
+        const ray = raycasterRef.current.ray;
+        const target = controlsRef.current?.target ?? new THREE.Vector3();
+        const threshold = Math.max(0.1, camera.position.distanceTo(target) * 0.015);
+        const hit = pickEdge(
+          bodies.filter((b) => !hiddenIds.includes(b.id)),
+          { x: ray.origin.x, y: ray.origin.y, z: ray.origin.z },
+          { x: ray.direction.x, y: ray.direction.y, z: ray.direction.z },
+          threshold,
+        );
+        if (hit) {
+          if (!selectedIds.includes(hit.bodyId)) selectObject(hit.bodyId);
+          const current = useStore.getState().selectedEdgeIds;
+          useStore.getState().setSelectedEdgeIds(
+            current.includes(hit.edgeId) ? current.filter((x) => x !== hit.edgeId) : [...current, hit.edgeId],
+          );
+          return;
+        }
+      }
 
       // Measure mode: each click drops a point on the surface under the cursor;
       // after two points the readout shows the distance. A third click restarts.
@@ -1443,7 +1529,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, sketchTool, currentSketch, gridSize, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll],
+    [sketchActive, sketchTool, currentSketch, gridSize, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds],
   );
 
   const handleMouseMove = useCallback(
@@ -1544,30 +1630,99 @@ export function ViewportCanvas() {
         label: isConstruction ? t('sketch.normalGeometry') : t('sketch.construction'),
         onClick: () => useStore.getState().toggleSketchConstruction(selectedSketchId),
       });
-      // Context-sensitive constraint submenu.
+      // Context-sensitive constraint submenu, aware of the whole multi-selection
+      // (SolidWorks: select two entities, right-click, pick the constraint).
+      // Two-entity offers only appear when the selection pair is valid for them.
       if (ent && currentSketch) {
         const store = useStore.getState();
         const constraintItems: import('../ui/ContextMenu').ContextMenuItem[] = [];
-        if (ent.type === 'line') {
+        const isRound = (e: typeof ent) => e.type === 'circle' || e.type === 'arc';
+        const selIds = store.selectedSketchIds.length >= 2 ? store.selectedSketchIds : [selectedSketchId];
+        const pair = selIds.length === 2
+          ? selIds.map((id) => currentSketch.entities.get(id)!).filter(Boolean)
+          : null;
+        // Symmetric takes two entities plus a mirror line (3-way selection).
+        const trio = selIds.length === 3
+          ? selIds.map((id) => currentSketch.entities.get(id)!).filter(Boolean)
+          : null;
+        if (trio && trio.filter((e) => e.type === 'line').length === 1) {
+          const mirror = trio.find((e) => e.type === 'line')!;
+          const others = trio.filter((e) => e !== mirror);
           constraintItems.push(
-            { label: t('constraint.horizontal'), onClick: () => { store.addSketchConstraint('horizontal', [selectedSketchId]); } },
-            { label: t('constraint.vertical'), onClick: () => { store.addSketchConstraint('vertical', [selectedSketchId]); } },
+            { label: t('constraint.symmetric'), onClick: () => { store.addSketchConstraint('symmetric', [others[0]!.id, others[1]!.id, mirror.id]); } },
           );
         }
-        if (ent.type === 'point') {
-          constraintItems.push(
-            { label: t('constraint.fixed'), onClick: () => { store.addSketchConstraint('fixed', [selectedSketchId]); } },
-          );
+
+        if (!pair) {
+          // Single-entity constraints.
+          if (ent.type === 'line') {
+            constraintItems.push(
+              { label: t('constraint.horizontal'), onClick: () => { store.addSketchConstraint('horizontal', [selectedSketchId]); } },
+              { label: t('constraint.vertical'), onClick: () => { store.addSketchConstraint('vertical', [selectedSketchId]); } },
+            );
+          }
+          if (ent.type === 'point') {
+            constraintItems.push(
+              { label: t('constraint.fixed'), onClick: () => { store.addSketchConstraint('fixed', [selectedSketchId]); } },
+            );
+          }
+          if (isRound(ent)) {
+            const r = ent.radius;
+            constraintItems.push(
+              { label: t('constraint.radius'), onClick: () => {
+                const val = parseFloat(prompt(t('constraint.radiusPrompt'), String(r)) ?? '');
+                if (Number.isFinite(val) && val > 0) store.addSketchConstraint('radius', [selectedSketchId], val);
+              }},
+            );
+          }
+        } else {
+          const a = pair[0]!;
+          const b = pair[1]!;
+          const bothLines = a.type === 'line' && b.type === 'line';
+          const bothRound = isRound(a) && isRound(b);
+          const pointAndLine = (a.type === 'point' && b.type === 'line') || (a.type === 'line' && b.type === 'point');
+          // Coincident/distance operate on points; resolve the picked entities
+          // to their closest point pair (endpoints touch for lines).
+          const resolvePair = () => closestPointPair(currentSketch, a.id, b.id);
+          if (bothLines) {
+            constraintItems.push(
+              { label: t('constraint.parallel'), onClick: () => { store.addSketchConstraint('parallel', [a.id, b.id]); } },
+              { label: t('constraint.perpendicular'), onClick: () => { store.addSketchConstraint('perpendicular', [a.id, b.id]); } },
+              { label: t('constraint.equal'), onClick: () => { store.addSketchConstraint('equal', [a.id, b.id]); } },
+            );
+          }
+          if (bothRound) {
+            constraintItems.push(
+              { label: t('constraint.concentric'), onClick: () => { store.addSketchConstraint('concentric', [a.id, b.id]); } },
+              { label: t('constraint.equal'), onClick: () => { store.addSketchConstraint('equal', [a.id, b.id]); } },
+            );
+          }
+          if ((a.type === 'line' && isRound(b)) || (isRound(a) && b.type === 'line')) {
+            constraintItems.push(
+              { label: t('constraint.tangent'), onClick: () => { store.addSketchConstraint('tangent', [a.id, b.id]); } },
+            );
+          }
+          if (a.type === 'point' && b.type === 'point') {
+            constraintItems.push(
+              { label: t('constraint.coincident'), onClick: () => { store.addSketchConstraint('coincident', [a.id, b.id]); } },
+              { label: t('constraint.distance'), onClick: () => {
+                const cur = Math.hypot(a.x - b.x, a.y - b.y);
+                const val = parseFloat(prompt(t('constraint.distancePrompt'), cur.toFixed(2)) ?? '');
+                if (Number.isFinite(val) && val >= 0) store.addSketchConstraint('distance', [a.id, b.id], val);
+              }},
+            );
+          }
+          if (bothLines || pointAndLine) {
+            constraintItems.push(
+              { label: t('constraint.coincident'), onClick: () => {
+                const pts = resolvePair();
+                if (pts) store.addSketchConstraint('coincident', pts);
+              }},
+            );
+          }
         }
-        if (ent.type === 'circle' || ent.type === 'arc') {
-          const r = ent.radius;
-          constraintItems.push(
-            { label: t('constraint.radius'), onClick: () => {
-              const val = parseFloat(prompt(t('constraint.radiusPrompt'), String(r)) ?? '');
-              if (Number.isFinite(val) && val > 0) store.addSketchConstraint('radius', [selectedSketchId], val);
-            }},
-            { label: t('constraint.concentric'), onClick: () => { store.addSketchConstraint('concentric', [selectedSketchId]); } },
-          );
+        if (constraintItems.length > 0) {
+          items.push({ label: t('sketch.addConstraint'), separatorBefore: true, submenu: constraintItems });
         }
         // Rectangle dimension editing: if the selected line is part of a rectangle.
         if (ent.type === 'line') {
@@ -1599,6 +1754,17 @@ export function ViewportCanvas() {
       label: t('sketch.tools'),
       separatorBefore: items.length > 0,
       submenu: tools.map((tool) => ({ label: t(`sketch.${tool}`), onClick: () => useStore.getState().setSketchTool(tool) })),
+    });
+    items.push({
+      label: t('sketch.sweep'),
+      separatorBefore: true,
+      onClick: () => {
+        const distance = parseFloat(prompt(t('sketch.sweepDistancePrompt'), '20') ?? '');
+        if (!Number.isFinite(distance) || distance <= 0) return;
+        const twist = parseFloat(prompt(t('sketch.sweepTwistPrompt'), '0') ?? '');
+        if (!Number.isFinite(twist)) return;
+        useStore.getState().performSweep(distance, twist);
+      },
     });
     items.push({ label: t('sketch.exit'), separatorBefore: true, onClick: () => useStore.getState().exitSketch() });
     return items;
@@ -1693,6 +1859,44 @@ export function ViewportCanvas() {
             { label: t('menu.linearPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'linear' }) },
             { label: t('menu.circularPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'circular' }) },
             { label: t('menu.gridPattern'), onClick: () => st().setPendingPattern({ bodyId, mode: 'grid' }) },
+          ],
+        },
+        {
+          // Parametric modify features (Fusion timeline style). Tree-produced
+          // bodies gain a child feature; direct bodies are edited in place.
+          label: t('menu.feature'),
+          submenu: [
+            { label: t('feature.fillet'), onClick: pre(() => {
+              const v = parseFloat(prompt(t('feature.filletPrompt'), '2') ?? '');
+              if (Number.isFinite(v) && v > 0) {
+                const ok = st().applyFilletFeature(v);
+                showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+              }
+            }) },
+            { label: t('feature.chamfer'), onClick: pre(() => {
+              const v = parseFloat(prompt(t('feature.chamferPrompt'), '2') ?? '');
+              if (Number.isFinite(v) && v > 0) {
+                const ok = st().applyChamferFeature(v);
+                showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+              }
+            }) },
+            { label: t('feature.shell'), onClick: pre(() => {
+              const v = parseFloat(prompt(t('feature.shellPrompt'), '1.5') ?? '');
+              if (Number.isFinite(v) && v > 0) {
+                const ok = st().applyShellFeature(v);
+                showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+              }
+            }) },
+            {
+              label: t('feature.mirror'),
+              submenu: (['xy', 'xz', 'yz'] as const).map((plane) => ({
+                label: t(`feature.mirror${plane.toUpperCase()}`),
+                onClick: pre(() => {
+                  const ok = st().applyMirrorFeature(plane, true);
+                  showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                }),
+              })),
+            },
           ],
         },
         ...(selectedIds.length >= 2
@@ -1914,10 +2118,13 @@ export function ViewportCanvas() {
           if (d && useStore.getState().nudgeSketchEntity(id, d[0]!, d[1]!)) e.preventDefault();
         }
       }
-      // Delete the selected sketch entity while sketching.
+      // Delete the selected sketch entities while sketching (multi-select aware).
       if (sketchActive && (e.key === 'Delete' || e.key === 'Backspace')) {
-        const id = useStore.getState().selectedSketchId;
-        if (id) { e.preventDefault(); useStore.getState().removeSketchEntity(id); }
+        const ids = useStore.getState().selectedSketchIds;
+        if (ids.length > 0) {
+          e.preventDefault();
+          for (const id of ids) useStore.getState().removeSketchEntity(id);
+        }
       }
       // Constraint shortcuts: apply to the selected entity when a sketch entity is selected.
       if (sketchActive && useStore.getState().selectedSketchId) {

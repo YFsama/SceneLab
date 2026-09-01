@@ -96,3 +96,21 @@ describe('exportDXF3D', () => {
     }
   });
 });
+
+describe('exportDXF multi-body', () => {
+  it('accepts an array and merges all entities', () => {
+    const a = createBox(10, 10, 10);
+    const b = createCylinder(5, 10, 16);
+    const singleA = exportDXF(a);
+    const singleB = exportDXF(b);
+    const merged = exportDXF([a, b]);
+    const countLines = (s: string) => (s.match(/\bLINE\b/g) ?? []).length;
+    expect(countLines(merged)).toBe(countLines(singleA) + countLines(singleB));
+    expect(merged).toContain('EOF');
+  });
+
+  it('single-body result matches the array form', () => {
+    const box = createBox(10, 10, 10);
+    expect(exportDXF(box)).toBe(exportDXF([box]));
+  });
+});

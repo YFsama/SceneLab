@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc, addPolygon,
   addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
-  detectRectangle, resizeRectangle,
+  detectRectangle, resizeRectangle, closestPointPair,
 } from './engine';
 
 describe('createSketch', () => {
@@ -626,5 +626,41 @@ describe('addRectangle edge cases', () => {
     const sketch = createSketch('xy');
     const { lines } = addRectangle(sketch, 0, 0, 0.01, 0.01);
     expect(lines.length).toBe(4);
+  });
+});
+
+describe('closestPointPair', () => {
+  it('finds the nearest endpoint pair of two lines', () => {
+    const sketch = createSketch('xz');
+    // Line A from (0,0) to (10,0); line B from (12,3) to (20,3).
+    const a = addLine(sketch, 0, 0, 10, 0);
+    const b = addLine(sketch, 12, 3, 20, 3);
+    const pair = closestPointPair(sketch, a.id, b.id);
+    expect(pair).not.toBeNull();
+    const pa = sketch.entities.get(pair![0]!);
+    const pb = sketch.entities.get(pair![1]!);
+    // Closest endpoints are (10,0) and (12,3).
+    expect(pa?.type === 'point' && pa.x).toBe(10);
+    expect(pa?.type === 'point' && pa.y).toBe(0);
+    expect(pb?.type === 'point' && pb.x).toBe(12);
+  });
+
+  it('uses circle centres for round entities', () => {
+    const sketch = createSketch('xz');
+    const c1 = addCircle(sketch, 0, 0, 5);
+    const c2 = addCircle(sketch, 8, 0, 3);
+    const pair = closestPointPair(sketch, c1.id, c2.id);
+    expect(pair).not.toBeNull();
+    for (const pid of pair!) {
+      const p = sketch.entities.get(pid);
+      expect(p?.type).toBe('point');
+    }
+  });
+
+  it('returns null for unknown ids', () => {
+    const sketch = createSketch('xz');
+    const a = addLine(sketch, 0, 0, 1, 1);
+    expect(closestPointPair(sketch, a.id, 'nope')).toBeNull();
+    expect(closestPointPair(sketch, 'nope', 'also-nope')).toBeNull();
   });
 });

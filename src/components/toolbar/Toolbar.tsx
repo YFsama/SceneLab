@@ -1,14 +1,7 @@
-import { useStore, type WorkspaceMode } from '../../store/app';
+import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Pen, Cog, Ruler, Settings, Undo2, Redo2 } from 'lucide-react';
-
-const workspaces: { mode: WorkspaceMode; icon: typeof Box; shortcut: string }[] = [
-  { mode: 'sketch', icon: Pen, shortcut: 'S' },
-  { mode: 'model', icon: Box, shortcut: 'M' },
-  { mode: 'assembly', icon: Cog, shortcut: '' },
-  { mode: 'drawing', icon: Ruler, shortcut: 'D' },
-  { mode: 'cam', icon: Settings, shortcut: 'C' },
-];
+import { WORKSPACES } from './workspaces';
+import { Undo2, Redo2 } from 'lucide-react';
 
 export function Toolbar() {
   const { t } = useT();
@@ -26,7 +19,7 @@ export function Toolbar() {
       role="toolbar"
       aria-label={t('toolbar.workspaceSelector')}
     >
-      {workspaces.map(({ mode, icon: Icon, shortcut }) => (
+      {WORKSPACES.map(({ mode, icon: Icon, shortcut }) => (
         <button
           key={mode}
           onClick={() => setWorkspace(mode)}

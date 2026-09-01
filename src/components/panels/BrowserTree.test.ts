@@ -1,51 +1,62 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { useStore } from '../../store/app';
+import { createBox } from '../../lib/geometry/brep';
 
-// BrowserTree is a React component — test the tree structure logic.
+// Real coverage for the operations the BrowserTree drives (rename, visibility,
+// duplicate, reorder) through the store — the component itself is rendering
+// only. Previously this file asserted locally-declared string arrays.
 
-describe('BrowserTree structure', () => {
-  it('tree sections include bodies, features, reference geometry', () => {
-    const sections = ['bodies', 'features', 'reference'];
-    expect(sections).toContain('bodies');
-    expect(sections).toContain('features');
-    expect(sections).toContain('reference');
+describe('browser tree body operations (store-backed)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      hiddenIds: [],
+      undoStack: [],
+      redoStack: [],
+      featureTree: useStore.getState().featureTree,
+    });
   });
 
-  it('body operations include rename, duplicate, delete, hide', () => {
-    const operations = ['rename', 'duplicate', 'delete', 'hide'];
-    expect(operations).toContain('rename');
-    expect(operations).toContain('duplicate');
-    expect(operations).toContain('delete');
-    expect(operations).toContain('hide');
+  it('renameBody renames and rejects empty/missing/same names', () => {
+    const a = createBox(2, 2, 2);
+    useStore.getState().addDirectBody(a);
+    expect(useStore.getState().renameBody(a.id, 'PartA')).toBe(true);
+    expect(useStore.getState().bodies.find((x) => x.id === a.id)!.name).toBe('PartA');
+    // No-op rename (same name) and missing body are refused; blank names too.
+    expect(useStore.getState().renameBody(a.id, 'PartA')).toBe(false);
+    expect(useStore.getState().renameBody(a.id, '   ')).toBe(false);
+    expect(useStore.getState().renameBody('nope', 'X')).toBe(false);
   });
 
-  it('supports multi-selection with Shift/Ctrl', () => {
-    const selectionModes = ['single', 'toggle', 'range'];
-    expect(selectionModes).toContain('single');
-    expect(selectionModes).toContain('toggle');
-    expect(selectionModes).toContain('range');
-  });
-});
-
-describe('BrowserTree body operations', () => {
-  it('rename flow: begin → set value → commit', () => {
-    const steps = ['beginRename', 'setRenameValue', 'commitRename'];
-    expect(steps).toHaveLength(3);
+  it('toggleBodyVisibility hides and shows a body', () => {
+    const a = createBox(2, 2, 2);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().toggleBodyVisibility(a.id);
+    expect(useStore.getState().hiddenIds).toContain(a.id);
+    useStore.getState().toggleBodyVisibility(a.id);
+    expect(useStore.getState().hiddenIds).not.toContain(a.id);
   });
 
-  it('rename can be cancelled', () => {
-    const steps = ['beginRename', 'cancelRename'];
-    expect(steps).toHaveLength(2);
+  it('duplicateSelected clones the selection with distinct ids', () => {
+    const a = createBox(4, 4, 4);
+    useStore.getState().addDirectBody(a);
+    useStore.getState().selectObject(a.id);
+    const newIds = useStore.getState().duplicateSelected();
+    expect(newIds).toHaveLength(1);
+    expect(newIds[0]).not.toBe(a.id);
+    expect(useStore.getState().bodies).toHaveLength(2);
   });
 
-  it('visibility toggle hides/shows a body', () => {
-    const hiddenIds: string[] = [];
-    const bodyId = 'body-1';
-    // Toggle hide.
-    hiddenIds.push(bodyId);
-    expect(hiddenIds).toContain(bodyId);
-    // Toggle show.
-    const idx = hiddenIds.indexOf(bodyId);
-    hiddenIds.splice(idx, 1);
-    expect(hiddenIds).not.toContain(bodyId);
+  it('reorderBody moves a body within the direct-body order', () => {
+    const a = createBox(1, 1, 1);
+    const b = createBox(2, 2, 2);
+    useStore.getState().addDirectBodies([a, b]);
+    expect(useStore.getState().reorderBody(b.id, 'up')).toBe(true);
+    expect(useStore.getState().bodies[0]!.id).toBe(b.id);
+    // Already at the top — a no-op move reports false.
+    expect(useStore.getState().reorderBody(b.id, 'up')).toBe(false);
   });
 });

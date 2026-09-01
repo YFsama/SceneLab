@@ -4,6 +4,8 @@ import type {
   SketchFeature,
   ExtrudeFeature,
   RevolveFeature,
+  SweepFeature,
+  LoftFeature,
   FilletFeature,
   ChamferFeature,
   ShellFeature,
@@ -12,7 +14,7 @@ import type {
   MirrorFeature,
 } from './types';
 import type { SolidBody, Vec3 } from '../geometry/types';
-import { createExtrude, createRevolve } from '../geometry/brep';
+import { createExtrude, createRevolve, createLoftSections } from '../geometry/brep';
 import {
   applyFillet,
   applyChamfer,
@@ -20,6 +22,7 @@ import {
   applyLinearArray,
   applyCircularArray,
   applyMirror,
+  sweepBody,
 } from '../geometry/operations';
 import { solveSketch } from '../sketch/engine';
 import type { Sketch } from '../sketch/types';
@@ -35,6 +38,13 @@ export class FeatureTree {
   // Features whose body was consumed by a downstream operation (fillet, shell,
   // …) and should therefore not appear on its own in the final output.
   private consumed = new Set<string>();
+  // Incremental DAG memo: per feature OBJECT, its last result, the parent
+  // results it was computed from, and which parent features that evaluation
+  // consumed (fillet/shell/array replace their parent's output). `updateFeature`
+  // replaces the feature object, so an unchanged object with unchanged parent
+  // results is reusable as-is — the downstream viewport diff keeps reusing
+  // those body meshes instead of rebuilding every body on every recompute.
+  private memo = new Map<Feature, { result: FeatureResult; parents: FeatureResult[]; consumedParents: string[] }>();
 
   addFeature(feature: Feature): void {
     this.features.push(feature);
@@ -64,23 +74,68 @@ export class FeatureTree {
     return this.results.get(id);
   }
 
+  /**
+   * The feature whose result produced the given body id. Lets modify features
+   * (fillet, shell, arrays, …) attach parametrically to a body picked in the
+   * viewport, the way Fusion 360 chains timeline features. Undefined for
+   * direct bodies (created outside the tree).
+   */
+  findFeatureIdForBody(bodyId: string): string | undefined {
+    for (const [featureId, result] of this.results) {
+      if (result.bodies.some((b) => b.id === bodyId)) return featureId;
+    }
+    return undefined;
+  }
+
   recompute(): void {
-    this.results.clear();
     this.consumed.clear();
+    const prevMemo = this.memo;
+    const nextMemo = new Map<Feature, { result: FeatureResult; parents: FeatureResult[]; consumedParents: string[] }>();
+    // Evaluators (firstParentBody, sketch lookups) read this.results while the
+    // walk is in progress, so the fresh map must be live during the loop.
+    const currentResults = new Map<string, FeatureResult>();
+    this.results = currentResults;
 
     for (const feature of this.features) {
       if (feature.suppressed) continue;
 
-      try {
-        const result = this.evaluateFeature(feature);
-        this.results.set(feature.id, result);
-      } catch (e) {
-        this.results.set(feature.id, {
-          bodies: [],
-          error: e instanceof Error ? e.message : String(e),
-        });
+      const parents = feature.parentIds
+        .map((id) => currentResults.get(id))
+        .filter((r): r is FeatureResult => r !== undefined);
+
+      // Reuse the cached result when this exact feature object is unchanged
+      // and every parent result is the same object it was computed from.
+      const cached = prevMemo.get(feature);
+      let result: FeatureResult;
+      let consumedParents: string[];
+      if (
+        cached &&
+        cached.parents.length === parents.length &&
+        cached.parents.every((p, i) => p === parents[i])
+      ) {
+        result = cached.result;
+        consumedParents = cached.consumedParents;
+        // Replay the consumption this feature recorded last time — evaluators
+        // did not run, so nothing else marks the parent as consumed.
+        for (const id of consumedParents) this.consumed.add(id);
+      } else {
+        const consumedBefore = new Set(this.consumed);
+        try {
+          result = this.evaluateFeature(feature);
+        } catch (e) {
+          result = {
+            bodies: [],
+            error: e instanceof Error ? e.message : String(e),
+          };
+        }
+        consumedParents = [...this.consumed].filter((id) => !consumedBefore.has(id));
       }
+
+      nextMemo.set(feature, { result, parents, consumedParents });
+      currentResults.set(feature.id, result);
     }
+
+    this.memo = nextMemo;
   }
 
   getLatestBodies(): SolidBody[] {
@@ -116,6 +171,10 @@ export class FeatureTree {
         return this.evaluateExtrude(feature);
       case 'revolve':
         return this.evaluateRevolve(feature);
+      case 'sweep':
+        return this.evaluateSweep(feature);
+      case 'loft':
+        return this.evaluateLoft(feature);
       case 'fillet':
         return this.evaluateFillet(feature);
       case 'chamfer':
@@ -148,6 +207,50 @@ export class FeatureTree {
       axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } },
       angle: feature.params.angle,
     });
+    return { bodies: [body] };
+  }
+
+  private evaluateSweep(feature: SweepFeature): FeatureResult {
+    // Profile: parent sketch if present, otherwise the explicit fallback.
+    let profile: { x: number; y: number }[] | undefined = feature.params.profile;
+    const parentSketch = feature.parentIds
+      .map((id) => this.getFeature(id))
+      .find((f): f is SketchFeature => f?.type === 'sketch');
+    if (parentSketch) {
+      const solved = solveSketch(parentSketch.sketch);
+      const pts = extractProfileFromSketch(parentSketch.sketch, solved);
+      if (pts.length >= 3) {
+        // Same sketch→world mapping as extrude: sketch (x,y) onto world (x,z).
+        profile = pts.map((p) => ({ x: p.x, y: p.y }));
+      }
+    }
+    if (!profile || profile.length < 3) {
+      throw new Error('Sweep requires a profile of at least 3 points');
+    }
+    const body = sweepBody(profile, feature.params.path, feature.params.twist);
+    return { bodies: [body] };
+  }
+
+  private evaluateLoft(feature: LoftFeature): FeatureResult {
+    // Sections: one profile per parent sketch (in parent order, like Fusion's
+    // loft section picking), falling back to explicit params.sections.
+    const sections: { x: number; y: number; z: number }[][] = [];
+    for (const id of feature.parentIds) {
+      const f = this.getFeature(id);
+      if (f?.type !== 'sketch') continue;
+      const solved = solveSketch(f.sketch);
+      const pts = extractProfileFromSketch(f.sketch, solved);
+      if (pts.length >= 3) {
+        sections.push(pts.map((p) => ({ x: p.x, y: 0, z: p.y })));
+      }
+    }
+    if (sections.length < 2 && feature.params.sections && feature.params.sections.length >= 2) {
+      sections.push(...feature.params.sections);
+    }
+    if (sections.length < 2) {
+      throw new Error('Loft requires at least two sections with 3+ points');
+    }
+    const body = createLoftSections(sections);
     return { bodies: [body] };
   }
 
@@ -354,6 +457,34 @@ export function createRevolveFeature(angle: number, parentIds: string[]): Revolv
     suppressed: false,
     parentIds,
     params: { angle },
+  };
+}
+
+export function createSweepFeature(
+  params: SweepFeature['params'],
+  parentIds: string[] = [],
+): SweepFeature {
+  return {
+    id: genId('feat'),
+    type: 'sweep',
+    name: 'Sweep',
+    suppressed: false,
+    parentIds,
+    params,
+  };
+}
+
+export function createLoftFeature(
+  params: LoftFeature['params'] = {},
+  parentIds: string[] = [],
+): LoftFeature {
+  return {
+    id: genId('feat'),
+    type: 'loft',
+    name: 'Loft',
+    suppressed: false,
+    parentIds,
+    params,
   };
 }
 

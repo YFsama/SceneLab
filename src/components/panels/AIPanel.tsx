@@ -63,10 +63,13 @@ export function AIPanel() {
     setLoading(true);
 
     try {
-      // Capture viewport screenshot if vision is enabled
+      // Capture viewport screenshot if vision is enabled. Target the tagged
+      // WebGL canvas, not whichever canvas is first in the DOM.
       let screenshot: string | undefined;
       if (visionEnabled) {
-        const canvas = document.querySelector('canvas');
+        const canvas =
+          document.querySelector<HTMLCanvasElement>('#viewport-canvas') ??
+          document.querySelector('canvas');
         if (canvas) {
           screenshot = canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
         }

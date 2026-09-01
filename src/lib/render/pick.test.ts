@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickBody } from './pick';
+import { pickBody, pickEdge } from './pick';
 import { createBox } from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
 
@@ -57,5 +57,33 @@ describe('pickBody', () => {
     expect(hit!.point.x).toBeLessThanOrEqual(5);
     expect(hit!.point.y).toBeGreaterThanOrEqual(0);
     expect(hit!.point.y).toBeLessThanOrEqual(10);
+  });
+});
+
+describe('pickEdge', () => {
+  const box = createBox(10, 10, 10);
+
+  it('hits the vertical edge nearest the ray', () => {
+    // Ray looking straight down the Y axis, passing next to the corner column.
+    const hit = pickEdge([box], { x: 5.1, y: 20, z: -5 }, { x: 0, y: -1, z: 0 }, 0.5);
+    expect(hit).not.toBeNull();
+    expect(hit!.bodyId).toBe(box.id);
+    expect(hit!.edgeId).toBeTruthy();
+  });
+
+  it('misses when the ray is far from every edge', () => {
+    // (2.5, 2.5) is the centre of a top-face quadrant, clear of the mid and
+    // boundary edges of the subdivided face.
+    expect(pickEdge([box], { x: 2.5, y: 20, z: 2.5 }, { x: 0, y: -1, z: 0 }, 0.5)).toBeNull();
+  });
+
+  it('misses when the closest approach is behind the origin', () => {
+    expect(pickEdge([box], { x: 5.1, y: -20, z: -5 }, { x: 0, y: -1, z: 0 }, 0.5)).toBeNull();
+  });
+
+  it('picks the closest of two bodies', () => {
+    const far = translateBody(createBox(10, 10, 10), { x: 30, y: 0, z: 0 });
+    const hit = pickEdge([far, box], { x: 5.1, y: 20, z: -5 }, { x: 0, y: -1, z: 0 }, 0.5);
+    expect(hit!.bodyId).toBe(box.id);
   });
 });

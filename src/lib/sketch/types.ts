@@ -62,7 +62,9 @@ export type ConstraintType =
   | 'equal'
   | 'distance'
   | 'radius'
-  | 'concentric';
+  | 'concentric'
+  | 'tangent'
+  | 'symmetric';
 
 export interface SketchConstraint {
   id: string;

@@ -10,7 +10,9 @@ function genId(prefix: string): string {
 /** Fillet: round edges by replacing them with arc-like faces */
 export function applyFillet(body: SolidBody, edgeIds: string[], radius: number): SolidBody {
   if (radius <= 0) return body;
-  const edgeSet = new Set(edgeIds);
+  // Empty selection means every edge (whole-body fillet, like a UI without
+  // edge picking yet); an explicit list fillets only those edges.
+  const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
   const ARC_SEGMENTS = 8; // number of quads approximating the fillet arc
 
   const newFaces: Face[] = [...body.faces]; // keep original faces
@@ -114,7 +116,8 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
 /** Chamfer: bevel edges by cutting them at an angle */
 export function applyChamfer(body: SolidBody, edgeIds: string[], distance: number): SolidBody {
   if (distance <= 0) return body;
-  const edgeSet = new Set(edgeIds);
+  // Empty selection means every edge (see applyFillet).
+  const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
 
   const newFaces: Face[] = [...body.faces]; // keep original faces
   const newEdges: Edge[] = [];
@@ -838,6 +841,46 @@ export function sweepBody(profile: { x: number; y: number }[], path: Vec3[], twi
     rings.push(ring);
   }
 
+  // Body centroid — used to orient every face normal outward.
+  const center: Vec3 = { x: 0, y: 0, z: 0 };
+  let vertCount = 0;
+  for (const ring of rings) {
+    for (const v of ring) {
+      center.x += v.x;
+      center.y += v.y;
+      center.z += v.z;
+      vertCount++;
+    }
+  }
+  center.x /= vertCount;
+  center.y /= vertCount;
+  center.z /= vertCount;
+
+  // Point `normal` outward and rewind `verts` to match it, so signed-volume
+  // and raycast computations see a consistently wound solid.
+  const orientFace = (verts: Vec3[], normal: Vec3): { verts: Vec3[]; normal: Vec3 } => {
+    const sum = verts.reduce(
+      (s, v) => ({ x: s.x + v.x, y: s.y + v.y, z: s.z + v.z }),
+      { x: 0, y: 0, z: 0 },
+    );
+    const fc = {
+      x: sum.x / verts.length - center.x,
+      y: sum.y / verts.length - center.y,
+      z: sum.z / verts.length - center.z,
+    };
+    let n = normal;
+    if (n.x * fc.x + n.y * fc.y + n.z * fc.z < 0) {
+      n = { x: -n.x, y: -n.y, z: -n.z };
+    }
+    const a = verts[0]!, b = verts[1]!, c = verts[2]!;
+    const gx = (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y);
+    const gy = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
+    const gz = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    const out = [...verts];
+    if (gx * n.x + gy * n.y + gz * n.z < 0) out.reverse();
+    return { verts: out, normal: n };
+  };
+
   // Side faces: connect adjacent rings.
   for (let i = 0; i < pathN - 1; i++) {
     const r0 = rings[i]!;
@@ -846,8 +889,8 @@ export function sweepBody(profile: { x: number; y: number }[], path: Vec3[], twi
       const j2 = (j + 1) % profileN;
       const v00 = r0[j]!, v01 = r0[j2]!;
       const v10 = r1[j]!, v11 = r1[j2]!;
-      const fn = computeFaceNormal(v00, v10, v11);
-      faces.push({ id: genId('face'), vertices: [v00, v10, v11, v01], normal: fn });
+      const oriented = orientFace([v00, v10, v11, v01], computeFaceNormal(v00, v10, v11));
+      faces.push({ id: genId('face'), vertices: oriented.verts, normal: oriented.normal });
       edges.push(
         { id: genId('edge'), start: v00, end: v10 },
         { id: genId('edge'), start: v01, end: v11 },
@@ -855,13 +898,15 @@ export function sweepBody(profile: { x: number; y: number }[], path: Vec3[], twi
     }
   }
 
-  // Cap faces: start and end.
+  // Cap faces: start and end (normal along the tangent, oriented outward).
   const capStart = rings[0]!;
   const capEnd = rings[pathN - 1]!;
   const startNormal = normalize({ x: -tangents[0]!.x, y: -tangents[0]!.y, z: -tangents[0]!.z });
   const endNormal = tangents[pathN - 1]!;
-  faces.push({ id: genId('face'), vertices: [...capStart].reverse(), normal: startNormal });
-  faces.push({ id: genId('face'), vertices: [...capEnd], normal: endNormal });
+  const startFace = orientFace(capStart, startNormal);
+  const endFace = orientFace(capEnd, endNormal);
+  faces.push({ id: genId('face'), vertices: startFace.verts, normal: startFace.normal });
+  faces.push({ id: genId('face'), vertices: endFace.verts, normal: endFace.normal });
 
   // Ring edges.
   for (const ring of rings) {

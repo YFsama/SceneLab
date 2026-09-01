@@ -13,38 +13,48 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | Styling | TailwindCSS 3 + CSS variables |
 | State | Zustand |
 | Desktop | Tauri 2 |
-| 3D Rendering | Three.js r170+ (WebGPU, WebGL2 fallback) |
+| 3D Rendering | Three.js r170+ (WebGL) |
 | Icons | lucide-react |
 
 ## Key Features
 
 - **Perspective/orthographic projection toggle** (Shift+P)
+- **Sketch constraints**: 10 solver constraint types. Single-entity ones
+  (horizontal / vertical / fixed / radius) apply from the right-click menu or
+  shortcuts; select **two** entities (Ctrl/Shift+click) and the menu offers
+  parallel / perpendicular / equal / concentric / coincident (nearest endpoints)
+  / distance.
 - **Interactive 3D ViewCube** with 26 orientations (faces/edges/corners)
 - **Box selection** (left-drag rectangle, middle-button orbit)
-- **Face selection** (Ctrl+click on body faces)
+- **Face selection** (Ctrl+click on body faces) and **edge selection** (Alt+click,
+  scopes fillet/chamfer to the picked edges)
 - **Construction geometry** (centerlines excluded from extrude/revolve)
 - **Polyline tool** (Shift+L, click-to-chain line segments)
 - **Persistent measurement annotations** (saved with project)
 - **Non-uniform scaling** (per-axis X/Y/Z)
 - **Rectangle width/height editing** (detect and resize)
 - **Multi-plane sketch support** (XY, XZ, YZ planes)
-- **PDF export** from drawing workspace
+- **Section views** in the drawing workspace (X/Y/Z mid-plane cut, hatched
+  cross-sections) and **PDF export**
 
 ### Geometry / Solver
 
 | Module | Choice |
 |--------|--------|
-| B-rep kernel | Replicad (OCCT.js wrapper) |
-| Sketch solver | planegcs (FreeCAD solver, wasm) |
-| Boolean / mesh | manifold-3d |
-| Topology naming | Custom + FreeCAD 0.21 ElementMap reference |
+| Mesh B-rep | Hand-rolled poly-solid kernel (`lib/geometry/brep.ts`) |
+| Exact booleans | **Manifold** (WASM) with a voxel fallback (`booleanOp`) |
+| Sketch solver | Hand-rolled relaxation, 10 constraint types (`lib/sketch/solver.ts`) |
+| Picking | Raycaster accelerated by **three-mesh-bvh** |
+
+The exact WASM engine warms up at app start; until it is ready — or for inputs
+it cannot convert — booleans transparently fall back to the voxel approximation
+(32³ occupancy grid, blocky results).
 
 ### AI Integration
 
 | Module | Choice |
 |--------|--------|
 | LLM | Claude API (direct browser access) |
-| Protocol | MCP (HTTP + SSE) |
 | Vision | Viewport screenshot → model |
 | Tool calling | Every modeling op registered as a tool |
 
@@ -77,15 +87,22 @@ src/
 - **Primitives**: box, cylinder, sphere, cone/frustum, torus, wedge — all with
   analytic outward normals and consistent winding (correct, translation-invariant
   volumes; watertightness is asserted in tests).
-- **Feature tree**: sketch → extrude / revolve / sweep, plus fillet (arc-segment
-  approximation), chamfer (per-face offset), shell, linear & circular arrays,
-  and mirror, evaluated as a DAG. Consuming ops replace their parent so the
-  output stays a single solid. Sketch profiles support lines (chained into an
-  ordered loop), polylines, rectangles, circles and arcs. Construction geometry
-  (centerlines) excluded from profiles.
-- **Body ops**: translate, rotate (Rodrigues), uniform scale, mirror, merge
-  bodies, weld near-coincident vertices (mesh repair), bounding-box stock block,
-  and arrange-on-plate packing.
+- **Feature tree**: sketch → extrude / revolve / sweep (straight path + twist),
+  plus fillet (arc-segment approximation), chamfer (per-face offset), shell,
+  linear & circular arrays, and mirror — created from the body context menu and
+  evaluated as a DAG. On tree-produced bodies these are **parametric**: the
+  operation joins the timeline and replays on recompute; on AI-created/imported
+  bodies they apply as undoable direct edits. Consuming ops replace their parent
+  so the output stays a single solid. Sketch profiles support lines (chained
+  into an ordered loop), polylines, rectangles, circles and arcs. Construction
+  geometry (centerlines) excluded from profiles.
+- **Loft / sweep geometry**: multi-section skinning with per-arc-length
+  resampling and ring alignment (`createLoftSections`); loft is a feature-tree
+  type (multi-sketch UI pending — use explicit sections or the AI tool today).
+- **Body ops**: translate, rotate (Rodrigues), uniform & per-axis scale, mirror,
+  merge bodies, exact WASM booleans (union / difference / intersect, voxel
+  fallback), weld near-coincident vertices (mesh repair), bounding-box stock
+  block, and arrange-on-plate packing.
 - **Mass properties**: volume-weighted center of mass, bounding sphere.
 
 ### 3D-print analysis & optimization (`lib/print`)
@@ -122,8 +139,8 @@ key persist across reloads.
 ### IO (`lib/io`)
 
 studio3d (JSON project) · STL (import auto-welds vertices / export) ·
-OBJ (import/export, polygon-preserving) · 3MF · STEP (AP203 export) ·
-DXF · PDF · PNG · SVG.
+OBJ (import/export, polygon-preserving) · 3MF (export) · STEP (AP203 faceted
+export; true B-rep import awaits an OCCT integration) · DXF · PDF · PNG · SVG.
 
 ## Scripts
 
@@ -178,17 +195,19 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 ## Performance
 
 - Viewport renders at 60 FPS (target: 100k triangles)
-- Any operation >16ms offloaded to Web Worker
-- GPU pick buffer for selection highlights (no raycaster)
-- BVH acceleration for large meshes (three-mesh-bvh)
-- Incremental DAG for geometry recalculation
+- BVH-accelerated raycasting for body/face picking (three-mesh-bvh)
+- Incremental mesh rebuild: only changed bodies re-upload to the GPU
+- Exact booleans run in WASM (Manifold) instead of JS voxel sampling
+- Slow voxel kernels (hollow, boolean fallback) run in a **Web Worker** — exact
+  WASM results stay on the main thread, occupancy sampling does not block the UI
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (1607+ tests, 105 files) plus Rust unit tests
+- Every `lib/*` module has vitest tests (1657+ tests, 110 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
-  translation invariance, and watertightness (no boundary loops)
+  translation invariance, and watertightness (no boundary loops); exact booleans
+  verified to closed-form volumes (e.g. 875 mm³ cube difference)
 - ESLint + tsc strict + zero warnings required for merge
 - CI runs lint + typecheck + tests + build, plus Rust fmt/clippy/check
 

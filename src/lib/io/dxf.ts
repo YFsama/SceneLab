@@ -1,7 +1,8 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
 
-/** Export body as DXF (AutoCAD Drawing Exchange Format) */
-export function exportDXF(body: SolidBody): string {
+/** Export one or more bodies as DXF (AutoCAD Drawing Exchange Format) */
+export function exportDXF(bodies: SolidBody | SolidBody[]): string {
+  const list = Array.isArray(bodies) ? bodies : [bodies];
   const lines: string[] = [];
 
   // DXF Header
@@ -21,16 +22,18 @@ export function exportDXF(body: SolidBody): string {
   // Entities section
   lines.push('0', 'SECTION', '2', 'ENTITIES');
 
-  // Project edges to XY plane (top view) for 2D DXF
-  for (const edge of body.edges) {
-    addLine(lines, edge.start, edge.end, 'EDGES');
-  }
+  for (const body of list) {
+    // Project edges to XY plane (top view) for 2D DXF
+    for (const edge of body.edges) {
+      addLine(lines, edge.start, edge.end, 'EDGES');
+    }
 
-  // Also add face outlines projected to XY
-  for (const face of body.faces) {
-    for (let i = 0; i < face.vertices.length; i++) {
-      const next = (i + 1) % face.vertices.length;
-      addLine(lines, face.vertices[i]!, face.vertices[next]!, '0');
+    // Also add face outlines projected to XY
+    for (const face of body.faces) {
+      for (let i = 0; i < face.vertices.length; i++) {
+        const next = (i + 1) % face.vertices.length;
+        addLine(lines, face.vertices[i]!, face.vertices[next]!, '0');
+      }
     }
   }
 

@@ -3,6 +3,8 @@ import type {
   SketchFeature,
   ExtrudeFeature,
   RevolveFeature,
+  SweepFeature,
+  LoftFeature,
   FilletFeature,
   ChamferFeature,
   ShellFeature,
@@ -58,7 +60,9 @@ interface SerializedBody {
 }
 
 const FILE_VERSION = 1;
-const APP_VERSION = '0.1.0';
+// Injected from package.json by vite/vitest (see src/vite-env.d.ts).
+declare const __APP_VERSION__: string;
+const APP_VERSION = __APP_VERSION__;
 
 export function serializeProject(
   name: string,
@@ -105,6 +109,8 @@ function serializeFeatureData(feature: Feature): unknown {
       };
     case 'extrude':
     case 'revolve':
+    case 'sweep':
+    case 'loft':
     case 'fillet':
     case 'chamfer':
     case 'shell':
@@ -158,6 +164,10 @@ export function deserializeFeatures(project: ProjectFile): Feature[] {
         return { ...base, type: 'extrude', params: sf.data } as ExtrudeFeature;
       case 'revolve':
         return { ...base, type: 'revolve', params: sf.data } as RevolveFeature;
+      case 'sweep':
+        return { ...base, type: 'sweep', params: sf.data } as SweepFeature;
+      case 'loft':
+        return { ...base, type: 'loft', params: sf.data } as LoftFeature;
       case 'fillet':
         return { ...base, type: 'fillet', params: sf.data } as FilletFeature;
       case 'chamfer':
