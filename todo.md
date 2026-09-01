@@ -337,6 +337,24 @@ See the original design document for full tech stack rationale. Key choices:
     symmetric profile's corners onto themselves — degenerate side faces, volume read ⅓ of true).
   - **Remaining open**: VLM face-picking ("circle a face"), drawing editable annotations, sketch
     fillet on arcs, OCCT-grade curved STEP import.
+- `2026-09-01`: Pass #4 — commit + polish round (all gates green; E2E included).
+  - Committed the three prior passes (2 commits) and this round separately.
+  - **Native autosave**: on desktop, `autosave()` also writes the Rust
+    `autosave_snapshot` command (pruned to newest 20) beside localStorage —
+    the last previously-dead Rust command is now wired.
+  - **Sketch corner fillet** (`filletSketchCorner`): intersection + tangent arc
+    + trim of two selected lines (SolidWorks sketch fillet), exposed via the
+    two-line constraint menu ("Fillet corner…"); shared corner vertices move
+    so every attached segment trims correctly; arc sweeps chosen to bulge
+    toward the corner (minor arc). Engine + store tests (incl. undo).
+  - **Playwright E2E** (`npm run test:e2e`): smoke suite — app boots to the
+    modeling workspace with a live WebGL canvas, and a Box inserts through the
+    real context-menu → dialog → Enter flow and appears in the tree. Separate
+    port 5174 (Tauri owns strict 5173), NO_PROXY injected so developer system
+    proxies don't break the readiness probe. CI gains an e2e job
+    (chromium, with-deps, report artifact on failure).
+  - **Remaining open**: VLM face-picking, drawing editable annotations,
+    OCCT-grade curved STEP import.
 
 ---
 

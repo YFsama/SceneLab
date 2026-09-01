@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc, addPolygon,
   addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
-  detectRectangle, resizeRectangle, closestPointPair,
+  detectRectangle, resizeRectangle, closestPointPair, filletSketchCorner,
 } from './engine';
 
 describe('createSketch', () => {
@@ -662,5 +662,83 @@ describe('closestPointPair', () => {
     const a = addLine(sketch, 0, 0, 1, 1);
     expect(closestPointPair(sketch, a.id, 'nope')).toBeNull();
     expect(closestPointPair(sketch, 'nope', 'also-nope')).toBeNull();
+  });
+});
+
+describe('filletSketchCorner', () => {
+  const lineIds = (sketch: ReturnType<typeof createSketch>) =>
+    [...sketch.entities.values()].filter((e) => e.type === 'line').map((e) => e.id);
+  const pointOf = (sketch: ReturnType<typeof createSketch>, id: string) => {
+    const p = sketch.entities.get(id);
+    return p?.type === 'point' ? p : null;
+  };
+
+  it('fillets an L-corner: trims both lines and adds a tangent arc', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 20, 0);
+    addLine(s, 0, 0, 0, 20);
+    const [a, b] = lineIds(s);
+    expect(filletSketchCorner(s, a!, b!, 5)).toBe(true);
+    const arc = [...s.entities.values()].find((e) => e.type === 'arc');
+    expect(arc).toBeDefined();
+    if (arc && arc.type === 'arc') {
+      expect(arc.radius).toBeCloseTo(5, 6);
+      const c = pointOf(s, arc.centerId);
+      expect(c?.x).toBeCloseTo(5, 6);
+      expect(c?.y).toBeCloseTo(5, 6);
+    }
+    // The corner endpoints moved to the tangent points (5,0) and (0,5).
+    const xs = lineIds(s).flatMap((id) => {
+      const e = s.entities.get(id);
+      return e && e.type === 'line' ? [pointOf(s, e.p1Id), pointOf(s, e.p2Id)] : [];
+    }).filter(Boolean).map((p) => `${p!.x!.toFixed(3)},${p!.y!.toFixed(3)}`);
+    expect(xs).toContain('5.000,0.000');
+    expect(xs).toContain('0.000,5.000');
+    // The shared corner point (0,0) is gone.
+    expect(xs).not.toContain('0.000,0.000');
+  });
+
+  it('keeps the far endpoints untouched', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 20, 0);
+    addLine(s, 0, 0, 0, 20);
+    const [a, b] = lineIds(s);
+    filletSketchCorner(s, a!, b!, 5);
+    const pts = [...s.entities.values()].filter((e) => e.type === 'point').map((p) => `${p.x},${p.y}`);
+    expect(pts).toContain('20,0');
+    expect(pts).toContain('0,20');
+  });
+
+  it('the arc midpoint bulges toward the corner', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 20, 0);
+    addLine(s, 0, 0, 0, 20);
+    const [a, b] = lineIds(s);
+    filletSketchCorner(s, a!, b!, 5);
+    const arc = [...s.entities.values()].find((e) => e.type === 'arc');
+    if (arc && arc.type === 'arc') {
+      const mid = (arc.startAngle + arc.endAngle) / 2;
+      const mx = 5 + 5 * Math.cos(mid);
+      const my = 5 + 5 * Math.sin(mid);
+      // Between the corner (0,0) and the centre (5,5): the arc dips toward V.
+      expect(mx + my).toBeLessThan(10);
+      expect(mx + my).toBeGreaterThan(2);
+    }
+  });
+
+  it('refuses parallel lines and oversized radii', () => {
+    const s = createSketch('xy');
+    addLine(s, 0, 0, 10, 0);
+    addLine(s, 0, 5, 10, 5);
+    const [a, b] = lineIds(s);
+    expect(filletSketchCorner(s, a!, b!, 2)).toBe(false);
+    const s2 = createSketch('xy');
+    addLine(s2, 0, 0, 4, 0);
+    addLine(s2, 0, 0, 0, 4);
+    const [c, d] = lineIds(s2);
+    // Radius 5 needs tangent points 5 from the corner — beyond the 4-long segments.
+    // (r = 4 lands exactly on the endpoints, which is still legal.)
+    expect(filletSketchCorner(s2, c!, d!, 5)).toBe(false);
+    expect(filletSketchCorner(s2, c!, d!, 1)).toBe(true);
   });
 });

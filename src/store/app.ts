@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, type DetectedRectangle } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, type DetectedRectangle } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -9,6 +9,7 @@ import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisF
 import { splitByPlane, asyncBooleanOp, asyncHollowBody, type BooleanOp } from '../lib/geometry/boolean';
 import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
 import { computeBoundingBoxCenter } from '../lib/geometry/brep';
+import { isTauri, callNative } from '../lib/runtime';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 
@@ -123,6 +124,8 @@ interface AppState {
   nudgeSketchEntity: (id: string, dx: number, dy: number) => boolean;
   /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
   toggleSketchConstruction: (id: string) => void;
+  /** 2D corner fillet between two lines: trim to the tangent points + arc. */
+  filletSketchCorner: (lineAId: string, lineBId: string, radius: number) => boolean;
   /** Detect if a sketch line is part of a rectangle pattern. */
   detectSketchRectangle: (lineId: string) => DetectedRectangle | null;
   /** Resize a detected rectangle (keeping first corner fixed). */
@@ -715,6 +718,15 @@ export const useStore = create<AppState>((set, get) => {
     pushSketchUndo();
     (e as { construction?: boolean }).construction = !e.construction;
     set({ currentSketch: { ...sketch }, projectDirty: true });
+  },
+  filletSketchCorner: (lineAId, lineBId, radius) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(radius > 0)) return false;
+    pushSketchUndo();
+    const ok = filletCorner(sketch, lineAId, lineBId, radius);
+    if (!ok) return false;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
   },
   detectSketchRectangle: (lineId) => {
     const sketch = get().currentSketch;
@@ -1889,7 +1901,14 @@ export const useStore = create<AppState>((set, get) => {
     if (!projectDirty) return false;
     try {
       const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points, coordSystems, annotations });
-      localStorage.setItem(AUTOSAVE_KEY, saveToFile(project));
+      const json = saveToFile(project);
+      localStorage.setItem(AUTOSAVE_KEY, json);
+      // Desktop belt-and-braces: a native crash-recovery snapshot beside the
+      // webview storage (Rust prunes to the newest 20). Fire-and-forget — the
+      // localStorage copy above is already the primary restore source.
+      if (isTauri()) {
+        void callNative('autosave_snapshot', { data: json }).catch(() => undefined);
+      }
       return true;
     } catch {
       return false;

@@ -211,7 +211,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 - ESLint + tsc strict + zero warnings required for merge
 - CI runs lint + typecheck + tests + build, plus Rust fmt/clippy/check
 
-> Playwright E2E for workspace flows is planned but not yet set up.
+- **Playwright E2E** smoke flows (app boot, insert via context menu) — `npm run test:e2e`
 
 ## License
 

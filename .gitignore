@@ -70,3 +70,7 @@ Desktop.ini
 
 # ─── Misc ─────────────────────────────────────────────────────
 .lobsterfarm/
+
+# Playwright
+playwright-report/
+test-results/

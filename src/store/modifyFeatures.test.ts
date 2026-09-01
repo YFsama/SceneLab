@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume } from '../lib/geometry/brep';
-import { createSketch, addRectangle, addCircle } from '../lib/sketch/engine';
+import { createSketch, addRectangle, addCircle, addLine } from '../lib/sketch/engine';
 
 describe('modify feature actions', () => {
   beforeEach(() => {
@@ -173,5 +173,30 @@ describe('loft from sketches', () => {
     useStore.setState({ featureTree: tree });
     expect(useStore.getState().performLoftFromSketches([feat.id])).toBe(false);
     expect(useStore.getState().performLoftFromSketches(['nope', 'also-nope'])).toBe(false);
+  });
+});
+
+describe('sketch corner fillet (store)', () => {
+  it('filletSketchCorner applies to the current sketch and is undoable', () => {
+    const sketch = createSketch('xy');
+    const la = addLine(sketch, 0, 0, 20, 0);
+    const lb = addLine(sketch, 0, 0, 0, 20);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().filletSketchCorner(la.id, lb.id, 5)).toBe(true);
+    const after = useStore.getState().currentSketch!;
+    expect([...after.entities.values()].filter((e) => e.type === 'arc')).toHaveLength(1);
+    useStore.getState().sketchUndo();
+    const restored = useStore.getState().currentSketch!;
+    expect([...restored.entities.values()].filter((e) => e.type === 'arc')).toHaveLength(0);
+  });
+
+  it('rejects bad input without touching the sketch', () => {
+    const sketch = createSketch('xy');
+    const la = addLine(sketch, 0, 0, 20, 0);
+    const lb = addLine(sketch, 0, 0, 0, 20);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().filletSketchCorner(la.id, lb.id, 0)).toBe(false);
+    expect(useStore.getState().filletSketchCorner(la.id, 'nope', 3)).toBe(false);
+    expect([...useStore.getState().currentSketch!.entities.values()].filter((e) => e.type === 'arc')).toHaveLength(0);
   });
 });

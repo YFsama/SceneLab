@@ -1689,6 +1689,10 @@ export function ViewportCanvas() {
               { label: t('constraint.parallel'), onClick: () => { store.addSketchConstraint('parallel', [a.id, b.id]); } },
               { label: t('constraint.perpendicular'), onClick: () => { store.addSketchConstraint('perpendicular', [a.id, b.id]); } },
               { label: t('constraint.equal'), onClick: () => { store.addSketchConstraint('equal', [a.id, b.id]); } },
+              { label: t('sketch.filletCorner'), onClick: () => {
+                const val = parseFloat(prompt(t('sketch.filletCornerPrompt'), '3') ?? '');
+                if (Number.isFinite(val) && val > 0) store.filletSketchCorner(a.id, b.id, val);
+              } },
             );
           }
           if (bothRound) {
