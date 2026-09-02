@@ -28,7 +28,7 @@ describe('numeric prompt state', () => {
 
   it('a real flow: prompt value drives a fillet on a direct body', () => {
     useStore.setState({
-      featureTree: new (useStore.getState().featureTree.constructor as never)() as never,
+      featureTree: new FeatureTree(),
       directBodies: [],
       bodies: [],
       undoStack: [],

@@ -371,6 +371,31 @@ function computeBoundingBoxLocal(body: SolidBody): { min: Vec3; max: Vec3 } {
 }
 
 /**
+ * Scale a single world axis so the body's extent along it equals `target` mm,
+ * keeping the other two axes (and the bounding-box center) fixed — a
+ * dimension-driven resize that leaves every other drawing dimension unchanged.
+ */
+export function resizeBodyAxis(body: SolidBody, axis: 'x' | 'y' | 'z', target: number): SolidBody {
+  if (!Number.isFinite(target) || target <= 0) throw new Error('Target size must be positive');
+  const bb = computeBoundingBoxLocal(body);
+  const extent = bb.max[axis] - bb.min[axis];
+  if (!(extent > 1e-9)) throw new Error('Body has zero extent along the axis');
+  const f = { x: 1, y: 1, z: 1 };
+  f[axis] = target / extent;
+  return scaleBodyXYZ(
+    body,
+    f.x,
+    f.y,
+    f.z,
+    {
+      x: (bb.min.x + bb.max.x) / 2,
+      y: (bb.min.y + bb.max.y) / 2,
+      z: (bb.min.z + bb.max.z) / 2,
+    },
+  );
+}
+
+/**
  * Resize a body to exact per-axis dimensions (mm), scaling each axis
  * independently about the bounding-box center. Unlike uniform scaleBody this
  * changes the aspect ratio, so normals are transformed by the inverse-transpose

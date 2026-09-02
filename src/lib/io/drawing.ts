@@ -18,6 +18,12 @@ export interface DrawingDimension {
   end: { x: number; y: number };
   value: number;
   offset: number;
+  /**
+   * Editable dimensions carry a driver: the dimension measures (and can set)
+   * this body's extent along a world axis. Only axis-aligned views (front,
+   * top, right, …) produce drivers — an iso view measures no single axis.
+   */
+  driver?: { bodyId: string; axis: 'x' | 'y' | 'z' };
 }
 
 export interface DrawingView {
@@ -67,8 +73,10 @@ export function projectBodies(
   // project to the left.
   const right = cross(upDir, viewDir);
   const lines: DrawingLine[] = [];
-  const points: Vec3[] = [];
   const sectionFaces: { x: number; y: number }[][] = [];
+  // Projected geometry per body: each body's own dimensions are measured from
+  // the geometry it actually contributed (post section-clip), not scene bounds.
+  const perBodyPts: { body: SolidBody; pts: { x: number; y: number }[] }[] = [];
 
   const sd = (p: Vec3): number =>
     section ? p.x * section.normal.x + p.y * section.normal.y + p.z * section.normal.z - section.offset : -1;
@@ -89,14 +97,16 @@ export function projectBodies(
   };
 
   for (const body of bodies) {
-    points.push(...body.vertices);
+    const bodyPts: { x: number; y: number }[] = [];
     for (const edge of body.edges) {
       const seg = clipSeg(edge.start, edge.end);
       if (!seg) continue;
       const p1 = projectPoint(seg[0], viewDir, right, upDir, scale);
       const p2 = projectPoint(seg[1], viewDir, right, upDir, scale);
       lines.push({ start: p1, end: p2 });
+      bodyPts.push(p1, p2);
     }
+    if (bodyPts.length > 0) perBodyPts.push({ body, pts: bodyPts });
     // Section cut faces: clip each face polygon to the kept side and collect
     // the edges the clip created ON the plane; chain those into closed loops —
     // the cross-section outline(s) of the cut.
@@ -129,9 +139,12 @@ export function projectBodies(
   }
   if (lines.length === 0) { minX = minY = maxX = maxY = 0; }
 
-  // Generate auto-dimensions spanning the whole scene
-  const projected = points.map((v) => projectPoint(v, viewDir, right, upDir, scale));
-  const dimensions = dimensionsFromPoints(projected, scale);
+  // Dimensions: per-body width/height (editable when the view is axis-aligned)
+  // plus overall scene dims when several bodies are in view. A single body's
+  // own dimensions already span the view, so the overall pair would duplicate.
+  const widthAxis = dominantWorldAxis(right);
+  const heightAxis = dominantWorldAxis(upDir);
+  const dimensions = bodyDimensions(perBodyPts, widthAxis, heightAxis, scale);
 
   return {
     name,
@@ -214,38 +227,71 @@ function projectPoint(
   };
 }
 
-function dimensionsFromPoints(
-  projected: { x: number; y: number }[],
+/**
+ * The world axis a view frame direction measures, when it is (close to)
+ * axis-aligned. Oblique directions measure no single world axis.
+ */
+function dominantWorldAxis(v: Vec3): 'x' | 'y' | 'z' | undefined {
+  const ax = Math.abs(v.x);
+  const ay = Math.abs(v.y);
+  const az = Math.abs(v.z);
+  const m = Math.max(ax, ay, az);
+  if (m < 0.9) return undefined;
+  return ax === m ? 'x' : ay === m ? 'y' : 'z';
+}
+
+/** Per-body width/height dimensions, plus overall scene dims when >1 body. */
+function bodyDimensions(
+  perBody: { body: SolidBody; pts: { x: number; y: number }[] }[],
+  widthAxis: 'x' | 'y' | 'z' | undefined,
+  heightAxis: 'x' | 'y' | 'z' | undefined,
   scale: number,
 ): DrawingDimension[] {
   const dims: DrawingDimension[] = [];
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of projected) {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
+  for (const { body, pts } of perBody) {
+    let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+    for (const p of pts) {
+      bMinX = Math.min(bMinX, p.x); bMinY = Math.min(bMinY, p.y);
+      bMaxX = Math.max(bMaxX, p.x); bMaxY = Math.max(bMaxY, p.y);
+    }
+    minX = Math.min(minX, bMinX); minY = Math.min(minY, bMinY);
+    maxX = Math.max(maxX, bMaxX); maxY = Math.max(maxY, bMaxY);
+    dims.push({
+      type: 'linear',
+      start: { x: bMinX, y: bMinY - 8 },
+      end: { x: bMaxX, y: bMinY - 8 },
+      value: (bMaxX - bMinX) / scale,
+      offset: 8,
+      ...(widthAxis ? { driver: { bodyId: body.id, axis: widthAxis } } : {}),
+    });
+    dims.push({
+      type: 'linear',
+      start: { x: bMaxX + 8, y: bMinY },
+      end: { x: bMaxX + 8, y: bMaxY },
+      value: (bMaxY - bMinY) / scale,
+      offset: 8,
+      ...(heightAxis ? { driver: { bodyId: body.id, axis: heightAxis } } : {}),
+    });
   }
-  if (projected.length === 0) return dims;
-
-  // Overall width dimension
-  dims.push({
-    type: 'linear',
-    start: { x: minX, y: minY - 10 },
-    end: { x: maxX, y: minY - 10 },
-    value: (maxX - minX) / scale,
-    offset: 10,
-  });
-
-  // Overall height dimension
-  dims.push({
-    type: 'linear',
-    start: { x: maxX + 10, y: minY },
-    end: { x: maxX + 10, y: maxY },
-    value: (maxY - minY) / scale,
-    offset: 10,
-  });
-
+  if (perBody.length > 1) {
+    dims.push(
+      {
+        type: 'linear',
+        start: { x: minX, y: minY - 26 },
+        end: { x: maxX, y: minY - 26 },
+        value: (maxX - minX) / scale,
+        offset: 26,
+      },
+      {
+        type: 'linear',
+        start: { x: maxX + 26, y: minY },
+        end: { x: maxX + 26, y: maxY },
+        value: (maxY - minY) / scale,
+        offset: 26,
+      },
+    );
+  }
   return dims;
 }
 

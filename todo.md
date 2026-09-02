@@ -445,3 +445,27 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     "Alt+click: edge · Ctrl+click: face" (with a tooltip explaining edge-scoped
     fillet/chamfer and shell open faces); in sketch mode it reminds that typed
     sizes + Enter work while drawing.
+- `2026-09-01`: Pass #7 — editable drawing dimensions (dimension-driven modelling; 1683 tests / 111 files green; lint/tsc/build/E2E OK).
+  - **Per-body drawing dimensions with drivers**: projectBodies now emits width+height
+    dimensions per body (overall scene pair only when several bodies are in view — a
+    single body's dims already span the view, no duplicates). Each per-body dim carries
+    a `driver { bodyId, axis }` mapping it to the world axis it measures: front (x,y),
+    top (x,z), right (z,y); oblique directions (iso width) measure no single axis and
+    stay read-only. Section views dimension the clipped geometry.
+  - **Click-to-edit on the drawing canvas**: dimensions are hit-tested in canvas space
+    (CSS-stretch-aware coordinate mapping); hover highlights the dim in blue with a
+    pointer cursor, click opens the shared NumericPrompt, and the typed value writes
+    back through the new `setDimensionTarget` store action — the drawing re-projects
+    live from the updated bodies. Toolbar hint + en/zh strings added.
+  - **Driving `scale` feature** (new FeatureType): `{ axis, target }` resizes the parent
+    body's extent along one world axis (new `resizeBodyAxis` op — single-axis factor
+    about the bbox centre, so every other drawing dimension stays put, normals
+    corrected via inverse-transpose). Because it stores a target (not a factor),
+    recompute re-fits upstream changes to the same dimension — a true driving
+    dimension. Tree bodies get the feature; direct bodies are resized in place; both
+    paths are one undo step. Repeated edits of the same dimension update the existing
+    scale feature instead of stacking nodes.
+  - **Integration**: FeatureEditor edits scale targets numerically; studio3d project
+    save/load serializes/deserializes scale features; NumericPrompt.test constructor
+    hack replaced with a real FeatureTree (fixes a latent tsc error).
+  - **Remaining open**: VLM face-picking, OCCT-grade curved STEP import.

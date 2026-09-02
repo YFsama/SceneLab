@@ -5,17 +5,17 @@ import { useEscapeClose } from '../../lib/hooks/useEscapeClose';
 import { useFocusRestore } from '../../lib/hooks/useFocusRestore';
 import type {
   Feature, ExtrudeFeature, RevolveFeature,
-  FilletFeature, ChamferFeature, ShellFeature,
+  FilletFeature, ChamferFeature, ShellFeature, ScaleFeature,
   LinearArrayFeature, CircularArrayFeature, MirrorFeature,
 } from '../../lib/features/types';
 import { Pencil, Trash2, Eye, EyeOff } from 'lucide-react';
 
 /** Feature types whose editable parameters are plain numbers. */
 export type NumericFeature =
-  | FilletFeature | ChamferFeature | ShellFeature
+  | FilletFeature | ChamferFeature | ShellFeature | ScaleFeature
   | LinearArrayFeature | CircularArrayFeature | MirrorFeature;
 const isNumericFeature = (f: Feature): f is NumericFeature =>
-  f.type === 'fillet' || f.type === 'chamfer' || f.type === 'shell' ||
+  f.type === 'fillet' || f.type === 'chamfer' || f.type === 'shell' || f.type === 'scale' ||
   f.type === 'linearArray' || f.type === 'circularArray' || f.type === 'mirror';
 
 export function FeatureEditor() {
@@ -337,6 +337,8 @@ function numericFields(f: NumericFeature): NumField[] {
       return [{ key: 'distance', label: 'Distance (mm)', value: f.params.distance, min: 0.1, step: 0.5 }];
     case 'shell':
       return [{ key: 'thickness', label: 'Thickness (mm)', value: f.params.thickness, min: 0.1, step: 0.5 }];
+    case 'scale':
+      return [{ key: 'target', label: `Target extent ${f.params.axis.toUpperCase()} (mm)`, value: f.params.target, min: 0.1, step: 0.5 }];
     case 'linearArray':
       return [
         { key: 'count', label: 'Count', value: f.params.count, min: 1, step: 1 },
@@ -357,6 +359,8 @@ function applyNumeric(f: NumericFeature, values: Record<string, number>): Featur
       return { ...f, params: { ...f.params, distance: values.distance! } };
     case 'shell':
       return { ...f, params: { ...f.params, thickness: values.thickness! } };
+    case 'scale':
+      return { ...f, params: { ...f.params, target: values.target! } };
     case 'linearArray':
       return { ...f, params: { ...f.params, count: values.count!, spacing: values.spacing! } };
     case 'circularArray':

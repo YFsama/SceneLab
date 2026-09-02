@@ -8,6 +8,7 @@ import type {
   FilletFeature,
   ChamferFeature,
   ShellFeature,
+  ScaleFeature,
   LinearArrayFeature,
   CircularArrayFeature,
   MirrorFeature,
@@ -114,6 +115,7 @@ function serializeFeatureData(feature: Feature): unknown {
     case 'fillet':
     case 'chamfer':
     case 'shell':
+    case 'scale':
     case 'linearArray':
     case 'circularArray':
     case 'mirror':
@@ -174,6 +176,8 @@ export function deserializeFeatures(project: ProjectFile): Feature[] {
         return { ...base, type: 'chamfer', params: sf.data } as ChamferFeature;
       case 'shell':
         return { ...base, type: 'shell', params: sf.data } as ShellFeature;
+      case 'scale':
+        return { ...base, type: 'scale', params: sf.data } as ScaleFeature;
       case 'linearArray':
         return { ...base, type: 'linearArray', params: sf.data } as LinearArrayFeature;
       case 'circularArray':

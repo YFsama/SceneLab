@@ -3,6 +3,35 @@ import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume } from '../lib/geometry/brep';
 import { createSketch, addRectangle, addCircle, addLine } from '../lib/sketch/engine';
+import type { SolidBody } from '../lib/geometry/types';
+
+const extentAlong = (b: SolidBody, axis: 'x' | 'y' | 'z') => {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of b.vertices) {
+    min = Math.min(min, v[axis]);
+    max = Math.max(max, v[axis]);
+  }
+  return max - min;
+};
+
+/** Sketch+extrude feature tree producing one 10×10×10 parametric body. */
+const parametricBox = (): FeatureTree => {
+  const tree = new FeatureTree();
+  tree.addFeature(createExtrudeFeature(
+    {
+      profile: [
+        { x: -5, y: 0, z: -5 }, { x: 5, y: 0, z: -5 },
+        { x: 5, y: 0, z: 5 }, { x: -5, y: 0, z: 5 },
+      ],
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 10,
+      symmetric: false,
+    },
+    [],
+  ));
+  return tree;
+};
 
 describe('modify feature actions', () => {
   beforeEach(() => {
@@ -133,6 +162,113 @@ describe('modify feature actions', () => {
     const produced = tree.getLatestBodies()[0]!;
     expect(tree.findFeatureIdForBody(produced.id)).toBe(tree.features[0]!.id);
     expect(tree.findFeatureIdForBody('nope')).toBeUndefined();
+  });
+});
+
+describe('setDimensionTarget (editable drawing dimensions)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
+    });
+  });
+
+  it('resizes a direct body along one axis, leaving the others alone', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().setDimensionTarget({ bodyId: box.id, axis: 'x' }, 25)).toBe(true);
+    const body = useStore.getState().bodies[0]!;
+    expect(extentAlong(body, 'x')).toBeCloseTo(25, 3);
+    expect(extentAlong(body, 'y')).toBeCloseTo(10, 3);
+    expect(extentAlong(body, 'z')).toBeCloseTo(10, 3);
+  });
+
+  it('direct resize is undoable', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().setDimensionTarget({ bodyId: box.id, axis: 'x' }, 25);
+    useStore.getState().undo();
+    expect(extentAlong(useStore.getState().bodies[0]!, 'x')).toBeCloseTo(10, 3);
+  });
+
+  it('rejects invalid values and unknown bodies', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().setDimensionTarget({ bodyId: box.id, axis: 'x' }, 0)).toBe(false);
+    expect(useStore.getState().setDimensionTarget({ bodyId: box.id, axis: 'x' }, -5)).toBe(false);
+    expect(useStore.getState().setDimensionTarget({ bodyId: 'nope', axis: 'x' }, 5)).toBe(false);
+  });
+
+  it('adds a driving scale feature to a tree body', () => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    expect(useStore.getState().setDimensionTarget({ bodyId, axis: 'y' }, 25)).toBe(true);
+    const t2 = useStore.getState().featureTree;
+    expect(t2.features).toHaveLength(2);
+    const scale = t2.features[1]!;
+    expect(scale.type).toBe('scale');
+    if (scale.type === 'scale') {
+      expect(scale.params).toEqual({ axis: 'y', target: 25 });
+      expect(scale.parentIds).toEqual([t2.features[0]!.id]);
+    }
+    expect(extentAlong(useStore.getState().bodies[0]!, 'y')).toBeCloseTo(25, 3);
+  });
+
+  it('repeated edits update the same scale feature instead of stacking', () => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    useStore.getState().setDimensionTarget({ bodyId, axis: 'y' }, 25);
+    const bodyId2 = useStore.getState().bodies[0]!.id; // body id changed by the scale
+    useStore.getState().setDimensionTarget({ bodyId: bodyId2, axis: 'y' }, 40);
+
+    const t2 = useStore.getState().featureTree;
+    expect(t2.features.filter((f) => f.type === 'scale')).toHaveLength(1);
+    const scale = t2.features[1]!;
+    if (scale.type === 'scale') expect(scale.params.target).toBe(40);
+    expect(extentAlong(useStore.getState().bodies[0]!, 'y')).toBeCloseTo(40, 3);
+  });
+
+  it('the scale feature is driving: upstream changes are re-fitted to the target', () => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+    useStore.getState().setDimensionTarget({ bodyId, axis: 'y' }, 25);
+
+    // Widen the underlying extrude: the scale feature must re-fit to 25.
+    useStore.getState().updateFeature(tree.features[0]!.id, (f) =>
+      f.type === 'extrude' ? { ...f, params: { ...f.params, distance: 20 } } : f,
+    );
+    useStore.getState().recomputeTree();
+    expect(extentAlong(useStore.getState().bodies[0]!, 'y')).toBeCloseTo(25, 3);
+  });
+
+  it('parametric dimension edits are undoable as a unit', () => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    useStore.getState().setDimensionTarget({ bodyId, axis: 'y' }, 25);
+    useStore.getState().undo();
+    const t = useStore.getState().featureTree;
+    expect(t.features.filter((f) => f.type === 'scale')).toHaveLength(0);
+    expect(extentAlong(useStore.getState().bodies[0]!, 'y')).toBeCloseTo(10, 3);
   });
 });
 

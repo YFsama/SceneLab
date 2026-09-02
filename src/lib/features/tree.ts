@@ -9,6 +9,7 @@ import type {
   FilletFeature,
   ChamferFeature,
   ShellFeature,
+  ScaleFeature,
   LinearArrayFeature,
   CircularArrayFeature,
   MirrorFeature,
@@ -22,6 +23,7 @@ import {
   applyLinearArray,
   applyCircularArray,
   applyMirror,
+  resizeBodyAxis,
   sweepBody,
 } from '../geometry/operations';
 import { solveSketch } from '../sketch/engine';
@@ -181,6 +183,8 @@ export class FeatureTree {
         return this.evaluateChamfer(feature);
       case 'shell':
         return this.evaluateShell(feature);
+      case 'scale':
+        return this.evaluateScale(feature);
       case 'linearArray':
         return this.evaluateLinearArray(feature);
       case 'circularArray':
@@ -273,6 +277,13 @@ export class FeatureTree {
     if (!parent) throw new Error('Shell requires a parent body');
     this.consumed.add(parent.featureId);
     return { bodies: [applyShell(parent.body, feature.params.faceIds, feature.params.thickness)] };
+  }
+
+  private evaluateScale(feature: ScaleFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Scale requires a parent body');
+    this.consumed.add(parent.featureId);
+    return { bodies: [resizeBodyAxis(parent.body, feature.params.axis, feature.params.target)] };
   }
 
   private evaluateLinearArray(feature: LinearArrayFeature): FeatureResult {
@@ -530,6 +541,21 @@ export function createShellFeature(
     suppressed: false,
     parentIds,
     params: { faceIds, thickness },
+  };
+}
+
+export function createScaleFeature(
+  axis: 'x' | 'y' | 'z',
+  target: number,
+  parentIds: string[],
+): ScaleFeature {
+  return {
+    id: genId('feat'),
+    type: 'scale',
+    name: `Scale ${axis.toUpperCase()}`,
+    suppressed: false,
+    parentIds,
+    params: { axis, target },
   };
 }
 

@@ -10,6 +10,7 @@ export type FeatureType =
   | 'fillet'
   | 'chamfer'
   | 'shell'
+  | 'scale'
   | 'linearArray'
   | 'circularArray'
   | 'mirror';
@@ -84,6 +85,19 @@ export interface ShellFeature extends FeatureBase {
   };
 }
 
+/**
+ * Dimension-driven resize: scales one world axis so the body's extent along it
+ * equals `target` mm (a driving dimension — upstream changes are re-fitted to
+ * the same target on every recompute, like editing a drawing dimension).
+ */
+export interface ScaleFeature extends FeatureBase {
+  type: 'scale';
+  params: {
+    axis: 'x' | 'y' | 'z';
+    target: number;
+  };
+}
+
 export interface LinearArrayFeature extends FeatureBase {
   type: 'linearArray';
   params: {
@@ -119,6 +133,7 @@ export type Feature =
   | FilletFeature
   | ChamferFeature
   | ShellFeature
+  | ScaleFeature
   | LinearArrayFeature
   | CircularArrayFeature
   | MirrorFeature;

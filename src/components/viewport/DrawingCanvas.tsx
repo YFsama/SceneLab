@@ -1,7 +1,8 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { projectBodies, exportDrawingSVG, type SectionPlane } from '../../lib/io/drawing';
+import { projectBodies, exportDrawingSVG, type DrawingDimension, type SectionPlane } from '../../lib/io/drawing';
 import { downloadFile } from '../../lib/io/studio3d';
 import { exportDXF } from '../../lib/io/dxf';
 import { exportCanvasAsPDF } from '../../lib/io/pdf';
@@ -15,6 +16,9 @@ export function DrawingCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bodies = useStore((s) => s.bodies);
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>('off');
+  // Editable-dimension hit targets (canvas px) recorded during the last paint.
+  const dimHitsRef = useRef<{ id: string; x: number; y: number; dim: DrawingDimension }[]>([]);
+  const [hoverHit, setHoverHit] = useState<string | null>(null);
 
   // Section plane: cuts the bodies in half at the middle of their combined
   // bounds along the chosen axis, removing the positive side (SolidWorks
@@ -52,6 +56,8 @@ export function DrawingCanvas() {
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const dimHits: typeof dimHitsRef.current = [];
 
     const w = canvas.width;
     const h = canvas.height;
@@ -140,14 +146,19 @@ export function DrawingCanvas() {
         ctx.restore();
       }
 
-      // Draw dimensions
-      ctx.strokeStyle = 'red';
-      ctx.fillStyle = 'red';
-      ctx.font = '10px sans-serif';
+      // Draw dimensions; editable ones (with a driver) highlight on hover and
+      // open the edit prompt on click.
       ctx.lineWidth = 0.5;
-      for (const dim of view.dimensions) {
+      ctx.font = '10px sans-serif';
+      for (let d = 0; d < view.dimensions.length; d++) {
+        const dim = view.dimensions[d]!;
         const p1 = transform(dim.start);
         const p2 = transform(dim.end);
+        const hitId = `${i}:${d}`;
+        const hovered = dim.driver && hoverHit === hitId;
+        const color = hovered ? '#3b82f6' : 'red';
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
         ctx.setLineDash([2, 2]);
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
@@ -158,7 +169,10 @@ export function DrawingCanvas() {
         const mx = (p1.x + p2.x) / 2;
         const my = (p1.y + p2.y) / 2;
         ctx.textAlign = 'center';
+        if (hovered) ctx.font = 'bold 11px sans-serif';
         ctx.fillText(`${dim.value.toFixed(1)} mm`, mx, my - 4);
+        if (hovered) ctx.font = '10px sans-serif';
+        dimHits.push({ id: hitId, x: mx, y: my, dim });
       }
     }
 
@@ -199,7 +213,58 @@ export function DrawingCanvas() {
     ctx.fillText(`${t('drawing.date')}: ${new Date().toLocaleDateString()}`, tbX + tbW * 0.4 + 5, tbY + 18);
     ctx.fillText(`${t('drawing.units')}: mm`, tbX + tbW * 0.4 + 5, tbY + 35);
     ctx.fillText(`SceneLab v${__APP_VERSION__}`, tbX + tbW * 0.4 + 5, tbY + 52);
-  }, [views, t]);
+
+    dimHitsRef.current = dimHits;
+  }, [views, t, hoverHit]);
+
+  /** Client event → 800×600 canvas pixel coordinates (the canvas is CSS-stretched). */
+  const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * canvas.width,
+      y: ((e.clientY - rect.top) / rect.height) * canvas.height,
+    };
+  };
+
+  /** Nearest editable dimension within the click/hover radius, if any. */
+  const hitTest = (x: number, y: number) => {
+    let best: { id: string; dim: DrawingDimension; dist: number } | null = null;
+    for (const hit of dimHitsRef.current) {
+      if (!hit.dim.driver) continue;
+      const dist = Math.hypot(hit.x - x, hit.y - y);
+      if (dist <= 14 && (!best || dist < best.dist)) best = { id: hit.id, dim: hit.dim, dist };
+    }
+    return best;
+  };
+
+  const handleCanvasMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    const p = toCanvasCoords(e);
+    const hit = p ? hitTest(p.x, p.y) : null;
+    setHoverHit(hit ? hit.id : null);
+    if (canvasRef.current) canvasRef.current.style.cursor = hit ? 'pointer' : 'default';
+  };
+
+  const handleCanvasClick = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    const p = toCanvasCoords(e);
+    if (!p) return;
+    const hit = hitTest(p.x, p.y);
+    const driver = hit?.dim.driver;
+    if (!hit || !driver) return;
+    useStore.getState().openNumericPrompt({
+      titleKey: 'drawing.dimTitle',
+      labelKey: 'drawing.dimLabel',
+      initial: Math.round(hit.dim.value * 1000) / 1000,
+      min: 0.1,
+      step: 0.5,
+      onApply: (v) => {
+        if (!useStore.getState().setDimensionTarget(driver, v)) {
+          showToast(t('drawing.editFailed'), 'warning');
+        }
+      },
+    });
+  };
 
   const handleExportSVG = () => {
     if (views.length === 0) {
@@ -278,6 +343,8 @@ export function DrawingCanvas() {
           <option value="z">Z</option>
         </select>
         <div className="w-px h-4 bg-panel-border" aria-hidden="true" />
+        <span className="text-xs text-text-muted">{t('drawing.editHint')}</span>
+        <div className="w-px h-4 bg-panel-border" aria-hidden="true" />
         <button
           onClick={handleExportSVG}
           className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded"
@@ -319,6 +386,9 @@ export function DrawingCanvas() {
           className="w-full h-full"
           role="img"
           aria-label="Drawing view"
+          onClick={handleCanvasClick}
+          onMouseMove={handleCanvasMove}
+          onMouseLeave={() => setHoverHit(null)}
         />
       </div>
     </div>

@@ -2,12 +2,12 @@ import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, type DetectedRectangle } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
-import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
+import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, asyncBooleanOp, asyncHollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, resizeBodyAxis, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
 import { computeBoundingBoxCenter } from '../lib/geometry/brep';
 import { isTauri, callNative } from '../lib/runtime';
 
@@ -399,6 +399,13 @@ interface AppState {
   applyCircularArrayFeature: (count: number) => boolean;
   /** Mirror across a world plane through the body's bounding-box centre. */
   applyMirrorFeature: (plane: 'xy' | 'xz' | 'yz', keepOriginal: boolean) => boolean;
+  /**
+   * Editable drawing dimension write-back: resize the given body so its extent
+   * along the world axis equals `value` mm. Tree bodies get (or update) a
+   * driving scale feature; direct bodies are resized in place. False when the
+   * body no longer exists or the value is invalid.
+   */
+  setDimensionTarget: (driver: { bodyId: string; axis: 'x' | 'y' | 'z' }, value: number) => boolean;
   /**
    * Loft between two or more existing sketch features (Fusion loft sections):
    * adds a loft feature parenting those sketches, in the given order. False
@@ -1908,6 +1915,40 @@ export const useStore = create<AppState>((set, get) => {
       // Keeping the original means the mirrored copy is added alongside it.
       !keepOriginal,
     ),
+
+  setDimensionTarget: (driver, value) => {
+    if (!(value > 0) || !Number.isFinite(value)) return false;
+    const body = get().bodies.find((b) => b.id === driver.bodyId);
+    if (!body) return false;
+    const tree = get().featureTree;
+    const parentId = tree.findFeatureIdForBody(driver.bodyId);
+    if (parentId) {
+      const parent = tree.getFeature(parentId);
+      pushUndo();
+      // Repeated edits of the same dimension update the driving scale feature
+      // instead of stacking a new node per edit.
+      if (parent?.type === 'scale' && parent.params.axis === driver.axis) {
+        tree.updateFeature(parentId, (f) =>
+          f.type === 'scale' ? { ...f, params: { ...f.params, target: value } } : f,
+        );
+      } else {
+        tree.addFeature(createScaleFeature(driver.axis, value, [parentId]));
+      }
+      tree.recompute();
+      set({ featureTree: tree, projectDirty: true });
+      recombine();
+      return true;
+    }
+    try {
+      const resized = resizeBodyAxis(body, driver.axis, value);
+      pushUndo();
+      set((s) => ({ directBodies: s.directBodies.map((b) => (b.id === driver.bodyId ? resized : b)) }));
+      recombine();
+      return true;
+    } catch {
+      return false; // zero-extent axis (body is flat along it)
+    }
+  },
 
   performLoftFromSketches: (sketchFeatureIds) => {
     const tree = get().featureTree;
