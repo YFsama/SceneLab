@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, importSTEP, import3MF, exportSTLBinary, exportOBJ, export3MFPackage } from '../../lib/io';
+import { downloadFile, readFileAsText, readFileAsArrayBuffer, importSTL, importOBJ, importSTEPAuto, import3MF, exportSTLBinary, exportOBJ, export3MFPackage } from '../../lib/io';
 import { showToast } from '../../lib/toast';
 import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../../lib/projectActions';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
@@ -22,18 +22,23 @@ export function ProjectMenu() {
     if (!file) return;
     try {
       const lower = file.name.toLowerCase();
-      const isText = lower.endsWith('.obj') || lower.endsWith('.step') || lower.endsWith('.stp');
       if (lower.endsWith('.3mf')) {
         // 3MF: a ZIP package → one body per model object.
         const bytes = new Uint8Array(await readFileAsArrayBuffer(file));
         for (const body of import3MF(bytes)) addDirectBody(body);
-      } else if (isText) {
-        const text = await readFileAsText(file);
-        const body = lower.endsWith('.obj')
-          ? importOBJ(text)
-          : importSTEP(text, file.name.replace(/\.(step|stp)$/i, ''));
+      } else if (lower.endsWith('.obj')) {
+        const body = importOBJ(await readFileAsText(file));
         if (body.faces.length === 0) throw new Error('No faces parsed');
         addDirectBody(body);
+      } else if (lower.endsWith('.step') || lower.endsWith('.stp')) {
+        // Curved STEP loads the exact OCCT kernel (lazy, first use only);
+        // planar files stay on the fast pure parser.
+        const bytes = new Uint8Array(await readFileAsArrayBuffer(file));
+        const text = new TextDecoder().decode(bytes);
+        const { bodies, engine } = await importSTEPAuto(text, file.name.replace(/\.(step|stp)$/i, ''), bytes);
+        if (bodies.every((b) => b.faces.length === 0)) throw new Error('No faces parsed');
+        for (const body of bodies) addDirectBody(body);
+        if (engine === 'occt') showToast(t('toast.stepExact'), 'info');
       } else {
         const body = importSTL(await readFileAsArrayBuffer(file));
         if (body.faces.length === 0) throw new Error('No faces parsed');

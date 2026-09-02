@@ -487,3 +487,29 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
   - **QA**: 5 tautological test files replaced with real coverage; Playwright E2E smoke
     suite + CI e2e job; in-app NumericPrompt replaced every window.prompt();
     version synced across package.json / Cargo.toml / tauri.conf.json.
+- `2026-09-01`: Pass #8 — OCCT-grade curved STEP import (1695 tests / 112 files green; lint/tsc/build/E2E OK).
+  - **Dependency choice**: started with opencascade.js (63 MB) — its default
+    build binds almost no embind constructors (STEPControl_Reader, TopExp_Explorer,
+    BRepMesh, even gp_Pnt are unusable), so STEP reading is impossible there
+    without a custom build. Swapped to **occt-import-js** (7.3 MB wasm, same
+    OCCT core, purpose-built STEP/IGES/BREP reader + mesher): validated against
+    real curved files (as1-oc-214 assembly: 18 named/colored parts; conical
+    surface: 416 tris; rounded cube: 40 tris).
+  - **Exact import path** (`stepOCCT.ts`): lazy code-split chunk + wasm fetched
+    only on first curved import; `ReadStepFile` at 0.1 mm absolute deflection
+    (parallel meshing, mm output). Mesh → SolidBody conversion welds duplicated
+    positions, emits one face per triangle (poly-solid convention), derives
+    model edges as feature edges of the triangle soup (open boundaries plus
+    segments bending > 25° — cylinder rims/cube corners, not tessellation
+    noise), and carries STEP product names + rgb colours. Assemblies import as
+    one body per part.
+  - **Dispatcher** `importSTEPAuto`: text scan for curved surface/edge tokens
+    (CYLINDRICAL/CONICAL/SPHERICAL/TOROIDAL/B-spline surfaces, circles,
+    ellipses…) routes curved files to the exact kernel; planar files stay on
+    the pure faceted parser; any kernel failure (offline, OOM) falls back to
+    it. ProjectMenu shows a toast when the exact kernel ran. Test seam
+    (`__setExactStepLoaderForTests`) keeps the 7.3 MB wasm out of unit tests.
+  - **E2E + fixtures**: curved fixtures (conical-surface, rounded-cube, from
+    occt-import-js's LGPL test data) imported through the real UI in
+    Playwright — wasm chunk load, parse, convert, tree entry (2.1 s).
+  - **Remaining open**: VLM face-picking (needs external vision API).

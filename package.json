@@ -22,6 +22,7 @@
     "fflate": "^0.8.3",
     "lucide-react": "^0.460.0",
     "manifold-3d": "^3.5.1",
+    "occt-import-js": "^0.0.23",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "three": "^0.170.0",

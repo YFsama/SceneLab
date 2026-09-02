@@ -39,3 +39,16 @@ test('insert a box through the context menu and see it in the tree', async ({ pa
   // The box appears in the browser tree by its auto-numbered name.
   await expect(page.getByText('Box', { exact: true }).first()).toBeVisible({ timeout: 10_000 });
 });
+
+test('import a curved STEP file through the exact OCCT kernel', async ({ page }) => {
+  await page.goto('/');
+
+  // The hidden mesh-import input accepts the curved fixture directly; the
+  // curved-surface heuristic routes it to the lazy occt-import-js chunk.
+  await page.locator('input[type="file"]').setInputFiles('e2e/fixtures/conical-surface.step');
+
+  // The kernel toast confirms the exact engine was used (wasm fetched + run).
+  await expect(page.getByText(/exact OCCT kernel/).first()).toBeVisible({ timeout: 30_000 });
+  // The tessellated cone lands in the browser tree under the file name.
+  await expect(page.getByText('conical-surface', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+});

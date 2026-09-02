@@ -10,3 +10,4 @@ export type { DrawingView, DrawingLine, DrawingArc, DrawingDimension } from './d
 export { projectBody, projectBodies, exportDrawingSVG } from './drawing';
 export { exportSTEP } from './step';
 export { importSTEP } from './stepImport';
+export { importSTEPAuto, importSTEPWithOCCT, stepNeedsExactKernel } from './stepOCCT';

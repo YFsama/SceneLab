@@ -41,7 +41,8 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - **Editable drawing dimensions**: click a red dimension on the drawing and
   type a new value — tree bodies gain a driving `scale` feature that re-fits
   upstream changes to the same target; direct bodies resize in place
-- **STEP (faceted B-rep) import** and **3MF round-trip**
+- **STEP import**: exact OCCT kernel (lazy WASM) for curved geometry with a
+  faceted fast path and automatic fallback; **3MF round-trip**
 - **Feature-tree undo/redo** (snapshots carry the timeline), sketch corner
   fillets, tangent/symmetric constraints
 - **Type-ahead sketch dimensions**: while drawing, type digits + Enter to
@@ -86,7 +87,7 @@ src/
 │   ├── features/     # Feature tree + evaluators (extrude/revolve/sweep/loft/fillet/chamfer/shell/scale/array/mirror)
 │   ├── geometry/     # B-rep primitives & mesh ops (pure functions, zero DOM)
 │   ├── hooks/        # useEscapeClose, useFocusRestore, useKeyboardShortcuts
-│   ├── io/           # Import/export: studio3d, STEP (faceted), STL, OBJ, DXF, 3MF, drawing SVG/PDF, screenshot
+│   ├── io/           # Import/export: studio3d, STEP (OCCT exact + faceted), STL, OBJ, DXF, 3MF, drawing SVG/PDF, screenshot
 │   ├── print/        # 3D-print analysis & optimization (pure functions, zero DOM)
 │   └── sketch/       # 2D sketch engine + constraint solver (zero DOM)
 ├── store/            # Zustand store (serializable state only)
@@ -216,7 +217,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (1683+ tests, 111 files) plus Rust unit tests
+- Every `lib/*` module has vitest tests (1695+ tests, 112 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops); exact booleans
