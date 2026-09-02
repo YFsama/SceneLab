@@ -469,3 +469,21 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     save/load serializes/deserializes scale features; NumericPrompt.test constructor
     hack replaced with a real FeatureTree (fixes a latent tsc error).
   - **Remaining open**: VLM face-picking, OCCT-grade curved STEP import.
+- `2026-09-01`: v0.5.0 release — deep-completion passes #1–#7 packaged (1683 tests / 111 files; lint/tsc/build/E2E/cargo check OK).
+  - **Exact geometry engine**: Manifold-3d WASM booleans + exact planar split with
+    warm-up and voxel fallback; voxel kernels moved to a Web Worker (sync fallback);
+    three-mesh-bvh accelerated picking; inside-point tests with per-face AABB rejection.
+  - **Parametric modelling**: sweep (twist, path-subdivided) and loft (perimeter-resampled
+    rings) features; incremental DAG recompute memo keyed on feature object identity;
+    feature-tree undo/redo; face-scoped shell; driving `scale` feature from drawing edits.
+  - **Sketch**: tangent + symmetric constraints (12 total), corner fillet
+    (intersection → tangent arc → trim), type-ahead exact dimensions while drawing.
+  - **Sub-entity selection**: Alt+click edges (scopes fillet/chamfer), Ctrl+click faces
+    (shell open faces), with status-bar discoverability hints.
+  - **Drawing workspace**: per-body dimensions with click-to-edit write-back, section
+    views with hatched cut faces, SVG/PNG/DXF/PDF export, title block.
+  - **IO**: STEP faceted B-rep import (round-trip safe), 3MF OPC package round-trip,
+    Tauri native save/open dialogs + Rust-side autosave.
+  - **QA**: 5 tautological test files replaced with real coverage; Playwright E2E smoke
+    suite + CI e2e job; in-app NumericPrompt replaced every window.prompt();
+    version synced across package.json / Cargo.toml / tauri.conf.json.

@@ -19,7 +19,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 ## Key Features
 
 - **Perspective/orthographic projection toggle** (Shift+P)
-- **Sketch constraints**: 10 solver constraint types. Single-entity ones
+- **Sketch constraints**: 12 solver constraint types (tangent, symmetric included). Single-entity ones
   (horizontal / vertical / fixed / radius) apply from the right-click menu or
   shortcuts; select **two** entities (Ctrl/Shift+click) and the menu offers
   parallel / perpendicular / equal / concentric / coincident (nearest endpoints)
@@ -36,6 +36,19 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - **Multi-plane sketch support** (XY, XZ, YZ planes)
 - **Section views** in the drawing workspace (X/Y/Z mid-plane cut, hatched
   cross-sections) and **PDF export**
+- **Sweep & loft features**: twisted sweeps along 3D paths, multi-section
+  lofts between sketch features (Fusion-style timeline entries)
+- **Editable drawing dimensions**: click a red dimension on the drawing and
+  type a new value — tree bodies gain a driving `scale` feature that re-fits
+  upstream changes to the same target; direct bodies resize in place
+- **STEP (faceted B-rep) import** and **3MF round-trip**
+- **Feature-tree undo/redo** (snapshots carry the timeline), sketch corner
+  fillets, tangent/symmetric constraints
+- **Type-ahead sketch dimensions**: while drawing, type digits + Enter to
+  commit an exact line length / rect WxH / circle radius; every numeric edit
+  goes through the in-app prompt dialog (no browser prompt())
+- **Web Worker geometry offload** for voxel fallback kernels; **Tauri native
+  save/open dialogs and autosave** on desktop
 
 ### Geometry / Solver
 
@@ -43,7 +56,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 |--------|--------|
 | Mesh B-rep | Hand-rolled poly-solid kernel (`lib/geometry/brep.ts`) |
 | Exact booleans | **Manifold** (WASM) with a voxel fallback (`booleanOp`) |
-| Sketch solver | Hand-rolled relaxation, 10 constraint types (`lib/sketch/solver.ts`) |
+| Sketch solver | Hand-rolled relaxation, 12 constraint types (`lib/sketch/solver.ts`), sketch corner fillets |
 | Picking | Raycaster accelerated by **three-mesh-bvh** |
 
 The exact WASM engine warms up at app start; until it is ready — or for inputs
@@ -70,10 +83,10 @@ src/
 ├── lib/
 │   ├── ai/           # LLM client, tool registry, ~30 built-in tools, validation
 │   ├── cam/          # Toolpaths, G-code, tool library, feeds & speeds
-│   ├── features/     # Feature tree + evaluators (extrude/revolve/fillet/chamfer/shell/array/mirror)
+│   ├── features/     # Feature tree + evaluators (extrude/revolve/sweep/loft/fillet/chamfer/shell/scale/array/mirror)
 │   ├── geometry/     # B-rep primitives & mesh ops (pure functions, zero DOM)
 │   ├── hooks/        # useEscapeClose, useFocusRestore, useKeyboardShortcuts
-│   ├── io/           # Import/export: studio3d, STL, OBJ, DXF, 3MF, screenshot
+│   ├── io/           # Import/export: studio3d, STEP (faceted), STL, OBJ, DXF, 3MF, drawing SVG/PDF, screenshot
 │   ├── print/        # 3D-print analysis & optimization (pure functions, zero DOM)
 │   └── sketch/       # 2D sketch engine + constraint solver (zero DOM)
 ├── store/            # Zustand store (serializable state only)
@@ -203,7 +216,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (1657+ tests, 110 files) plus Rust unit tests
+- Every `lib/*` module has vitest tests (1683+ tests, 111 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops); exact booleans
