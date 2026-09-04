@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, initBuiltinCommands, addMidplaneFromSelection } from './registry';
+import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, recentCommands, initBuiltinCommands, addMidplaneFromSelection } from './registry';
 import { useStore } from '../../store/app';
 import { createBox, createCylinder, createTorus } from '../geometry';
 
@@ -120,5 +120,35 @@ describe('addMidplaneFromSelection', () => {
     expect(mid).toBeDefined();
     const nLen = Math.hypot(mid.normal.x, mid.normal.y, mid.normal.z);
     expect(nLen).toBeCloseTo(1, 6);
+  });
+});
+
+describe('recent command history (Fusion-style right-click recents)', () => {
+  beforeEach(() => clearCommands());
+
+  it('runCommand records usage, newest first, deduped', () => {
+    registerCommand({ id: 'a', label: 'A', run: () => {} });
+    registerCommand({ id: 'b', label: 'B', run: () => {} });
+    runCommand('a');
+    runCommand('b');
+    runCommand('a'); // re-running moves it back to the front
+    expect(recentCommands().map((c) => c.id)).toEqual(['a', 'b']);
+  });
+
+  it('caps the history length', () => {
+    for (let i = 0; i < 15; i++) registerCommand({ id: `c${i}`, label: `C${i}`, run: () => {} });
+    for (let i = 0; i < 15; i++) runCommand(`c${i}`);
+    expect(recentCommands(50).length).toBeLessThanOrEqual(12);
+    // The most recent command is still first.
+    expect(recentCommands(1)[0]?.id).toBe('c14');
+  });
+
+  it('unknown ids are not recorded and clearCommands resets history', () => {
+    registerCommand({ id: 'x', label: 'X', run: () => {} });
+    runCommand('x');
+    runCommand('missing');
+    expect(recentCommands()).toHaveLength(1);
+    clearCommands();
+    expect(recentCommands()).toHaveLength(0);
   });
 });

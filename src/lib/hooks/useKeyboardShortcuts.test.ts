@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { registerShortcut, escapeAction } from './useKeyboardShortcuts';
 
 describe('escapeAction', () => {
+  it('cancels an active body drag before anything else', () => {
+    expect(escapeAction({ bodyDragging: true, sketchActive: true, measureActive: true, drawing: true })).toBe('cancelDrag');
+    expect(escapeAction({ bodyDragging: true, sketchActive: false, measureActive: false })).toBe('cancelDrag');
+  });
   it('cancels an in-progress draw before exiting the sketch', () => {
     expect(escapeAction({ sketchActive: true, measureActive: false, drawing: true })).toBe('cancelDraw');
   });

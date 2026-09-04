@@ -7,6 +7,8 @@ import { Toolbar } from './components/toolbar/Toolbar';
 import { SketchToolbar } from './components/toolbar/SketchToolbar';
 import { PrimitiveBar } from './components/toolbar/PrimitiveBar';
 import { BrowserTree } from './components/panels/BrowserTree';
+import { PartsLibrary } from './components/panels/PartsLibrary';
+import { TimelineBar } from './components/panels/TimelineBar';
 import { PropertiesPanel } from './components/panels/PropertiesPanel';
 import { StatusBar } from './components/ui/StatusBar';
 import { ToastHost } from './components/ui/ToastHost';
@@ -27,6 +29,8 @@ import { MoveDialog } from './components/ui/MoveDialog';
 import { RotateDialog } from './components/ui/RotateDialog';
 import { ScaleDialog } from './components/ui/ScaleDialog';
 import { HollowDialog } from './components/ui/HollowDialog';
+import { WelcomeCard } from './components/ui/WelcomeCard';
+import { SectionPanel } from './components/ui/SectionPanel';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -60,16 +64,27 @@ export default function App() {
         {/* Browser tree */}
         {showBrowserTree && <BrowserTree />}
 
+        {/* Parts library (model workspace only) */}
+        {workspace === 'model' && <PartsLibrary />}
+
         {/* Viewport area */}
-        <main id="main-content" className="flex-1 relative" tabIndex={-1}>
+        <main id="main-content" className="flex-1 flex flex-col min-w-0" tabIndex={-1}>
           {workspace === 'drawing' ? (
-            <DrawingCanvas />
+            <div className="flex-1 relative">
+              <DrawingCanvas />
+            </div>
           ) : (
             <>
-              <ViewportCanvas />
-              <InteractiveViewCube />
-              {workspace === 'sketch' && <SketchToolbar />}
-              {workspace === 'model' && <PrimitiveBar />}
+              <div className="flex-1 relative">
+                <ViewportCanvas />
+                <InteractiveViewCube />
+                {workspace === 'sketch' && <SketchToolbar />}
+                {workspace === 'model' && <PrimitiveBar />}
+                {workspace === 'model' && <WelcomeCard />}
+                {workspace === 'model' && <SectionPanel />}
+              </div>
+              {/* Fusion-style bottom feature timeline */}
+              {(workspace === 'model' || workspace === 'sketch') && <TimelineBar />}
             </>
           )}
         </main>

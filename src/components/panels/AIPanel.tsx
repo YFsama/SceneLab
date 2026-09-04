@@ -42,6 +42,16 @@ export function AIPanel() {
     else localStorage.removeItem('scenelab.apiKey');
   }, [apiKey]);
 
+  // The welcome card (and anything else) can pop the assistant open.
+  useEffect(() => {
+    const open = () => {
+      setExpanded(true);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener('scenelab:open-ai', open);
+    return () => window.removeEventListener('scenelab:open-ai', open);
+  }, []);
+
   const handleSend = useCallback(async () => {
     if (!input.trim() || loading) return;
     if (!apiKey) {
@@ -49,6 +59,7 @@ export function AIPanel() {
       showToast(t('ai.setApiKey'), 'warning');
       return;
     }
+    useStore.getState().markOnboardingStep('ai');
 
     const userMessage: AIMessage = {
       role: 'user',

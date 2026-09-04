@@ -272,6 +272,97 @@ describe('setDimensionTarget (editable drawing dimensions)', () => {
   });
 });
 
+describe('viewport drag-move (bodyDragging lifecycle)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
+      bodyDragging: false,
+      dragMovedThisDrag: false,
+    });
+  });
+
+  const xOf = (): number => {
+    const b = useStore.getState().bodies[0]!;
+    return b.vertices.reduce((m, v) => Math.min(m, v.x), Infinity);
+  };
+
+  it('a drag moves the selection with one undo entry and keeps ids', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    const undoBefore = useStore.getState().undoStack.length;
+
+    useStore.getState().beginSelectionDrag();
+    expect(useStore.getState().bodyDragging).toBe(true);
+    // Several silent deltas — like mousemove frames — move cumulatively.
+    expect(useStore.getState().dragSelectionBy(2, 0, 0)).toBe(1);
+    expect(useStore.getState().dragSelectionBy(3, 0, 0)).toBe(1);
+    expect(useStore.getState().bodies[0]!.id).toBe(box.id);
+    expect(xOf()).toBeCloseTo(-5 + 5, 3); // box spans -5..5 → moved +5
+    // Exactly one history entry for the whole drag.
+    expect(useStore.getState().undoStack.length).toBe(undoBefore + 1);
+    useStore.getState().endSelectionDrag();
+    expect(useStore.getState().bodyDragging).toBe(false);
+
+    // One undo restores the pre-drag position.
+    useStore.getState().undo();
+    expect(xOf()).toBeCloseTo(-5, 3);
+  });
+
+  it('a press without motion is a click: the empty snapshot is dropped', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    const undoBefore = useStore.getState().undoStack.length;
+
+    useStore.getState().beginSelectionDrag();
+    useStore.getState().endSelectionDrag();
+    expect(useStore.getState().undoStack.length).toBe(undoBefore);
+    // Undo still steps to the pre-insert state, not a no-op.
+    useStore.getState().undo();
+    expect(useStore.getState().bodies).toHaveLength(0);
+  });
+
+  it('Esc mid-drag (cancelSelectionDrag) restores the pre-drag state', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.getState().beginSelectionDrag();
+    useStore.getState().dragSelectionBy(7, 0, 0);
+    expect(xOf()).toBeCloseTo(2, 3);
+    useStore.getState().cancelSelectionDrag();
+    expect(useStore.getState().bodyDragging).toBe(false);
+    expect(xOf()).toBeCloseTo(-5, 3);
+  });
+
+  it('dragSelectionBy is inert outside a drag; feature-only selections move nothing', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().dragSelectionBy(5, 0, 0)).toBe(0);
+    expect(xOf()).toBeCloseTo(-5, 3);
+    expect(useStore.getState().undoStack).toHaveLength(useStore.getState().undoStack.length);
+
+    // Tree-produced body: a drag starts but the first motion reports 0 moves
+    // (nothing direct selected) so the viewport stops the drag.
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const paramId = useStore.getState().bodies[0]!.id;
+    useStore.getState().selectObject(paramId);
+    useStore.getState().beginSelectionDrag();
+    expect(useStore.getState().dragSelectionBy(5, 0, 0)).toBe(0);
+    useStore.getState().endSelectionDrag();
+  });
+});
+
 describe('loft from sketches', () => {
   it('performLoftFromSketches builds a loft over two sketch features', () => {
     useStore.setState({ featureTree: new FeatureTree(), directBodies: [], bodies: [], objectIds: [] });

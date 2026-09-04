@@ -9,6 +9,7 @@ import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisF
 import { splitByPlane, asyncBooleanOp, asyncHollowBody, type BooleanOp } from '../lib/geometry/boolean';
 import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, resizeBodyAxis, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
 import { computeBoundingBoxCenter } from '../lib/geometry/brep';
+import { findLibraryPart } from '../lib/library/parts';
 import { isTauri, callNative } from '../lib/runtime';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
@@ -122,6 +123,10 @@ interface AppState {
   setSketchLineAngle: (id: string, deg: number) => boolean;
   /** Translate a sketch entity's points by (dx, dy); false if it has no movable points. */
   nudgeSketchEntity: (id: string, dx: number, dy: number) => boolean;
+  /** Resize a sketch line to an exact length, scaling about its midpoint (Fusion); false if not a line / invalid. */
+  resizeSketchLine: (id: string, length: number) => boolean;
+  /** Set a sketch circle/arc's radius, keeping its centre; false if not round / invalid. */
+  resizeSketchCircle: (id: string, radius: number) => boolean;
   /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
   toggleSketchConstruction: (id: string) => void;
   /** 2D corner fillet between two lines: trim to the tangent points + arc. */
@@ -188,6 +193,21 @@ interface AppState {
   duplicateSelected: () => string[];
   /** Translate the selected direct bodies by an offset in place (keeps ids); returns how many moved. */
   nudgeSelected: (dx: number, dy: number, dz: number) => number;
+  /** Silent in-place translate of the selected direct bodies (no undo entry). */
+  translateSelectionLive: (dx: number, dy: number, dz: number) => number;
+  /**
+   * Viewport drag-move of the selection. `beginSelectionDrag` snapshots history
+   * once; `dragSelectionBy` applies silent deltas (no per-frame undo entries);
+   * `endSelectionDrag` drops the snapshot again when nothing moved (a plain
+   * click, not a drag); `cancelSelectionDrag` (Esc) restores the pre-drag state.
+   */
+  bodyDragging: boolean;
+  /** Whether the current drag actually moved anything (a no-move press is a click). */
+  dragMovedThisDrag: boolean;
+  beginSelectionDrag: () => void;
+  dragSelectionBy: (dx: number, dy: number, dz: number) => number;
+  endSelectionDrag: () => void;
+  cancelSelectionDrag: () => void;
   /** Move the selection so its combined bounding-box centre sits at the world origin; returns count. */
   moveSelectionToOrigin: () => number;
   /** Move the selection so its bounding-box centre sits at `target`; returns moved count. */
@@ -245,6 +265,8 @@ interface AppState {
   cutSelected: () => number;
   /** Paste the clipboard as offset copies, select them; returns the new ids. */
   paste: () => string[];
+  /** Paste the clipboard at the originals' exact positions (SolidWorks Ctrl+Shift+V); returns the new ids. */
+  pasteInPlace: () => string[];
   /**
    * Undo/redo history. Snapshots cover direct bodies, visibility AND the
    * feature list — sketch/extrude/fillet/… tree edits are first-class undoable
@@ -348,6 +370,16 @@ interface AppState {
   /** Whether the ground grid is shown. */
   showGrid: boolean;
   setShowGrid: (v: boolean) => void;
+  /** Soft shadow under bodies on the ground plane (Fusion/SolidWorks viewport look). */
+  groundShadows: boolean;
+  setGroundShadows: (v: boolean) => void;
+  /**
+   * Live section analysis (Fusion-style): clip everything in the 3D view with
+   * a plane `offset` mm along `axis` from the origin (flip = keep the other
+   * half). Viewport-only — geometry itself is never modified.
+   */
+  sectionAnalysis: { active: boolean; axis: 'x' | 'y' | 'z'; offset: number; flip: boolean };
+  setSectionAnalysis: (patch: Partial<{ active: boolean; axis: 'x' | 'y' | 'z'; offset: number; flip: boolean }>) => void;
   /** Whether to mark the centre of mass of selected bodies. */
   showCenterOfMass: boolean;
   setShowCenterOfMass: (v: boolean) => void;
@@ -448,6 +480,27 @@ interface AppState {
   showProperties: boolean;
   toggleBrowserTree: () => void;
   toggleProperties: () => void;
+
+  // Parts library (beginner quick-insert gallery, TinkerCAD-style)
+  showPartsLibrary: boolean;
+  togglePartsLibrary: () => void;
+  /** Most recently inserted part ids, most recent first (persisted). */
+  recentPartIds: string[];
+  /** Build a library part and insert it at a staggered plate position; returns the body id, or null for an unknown part. */
+  insertLibraryPart: (partId: string) => string | null;
+
+  // Onboarding (welcome card + getting-started checklist)
+  /** Completed onboarding step ids ('insert' | 'move' | 'ai' | 'save'), persisted. */
+  onboardingSteps: string[];
+  markOnboardingStep: (step: string) => void;
+  /** Welcome card permanently dismissed (persisted). */
+  welcomeDismissed: boolean;
+  dismissWelcome: () => void;
+  /** Bring the welcome card back (command palette). */
+  showWelcome: () => void;
+  /** Welcome card hidden for this session only (X button). */
+  welcomeSessionHidden: boolean;
+  hideWelcomeForSession: () => void;
 
   // Project
   projectName: string;
@@ -780,6 +833,36 @@ export const useStore = create<AppState>((set, get) => {
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
   },
+  resizeSketchLine: (id, length) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(length > 0.01)) return false;
+    const e = sketch.entities.get(id);
+    if (e?.type !== 'line') return false;
+    const p1 = sketch.entities.get(e.p1Id);
+    const p2 = sketch.entities.get(e.p2Id);
+    if (p1?.type !== 'point' || p2?.type !== 'point') return false;
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) return false;
+    // Scale about the midpoint so the line grows both ways (Fusion behaviour).
+    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+    const ux = dx / len, uy = dy / len;
+    pushSketchUndo();
+    p1.x = mx - (ux * length) / 2; p1.y = my - (uy * length) / 2;
+    p2.x = mx + (ux * length) / 2; p2.y = my + (uy * length) / 2;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
+  },
+  resizeSketchCircle: (id, radius) => {
+    const sketch = get().currentSketch;
+    if (!sketch || !(radius > 0.01)) return false;
+    const e = sketch.entities.get(id);
+    if (e?.type !== 'circle' && e?.type !== 'arc') return false;
+    pushSketchUndo();
+    e.radius = radius;
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
+  },
   toggleSketchConstruction: (id) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
@@ -853,6 +936,7 @@ export const useStore = create<AppState>((set, get) => {
       return { directBodies: [...s.directBodies, b], projectDirty: true };
     });
     recombine();
+    get().markOnboardingStep('insert');
   },
   addPrimitive: (kind) => {
     // Sensible default dimensions (mm) so a single click/call yields a usable part.
@@ -876,6 +960,7 @@ export const useStore = create<AppState>((set, get) => {
     pushUndo();
     set((s) => ({ directBodies: [...s.directBodies, ...withUniqueNames(newBodies, s.directBodies.map((b) => b.name))], projectDirty: true }));
     recombine();
+    get().markOnboardingStep('insert');
   },
   replaceBody: (oldId, newBody) => {
     pushUndo();
@@ -1074,13 +1159,14 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return copies.map((c) => c.id);
   },
-  nudgeSelected: (dx, dy, dz) => {
+  /** Silent in-place translate of the selected direct bodies (no undo entry);
+   * shared by nudgeSelected and the viewport drag flow. */
+  translateSelectionLive: (dx, dy, dz) => {
     const { selectedIds, directBodies } = get();
     const sel = new Set(selectedIds);
     const n = directBodies.filter((b) => sel.has(b.id)).length;
     if (n === 0) return 0; // nothing direct selected
     const move = (v: Vec3): Vec3 => ({ x: v.x + dx, y: v.y + dy, z: v.z + dz });
-    pushUndo();
     set((s) => ({
       directBodies: s.directBodies.map((b) =>
         sel.has(b.id)
@@ -1096,6 +1182,43 @@ export const useStore = create<AppState>((set, get) => {
     }));
     recombine();
     return n;
+  },
+
+  nudgeSelected: (dx, dy, dz) => {
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    if (!directBodies.some((b) => sel.has(b.id))) return 0;
+    pushUndo();
+    const n = get().translateSelectionLive(dx, dy, dz);
+    if (n > 0) get().markOnboardingStep('move');
+    return n;
+  },
+
+  bodyDragging: false,
+  dragMovedThisDrag: false,
+  beginSelectionDrag: () => {
+    pushUndo();
+    set({ bodyDragging: true, dragMovedThisDrag: false });
+  },
+  dragSelectionBy: (dx, dy, dz) => {
+    if (!get().bodyDragging) return 0;
+    const n = get().translateSelectionLive(dx, dy, dz);
+    if (n > 0) set({ dragMovedThisDrag: true });
+    return n;
+  },
+  endSelectionDrag: () => {
+    const { bodyDragging, dragMovedThisDrag } = get();
+    if (!bodyDragging) return;
+    // A press without motion was a click, not a drag — drop the no-op
+    // snapshot so undo doesn't step through empty entries.
+    if (!dragMovedThisDrag) set((s) => ({ undoStack: s.undoStack.slice(0, -1) }));
+    set({ bodyDragging: false, dragMovedThisDrag: false });
+    if (dragMovedThisDrag) get().markOnboardingStep('move');
+  },
+  cancelSelectionDrag: () => {
+    if (!get().bodyDragging) return;
+    set({ bodyDragging: false, dragMovedThisDrag: false });
+    get().undo();
   },
   moveSelectionTo: (target) => {
     const { selectedIds, bodies } = get();
@@ -1464,6 +1587,20 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
     return copies.map((c) => c.id);
   },
+  pasteInPlace: () => {
+    const { clipboard } = get();
+    if (clipboard.length === 0) return [];
+    // SolidWorks Ctrl+Shift+V: copies land at the originals' exact positions —
+    // zero-offset translate gives the deep copy without moving anything.
+    const copies = clipboard.map((b) => ({ ...translateBody(b, { x: 0, y: 0, z: 0 }, `${b.name} copy`), color: b.color }));
+    pushUndo();
+    set((s) => {
+      const named = withUniqueNames(copies, s.directBodies.map((b) => b.name));
+      return { directBodies: [...s.directBodies, ...named], selectedIds: named.map((c) => c.id), projectDirty: true };
+    });
+    recombine();
+    return copies.map((c) => c.id);
+  },
   undoStack: [],
   redoStack: [],
   undo: () => {
@@ -1739,8 +1876,12 @@ export const useStore = create<AppState>((set, get) => {
   setShowShortcuts: (showShortcuts) => set({ showShortcuts }),
   wireframe: stored('scenelab.wireframe') === 'true',
   setWireframe: (wireframe) => { set({ wireframe }); persist('scenelab.wireframe', String(wireframe)); },
+  sectionAnalysis: { active: false, axis: 'z', offset: 0, flip: false },
+  setSectionAnalysis: (patch) => set((s) => ({ sectionAnalysis: { ...s.sectionAnalysis, ...patch } })),
   showGrid: stored('scenelab.showGrid') !== 'false',
   setShowGrid: (showGrid) => { set({ showGrid }); persist('scenelab.showGrid', String(showGrid)); },
+  groundShadows: stored('scenelab.groundShadows') !== 'false',
+  setGroundShadows: (groundShadows) => { set({ groundShadows }); persist('scenelab.groundShadows', String(groundShadows)); },
   showCenterOfMass: stored('scenelab.showCenterOfMass') === 'true',
   setShowCenterOfMass: (showCenterOfMass) => { set({ showCenterOfMass }); persist('scenelab.showCenterOfMass', String(showCenterOfMass)); },
   pendingPrimitive: null,
@@ -2012,6 +2153,44 @@ export const useStore = create<AppState>((set, get) => {
   showProperties: stored('scenelab.showProperties') !== 'false',
   toggleBrowserTree: () => set((s) => { const v = !s.showBrowserTree; persist('scenelab.showBrowserTree', String(v)); return { showBrowserTree: v }; }),
   toggleProperties: () => set((s) => { const v = !s.showProperties; persist('scenelab.showProperties', String(v)); return { showProperties: v }; }),
+
+  // Parts library
+  showPartsLibrary: stored('scenelab.showPartsLibrary') === 'true',
+  togglePartsLibrary: () => set((s) => { const v = !s.showPartsLibrary; persist('scenelab.showPartsLibrary', String(v)); return { showPartsLibrary: v }; }),
+  recentPartIds: (() => { try { const v = JSON.parse(stored('scenelab.recentParts') || '[]'); return Array.isArray(v) ? (v as string[]) : []; } catch { return []; } })(),
+  insertLibraryPart: (partId) => {
+    const part = findLibraryPart(partId);
+    if (!part) return null;
+    const placed = translateBody(part.build(), {
+      // Stagger successive inserts across the plate (TinkerCAD's drop grid)
+      // so parts never stack on top of each other at the origin.
+      x: 18 * (get().directBodies.length % 3),
+      y: 0,
+      z: 18 * Math.floor((get().directBodies.length % 9) / 3),
+    });
+    get().addDirectBody(placed);
+    get().selectObject(placed.id);
+    set((s) => {
+      const recent = [partId, ...s.recentPartIds.filter((x) => x !== partId)].slice(0, 6);
+      persist('scenelab.recentParts', JSON.stringify(recent));
+      return { recentPartIds: recent };
+    });
+    return placed.id;
+  },
+
+  // Onboarding
+  onboardingSteps: (() => { try { const v = JSON.parse(stored('scenelab.onboarding') || '[]'); return Array.isArray(v) ? (v as string[]) : []; } catch { return []; } })(),
+  markOnboardingStep: (step) => set((s) => {
+    if (s.onboardingSteps.includes(step)) return {};
+    const next = [...s.onboardingSteps, step];
+    persist('scenelab.onboarding', JSON.stringify(next));
+    return { onboardingSteps: next };
+  }),
+  welcomeDismissed: stored('scenelab.welcomeDismissed') === 'true',
+  dismissWelcome: () => { set({ welcomeDismissed: true }); persist('scenelab.welcomeDismissed', 'true'); },
+  showWelcome: () => set({ welcomeDismissed: false, welcomeSessionHidden: false }),
+  welcomeSessionHidden: false,
+  hideWelcomeForSession: () => set({ welcomeSessionHidden: true }),
 
   projectName: 'Untitled',
   setProjectName: (projectName) => set({ projectName }),

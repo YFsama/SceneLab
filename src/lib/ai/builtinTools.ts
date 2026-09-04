@@ -10,6 +10,9 @@ import { createBox, createBoundingBoxBody, createCylinder, createSphere, createC
 import { importSTLAscii, importOBJ, importSTEP, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { exportSTEP } from '../io/step';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
+import { LIBRARY_PARTS } from '../library/parts';
+import { SAMPLE_PROJECTS } from '../library/samples';
+import { loadSampleProject } from '../library/loadSample';
 import { getTool as getCamTool, computeFeedsAndSpeeds } from '../cam';
 import type { WorkMaterial } from '../cam';
 import type { Vec3, SolidBody } from '../geometry/types';
@@ -2384,6 +2387,44 @@ export function registerBuiltinTools(): void {
       if (typeof args.name === 'string') body.name = args.name;
       useStore.getState().addDirectBodies([body]);
       return { success: true, bodyId: body.id, name: body.name };
+    },
+  });
+
+  // Beginner parts library + starter projects (TinkerCAD-style gallery).
+  registerTool({
+    name: 'insert_library_part',
+    description: `Insert a prebuilt part from the parts library at a staggered plate position. Valid part ids: ${LIBRARY_PARTS.map((p) => p.id).join(', ')}.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        part_id: { type: 'string', description: 'Library part id (see the description for the valid list)' },
+      },
+      required: ['part_id'],
+    },
+    execute: async (args) => {
+      const id = assertString(args.part_id, 'part_id');
+      const bodyId = useStore.getState().insertLibraryPart(id);
+      if (!bodyId) {
+        throw new Error(`Unknown part id "${id}". Valid ids: ${LIBRARY_PARTS.map((p) => p.id).join(', ')}`);
+      }
+      return { success: true, bodyId, partId: id };
+    },
+  });
+  registerTool({
+    name: 'load_sample_project',
+    description: `Replace the scene with a starter sample project (asks to discard unsaved changes). Valid ids: ${SAMPLE_PROJECTS.map((s) => s.id).join(', ')}.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        sample_id: { type: 'string', description: 'Sample id (see the description for the valid list)' },
+      },
+      required: ['sample_id'],
+    },
+    execute: async (args) => {
+      const id = assertString(args.sample_id, 'sample_id');
+      const ok = await loadSampleProject(id);
+      if (!ok) throw new Error(`Unknown sample id "${id}" or the user cancelled the discard prompt`);
+      return { success: true, sampleId: id };
     },
   });
 }

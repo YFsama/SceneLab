@@ -5,7 +5,7 @@ import { selectionSummary } from '../../lib/selectionSummary';
 import { MATERIALS } from '../../lib/materials';
 import { useT } from '../../lib/i18n';
 import { ProjectMenu } from './ProjectMenu';
-import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard, Box, Target } from 'lucide-react';
+import { Sun, Moon, Globe, Eye, Grid3X3, Keyboard, Box, Target, SunDim } from 'lucide-react';
 
 const themes: ThemeMode[] = ['dark', 'light', 'high-contrast'];
 
@@ -62,6 +62,7 @@ export function StatusBar() {
   const setWireframe = useStore((s) => s.setWireframe);
   const showGrid = useStore((s) => s.showGrid);
   const setShowGrid = useStore((s) => s.setShowGrid);
+  const shadows = useStore((s) => s.groundShadows);
   const showCenterOfMass = useStore((s) => s.showCenterOfMass);
   const setShowCenterOfMass = useStore((s) => s.setShowCenterOfMass);
   const viewDirection = useStore((s) => s.viewDirection);
@@ -181,6 +182,15 @@ export function StatusBar() {
           title={t('status.com')}
         >
           <Target size={12} />
+        </button>
+        <button
+          onClick={() => useStore.getState().setGroundShadows(!useStore.getState().groundShadows)}
+          className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${shadows ? 'bg-accent/20 text-accent' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
+          aria-label={t('status.shadows')}
+          aria-pressed={shadows}
+          title={t('status.shadows')}
+        >
+          <SunDim size={12} />
         </button>
         <button
           onClick={() => setWireframe(!wireframe)}

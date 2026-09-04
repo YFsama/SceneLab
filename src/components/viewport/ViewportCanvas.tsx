@@ -25,9 +25,12 @@ import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
+import { runCommand, recentCommands } from '../../lib/commands/registry';
 import { Maximize2, Check, Box } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
+import { formatDragDelta } from '../../lib/viewport/dragMove';
+import { sectionPlane } from '../../lib/render/section';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
   top: { pos: new THREE.Vector3(0, 10, 0), up: new THREE.Vector3(0, 0, -1) },
@@ -51,6 +54,60 @@ const PLANE_COLORS: Record<SketchPlaneId, number> = {
   xz: 0xa6e3a1,
   yz: 0xf38ba8,
 };
+
+/**
+ * Hit-test a click against the sketch's dimension labels (Fusion-style
+ * click-to-edit). The anchors are the exact positions the label sprites render
+ * at — line midpoints and circle/arc centres — projected to screen space; a hit
+ * within `radiusPx` wins and reports the entity + its current value.
+ */
+function pickSketchDimension(
+  sketch: import('../../lib/sketch/types').Sketch,
+  planeId: SketchPlaneId,
+  e: { clientX: number; clientY: number },
+  camera: THREE.Camera,
+  container: HTMLElement,
+  radiusPx = 14,
+): { entityId: string; kind: 'length' | 'radius'; value: number } | null {
+  const frame = SKETCH_PLANE_FRAMES[planeId] ?? SKETCH_PLANE_FRAMES.xz;
+  const rect = container.getBoundingClientRect();
+  const pt = (id: string) => {
+    const p = sketch.entities.get(id);
+    return p?.type === 'point' ? p : null;
+  };
+  // (sketch-space x, y, current value, kind, entity id) for every labelled entity.
+  const anchors: { x: number; y: number; value: number; kind: 'length' | 'radius'; id: string }[] = [];
+  for (const ent of sketch.entities.values()) {
+    if (ent.type === 'line') {
+      const a = pt(ent.p1Id); const b = pt(ent.p2Id);
+      if (a && b) {
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        if (len > 1e-6) anchors.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, value: len, kind: 'length', id: ent.id });
+      }
+    } else if (ent.type === 'circle' || ent.type === 'arc') {
+      const c = pt(ent.centerId);
+      if (c) anchors.push({ x: c.x, y: c.y, value: ent.radius, kind: 'radius', id: ent.id });
+    }
+  }
+  if (anchors.length === 0) return null;
+
+  const world = new THREE.Vector3();
+  let best: { entityId: string; kind: 'length' | 'radius'; value: number } | null = null;
+  let bestDist = radiusPx;
+  for (const a of anchors) {
+    world.set(
+      frame.u.x * a.x + frame.v.x * a.y,
+      frame.u.y * a.x + frame.v.y * a.y,
+      frame.u.z * a.x + frame.v.z * a.y,
+    );
+    world.addScaledVector(frame.normal, 0.05).project(camera);
+    const sx = rect.left + ((world.x + 1) / 2) * rect.width;
+    const sy = rect.top + ((1 - world.y) / 2) * rect.height;
+    const d = Math.hypot(sx - e.clientX, sy - e.clientY);
+    if (d <= bestDist) { bestDist = d; best = { entityId: a.id, kind: a.kind, value: a.value }; }
+  }
+  return best;
+}
 
 /**
  * Build a camera-facing text label as a THREE.Sprite (canvas texture). Used for
@@ -99,6 +156,10 @@ export function ViewportCanvas() {
   const pointGroupRef = useRef<THREE.Group | null>(null);
   const csGroupRef = useRef<THREE.Group | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
+  // Invisible ShadowMaterial plane under the grid (ground shadows toggle).
+  const shadowGroundRef = useRef<THREE.Mesh | null>(null);
+  // The key light that casts the ground shadow (toggle flips castShadow).
+  const dirLightRef = useRef<THREE.DirectionalLight | null>(null);
   const edgesGroupRef = useRef<THREE.Group | null>(null);
   const edgeHighlightRef = useRef<THREE.Group | null>(null);
   const comGroupRef = useRef<THREE.Group | null>(null);
@@ -107,11 +168,16 @@ export function ViewportCanvas() {
   const previewGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  // Live drag-move readout ("Δ 20, -10 mm") shown while a body drag is active.
+  const [dragReadout, setDragReadout] = useState<string | null>(null);
   // Box-selection state: when left-dragging on empty space, draws a screen rectangle.
   const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const selRectStartRef = useRef<{ x: number; y: number; hitBody: boolean } | null>(null);
   const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
   const visionDragRef = useRef<{ x: number; y: number } | null>(null); // AI vision crop drag origin
+  // Active body drag-move: the drag plane height, the grab point, and the
+  // snapped offset already applied (deltas are cumulative, not per-frame).
+  const bodyDragRef = useRef<{ planeY: number; start: { x: number; y: number; z: number }; applied: { x: number; y: number; z: number } } | null>(null);
   const visionSelectActive = useStore((s) => s.visionSelectActive);
   // Type-ahead sketch dimensions: keystrokes accumulated while a draw is in
   // progress ("25" or "20x30"); Enter commits the entity at that exact size.
@@ -253,6 +319,10 @@ export function ViewportCanvas() {
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setClearColor(0x1e1e2e);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Soft ground shadows — toggled per-material at runtime (light + ground),
+    // so switching never forces every material to recompile.
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // Stable id so AI vision capture (and tests) can find the WebGL canvas
     // instead of whichever canvas happens to be first in the DOM.
     renderer.domElement.id = 'viewport-canvas';
@@ -325,6 +395,27 @@ export function ViewportCanvas() {
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
     dirLight.position.set(5, 10, 7);
     scene.add(dirLight);
+    dirLightRef.current = dirLight;
+    // Soft ground shadows (Fusion/SolidWorks viewport look): the key light
+    // casts onto an invisible ShadowMaterial plane just below the grid.
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(2048, 2048);
+    dirLight.shadow.camera.left = -150;
+    dirLight.shadow.camera.right = 150;
+    dirLight.shadow.camera.top = 150;
+    dirLight.shadow.camera.bottom = -150;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 400;
+    dirLight.shadow.bias = -0.0004;
+    const shadowGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(600, 600),
+      new THREE.ShadowMaterial({ opacity: 0.28 }),
+    );
+    shadowGround.rotation.x = -Math.PI / 2;
+    shadowGround.position.y = -0.02;
+    shadowGround.receiveShadow = true;
+    scene.add(shadowGround);
+    shadowGroundRef.current = shadowGround;
     const backLight = new THREE.DirectionalLight(0xffffff, 0.25);
     backLight.position.set(-6, 4, -8);
     scene.add(backLight);
@@ -976,6 +1067,8 @@ export function ViewportCanvas() {
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = body.name;
       mesh.userData = { bodyId: body.id, triFaceIds };
+      // Bodies cast the soft ground shadow (renderer-level toggle).
+      mesh.castShadow = true;
       bodiesGroup.add(mesh);
 
       // Build edges.
@@ -1283,6 +1376,27 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [theme]);
 
+  // Section analysis (Fusion-style): a global clip plane slices the whole view
+  // live. Viewport-only — the geometry itself is never modified.
+  const sectionAnalysis = useStore((s) => s.sectionAnalysis);
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.clippingPlanes = sectionAnalysis.active ? [sectionPlane(sectionAnalysis)] : [];
+    dirtyRef.current = true;
+  }, [sectionAnalysis]);
+
+  // Ground shadows toggle: flipping light.castShadow + ground visibility is
+  // enough — body meshes always declare castShadow.
+  const groundShadows = useStore((s) => s.groundShadows);
+  useEffect(() => {
+    const light = dirLightRef.current;
+    const ground = shadowGroundRef.current;
+    if (light) light.castShadow = groundShadows;
+    if (ground) ground.visible = groundShadows;
+    dirtyRef.current = true;
+  }, [groundShadows]);
+
   // Render measure points and the segment between them.
   useEffect(() => {
     const measureGroup = measureGroupRef.current;
@@ -1419,6 +1533,23 @@ export function ViewportCanvas() {
         // Ctrl/Shift+click toggles multi-select for two-entity constraints
         // (SolidWorks: select a pair, then pick the constraint).
         if (sketchTool === 'select' && currentSketch) {
+          // Dimension labels come first (Fusion): clicking the length/radius
+          // label of a line/circle opens a numeric prompt that drives the
+          // entity to the typed value.
+          const dim = pickSketchDimension(currentSketch, sketchPlaneId, e, camera, container);
+          if (dim) {
+            useStore.getState().openNumericPrompt({
+              titleKey: dim.kind === 'length' ? 'sketch.editLength' : 'constraint.radius',
+              labelKey: dim.kind === 'length' ? 'sketch.lengthPrompt' : 'constraint.radiusPrompt',
+              initial: dim.value.toFixed(2),
+              min: 0.01,
+              onApply: (val) => {
+                if (dim.kind === 'length') useStore.getState().resizeSketchLine(dim.entityId, val);
+                else useStore.getState().resizeSketchCircle(dim.entityId, val);
+              },
+            });
+            return;
+          }
           const p = getSketchPoint(e);
           const id = p ? pickSketchEntity(currentSketch, p, Math.max(gridSize, 0.4)) : null;
           if (id && (e.ctrlKey || e.metaKey || e.shiftKey)) {
@@ -1535,11 +1666,49 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, sketchTool, currentSketch, gridSize, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds],
+    [sketchActive, sketchTool, currentSketch, gridSize, sketchPlaneId, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds],
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      // Body drag-move: project the cursor ray onto the level drag plane and
+      // apply the snapped cumulative offset (Ctrl = free, no grid snap).
+      const drag = bodyDragRef.current;
+      if (!sketchActive && drag && useStore.getState().bodyDragging) {
+        const container = containerRef.current;
+        const camera = cameraRef.current;
+        if (!container || !camera) return;
+        const rect = container.getBoundingClientRect();
+        mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        raycasterRef.current.setFromCamera(mouseRef.current, camera);
+        const o = raycasterRef.current.ray.origin;
+        const d = raycasterRef.current.ray.direction;
+        if (Math.abs(d.y) < 1e-6) return; // viewing edge-on: no plane intersection
+        const t = (drag.planeY - o.y) / d.y;
+        if (t <= 0) return;
+        const px = o.x + d.x * t;
+        const pz = o.z + d.z * t;
+        const grid = e.ctrlKey ? 0 : useStore.getState().gridSize;
+        const targetX = grid > 0 ? Math.round((px - drag.start.x) / grid) * grid : px - drag.start.x;
+        const targetZ = grid > 0 ? Math.round((pz - drag.start.z) / grid) * grid : pz - drag.start.z;
+        const stepX = targetX - drag.applied.x;
+        const stepZ = targetZ - drag.applied.z;
+        if (Math.abs(stepX) < 1e-9 && Math.abs(stepZ) < 1e-9) return;
+        const n = useStore.getState().dragSelectionBy(stepX, 0, stepZ);
+        if (n > 0) {
+          drag.applied = { x: targetX, y: 0, z: targetZ };
+          setDragReadout(formatDragDelta(drag.applied));
+        } else {
+          // The selection has no direct bodies (feature-driven) — stop the
+          // drag instead of sliding nothing.
+          bodyDragRef.current = null;
+          useStore.getState().endSelectionDrag();
+          container.style.cursor = '';
+          setDragReadout(null);
+        }
+        return;
+      }
       // Update selection rectangle while dragging (box-select and the AI
       // vision region crop share the same rubber-band).
       if (visionDragRef.current || (selRectStartRef.current && !selRectStartRef.current.hitBody)) {
@@ -1578,6 +1747,10 @@ export function ViewportCanvas() {
         // Hover-highlight the body under the cursor (preselect) + name tooltip.
         const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
         setHoveredId(id);
+        // Grab cursor over a draggable body (unless the vision crop owns the cursor).
+        if (!useStore.getState().visionSelectActive) {
+          container.style.cursor = id ? 'grab' : '';
+        }
         if (id !== lastHoverIdRef.current) {
           lastHoverIdRef.current = id;
           const b = id ? bodies.find((x) => x.id === id) : null;
@@ -1806,11 +1979,19 @@ export function ViewportCanvas() {
 
   const bodyMenuItems = useCallback(
     (bodyId: string | null): ContextMenuItem[] => {
-      // Empty-space menu: quick insert + scene actions.
+      // Empty-space menu: recent tools first (Fusion right-click), then quick
+      // insert + scene actions. Where a command-registry id exists the item
+      // runs through runCommand so it lands in the recents history too.
       if (!bodyId) {
         const kinds = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube', 'coil'] as const;
-        const setView = (d: import('../../store/app').ViewDirection) => useStore.getState().setViewDirection(d);
+        const recents = recentCommands(4);
         return [
+          ...(recents.length > 0
+            ? [{
+                label: t('menu.recent'),
+                submenu: recents.map((c) => ({ label: c.label, onClick: () => runCommand(c.id) })),
+              }]
+            : []),
           {
             label: t('dialog.insert'),
             submenu: kinds.map((k) => ({ label: t(`primitive.${k}`), onClick: () => setPendingPrimitive(k) })),
@@ -1819,20 +2000,20 @@ export function ViewportCanvas() {
           {
             label: t('menu.views'),
             submenu: [
-              { label: t('viewport.front'), onClick: () => setView('front') },
-              { label: t('viewport.back'), onClick: () => setView('back') },
-              { label: t('viewport.left'), onClick: () => setView('left') },
-              { label: t('viewport.right'), onClick: () => setView('right') },
-              { label: t('viewport.top'), onClick: () => setView('top') },
-              { label: t('viewport.bottom'), onClick: () => setView('bottom') },
-              { label: t('viewport.iso'), onClick: () => setView('iso'), separatorBefore: true },
+              { label: t('viewport.front'), onClick: () => runCommand('view.front') },
+              { label: t('viewport.back'), onClick: () => runCommand('view.back') },
+              { label: t('viewport.left'), onClick: () => runCommand('view.left') },
+              { label: t('viewport.right'), onClick: () => runCommand('view.right') },
+              { label: t('viewport.top'), onClick: () => runCommand('view.top') },
+              { label: t('viewport.bottom'), onClick: () => runCommand('view.bottom') },
+              { label: t('viewport.iso'), onClick: () => runCommand('view.iso'), separatorBefore: true },
               { label: projection === 'orthographic' ? t('viewport.perspective') : t('viewport.orthographic'), onClick: () => useStore.getState().toggleProjection(), separatorBefore: true },
             ],
           },
           ...(useStore.getState().clipboard.length > 0
-            ? [{ label: t('menu.paste'), onClick: () => useStore.getState().paste(), separatorBefore: true }]
+            ? [{ label: t('menu.paste'), onClick: () => runCommand('edit.paste'), separatorBefore: true }]
             : []),
-          { label: t('measure.tool'), onClick: () => useStore.getState().setMeasureActive(!useStore.getState().measureActive), separatorBefore: true },
+          { label: t('measure.tool'), onClick: () => runCommand('view.measure'), separatorBefore: true },
           ...(annotations.length > 0
             ? [{
                 label: `${t('measure.annotation')} (${annotations.length})`,
@@ -1847,8 +2028,8 @@ export function ViewportCanvas() {
               }]
             : []),
           { label: t('reference.standardPlanes'), onClick: () => ensureStandardPlanes(), separatorBefore: true },
-          { label: t('menu.selectAll'), onClick: () => useStore.getState().selectAll() },
-          { label: t('menu.deselectAll'), onClick: () => deselectAll() },
+          { label: t('menu.selectAll'), onClick: () => runCommand('edit.selectAll') },
+          { label: t('menu.deselectAll'), onClick: () => runCommand('edit.deselectAll') },
         ];
       }
       const body = () => bodies.find((b) => b.id === bodyId);
@@ -2003,7 +2184,7 @@ export function ViewportCanvas() {
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, deselectAll, projection, annotations],
+    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, projection, annotations],
   );
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
@@ -2113,6 +2294,18 @@ export function ViewportCanvas() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      // Esc while dragging a body undoes the whole drag (grid-snap moves are
+      // one history entry) and consumes the key so the central Esc (deselect
+      // / exit sketch) doesn't also fire.
+      if (e.key === 'Escape' && bodyDragRef.current && useStore.getState().bodyDragging) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        bodyDragRef.current = null;
+        useStore.getState().cancelSelectionDrag();
+        if (containerRef.current) containerRef.current.style.cursor = '';
+        setDragReadout(null);
+        return;
+      }
       // Type-ahead dimensions while a sketch draw is in progress: digits and
       // the WxH separator accumulate; Enter commits the entity at that exact
       // size (line length, rect WxH, circle radius) — Fusion-style entry.
@@ -2271,6 +2464,9 @@ export function ViewportCanvas() {
         return;
       }
       // In model mode, left-click on empty space starts a selection rectangle.
+      // Left-press on a BODY arms a ground-plane drag-move (SolidWorks-style
+      // grab-and-slide): modifiers stay reserved for sub-selection, measure,
+      // and the vision crop.
       if (e.button === 0 && !sketchActive) {
         const container = containerRef.current;
         const camera = cameraRef.current;
@@ -2286,14 +2482,42 @@ export function ViewportCanvas() {
         selRectCommittedRef.current = false;
         if (!hitBody) {
           setSelRect({ x1: e.clientX - rect.left, y1: e.clientY - rect.top, x2: e.clientX - rect.left, y2: e.clientY - rect.top });
+          return;
+        }
+        const dragBodyId = hit!.object.userData.bodyId as string | undefined;
+        const st0 = useStore.getState();
+        if (
+          dragBodyId && !measureActive && !st0.visionSelectActive &&
+          !e.ctrlKey && !e.altKey && !e.shiftKey && !st0.bodyDragging
+        ) {
+          // Grabbing an unselected body selects it first, so the whole
+          // selection slides together.
+          if (!st0.selectedIds.includes(dragBodyId)) st0.selectObject(dragBodyId);
+          st0.beginSelectionDrag();
+          // Drag plane through the grabbed point, level with the cursor: the
+          // body follows at its current height.
+          bodyDragRef.current = {
+            planeY: hit!.point.y,
+            start: { x: hit!.point.x, y: hit!.point.y, z: hit!.point.z },
+            applied: { x: 0, y: 0, z: 0 },
+          };
+          container.style.cursor = 'grabbing';
         }
       }
     },
-    [sketchActive, sketchTool, getSketchPoint, setDrawStart],
+    [sketchActive, sketchTool, getSketchPoint, setDrawStart, measureActive],
   );
 
   const handleMouseUp = useCallback(
     (e: React.MouseEvent) => {
+      // Finish a body drag-move. A press without motion falls through as a
+      // normal click (endSelectionDrag already dropped the empty snapshot).
+      if (bodyDragRef.current) {
+        bodyDragRef.current = null;
+        useStore.getState().endSelectionDrag();
+        if (containerRef.current) containerRef.current.style.cursor = '';
+        setDragReadout(null);
+      }
       // AI vision region: finalize the crop rectangle (normalized 0..1).
       if (visionDragRef.current && selRect) {
         const container = containerRef.current;
@@ -2469,6 +2693,16 @@ export function ViewportCanvas() {
           aria-hidden="true"
         >
           {hoverLabel.name}
+        </div>
+      )}
+      {/* Live drag-move offset readout (bottom-left, next to the type-ahead
+          dimension entry's slot) so beginners see how far a drag went. */}
+      {dragReadout && (
+        <div
+          className="absolute z-20 bottom-3 left-3 px-2 py-1 rounded bg-panel/90 backdrop-blur-sm border border-accent/60 text-xs text-text-primary pointer-events-none font-mono"
+          aria-live="polite"
+        >
+          {dragReadout}
         </div>
       )}
       {/* Type-ahead dimension entry: shows the buffered value and the tool's

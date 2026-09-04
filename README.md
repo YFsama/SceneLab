@@ -18,6 +18,37 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ## Key Features
 
+- **Recent tools in the right-click menu**: the empty-space viewport menu leads
+  with your most recently used commands (palette, views, paste, measure…),
+  one click to re-run — Fusion-style.
+- **Ground shadows**: bodies cast a soft PCF shadow onto the plane below the
+  grid (status-bar toggle), matching the Fusion/SolidWorks viewport look.
+- **Click-to-edit sketch dimensions**: the length/radius labels drawn on sketch
+  entities are interactive — click one in the select tool and type an exact
+  value; lines rescale about their midpoint and circles/arc radii update in
+  place (Fusion-style driving dimensions).
+- **Live section analysis** (X): a global clip plane slices the 3D view along
+  X/Y/Z with an offset slider (range fit to the model) and a flip toggle —
+  view-only inspection, geometry is never modified (Fusion's section
+  analysis).
+- **Paste in place** (Ctrl+Shift+V): clipboard copies land at the originals'
+  exact positions instead of the cascading paste offset (SolidWorks).
+- **Beginner parts library** (B): a searchable, categorized gallery of 25
+  parametric parts — practical-size basics, mechanical hardware (hex nut,
+  washer, bushing, flange, L/U brackets, gear, knob), M3–M8 hole cutters and
+  fun starter shapes — one click drops each on a staggered plate position
+  (TinkerCAD-style). Also reachable from the command palette and the AI
+  (`insert_library_part` / `load_sample_project` tools).
+- **Drag-to-move bodies**: grab any body with the left mouse button and slide
+  it across its height plane with live grid snapping (Ctrl = free), a Δ mm
+  readout, one undo step per drag and Esc to cancel the whole drag.
+- **Fusion-style bottom timeline**: the feature tree rendered as chips in
+  build order with parameter summaries — click selects the produced body,
+  double-click edits the feature, right-click suppresses/deletes.
+- **Welcome guide + starter projects**: an empty scene shows a first-run card
+  (quick actions, four one-click samples — phone stand, pen cup, gear set,
+  nameplate — and a persisted getting-started checklist that ticks off
+  insert → move → AI → save); reopen it from the command palette.
 - **Perspective/orthographic projection toggle** (Shift+P)
 - **Sketch constraints**: 12 solver constraint types (tangent, symmetric included). Single-entity ones
   (horizontal / vertical / fixed / radius) apply from the right-click menu or
@@ -77,7 +108,7 @@ it cannot convert — booleans transparently fall back to the voxel approximatio
 ```
 src/
 ├── components/
-│   ├── panels/       # AIPanel, BrowserTree, CAMPanel, FeatureEditor, PropertiesPanel
+│   ├── panels/       # AIPanel, BrowserTree, CAMPanel, FeatureEditor, PartsLibrary, PropertiesPanel, TimelineBar
 │   ├── toolbar/      # Toolbar, SketchToolbar
 │   ├── ui/           # ConfirmDialog, ExtrudeDialog, StatusBar, ToastHost, SkipLink, ProjectMenu
 │   └── viewport/     # ViewportCanvas, ViewCube, DrawingCanvas
@@ -88,6 +119,7 @@ src/
 │   ├── geometry/     # B-rep primitives & mesh ops (pure functions, zero DOM)
 │   ├── hooks/        # useEscapeClose, useFocusRestore, useKeyboardShortcuts
 │   ├── io/           # Import/export: studio3d, STEP (OCCT exact + faceted), STL, OBJ, DXF, 3MF, drawing SVG/PDF, screenshot
+│   ├── library/      # Parts library catalog + starter sample projects (pure builders)
 │   ├── print/        # 3D-print analysis & optimization (pure functions, zero DOM)
 │   └── sketch/       # 2D sketch engine + constraint solver (zero DOM)
 ├── store/            # Zustand store (serializable state only)

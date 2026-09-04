@@ -1,6 +1,9 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
 import { listFaces } from '../geometry/query';
 import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../projectActions';
+import { LIBRARY_PARTS } from '../library/parts';
+import { SAMPLE_PROJECTS } from '../library/samples';
+import { loadSampleProject } from '../library/loadSample';
 
 /**
  * Build a midplane on the selected body (or the first body) from its two
@@ -41,6 +44,11 @@ export interface Command {
 
 const commands = new Map<string, Command>();
 
+// Most-recently-run command ids (newest first) — powers the "Recent" section
+// of the viewport context menu, like Fusion's right-click recent tools.
+const history: string[] = [];
+const HISTORY_CAP = 12;
+
 export function registerCommand(cmd: Command): void {
   commands.set(cmd.id, cmd);
 }
@@ -53,12 +61,27 @@ export function allCommands(): Command[] {
   return [...commands.values()];
 }
 
-/** Run a command by id; returns true if it existed and ran. */
+/** Run a command by id; returns true if it existed and ran. Records it as recent. */
 export function runCommand(id: string): boolean {
   const cmd = commands.get(id);
   if (!cmd) return false;
   cmd.run();
+  recordRecent(id);
   return true;
+}
+
+/** The most recently used commands, newest first (Fusion right-click recents). */
+export function recentCommands(max = 4): Command[] {
+  return history.slice(0, max)
+    .map((id) => commands.get(id))
+    .filter((c): c is Command => c !== undefined);
+}
+
+function recordRecent(id: string): void {
+  const i = history.indexOf(id);
+  if (i !== -1) history.splice(i, 1);
+  history.unshift(id);
+  if (history.length > HISTORY_CAP) history.pop();
 }
 
 /**
@@ -86,6 +109,7 @@ export function searchCommands(query: string): Command[] {
 /** For tests: clear the registry. */
 export function clearCommands(): void {
   commands.clear();
+  history.length = 0;
 }
 
 const PRIMITIVES: PrimitiveKind[] = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube', 'coil'];
@@ -148,4 +172,20 @@ export function initBuiltinCommands(): void {
   for (const { tool, key } of sketchTools) {
     registerCommand({ id: `sketch.${tool}`, label: `Sketch tool: ${tool}`, category: 'Sketch', shortcut: key, run: () => s().setSketchTool(tool) });
   }
+  // Beginner parts library + starter projects (TinkerCAD-style quick insert).
+  registerCommand({ id: 'library.toggle', label: 'Toggle parts library', category: 'Create', shortcut: 'B', run: () => s().togglePartsLibrary() });
+  for (const part of LIBRARY_PARTS) {
+    registerCommand({ id: `library.insert.${part.id}`, label: `Insert part: ${part.id} (${part.spec})`, category: 'Create', run: () => { s().insertLibraryPart(part.id); } });
+  }
+  for (const sample of SAMPLE_PROJECTS) {
+    registerCommand({ id: `sample.load.${sample.id}`, label: `Load sample: ${sample.id}`, category: 'Create', run: () => { void loadSampleProject(sample.id); } });
+  }
+  registerCommand({ id: 'help.welcome', label: 'Show welcome guide (empty scene)', category: 'Help', run: () => s().showWelcome() });
+  // Fusion-style live section analysis + SolidWorks paste-in-place.
+  registerCommand({ id: 'view.sectionToggle', label: 'Toggle section analysis', category: 'View', shortcut: 'X', run: () => { if (s().workspace === 'model') s().setSectionAnalysis({ active: !s().sectionAnalysis.active }); } });
+  for (const ax of ['x', 'y', 'z'] as const) {
+    registerCommand({ id: `view.sectionAxis${ax.toUpperCase()}`, label: `Section analysis: ${ax.toUpperCase()} axis`, category: 'View', run: () => s().setSectionAnalysis({ active: true, axis: ax, offset: 0 }) });
+  }
+  registerCommand({ id: 'edit.pasteInPlace', label: 'Paste in place', category: 'Edit', shortcut: 'Ctrl+Shift+V', run: () => s().pasteInPlace() });
+  registerCommand({ id: 'view.toggleShadows', label: 'Toggle ground shadows', category: 'View', run: () => s().setGroundShadows(!s().groundShadows) });
 }

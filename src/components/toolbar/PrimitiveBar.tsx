@@ -1,6 +1,6 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline, Frame, Ruler } from 'lucide-react';
+import { Box, Cylinder, Circle, Cone, Donut, Triangle, Hexagon, CircleDot, Spline, Frame, Ruler, Shapes } from 'lucide-react';
 
 const primitives: { kind: PrimitiveKind; icon: typeof Box }[] = [
   { kind: 'box', icon: Box },
@@ -21,6 +21,8 @@ export function PrimitiveBar() {
   const ensureStandardPlanes = useStore((s) => s.ensureStandardPlanes);
   const measureActive = useStore((s) => s.measureActive);
   const setMeasureActive = useStore((s) => s.setMeasureActive);
+  const showPartsLibrary = useStore((s) => s.showPartsLibrary);
+  const togglePartsLibrary = useStore((s) => s.togglePartsLibrary);
 
   return (
     <div
@@ -28,6 +30,18 @@ export function PrimitiveBar() {
       role="toolbar"
       aria-label={t('primitive.add')}
     >
+      <button
+        onClick={() => togglePartsLibrary()}
+        className={`w-9 h-9 flex items-center justify-center rounded transition-colors ${
+          showPartsLibrary ? 'bg-accent/20 text-accent' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+        }`}
+        aria-label={t('library.title')}
+        aria-pressed={showPartsLibrary}
+        title={`${t('library.title')} (B)`}
+      >
+        <Shapes size={18} />
+      </button>
+      <div className="w-px self-stretch my-1 bg-panel-border" aria-hidden="true" />
       {primitives.map(({ kind, icon: Icon }) => (
         <button
           key={kind}

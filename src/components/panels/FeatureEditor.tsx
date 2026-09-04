@@ -128,7 +128,7 @@ export function FeatureEditor() {
   );
 }
 
-function FeatureEditDialog({
+export function FeatureEditDialog({
   feature,
   onClose,
 }: {

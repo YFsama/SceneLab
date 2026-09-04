@@ -70,6 +70,7 @@ export async function saveProjectToFile(): Promise<void> {
       downloadFile(json, `${s.projectName}.studio3d`);
     }
     s.setProjectDirty(false);
+    useStore.getState().markOnboardingStep('save');
     showToast(tr('toast.projectSaved'), 'success');
   } catch (e) {
     showToast(`${tr('toast.saveFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');

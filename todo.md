@@ -513,3 +513,97 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     occt-import-js's LGPL test data) imported through the real UI in
     Playwright — wasm chunk load, parse, convert, tree entry (2.1 s).
   - **Remaining open**: VLM face-picking (needs external vision API).
+- `2026-09-04`: Pass #9 — beginner-friendly deep UX round (1745 tests / 120 files green; lint/tsc/build OK).
+  - **Parts library ("补仓")**: `lib/library/parts.ts` — a 25-part parametric catalog
+    (practical-size basics, mechanical hardware: hex nut M8 / washer / bushing /
+    flange / L & U brackets / z12 gear / knob, M3–M8 hole cutters, fun starters:
+    star / pyramid / arch / steps) built from the existing geometry kernels
+    (profiles, lofts, exact-or-voxel booleans, box merges; sphere/coil seated on
+    the bed). `PartsLibrary` panel (B / PrimitiveBar Shapes button): search box
+    (English + Chinese keywords), category chips, recently-used row, one-click
+    staggered insert that selects the new body; every part also registered in the
+    command palette and as the AI tools `insert_library_part` / `load_sample_project`.
+  - **Viewport drag-move**: left-press on a body arms a ground-plane drag (grab
+    cursor), movement snaps to the grid with a live "Δ x, z mm" readout, Ctrl =
+    free placement, one undo entry per drag (a press-without-motion drops the
+    no-op snapshot), Esc cancels the whole drag; grabbing an unselected body
+    selects it first so the whole selection slides together. Feature-tree bodies
+    stay put (use a feature to move them, same rule as arrow nudge).
+  - **Fusion-style bottom timeline** (`TimelineBar`): the feature tree as chips in
+    build order with per-type icons and parameter summaries (`featureSummary`),
+    click selects the produced body, double-click opens the shared
+    FeatureEditDialog, right-click offers suppress / delete, plus a recompute
+    button. Auto-hides when the tree is empty; shown in model + sketch workspaces.
+  - **Welcome guide**: first-run card on an empty model scene — quick actions
+    (insert box / open library / start sketch / ask AI via a `scenelab:open-ai`
+    event the AIPanel now listens for), four one-click starter projects (phone
+    stand, pen cup, gear assembly, nameplate — dirty-document guarded), and a
+    persisted 4-step checklist (insert → move → ai → save) credited by the
+    actual actions (addDirectBody, drag/nudge end, AI send, explicit save).
+    Session-hide X + permanent dismiss, recoverable via the command palette.
+  - **Shortcuts**: B toggles the parts library; new ShortcutsHelp rows for the
+    library and drag-move. i18n: 70+ new keys in both locales, incl. per-part
+    names, sample names, feature-type chip labels (sketch/sweep/loft/scale/arrays
+    were missing) — enforced by tests that walk the catalogs against both maps.
+  - **Tests**: parts/samples catalogs (build → positive volume, finite bbox, bed
+    rest, bilingual names), search/filter, featureSummary, formatDragDelta,
+    store actions (staggered insert, recent parts, onboarding dedupe/persist,
+    drag undo semantics), welcome-card visibility rule.
+  - **Remaining open**: VLM face-picking (needs external vision API); timeline
+    drag-reorder; multi-sketch loft UI.
+- `2026-09-04`: Pass #9 — tactile operation round: drag-to-move + quick keys (1745 tests / 120 files; lint/tsc/build/E2E 4/4).
+  - **Drag a body to move it** (the last big missing viewport interaction): left-press
+    on a body grabs the whole selection and slides it on a level plane through the
+    grab point — grid-snapped deltas (Ctrl = free move), grabbing an unselected
+    body selects it first, hover shows a grab cursor / dragging grabbing. The whole
+    drag is ONE undo entry (lazy snapshot, per-frame silent translates); a press
+    without motion is a plain click (empty snapshot dropped); Esc mid-drag undoes
+    the entire drag and consumes the key (new top-priority branch in escapeAction).
+    Store seam: beginSelectionDrag / dragSelectionBy / endSelectionDrag /
+    cancelSelectionDrag + translateSelectionLive (silent core shared with
+    nudgeSelected).
+  - **Quick keys**: E opens the extrude dialog when a sketch exists (Fusion muscle
+    memory); Ctrl+I isolates the selection.
+  - **Discoverability**: shortcuts help gains drag/E/Ctrl+I rows; status-bar
+    selection hint now mentions drag-to-move.
+  - E2E: real drag through the UI — insert → grab → slide (grid-snapped 5,-2) →
+    single Ctrl+Z restores exactly. Suite also adapted to the parallel welcome-card
+    work (localStorage-dismissed up front; exact toolbar-button names).
+  - NOTE: working tree also contains a parallel session's uncommitted work
+    (welcome card/onboarding, parts library, timeline bar) — this pass is verified
+    green alongside it but NOT committed to avoid entangling their in-progress
+    changes.
+- `2026-09-04`: Pass #10 — learn-from-the-leaders interaction round (1756 tests green; lint/tsc/build/E2E 4/4 OK).
+  - **Click-to-edit sketch dimensions** (Fusion): the length/radius labels the sketch
+    already renders are now hit-testable in the select tool — `pickSketchDimension`
+    projects the same anchors the sprites use to screen space (14 px radius), a hit
+    opens the shared NumericPrompt, and the typed value drives the entity through
+    the new `resizeSketchLine` (rescales about the midpoint, direction kept) /
+    `resizeSketchCircle` (radius only, centre kept) store actions.
+  - **Live section analysis** (Fusion): `sectionAnalysis {active, axis, offset,
+    flip}` state + `sectionPlane()` pure math (offset always measured along +axis;
+    flip only picks the kept half — caught by a unit test) drives a global
+    `renderer.clippingPlanes` slice. New floating `SectionPanel` (bottom-right,
+    model workspace): toggle button (X shortcut), X/Y/Z axis tabs, offset slider
+    ranged to the scene's bounding box, flip button, "view-only" hint. Command
+    palette: toggle + per-axis entries.
+  - **Paste in place** (SolidWorks Ctrl+Shift+V): `pasteInPlace()` deep-copies the
+    clipboard via a zero-offset translate so copies land exactly on the originals,
+    selects them, one undo step.
+  - **Guard fix**: the central shortcut map now yields the 'x' key to the rect
+    type-ahead buffer's "WxH" separator while a draw is in progress (X would
+    otherwise toggle section analysis mid-typing).
+  - E2E: the drag-move test (concurrent WIP) now passes; suite is 4/4.
+- `2026-09-04`: Pass #11 — recents + viewport polish, v0.6.0 release (1760 tests / 122 files green; lint/tsc/build/E2E 4/4 OK).
+  - **Recent tools in the right-click menu** (Fusion): `runCommand` now records a
+    capped (12) deduplicated history; `recentCommands()` feeds a "Recent" submenu at
+    the top of the empty-space viewport menu. View/select/paste/measure menu items
+    were re-routed through `runCommand` so they land in the history too.
+  - **Ground shadows** (Fusion/SolidWorks viewport look): the key light casts a
+    PCF-soft shadow onto an invisible ShadowMaterial plane just under the grid;
+    body meshes always declare castShadow and the toggle flips light.castShadow +
+    ground visibility (no material recompiles). Status-bar button (SunDim icon),
+    `view.toggleShadows` command, persisted `scenelab.groundShadows`, default on.
+  - **v0.6.0**: version synced across package.json / Cargo.toml / tauri.conf.json /
+    Cargo.lock; user-facing CHANGELOG.md added (v0.6.0 entry summarizing passes
+    #9–#11; earlier releases referenced).

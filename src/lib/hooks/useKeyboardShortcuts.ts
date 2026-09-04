@@ -9,14 +9,16 @@ export function registerShortcut(key: string, handler: () => void): void {
 }
 
 /**
- * What the Escape key should cancel, in priority order: an in-progress sketch
- * drag first (cancel the current shape, staying in the sketch), then exit the
- * sketch, then the measure tool, then the selection — mirroring how Esc backs
- * out one step at a time in SolidWorks.
+ * What the Escape key should cancel, in priority order: an active body drag
+ * first (undoing the whole drag as one history step), then an in-progress
+ * sketch drag (cancel the current shape, staying in the sketch), then exit
+ * the sketch, then the measure tool, then the selection — mirroring how Esc
+ * backs out one step at a time in SolidWorks.
  */
 export function escapeAction(
-  s: { sketchActive: boolean; measureActive: boolean; drawing?: boolean },
-): 'cancelDraw' | 'exitSketch' | 'exitMeasure' | 'deselect' {
+  s: { bodyDragging?: boolean; sketchActive: boolean; measureActive: boolean; drawing?: boolean },
+): 'cancelDrag' | 'cancelDraw' | 'exitSketch' | 'exitMeasure' | 'deselect' {
+  if (s.bodyDragging) return 'cancelDrag';
   if (s.sketchActive && s.drawing) return 'cancelDraw';
   if (s.sketchActive) return 'exitSketch';
   if (s.measureActive) return 'exitMeasure';
@@ -33,10 +35,13 @@ export function useKeyboardShortcuts() {
       }
       // Type-ahead sketch dimensions own the plain number keys while a draw is
       // in progress — they build the exact-size buffer, not view switching.
+      // The 'x' in a rect's "WxH" entry belongs to the buffer too (it would
+      // otherwise toggle section analysis mid-typing).
       const st = useStore.getState();
       if (
         st.sketchActive && st.drawStart &&
-        /^[0-9.]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey
+        (/^[0-9.]$/.test(e.key) || (e.key.toLowerCase() === 'x' && st.sketchTool === 'rect')) &&
+        !e.ctrlKey && !e.metaKey && !e.altKey
       ) {
         return;
       }
@@ -99,6 +104,14 @@ export function initShortcuts(): void {
   // Panel toggles
   registerShortcut('ctrl+b', () => store.toggleBrowserTree());
   registerShortcut('ctrl+p', () => store.toggleProperties());
+  // B opens the beginner parts library (TinkerCAD-style quick-insert gallery).
+  registerShortcut('b', () => useStore.getState().togglePartsLibrary());
+  // X toggles live section analysis (Fusion-style inspection clip) — a model-view
+  // tool; the panel only exists there, so don't arm it from other workspaces.
+  registerShortcut('x', () => {
+    const s = useStore.getState();
+    if (s.workspace === 'model') s.setSectionAnalysis({ active: !s.sectionAnalysis.active });
+  });
 
   // Actions. While measuring, Delete/Backspace drops the last picked point
   // (re-pick a mis-click) instead of deleting the selected bodies.
@@ -114,12 +127,21 @@ export function initShortcuts(): void {
   registerShortcut('ctrl+shift+a', () => store.deselectAll());
   registerShortcut('ctrl+shift+i', () => store.invertSelection());
   registerShortcut('f2', () => store.beginRenameSelected());
+  // Fusion-style: E extrudes the active sketch; Ctrl+I isolates the selection
+  // (hides everything else).
+  registerShortcut('e', () => {
+    const s = useStore.getState();
+    if (s.currentSketch) s.setShowExtrudeDialog(true);
+  });
+  registerShortcut('ctrl+i', () => useStore.getState().isolateSelected());
   // Tab hides the current selection; Shift+Tab brings every hidden body back.
   registerShortcut('tab', () => store.hideSelected());
   registerShortcut('shift+tab', () => store.showAllBodies());
   registerShortcut('ctrl+x', () => store.cutSelected());
   registerShortcut('ctrl+c', () => store.copySelected());
   registerShortcut('ctrl+v', () => store.paste());
+  // SolidWorks-style paste-in-place: copies land at the originals' positions.
+  registerShortcut('ctrl+shift+v', () => useStore.getState().pasteInPlace());
   // While sketching, Ctrl+Z/Y act on the sketch's own history; otherwise on bodies.
   registerShortcut('ctrl+z', () => { const s = useStore.getState(); if (s.sketchActive) s.sketchUndo(); else s.undo(); });
   registerShortcut('ctrl+shift+z', () => { const s = useStore.getState(); if (s.sketchActive) s.sketchRedo(); else s.redo(); });
@@ -135,10 +157,12 @@ export function initShortcuts(): void {
   registerShortcut('shift+?', () => store.setShowShortcuts(true));
   registerShortcut('shift+/', () => store.setShowShortcuts(true));
   registerShortcut('escape', () => {
-    // Esc backs out one step at a time: cancel an in-progress sketch shape,
-    // then exit the sketch, then leave measure, then clear the selection.
+    // Esc backs out one step at a time: undo a body drag, cancel an
+    // in-progress sketch shape, then exit the sketch, then leave measure,
+    // then clear the selection.
     const s = useStore.getState();
-    switch (escapeAction({ sketchActive: s.sketchActive, measureActive: s.measureActive, drawing: s.drawStart !== null })) {
+    switch (escapeAction({ bodyDragging: s.bodyDragging, sketchActive: s.sketchActive, measureActive: s.measureActive, drawing: s.drawStart !== null })) {
+      case 'cancelDrag': s.cancelSelectionDrag(); break;
       case 'cancelDraw': s.setDrawStart(null); break;
       case 'exitSketch': s.exitSketch(); break;
       case 'exitMeasure': s.setMeasureActive(false); break;
