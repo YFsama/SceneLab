@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, offsetEntity, type DetectedRectangle } from '../lib/sketch/engine';
+import { offsetSketchProfile } from '../lib/sketch/offset';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -129,6 +130,14 @@ interface AppState {
   resizeSketchCircle: (id: string, radius: number) => boolean;
   /** Offset (equidistant copy) a line/circle/arc by a signed distance; returns the new entity id, or null. */
   offsetSketchEntity: (id: string, distance: number) => string | null;
+  /**
+   * Fusion-style sketch Offset of the current selection (first multi-select id
+   * or the primary one): a mitered copy of a closed line loop, or a grown /
+   * shrunk circle, arc or rectangle. Positive = outward/larger. Selects the new
+   * entities; false (nothing changed) when there is no offsetable selection or
+   * the copy would collapse.
+   */
+  offsetSelectedSketch: (distance: number) => boolean;
   /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
   toggleSketchConstruction: (id: string) => void;
   /** 2D corner fillet between two lines: trim to the tangent points + arc. */
@@ -888,6 +897,29 @@ export const useStore = create<AppState>((set, get) => {
     }
     set({ currentSketch: { ...sketch }, selectedSketchId: newId, projectDirty: true });
     return newId;
+  },
+  offsetSelectedSketch: (distance) => {
+    const s = get();
+    const sketch = s.currentSketch;
+    if (!sketch) return false;
+    // Same target resolution as the other sketch actions: first multi-select
+    // id, falling back to the primary selection.
+    const id = s.selectedSketchIds[0] ?? s.selectedSketchId;
+    if (!id) return false;
+    pushSketchUndo();
+    const newIds = offsetSketchProfile(sketch, id, distance);
+    if (newIds === null) {
+      // Nothing was created — drop the now-pointless undo snapshot.
+      set((st) => ({ sketchUndoStack: st.sketchUndoStack.slice(0, -1) }));
+      return false;
+    }
+    set({
+      currentSketch: { ...sketch },
+      selectedSketchId: newIds[0] ?? null,
+      selectedSketchIds: newIds,
+      projectDirty: true,
+    });
+    return true;
   },
   toggleSketchConstruction: (id) => {
     const sketch = get().currentSketch;

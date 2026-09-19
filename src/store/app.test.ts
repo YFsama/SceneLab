@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, computeBoundingBox } from '../lib/geometry';
-import { createSketch, addRectangle, addLine, closestPointPair } from '../lib/sketch/engine';
+import { createSketch, addRectangle, addLine, addCircle, closestPointPair } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
 
 describe('uniqueBodyName', () => {
@@ -2166,5 +2166,85 @@ describe('sketch multi-selection', () => {
     useStore.getState().toggleSketchSelection(b.id);
     useStore.getState().removeSketchEntity(a.id);
     expect(useStore.getState().selectedSketchIds).toEqual([b.id]);
+  });
+});
+
+describe('offsetSelectedSketch (Fusion sketch Offset)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      sketchUndoStack: [],
+      sketchRedoStack: [],
+      numericPrompt: null,
+    });
+  });
+
+  it('offsets a selected rectangle loop, selects the copy, and sketch-undo restores the count', () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 6); // 4 lines + 4 shared points
+    useStore.getState().setCurrentSketch(sketch);
+    const firstLine = [...useStore.getState().currentSketch!.entities.values()].find((e) => e.type === 'line')!;
+    useStore.getState().setSelectedSketchId(firstLine.id);
+    const before = useStore.getState().currentSketch!.entities.size; // 8
+
+    expect(useStore.getState().offsetSelectedSketch(1)).toBe(true);
+    const after = useStore.getState().currentSketch!;
+    expect(after.entities.size).toBe(before + 8); // 4 new lines + 4 shared junction points
+    const sel = useStore.getState().selectedSketchIds;
+    expect(sel).toHaveLength(4); // the new loop is selected
+    for (const id of sel) expect(after.entities.get(id)?.type).toBe('line');
+
+    expect(useStore.getState().sketchUndo()).toBe(true);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(before);
+  });
+
+  it('offsets a selected circle about its centre', () => {
+    const sketch = createSketch('xy');
+    const c = addCircle(sketch, 2, -3, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(c.id);
+    expect(useStore.getState().offsetSelectedSketch(2)).toBe(true);
+    const circles = [...useStore.getState().currentSketch!.entities.values()].filter(
+      (e): e is ReturnType<typeof addCircle> => e.type === 'circle',
+    );
+    expect(circles.map((x) => x.radius).sort((a, b) => a - b)).toEqual([5, 7]);
+    useStore.getState().sketchUndo();
+    expect([...useStore.getState().currentSketch!.entities.values()].filter((e) => e.type === 'circle')).toHaveLength(1);
+  });
+
+  it('targets the first multi-selected entity when present', () => {
+    const sketch = createSketch('xy');
+    const c = addCircle(sketch, 0, 0, 5);
+    addCircle(sketch, 20, 0, 3);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.setState({ selectedSketchIds: [c.id], selectedSketchId: null });
+    expect(useStore.getState().offsetSelectedSketch(1)).toBe(true);
+    const circles = [...useStore.getState().currentSketch!.entities.values()].filter(
+      (e): e is ReturnType<typeof addCircle> => e.type === 'circle',
+    );
+    expect(circles.map((x) => x.radius).sort((a, b) => a - b)).toEqual([3, 5, 6]);
+  });
+
+  it('returns false with no mutation when nothing is selected', () => {
+    const sketch = createSketch('xy');
+    addCircle(sketch, 0, 0, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    const before = useStore.getState().currentSketch!.entities.size;
+    expect(useStore.getState().offsetSelectedSketch(2)).toBe(false);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(before);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0); // no orphan undo snapshot
+  });
+
+  it('returns false and keeps the sketch unchanged on a collapsing offset', () => {
+    const sketch = createSketch('xy');
+    const c = addCircle(sketch, 0, 0, 1);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(c.id);
+    const before = useStore.getState().currentSketch!.entities.size;
+    expect(useStore.getState().offsetSelectedSketch(-2)).toBe(false); // radius would be -1
+    expect(useStore.getState().currentSketch!.entities.size).toBe(before);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
   });
 });

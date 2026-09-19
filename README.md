@@ -26,6 +26,10 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - **Numeric expression fields** (Fusion/SolidWorks): every dimension dialog
   evaluates arithmetic — type `20/2`, `(30-6)/3` or `2*pi*5` and the computed
   value commits (with a live `= result` preview; invalid input is rejected).
+- **Sketch offset** (Fusion/SolidWorks): offset a selected line, circle or arc
+  by a signed distance from the toolbar or right-click menu — circles/arcs
+  scale about their centre, and a line offsets its whole closed loop with
+  mitered corners (hand-drawn profiles included; collapses are rejected).
 - **Fuzzy command palette**: word-boundary-weighted substring + subsequence
   matching (`zmsl` → Zoom to selection) with multi-token AND queries.
 - **Browser tree filter**: live name search over bodies, reference geometry
@@ -261,7 +265,9 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 - Viewport renders on demand (dirty-flag loop) — idle frames cost nothing
 - No `preserveDrawingBuffer`: captures (screenshots, AI vision, PNG export)
   force a fresh render right before reading pixels via a capture service
-- BVH-accelerated raycasting for body/face picking (three-mesh-bvh)
+- BVH-accelerated raycasting for body/face picking (three-mesh-bvh); meshes
+  above 15k triangles build their picking BVH in a **Web Worker**
+  (serialize/deserialize round-trip) so large imports don't freeze the UI
 - Incremental mesh rebuild: only changed bodies re-upload to the GPU
 - **Preview-transform drags**: sliding a body never rebuilds geometry — the
   offset is applied as a mesh transform and baked as one translate on release
@@ -278,7 +284,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (1814+ tests, 123 files) plus Rust unit tests
+- Every `lib/*` module has vitest tests (1835+ tests, 125 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops); exact booleans

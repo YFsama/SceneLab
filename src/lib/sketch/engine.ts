@@ -49,6 +49,14 @@ export function addLine(sketch: Sketch, x1: number, y1: number, x2: number, y2: 
   return line;
 }
 
+/** A line connecting two EXISTING points (shared junction ids, like the
+ * rectangle tool's frame) — used by loop-generating ops such as offset. */
+export function addLineBetween(sketch: Sketch, p1Id: string, p2Id: string): SketchLine {
+  const line: SketchLine = { id: genId('line'), type: 'line', p1Id, p2Id };
+  sketch.entities.set(line.id, line);
+  return line;
+}
+
 /** Vertices of a regular `sides`-gon centred at (cx,cy) with circumradius `r`,
  * first vertex at the top. Pure — used for drawing and the polygon preview. */
 export function polygonPoints(cx: number, cy: number, r: number, sides: number): { x: number; y: number }[] {

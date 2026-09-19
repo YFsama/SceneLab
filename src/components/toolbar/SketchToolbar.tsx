@@ -11,18 +11,18 @@ const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[
   { tool: 'polygon', icon: Hexagon, shortcut: 'P' },
 ];
 
-/** Opens the offset-distance prompt for the selected line/circle/arc. */
+/** Opens the offset-distance prompt for the selected entity (Fusion's Offset:
+ * line loops offset mitered, circles/arcs/rectangles grow or shrink). */
 function promptOffset() {
   const st = useStore.getState();
-  const id = st.selectedSketchId;
-  const ent = id ? st.currentSketch?.entities.get(id) : undefined;
-  if (!ent || (ent.type !== 'line' && ent.type !== 'circle' && ent.type !== 'arc')) return;
+  const id = st.selectedSketchIds[0] ?? st.selectedSketchId;
+  if (!id || !st.currentSketch?.entities.has(id)) return;
   st.openNumericPrompt({
     titleKey: 'sketch.offset',
     labelKey: 'sketch.offsetPrompt',
-    initial: 5,
+    initial: 2,
     min: -1e6,
-    onApply: (val) => { useStore.getState().offsetSketchEntity(id!, val); },
+    onApply: (val) => { useStore.getState().offsetSelectedSketch(val); },
   });
 }
 
@@ -36,10 +36,14 @@ export function SketchToolbar() {
   const setShowExtrudeDialog = useStore((s) => s.setShowExtrudeDialog);
   const setShowRevolveDialog = useStore((s) => s.setShowRevolveDialog);
   const selectedSketchId = useStore((s) => s.selectedSketchId);
+  const selectedSketchIds = useStore((s) => s.selectedSketchIds);
   const currentSketch = useStore((s) => s.currentSketch);
   const offsettableSelected = (() => {
-    const e = selectedSketchId ? currentSketch?.entities.get(selectedSketchId) : undefined;
-    return !!e && (e.type === 'line' || e.type === 'circle' || e.type === 'arc');
+    const id = selectedSketchIds[0] ?? selectedSketchId;
+    const e = id ? currentSketch?.entities.get(id) : undefined;
+    // A line only offsets as part of a closed loop — the store action validates
+    // that; here we just need an entity of an offsetable kind selected.
+    return !!e && (e.type === 'line' || e.type === 'circle' || e.type === 'arc' || e.type === 'rectangle');
   })();
 
   const exitSketch = () => {
@@ -94,15 +98,15 @@ export function SketchToolbar() {
         <RotateCw size={18} />
       </button>
 
-      {/* Offset (equidistant copy) of the selected line/circle/arc —
-          SolidWorks' offset entity. Disabled without an offsetable selection. */}
+      {/* Offset (equidistant copy) of the selected entity — Fusion's sketch
+          Offset. Disabled without an offsetable selection (hint in the title). */}
       <button
         onClick={promptOffset}
         disabled={!offsettableSelected}
         className="w-9 h-9 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         aria-label={t('sketch.offset')}
         aria-disabled={!offsettableSelected}
-        title={t('sketch.offset')}
+        title={!offsettableSelected ? `${t('sketch.offset')} — ${t('sketch.offsetHint')}` : t('sketch.offset')}
       >
         <MoveDiagonal size={18} />
       </button>

@@ -705,3 +705,32 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     NumericPrompt with a signed distance (negative allowed for inward offsets);
     the prompt's label says so in both locales (sketch.offset / offsetPrompt).
   - No hotkey on purpose — candidates were noted for a future keymap pass.
+- `2026-09-19`: Pass #14b — v0.8.1 hotfix release. The v0.8.0 tag shipped a
+  mid-edit bvhWorkerClient (called undeclared `computeBoundsTree()`), so CI
+  typecheck and all four Release builds failed with no usable artifacts; the
+  concurrent follow-up fix (construct `MeshBVH` directly) plus the sketch
+  offset entity landed on main. v0.8.1 packages both with a CHANGELOG entry
+  noting that 0.8.0 has no working artifacts. Lesson recorded: verify with a
+  clean `tsc -b` (stale tsbuildinfo masks tag-content type errors).
+- `2026-09-19`: Pass #14c — loop-offset completion + QA hardening, v0.9.0 (1835 tests / 125 files green; lint/tsc/build/E2E 4/4/cargo OK).
+  - **The toolbar Offset button could never work on hand-drawn loops**: the
+    loop walk only accepted SHARED point ids, but the freehand line tool
+    creates fresh points per segment. Junctions now match by POSITION
+    (6-decimal coordinate key, same convention as features/tree.ts's
+    chainLineLoop), so hand-drawn closed profiles offset like Fusion's.
+  - **Real bug fixes found by the new tests**: (1) CW-wound loops had a
+    double sign flip — miterOffsetVertex's normals are already winding-aware,
+    the extra `d = -distance` flip sent CW offsets INWARD; (2) the shoelace
+    orientation check misses self-intersecting inward offsets (acute-corner
+    spikes cross over without flipping net area) — replaced with the standard
+    per-vertex side-of-polygon validity test (outward vertices must be outside
+    the original, inward ones inside); (3) the offset copy's junctions now
+    SHARE point ids (new `engine.addLineBetween`) instead of 2n fresh points,
+    matching the rectangle tool's topology so copies re-chain cleanly.
+  - **Coverage**: 11-test suite for offsetSketchProfile/miterOffsetVertex
+    (circle out/in + collapse refusal, arc sweep kept, rectangle frame
+    12×8 from 10×6, CCW triangle outward with miter-extension lengths +
+    perpendicular-distance invariant + <3° parallelism band, CW outward,
+    inradius-violation rejection with zero mutation, open-chain/NaN/unknown-id
+    rejection, miter spike clamp ≤ d/0.35).
+  - **v0.9.0**: version synced across the four manifest files; CHANGELOG entry.
