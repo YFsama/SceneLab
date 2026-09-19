@@ -42,6 +42,13 @@ export const SYSTEM_PROMPT = [
   'printability, and compute_mass_properties / pendulum_period for simulation.',
   'Prefer calling a tool over assuming a result, and after acting give a short,',
   'concrete confirmation.',
+  'When a viewport image is attached and the user refers to something visible in',
+  'it ("shell this wall", "fillet this side"), estimate the point over that',
+  'feature as x,y normalized 0..1 of the image (origin top-left, y down), call',
+  'select_face_at_viewport, then pass the returned faceId to shell/fillet in the',
+  'same turn — face ids regenerate after every edit, so always pick before the',
+  'modifying tool, and pick again after any set_view or geometry change. Use',
+  'additive=true when several faces are wanted, and clear_face_selection when done.',
 ].join(' ');
 
 function toolDefinitions(): AnthropicToolDef[] {

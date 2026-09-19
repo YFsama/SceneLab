@@ -292,7 +292,7 @@ describe('viewport drag-move (bodyDragging lifecycle)', () => {
     return b.vertices.reduce((m, v) => Math.min(m, v.x), Infinity);
   };
 
-  it('a drag moves the selection with one undo entry and keeps ids', () => {
+  it('a drag previews via dragOffset, bakes on release with one undo entry, keeps ids', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);
     useStore.getState().selectObject(box.id);
@@ -300,15 +300,25 @@ describe('viewport drag-move (bodyDragging lifecycle)', () => {
 
     useStore.getState().beginSelectionDrag();
     expect(useStore.getState().bodyDragging).toBe(true);
-    // Several silent deltas — like mousemove frames — move cumulatively.
+    const bodyBefore = useStore.getState().directBodies[0]!;
+    // Several silent deltas — like mousemove frames — accumulate into the
+    // preview offset; geometry itself is untouched until release (the viewport
+    // shows the motion as a mesh transform, no per-frame rebuilds).
     expect(useStore.getState().dragSelectionBy(2, 0, 0)).toBe(1);
     expect(useStore.getState().dragSelectionBy(3, 0, 0)).toBe(1);
+    // Same body object → the viewport mesh cache hits; only the release bake
+    // (one translate) creates new geometry.
+    expect(useStore.getState().directBodies[0]).toBe(bodyBefore);
     expect(useStore.getState().bodies[0]!.id).toBe(box.id);
-    expect(xOf()).toBeCloseTo(-5 + 5, 3); // box spans -5..5 → moved +5
-    // Exactly one history entry for the whole drag.
-    expect(useStore.getState().undoStack.length).toBe(undoBefore + 1);
+    expect(useStore.getState().dragOffset).toEqual({ x: 5, y: 0, z: 0 });
+    expect(xOf()).toBeCloseTo(-5, 3); // still at rest — nothing baked yet
+    expect(useStore.getState().undoStack.length).toBe(undoBefore); // no mid-drag entries
     useStore.getState().endSelectionDrag();
     expect(useStore.getState().bodyDragging).toBe(false);
+    expect(useStore.getState().dragOffset).toBeNull();
+    expect(xOf()).toBeCloseTo(0, 3); // box spans -5..5 → moved +5, baked once
+    // Exactly one history entry for the whole drag.
+    expect(useStore.getState().undoStack.length).toBe(undoBefore + 1);
 
     // One undo restores the pre-drag position.
     useStore.getState().undo();
@@ -335,9 +345,12 @@ describe('viewport drag-move (bodyDragging lifecycle)', () => {
     useStore.getState().selectObject(box.id);
     useStore.getState().beginSelectionDrag();
     useStore.getState().dragSelectionBy(7, 0, 0);
-    expect(xOf()).toBeCloseTo(2, 3);
+    // Preview only — vertices never moved, so cancel just drops the offset.
+    expect(useStore.getState().dragOffset).toEqual({ x: 7, y: 0, z: 0 });
+    expect(xOf()).toBeCloseTo(-5, 3);
     useStore.getState().cancelSelectionDrag();
     expect(useStore.getState().bodyDragging).toBe(false);
+    expect(useStore.getState().dragOffset).toBeNull();
     expect(xOf()).toBeCloseTo(-5, 3);
   });
 

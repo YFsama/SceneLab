@@ -607,3 +607,89 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
   - **v0.6.0**: version synced across package.json / Cargo.toml / tauri.conf.json /
     Cargo.lock; user-facing CHANGELOG.md added (v0.6.0 entry summarizing passes
     #9–#11; earlier releases referenced).
+- `2026-09-14`: Pass #12 — market-parity interaction + real perf fixes, v0.7.0 (1769 tests / 122 files green; lint/tsc/build/E2E OK).
+  - **Timeline drag-reorder** (the last signature Fusion interaction still
+    missing): `FeatureTree.moveFeature` + pure `canReorderFeatures` enforce
+    dependency order — a feature must stay after its parents and before its
+    dependents; store `moveFeature` recomputes and is one undo entry (illegal /
+    same-place drops push nothing, like a click-without-drag). TimelineBar chips
+    are HTML5-draggable with a blue insertion indicator, not-allowed cursor at
+    illegal targets (dragover simply isn't prevented → native blocked cursor,
+    no drop event), a "can't reorder past a dependency" toast for denied drops,
+    and Alt+←/→ keyboard reorder for accessibility (a11y + Fusion parity).
+    Memoized recompute makes a reorder free: same feature objects + same parent
+    results → everything reuses cached bodies.
+  - **Preview-transform drag** (real perf fix): dragging a body used to remap
+    every vertex/face/edge and rebuild mesh + normals + **BVH** on every
+    pointermove (guaranteed jank on real parts). Now `dragSelectionBy`
+    accumulates a `dragOffset` preview applied as `mesh.position` /
+    edges transform — zero geometry rebuilds mid-drag, same body object
+    references (mesh cache hits, asserted by test). `endSelectionDrag` bakes
+    the offset as ONE undoable translate (fresh meshes at final position, no
+    snap-back frame); Esc just drops the preview since geometry was never
+    touched. Feature-tree bodies don't preview (they don't move — by design).
+  - **On-demand shadow map**: `renderer.shadowMap.autoUpdate = false`; the
+    2048² depth map re-renders only when shadow-casting geometry changes
+    (mesh-rebuild effect tracks a dirty flag), during drag previews, or when
+    shadows are re-enabled — not on every rendered frame.
+  - **Solver perf guard**: benchmark test — a 25-line chain with 50+
+    constraints (horizontal + distance + coincident) must solve < 100 ms
+    (the roadmap metric finally has a test watching it).
+  - **Nudge modifier steps** (Fusion-style): Shift = 10 mm coarse, new
+    Alt = 0.1 mm fine, default 1 mm — both for 3D selection nudge and in-sketch
+    entity nudge (× gridSize); ShortcutsHelp + i18n updated (en/zh).
+  - **v0.7.0**: version synced across package.json / Cargo.toml / tauri.conf.json /
+    Cargo.lock; CHANGELOG entry added.
+  - **E2E env fix**: Vite 8 on this Windows host binds IPv6 `::1` only, so the
+    Playwright readiness probe on IPv4 never turned green (webServer timeout).
+    `--host 127.0.0.1` + `baseURL`/`url` pinned to 127.0.0.1 in
+    playwright.config.ts — the drag E2E then passed against the new
+    preview-transform flow.
+  - **Remaining open**: VLM face-picking (needs external vision API semantics);
+    multi-sketch loft UI is DONE (FeatureEditor ctrl+click → Create Loft —
+    the earlier "remaining" note was stale).
+- `2026-09-19`: Pass #13 — agent-team round: VLM face-picking closed + perf sweep (1814 tests / 123 files green; lint/tsc/build/E2E 4/4/cargo OK; v0.8.0).
+  - **Method**: three parallel read-only audit agents (UX-parity gaps, render
+    hotspots, VLM feasibility), then two implementation agents (palette/tree,
+    expressions) + coordinator (viewport/AI) with strict file ownership to
+    avoid merge conflicts.
+  - **VLM face-picking CLOSED** (the last standing todo item): the model now
+    estimates a point over the feature it means (x,y normalized to the image
+    it was shown) and calls `select_face_at_viewport`, which dispatches a
+    synchronous `scenelab:pick-face` event; the viewport raycasts with the
+    live camera (projection-aware), maps `triFaceIds[faceIndex]` exactly like
+    Ctrl+click, selects the body FIRST then the faces (scopedFaceIds needs
+    the body selected), and resolves the tool's Promise in-place (2 s timeout
+    when no viewport is mounted). Crop-region captures are mapped back to
+    full-viewport coordinates inside the tool. Companion tools: `select_face`
+    (by id), `clear_face_selection`, `select_body`; system prompt teaches
+    "pick before modify" (face ids regenerate after edits) and retry-once.
+  - **Numeric expression fields** (Fusion/SolidWorks parity): new
+    `lib/dimension.ts` recursive-descent parser (`+ - * /`, parens, unary,
+    `pi`, exponent notation; NO eval/Function; null on invalid/non-finite) —
+    NumericPrompt / ExtrudeDialog / feature NumericEditDialog keep raw text
+    while editing, evaluate on commit, live `= result` preview, red-border +
+    disabled-confirm on invalid input.
+  - **Fuzzy command palette**: `searchCommands` upgraded from plain substring
+    to word-boundary-weighted substring + subsequence scoring, multi-token
+    AND, label>id>category weights (`zmsl` → Zoom to selection, `vtwf` →
+    view.toggleWireframe). `view.fitAll`/`view.fitSelection` registered
+    (dispatch `scenelab:fit-view`, handled by the viewport).
+  - **Browser tree filter** (Fusion browser search): live name filter over
+    bodies/reference geometry/feature history with `n/total` count, X clear,
+    Esc clears; pure helper in `lib/treeFilter.ts`.
+  - **Perf sweep (audit-driven)**: dropped `preserveDrawingBuffer` via a
+    fresh-render capture service (`lib/render/capture.ts`; AIPanel + PNG
+    export + screenshot helpers render immediately before reading pixels);
+    `viewport-camera-update` now fires only when the camera actually moved;
+    sketch rubber-band preview is allocation-free (size-cached marker
+    materials + LiveTextSprite redrawing one canvas in place — no per-
+    mousemove canvas/CanvasTexture/GPU uploads); ResizeObserver early-outs
+    when size/DPR are unchanged.
+  - **Deferred (documented, not faked)**: async BVH build for very large
+    imports — three-mesh-bvh 0.9 ships no worker generator; needs a custom
+    MeshBVH.serialize/deserialize worker. Sketch offset tool, Alt+drag
+    duplicate (Alt is edge-pick), 'M'-for-measure (M is workspace switch)
+    all conflict with existing bindings — candidates for a future keymap pass.
+  - **v0.8.0**: version synced (package.json / Cargo.toml / tauri.conf.json /
+    Cargo.lock).

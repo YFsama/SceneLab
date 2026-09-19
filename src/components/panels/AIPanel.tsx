@@ -3,6 +3,7 @@ import { useT } from '../../lib/i18n';
 import { useStore } from '../../store/app';
 import { sendMessageWithTools, executeToolCall, registerBuiltinTools } from '../../lib/ai';
 import type { AIMessage } from '../../lib/ai';
+import { captureFreshCanvas } from '../../lib/render/capture';
 import { showToast } from '../../lib/toast';
 import { Bot, Send, Settings, X, Loader2, Eye, Crop } from 'lucide-react';
 
@@ -77,14 +78,13 @@ export function AIPanel() {
     setLoading(true);
 
     try {
-      // Capture viewport screenshot if vision is enabled. Target the tagged
-      // WebGL canvas, not whichever canvas is first in the DOM. When a region
-      // was circled in the viewport, crop to it — "look at THIS face".
+      // Capture viewport screenshot if vision is enabled. captureFreshCanvas
+      // forces a fresh render first, so pixels are readable without
+      // preserveDrawingBuffer. When a region was circled in the viewport, crop
+      // to it — "look at THIS face".
       let screenshot: string | undefined;
       if (visionEnabled) {
-        const canvas =
-          document.querySelector<HTMLCanvasElement>('#viewport-canvas') ??
-          document.querySelector('canvas');
+        const canvas = captureFreshCanvas() ?? document.querySelector('canvas');
         if (canvas) {
           const region = useStore.getState().visionRegion;
           if (region && region.w > 0.01 && region.h > 0.01) {

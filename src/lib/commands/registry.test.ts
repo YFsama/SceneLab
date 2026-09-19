@@ -46,6 +46,93 @@ describe('command registry', () => {
     expect(runCommand('reference.standardPlanes')).toBe(true);
     expect(useStore.getState().planes).toHaveLength(3);
   });
+
+  it('registers the viewport fit commands for palette discovery', () => {
+    initBuiltinCommands();
+    expect(getCommand('view.fitAll')?.label).toBe('Zoom to fit (F)');
+    expect(getCommand('view.fitAll')?.shortcut).toBe('F');
+    expect(getCommand('view.fitSelection')?.label).toBe('Zoom to selection (Shift+F)');
+    expect(getCommand('view.fitSelection')?.shortcut).toBe('Shift+F');
+    expect(allCommands().map((c) => c.id)).toContain('view.fitAll');
+    expect(allCommands().map((c) => c.id)).toContain('view.fitSelection');
+  });
+
+  it('fit commands dispatch scenelab:fit-view events with a selection flag', () => {
+    initBuiltinCommands();
+    const events: CustomEvent[] = [];
+    const listener = (e: Event) => { events.push(e as CustomEvent); };
+    window.addEventListener('scenelab:fit-view', listener);
+    try {
+      expect(runCommand('view.fitAll')).toBe(true);
+      expect(runCommand('view.fitSelection')).toBe(true);
+    } finally {
+      window.removeEventListener('scenelab:fit-view', listener);
+    }
+    expect(events).toHaveLength(2);
+    expect(events[0]).toBeInstanceOf(CustomEvent);
+    expect(events[0]!.detail).toEqual({ selection: false });
+    expect(events[1]!.detail).toEqual({ selection: true });
+  });
+});
+
+describe('fuzzy command search', () => {
+  beforeEach(() => clearCommands());
+
+  it('ranks exact label substring hits by position, word-start first', () => {
+    registerCommand({ id: 'test.selectAll', label: 'Select all', run: () => {} });
+    registerCommand({ id: 'test.invertSelection', label: 'Invert selection', run: () => {} });
+    registerCommand({ id: 'test.deleteSelected', label: 'Delete selected', run: () => {} });
+    const hits = searchCommands('sel');
+    // "Select all" starts with the query at a word boundary; the other two hit
+    // mid-phrase ("selected"/"selection" also start words, but later in the label).
+    expect(hits[0]?.id).toBe('test.selectAll');
+    expect(hits.map((c) => c.id).sort()).toEqual(['test.deleteSelected', 'test.invertSelection', 'test.selectAll']);
+  });
+
+  it('matches id and category as lower-weighted fallbacks', () => {
+    registerCommand({ id: 'y.bar', label: 'Reference marker', category: 'View', run: () => {} });
+    registerCommand({ id: 'x.foo', label: 'Widget', category: 'Reference', run: () => {} });
+    const hits = searchCommands('reference');
+    expect(hits).toHaveLength(2);
+    expect(hits[0]?.id).toBe('y.bar'); // label hit outranks the category-only hit
+    expect(hits[1]?.id).toBe('x.foo');
+  });
+
+  it('falls back to fuzzy id matching (initialism over the id)', () => {
+    initBuiltinCommands();
+    // "vtwf" is an initialism of the id view.toggleWireframe; its label
+    // ("Toggle wireframe") has no 'v', so only the id can match.
+    expect(searchCommands('vtwf').map((c) => c.id)).toContain('view.toggleWireframe');
+  });
+
+  it('matches a subsequence across the label ("zmsl" → zoom to selection)', () => {
+    initBuiltinCommands();
+    const hits = searchCommands('zmsl');
+    expect(hits[0]?.id).toBe('view.fitSelection');
+    expect(searchCommands('zmf')[0]?.id).toBe('view.fitAll'); // zoom→fit
+  });
+
+  it('multi-token AND: every token must match somewhere', () => {
+    registerCommand({ id: 'view.fitSelection', label: 'Zoom to selection (Shift+F)', run: () => {} });
+    registerCommand({ id: 'view.toggleGrid', label: 'Toggle grid', run: () => {} });
+    const hits = searchCommands('zoom sel');
+    expect(hits.map((c) => c.id)).toEqual(['view.fitSelection']); // "grid" fails "sel"
+    expect(searchCommands('zoom')).toHaveLength(1);
+    expect(searchCommands('grid zz')).toHaveLength(0); // one dead token kills the match
+  });
+
+  it('built-in multi-token search finds the fit commands', () => {
+    initBuiltinCommands();
+    expect(searchCommands('zoom sel').map((c) => c.id)).toEqual(['view.fitSelection']);
+    expect(searchCommands('zoom fit').map((c) => c.id)[0]).toBe('view.fitAll');
+  });
+
+  it('returns empty for no match and everything for a blank query', () => {
+    registerCommand({ id: 'a', label: 'Alpha', run: () => {} });
+    expect(searchCommands('qqqq')).toHaveLength(0);
+    expect(searchCommands('   ')).toHaveLength(1); // whitespace-only → all
+    expect(searchCommands('')).toHaveLength(1);
+  });
 });
 
 describe('addMidplaneFromSelection', () => {

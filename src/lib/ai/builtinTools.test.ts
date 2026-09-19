@@ -34,10 +34,107 @@ describe('registerBuiltinTools registration', () => {
       'orient_for_print', 'scale_to_fit',
       // cam / view
       'suggest_feeds_speeds', 'set_view',
+      // selection control (vision → face-scoped ops)
+      'select_face_at_viewport', 'select_face', 'clear_face_selection', 'select_body',
     ]) {
       expect(names).toContain(n);
     }
     clearTools();
+  });
+});
+
+describe('AI selection tools (vision face-picking loop)', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], selectedIds: [], selectedFaceIds: [] });
+  });
+
+  it('select_face_at_viewport resolves through the pick-face event and sets the face selection', async () => {
+    const seen: { xNorm: number; yNorm: number; additive?: boolean }[] = [];
+    const listener = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        xNorm: number; yNorm: number; additive?: boolean;
+        resolve: (hit: { faceId: string; bodyId: string } | null) => void;
+      };
+      seen.push({ xNorm: d.xNorm, yNorm: d.yNorm, additive: d.additive });
+      d.resolve({ faceId: 'face_2', bodyId: 'b1' });
+    };
+    window.addEventListener('scenelab:pick-face', listener);
+    const tool = getTool('select_face_at_viewport')!;
+    const result = (await tool.execute({ x: 0.25, y: 0.75 })) as {
+      success: boolean; faceId: string; bodyId: string;
+    };
+    window.removeEventListener('scenelab:pick-face', listener);
+
+    expect(result).toEqual({ success: true, faceId: 'face_2', bodyId: 'b1' });
+    // Image-space (0..1, y down) → NDC mapping happened in the listener, the
+    // tool passes the image coordinates through.
+    expect(seen).toEqual([{ xNorm: 0.25, yNorm: 0.75, additive: false }]);
+  });
+
+  it('select_face_at_viewport maps coordinates through an active crop region', async () => {
+    useStore.setState({
+      visionRegion: { x: 0.5, y: 0.5, w: 0.25, h: 0.5 },
+    });
+    let got = { x: -1, y: -1 };
+    const listener = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        xNorm: number; yNorm: number;
+        resolve: (hit: { faceId: string; bodyId: string } | null) => void;
+      };
+      got = { x: d.xNorm, y: d.yNorm };
+      d.resolve({ faceId: 'face_0', bodyId: 'b1' });
+    };
+    window.addEventListener('scenelab:pick-face', listener);
+    await getTool('select_face_at_viewport')!.execute({ x: 0.5, y: 0.5 });
+    window.removeEventListener('scenelab:pick-face', listener);
+    useStore.setState({ visionRegion: null });
+    // Center of the crop (0.5,0.5) in a region at (0.5,0.5) size (0.25,0.5)
+    // is the viewport point (0.625, 0.75).
+    expect(got.x).toBeCloseTo(0.625, 6);
+    expect(got.y).toBeCloseTo(0.75, 6);
+  });
+
+  it('select_face_at_viewport throws when nothing answers (no viewport mounted)', async () => {
+    const tool = getTool('select_face_at_viewport')!;
+    await expect(tool.execute({ x: 0.5, y: 0.5 })).rejects.toThrow(/No face found/);
+  });
+
+  it('select_face picks a real face: body first, then the face id', async () => {
+    const body = useStore.getState().bodies[0]!;
+    const faceId = body.faces[0]!.id;
+    const result = (await getTool('select_face')!.execute({ bodyId: body.id, faceId })) as { success: boolean };
+    expect(result.success).toBe(true);
+    expect(useStore.getState().selectedIds).toContain(body.id);
+    expect(useStore.getState().selectedFaceIds).toContain(faceId);
+  });
+
+  it('select_face rejects unknown faces and bodies', async () => {
+    const body = useStore.getState().bodies[0]!;
+    await expect(
+      getTool('select_face')!.execute({ bodyId: body.id, faceId: 'face_999' }),
+    ).rejects.toThrow(/not found/);
+    await expect(
+      getTool('select_face')!.execute({ bodyId: 'nope', faceId: 'face_0' }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('clear_face_selection empties the picked faces', async () => {
+    useStore.setState({ selectedFaceIds: ['face_1', 'face_2'] });
+    await getTool('clear_face_selection')!.execute({});
+    expect(useStore.getState().selectedFaceIds).toEqual([]);
+  });
+
+  it('select_body selects valid ids and rejects unknown ones', async () => {
+    const body = useStore.getState().bodies[0]!;
+    const ok = (await getTool('select_body')!.execute({ bodyIds: [body.id] })) as { selectedIds: string[] };
+    expect(ok.selectedIds).toEqual([body.id]);
+    await expect(
+      getTool('select_body')!.execute({ bodyIds: ['missing'] }),
+    ).rejects.toThrow(/not found/);
   });
 });
 

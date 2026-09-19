@@ -2,6 +2,75 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.8.0] — 2026-09-19
+
+Theme: **AI 面拾取闭环 + 视口性能清扫** — 补上 todo 中最后一个遗留项
+（VLM 面拾取），并由并行审计清掉四个真实渲染热点。
+
+### AI 与操作 (AI & interaction)
+
+- **AI 面拾取闭环 (VLM face-picking)** — 此前 AI 只能"看"不能"点"：现在
+  视口截图发给模型后，模型估计目标面上的坐标 (0..1)，调用新工具
+  `select_face_at_viewport` → `scenelab:pick-face` 事件 → 视口用真实相机
+  射线拾取并设置面选集（与 Ctrl+点击同路径），再链式调用 shell/fillet。
+  裁剪区域截图的坐标自动映射回全视口；系统提示词指导"先拾取后修改"
+  （面 id 每次重建后会变）。另加 `select_face`（按 id 直选）、
+  `clear_face_selection`、`select_body` 三个选区控制工具。
+- **数值表达式输入 (Fusion/SolidWorks 式)** — 所有数值对话框（共享
+  NumericPrompt、拉伸、特征编辑）现在支持算术：输入 `20/2`、`(30-6)/3`、
+  `2*pi*5` 提交计算值；非法输入红框提示且禁止提交；表达式实时预览结果
+  （`= 10`）。手写递归下降解析器，零 eval/Function。
+- **命令面板模糊搜索** — 从纯子串升级为市场标准模糊匹配：词边界加权、
+  子序列匹配（`zmsl` → Zoom to selection）、多 token AND（`zoom sel`）、
+  label > id > category 权重分层。
+- **浏览树过滤框 (Fusion 式)** — 实体/参考几何/特征历史按名称实时过
+  滤，显示 `n/total` 匹配计数，Esc 清空。
+- **缩放命令入面板** — `view.fitAll` / `view.fitSelection` 注册进命令面
+  板（F / Shift+F 原快捷键不变）。
+
+### 性能 (Performance)
+
+- **去掉 preserveDrawingBuffer** — 新的视口捕获服务在截图/AI 视觉/PNG
+  导出前强制渲染一帧，省掉逐帧保留帧缓冲的 GPU 带宽开销。
+- **相机事件门控** — `viewport-camera-update` 仅在相机真正移动时派发，
+  悬停变色/草图预览不再触发 ViewCube 无效重渲染与逐帧事件分配。
+- **草图预览零分配化** — 橡皮筋预览的材质（按尺寸缓存）与尺寸标签
+  （LiveTextSprite 原地重绘单张 canvas）全部复用：鼠标移动不再创建
+  canvas/CanvasTexture/GPU 上传。
+- **resize 早退** — ResizeObserver 尺寸/DPR 未变时直接返回，不再重复
+  重分配 drawing buffer。
+
+## [0.7.0] — 2026-09-14
+
+Theme: **对标主流 CAD 的深度打磨** — 补齐 Fusion 360 时间轴拖拽重排这一
+标志性交互，并把视口两个真实性能热点做掉（拖拽逐帧重建、阴影逐帧重绘）。
+
+### 操作 (Interaction)
+
+- **时间轴拖拽重排 (Timeline drag-reorder)** — 底部时间轴的 Feature 芯片
+  现在可以直接拖拽排序（Fusion 360 标志性交互）：拖拽时显示蓝色插入指
+  示条，非法位置（跨越依赖关系）显示系统"禁止"光标并拒绝放置；合法移
+  动即时重算。依赖规则：特征必须保持在其父特征之后、其消费者之前。
+  键盘无障碍：聚焦芯片后 **Alt+←/→** 单步移动。一次拖拽 = 一条撤销记
+  录；非法/原地放置不产生空撤销条目。
+- **箭头微调步长修饰键** — ←↑→↓/PgUp/PgDn 微移所选：Shift = 10mm 粗步，
+  **Alt = 0.1mm 细步**（新增），默认 1mm；草图内微移同步支持（乘网格
+  步长）。与 Fusion 的修饰键分级一致。
+
+### 性能 (Performance)
+
+- **拖拽移动改预览变换 (Preview-transform drag)** — 之前每次 pointermove
+  都重映射全部顶点/面/边并重建 mesh + 法线 + **BVH**，大模型拖拽必掉
+  帧。现在拖拽期间只把偏移累积到 `dragOffset` 并施加为 `mesh.position`
+  纯变换（零几何重建、零 GPU 重上传），松手时一次性烘焙成单条可撤销
+  平移；Esc 取消只是丢弃预览（几何从未被碰过）。特征树实体照旧不动
+  （设计如此），只有真正会移动的直接体参与预览。
+- **阴影贴图按需重绘 (On-demand shadow map)** — `shadowMap.autoUpdate`
+  关闭：只有几何增删/重建、可见性变化、拖拽预览移动或阴影开关时才重
+  渲染阴影贴图，静止帧不再每帧重绘 2048² 深度图。
+- **草图求解器性能护栏** — 新增基准测试：50 条约束的链式草图必须在
+  100ms 内解完（规划文档中的指标终于有测试看守，防 O(n²) 回归）。
+
 ## [0.6.0] — 2026-09-04
 
 Theme: **beginner-friendly, learned from the market leaders** — three deep UX

@@ -72,6 +72,23 @@ export class FeatureTree {
     }
   }
 
+  /**
+   * Reorder a feature in the timeline (Fusion-style drag-reorder). Dependency
+   * order is enforced: the moved feature must stay AFTER every parent and
+   * BEFORE every dependent. Returns whether the order changed; an illegal
+   * target leaves the timeline untouched.
+   */
+  moveFeature(id: string, toIndex: number): boolean {
+    const from = this.features.findIndex((f) => f.id === id);
+    if (from === -1) return false;
+    const target = Math.max(0, Math.min(this.features.length - 1, toIndex));
+    if (target === from) return false;
+    if (!canReorderFeatures(this.features, id, target)) return false;
+    const moved = this.features.splice(from, 1)[0]!;
+    this.features.splice(target, 0, moved);
+    return true;
+  }
+
   getResult(id: string): FeatureResult | undefined {
     return this.results.get(id);
   }
@@ -603,4 +620,29 @@ export function createMirrorFeature(
     parentIds,
     params: { plane, keepOriginal },
   };
+}
+
+/**
+ * Whether moving `featureId` to `toIndex` keeps the timeline a valid DAG:
+ * every parent must stay before the feature, every dependent after it. Pure —
+ * the timeline UI uses it to show a legal drop target / not-allowed cursor
+ * before the drop, and FeatureTree.moveFeature re-checks it.
+ */
+export function canReorderFeatures(features: Feature[], featureId: string, toIndex: number): boolean {
+  const from = features.findIndex((f) => f.id === featureId);
+  if (from === -1) return false;
+  const target = Math.max(0, Math.min(features.length - 1, toIndex));
+  const next = [...features];
+  const moved = next.splice(from, 1)[0]!;
+  next.splice(target, 0, moved);
+  const index = new Map(next.map((f, i) => [f.id, i] as const));
+  for (const f of next) {
+    const fi = index.get(f.id)!;
+    for (const pid of f.parentIds) {
+      const pi = index.get(pid);
+      // Parents only exist in this tree (external ids are ignored, as in recompute).
+      if (pi !== undefined && pi >= fi) return false;
+    }
+  }
+  return true;
 }

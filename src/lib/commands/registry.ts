@@ -84,24 +84,99 @@ function recordRecent(id: string): void {
   if (history.length > HISTORY_CAP) history.pop();
 }
 
+// Fuzzy-search tuning. Lower scores rank better; substring hits always beat
+// subsequence hits, label hits beat id hits beat category hits.
+const SUBSEQ_BASE = 100; // added to every subsequence-only match
+const WORD_START_BONUS = 8; // substring starting on a word boundary
+const SUBSEQ_WORD_BONUS = 6; // subsequence character landing on a word boundary
+const ID_OFFSET = 1000; // id-only matches rank below every label match
+const CATEGORY_OFFSET = 2000; // category-only matches rank below id matches
+
+interface SearchField {
+  lower: string;
+  /** lower[i]'s source character starts a word (space/separator/camelCase hump). */
+  wordStart: boolean[];
+}
+
+/** Precompute a case-insensitive view of a field plus its word-boundary map. */
+function toSearchField(text: string): SearchField {
+  const lower = text.toLowerCase();
+  const wordStart: boolean[] = [];
+  // toLowerCase() is length-preserving for the ASCII-heavy labels/ids used
+  // here; if an exotic codepoint ever changes the length, drop the boundary
+  // info rather than read out of sync.
+  const sameLength = lower.length === text.length;
+  for (let i = 0; i < lower.length; i++) {
+    if (!sameLength || i === 0) {
+      wordStart.push(i === 0 && sameLength);
+      continue;
+    }
+    const prev = text[i - 1]!;
+    const cur = text[i]!;
+    wordStart.push(' -_/.:()'.includes(prev) || (prev >= 'a' && prev <= 'z' && cur >= 'A' && cur <= 'Z'));
+  }
+  return { lower, wordStart };
+}
+
 /**
- * Fuzzy-ish command search for a command palette: case-insensitive substring
- * match on label / id / category, ranked so earlier matches and label hits
- * come first.
+ * Best score for one token against one field (lower = better), or null when
+ * the token doesn't match at all: an exact substring wins (earlier and
+ * word-boundary-anchored better), otherwise a subsequence across the field
+ * scored by compactness plus word-boundary hits ("zmsl" → "zoom to selection").
+ */
+function scoreToken(field: SearchField, token: string): number | null {
+  const idx = field.lower.indexOf(token);
+  if (idx >= 0) {
+    return idx - (field.wordStart[idx] ? WORD_START_BONUS : 0);
+  }
+  let ti = 0;
+  let first = -1;
+  let last = -1;
+  let boundaryHits = 0;
+  for (let i = 0; i < field.lower.length && ti < token.length; i++) {
+    if (field.lower[i] === token[ti]) {
+      if (first === -1) first = i;
+      last = i;
+      if (field.wordStart[i]) boundaryHits++;
+      ti++;
+    }
+  }
+  if (ti < token.length) return null;
+  return SUBSEQ_BASE + (last - first + 1) - boundaryHits * SUBSEQ_WORD_BONUS;
+}
+
+/**
+ * Market-standard fuzzy palette search: every whitespace-separated token of
+ * the query must match the command somewhere (AND), each token scored
+ * independently as a substring or subsequence of the label, id or category —
+ * label matches weighing highest. Ranked ascending by score; ties keep
+ * registration order.
  */
 export function searchCommands(query: string): Command[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return allCommands();
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return allCommands();
   const scored: { cmd: Command; score: number }[] = [];
   for (const cmd of commands.values()) {
-    const label = cmd.label.toLowerCase();
-    const hay = `${label} ${cmd.id.toLowerCase()} ${(cmd.category ?? '').toLowerCase()}`;
-    const idx = hay.indexOf(q);
-    if (idx < 0) continue;
-    // Prefer matches in the label, and earlier matches.
-    const labelIdx = label.indexOf(q);
-    const score = (labelIdx >= 0 ? labelIdx : 1000 + idx);
-    scored.push({ cmd, score });
+    const label = toSearchField(cmd.label);
+    const id = toSearchField(cmd.id);
+    const category = toSearchField(cmd.category ?? '');
+    let total = 0;
+    let matched = true;
+    for (const token of tokens) {
+      const candidates: number[] = [];
+      const byLabel = scoreToken(label, token);
+      const byId = scoreToken(id, token);
+      const byCategory = scoreToken(category, token);
+      if (byLabel !== null) candidates.push(byLabel);
+      if (byId !== null) candidates.push(byId + ID_OFFSET);
+      if (byCategory !== null) candidates.push(byCategory + CATEGORY_OFFSET);
+      if (candidates.length === 0) {
+        matched = false;
+        break;
+      }
+      total += Math.min(...candidates);
+    }
+    if (matched) scored.push({ cmd, score: total });
   }
   return scored.sort((a, b) => a.score - b.score).map((s) => s.cmd);
 }
@@ -188,4 +263,22 @@ export function initBuiltinCommands(): void {
   }
   registerCommand({ id: 'edit.pasteInPlace', label: 'Paste in place', category: 'Edit', shortcut: 'Ctrl+Shift+V', run: () => s().pasteInPlace() });
   registerCommand({ id: 'view.toggleShadows', label: 'Toggle ground shadows', category: 'View', run: () => s().setGroundShadows(!s().groundShadows) });
+  // Viewport fit commands. The actual F / Shift+F keys are handled locally in
+  // ViewportCanvas; these palette entries replay them by dispatching a window
+  // event the canvas listens for, so the shortcuts and the palette stay in
+  // sync without coupling the registry to the viewport.
+  registerCommand({
+    id: 'view.fitAll',
+    label: 'Zoom to fit (F)',
+    category: 'View',
+    shortcut: 'F',
+    run: () => { window.dispatchEvent(new CustomEvent('scenelab:fit-view', { detail: { selection: false } })); },
+  });
+  registerCommand({
+    id: 'view.fitSelection',
+    label: 'Zoom to selection (Shift+F)',
+    category: 'View',
+    shortcut: 'Shift+F',
+    run: () => { window.dispatchEvent(new CustomEvent('scenelab:fit-view', { detail: { selection: true } })); },
+  });
 }

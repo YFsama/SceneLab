@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { solveConstraints } from './solver';
+import { createSketch, addLine, addConstraint, solveSketch } from './engine';
 import type { SketchEntity, SketchConstraint } from './types';
 
 describe('solveConstraints', () => {
@@ -792,5 +793,30 @@ describe('tangent and symmetric constraints', () => {
     expect(result.get('a')!.x).toBeCloseTo(4, 6);
     expect(result.get('b')!.x).toBeCloseTo(-4, 3);
     expect(result.get('b')!.y).toBeCloseTo(2, 3);
+  });
+});
+
+describe('solver performance guard', () => {
+  it('solves a 50-constraint sketch in well under interactive budget (<100 ms)', () => {
+    // A realistic mid-size sketch: 25 lines in a chain, each with a horizontal
+    // and a driving distance constraint (50 constraints, 52 points). The
+    // relaxation solver must stay interactive — this guards against accidental
+    // O(n²) regressions in the constraint loop.
+    const sketch = createSketch('xy');
+    let prevId: string | null = null;
+    for (let i = 0; i < 25; i++) {
+      const line = addLine(sketch, i * 10, 0, (i + 1) * 10, i % 2 === 0 ? 1 : -1);
+      addConstraint(sketch, 'horizontal', [line.id]);
+      addConstraint(sketch, 'distance', [line.id], 10);
+      if (prevId) addConstraint(sketch, 'coincident', [prevId, line.p1Id]);
+      prevId = line.p2Id;
+    }
+    expect(sketch.constraints.size).toBeGreaterThanOrEqual(50);
+
+    const t0 = performance.now();
+    const solved = solveSketch(sketch);
+    const ms = performance.now() - t0;
+    expect(solved.size).toBeGreaterThan(0);
+    expect(ms).toBeLessThan(100);
   });
 });

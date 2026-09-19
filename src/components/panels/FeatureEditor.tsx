@@ -9,6 +9,7 @@ import type {
   LinearArrayFeature, CircularArrayFeature, MirrorFeature,
 } from '../../lib/features/types';
 import { Pencil, Trash2, Eye, EyeOff } from 'lucide-react';
+import { evalDimension, formatDimensionValue, isPlainNumber, parseDimensionField } from '../../lib/dimension';
 
 /** Feature types whose editable parameters are plain numbers. */
 export type NumericFeature =
@@ -373,16 +374,28 @@ function applyNumeric(f: NumericFeature, values: Record<string, number>): Featur
 function NumericEditDialog({ feature, onClose }: { feature: NumericFeature; onClose: () => void }) {
   const updateFeature = useStore((s) => s.updateFeature);
   const [keepOriginal, setKeepOriginal] = useState(feature.type === 'mirror' ? feature.params.keepOriginal !== false : false);
-  const initial = Object.fromEntries(numericFields(feature).map((f) => [f.key, f.value]));
-  const [values, setValues] = useState<Record<string, number>>(initial);
+  // CAD-style input: fields keep their raw text while editing (so expressions
+  // like `20/` aren't destroyed mid-typing) and are evaluated on Apply.
+  const initialTexts = Object.fromEntries(numericFields(feature).map((f) => [f.key, String(f.value)]));
+  const [texts, setTexts] = useState<Record<string, string>>(initialTexts);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEscapeClose(onClose, true);
   useFocusRestore();
 
   const fields = numericFields(feature);
+  const evaluatedByKey: Record<string, number | null> = {};
+  for (const f of fields) evaluatedByKey[f.key] = evalDimension(texts[f.key] ?? '');
+  const allValid = fields.every((f) => (evaluatedByKey[f.key] ?? null) !== null);
 
   const handleApply = () => {
+    if (!allValid) return;
+    const values: Record<string, number> = {};
+    for (const f of fields) {
+      // Fallback (the field's current value) is defensive only — Apply is
+      // disabled while any field is empty or invalid.
+      values[f.key] = parseDimensionField(texts[f.key] ?? '', f.value);
+    }
     updateFeature(feature.id, (f) => {
       if (!isNumericFeature(f)) return f;
       const next = applyNumeric(f, values);
@@ -406,19 +419,34 @@ function NumericEditDialog({ feature, onClose }: { feature: NumericFeature; onCl
           {feature.name}
         </h2>
         <div className="space-y-4">
-          {fields.map((f) => (
-            <div key={f.key}>
-              <label className="block text-sm text-text-secondary mb-1">{f.label}</label>
-              <input
-                type="number"
-                value={values[f.key]}
-                onChange={(e) => setValues((v) => ({ ...v, [f.key]: Number(e.target.value) }))}
-                min={f.min}
-                step={f.step}
-                className="w-full px-3 py-2 bg-surface border border-panel-border rounded-md text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-              />
-            </div>
-          ))}
+          {fields.map((f) => {
+            const text = texts[f.key] ?? '';
+            const evaluated = evaluatedByKey[f.key] ?? null;
+            const invalid = text.trim() !== '' && evaluated === null;
+            const preview = evaluated !== null && !isPlainNumber(text)
+              ? formatDimensionValue(evaluated)
+              : null;
+            return (
+              <div key={f.key}>
+                <label className="block text-sm text-text-secondary mb-1">{f.label}</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={text}
+                    onChange={(e) => setTexts((v) => ({ ...v, [f.key]: e.target.value }))}
+                    aria-invalid={invalid || undefined}
+                    className={`w-full px-3 py-2 bg-surface border rounded-md text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent ${
+                      invalid ? 'border-error' : 'border-panel-border'
+                    }`}
+                  />
+                  {preview !== null && (
+                    <span className="text-xs text-text-muted whitespace-nowrap">= {preview}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
           {feature.type === 'mirror' && (
             <div className="flex items-center gap-2">
               <input
@@ -437,7 +465,8 @@ function NumericEditDialog({ feature, onClose }: { feature: NumericFeature; onCl
           </button>
           <button
             onClick={handleApply}
-            className="px-4 py-2 text-sm rounded-md bg-accent text-white hover:bg-accent-hover"
+            disabled={!allValid}
+            className="px-4 py-2 text-sm rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
             autoFocus
           >
             Apply

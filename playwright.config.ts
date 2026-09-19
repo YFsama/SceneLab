@@ -13,7 +13,9 @@ export default defineConfig({
   reporter: process.env.CI ? 'github' : 'list',
   timeout: 30_000,
   use: {
-    baseURL: 'http://localhost:5174',
+    // 127.0.0.1, not localhost: on some machines Vite binds IPv6 ::1 only and
+    // an IPv4 probe (or vice versa) never becomes ready.
+    baseURL: 'http://127.0.0.1:5174',
     trace: 'on-first-retry',
   },
   projects: [
@@ -22,8 +24,10 @@ export default defineConfig({
   webServer: {
     // 5173 is Tauri's fixed dev port (strictPort in vite.config) and may be
     // held by unrelated processes — E2E uses its own port via the CLI.
-    command: 'npx vite --port 5174 --strictPort',
-    url: 'http://localhost:5174',
+    // --host 127.0.0.1 pins the IPv4 loopback so the readiness probe and the
+    // browser hit the same interface (default localhost can bind ::1 only).
+    command: 'npx vite --port 5174 --strictPort --host 127.0.0.1',
+    url: 'http://127.0.0.1:5174',
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
     // Developer machines may run a system proxy (e.g. 127.0.0.1:7890) that

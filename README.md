@@ -18,6 +18,22 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ## Key Features
 
+- **AI face-picking** ("shell this wall"): with vision on, the assistant
+  estimates the point over the feature you mean and selects that CAD face
+  through the real viewport raycast — then shells/fillets it in the same
+  turn. Crop a region first to disambiguate. Also `select_face` /
+  `select_body` / `clear_face_selection` selection tools.
+- **Numeric expression fields** (Fusion/SolidWorks): every dimension dialog
+  evaluates arithmetic — type `20/2`, `(30-6)/3` or `2*pi*5` and the computed
+  value commits (with a live `= result` preview; invalid input is rejected).
+- **Fuzzy command palette**: word-boundary-weighted substring + subsequence
+  matching (`zmsl` → Zoom to selection) with multi-token AND queries.
+- **Browser tree filter**: live name search over bodies, reference geometry
+  and the feature history with a match counter (Fusion browser search).
+- **Timeline drag-reorder** (Fusion 360): grab a feature chip in the bottom
+  timeline and drop it elsewhere — a blue insertion indicator follows the
+  pointer, illegal targets (past a dependency) get the native blocked cursor,
+  and Alt+←/→ moves the focused chip one step. One undo entry per reorder.
 - **Recent tools in the right-click menu**: the empty-space viewport menu leads
   with your most recently used commands (palette, views, paste, measure…),
   one click to re-run — Fusion-style.
@@ -41,7 +57,9 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
   (`insert_library_part` / `load_sample_project` tools).
 - **Drag-to-move bodies**: grab any body with the left mouse button and slide
   it across its height plane with live grid snapping (Ctrl = free), a Δ mm
-  readout, one undo step per drag and Esc to cancel the whole drag.
+  readout, one undo step per drag and Esc to cancel the whole drag. The drag
+  is a **preview transform** — meshes slide without rebuilding geometry, and
+  the offset is baked once on release.
 - **Fusion-style bottom timeline**: the feature tree rendered as chips in
   build order with parameter summaries — click selects the produced body,
   double-click edits the feature, right-click suppresses/deletes.
@@ -162,7 +180,7 @@ and a one-call **print-readiness** assessment.
 
 ### AI (`lib/ai`)
 
-~96 operations are registered as Claude tools and run through a proper tool-use
+~100 operations are registered as Claude tools and run through a proper tool-use
 loop (the model is system-prompted with role + units, sees each tool's result,
 and can chain steps). The assistant can create primitives, sketch/extrude/
 revolve/sweep, edit & pattern bodies, move/rotate/scale/orient them, arrange
@@ -240,16 +258,27 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Performance
 
-- Viewport renders at 60 FPS (target: 100k triangles)
+- Viewport renders on demand (dirty-flag loop) — idle frames cost nothing
+- No `preserveDrawingBuffer`: captures (screenshots, AI vision, PNG export)
+  force a fresh render right before reading pixels via a capture service
 - BVH-accelerated raycasting for body/face picking (three-mesh-bvh)
 - Incremental mesh rebuild: only changed bodies re-upload to the GPU
+- **Preview-transform drags**: sliding a body never rebuilds geometry — the
+  offset is applied as a mesh transform and baked as one translate on release
+- **On-demand shadow map**: the ground-shadow depth map re-renders only when
+  geometry, visibility or the light changes, not on every frame
+- **Allocation-free sketch previews**: rubber-band materials are cached per
+  size and the live dimension label redraws one canvas in place — mousemoves
+  create no textures or GPU uploads
+- Camera-sync events fire only when the camera actually moves
 - Exact booleans run in WASM (Manifold) instead of JS voxel sampling
 - Slow voxel kernels (hollow, boolean fallback) run in a **Web Worker** — exact
   WASM results stay on the main thread, occupancy sampling does not block the UI
+- Sketch solver perf is guarded by a benchmark test (50 constraints < 100 ms)
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (1695+ tests, 112 files) plus Rust unit tests
+- Every `lib/*` module has vitest tests (1814+ tests, 123 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops); exact booleans

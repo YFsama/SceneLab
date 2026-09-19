@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, Layers, History, Frame, Slash, Dot, Axis3d, X, Eye, EyeOff } from 'lucide-react';
+import { Box, Layers, History, Frame, Slash, Dot, Axis3d, X, Eye, EyeOff, Search } from 'lucide-react';
 import { FeatureEditor } from './FeatureEditor';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, type Axis } from '../../lib/geometry';
 import { MATERIALS } from '../../lib/materials';
 import type { SolidBody } from '../../lib/geometry/types';
+import { matchesNameFilter } from '../../lib/treeFilter';
 
 export function BrowserTree() {
   const { t } = useT();
@@ -69,6 +70,17 @@ export function BrowserTree() {
   // Collapsible tree sections (SolidWorks tree folders).
   const [collapsed, setCollapsed] = useState({ bodies: false, refs: false, history: false });
   const toggleSection = (k: 'bodies' | 'refs' | 'history') => setCollapsed((c) => ({ ...c, [k]: !c[k] }));
+  // Fusion-style browser filter: narrows the bodies / reference-geometry /
+  // history sections by name. Empty filter = zero behaviour change.
+  const [filter, setFilter] = useState('');
+  const query = filter.trim();
+  const hasFilter = query.length > 0;
+  const filteredBodies = hasFilter ? bodies.filter((b) => matchesNameFilter(b.name, query)) : bodies;
+  const filteredPlanes = hasFilter ? planes.filter((p) => matchesNameFilter(p.name, query)) : planes;
+  const filteredAxes = hasFilter ? axes.filter((a) => matchesNameFilter(a.name, query)) : axes;
+  const filteredPoints = hasFilter ? points.filter((p) => matchesNameFilter(p.name, query)) : points;
+  const filteredCoordSystems = hasFilter ? coordSystems.filter((c) => matchesNameFilter(c.name, query)) : coordSystems;
+  const filteredFeatures = hasFilter ? featureTree.features.filter((f) => matchesNameFilter(f.name, query)) : featureTree.features;
 
   // Click selection: Shift = range from anchor, Ctrl/Cmd = toggle, plain = single.
   const handleRowClick = (e: React.MouseEvent, id: string) => {
@@ -239,6 +251,41 @@ export function BrowserTree() {
         <Layers size={16} className="text-text-muted" />
         <h2 className="text-sm font-semibold text-text-primary">{t('panel.browser')}</h2>
       </div>
+      {/* Fusion-style browser filter. The global keyboard handlers
+          (ViewportCanvas + useKeyboardShortcuts) ignore INPUT targets, so
+          typing here never fires viewport shortcuts; Escape clears the field
+          instead of deselecting. */}
+      <div className="px-2 py-1.5 border-b border-panel-border flex items-center gap-1.5">
+        <Search size={12} className="text-text-muted shrink-0" aria-hidden="true" />
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && filter) {
+              e.stopPropagation();
+              setFilter('');
+            }
+          }}
+          placeholder={t('tree.filterPlaceholder')}
+          aria-label={t('tree.filterLabel')}
+          className="flex-1 min-w-0 px-1 py-0.5 bg-surface border border-panel-border rounded text-xs text-text-primary placeholder:text-text-muted"
+        />
+        {hasFilter && (
+          <>
+            <span className="text-[10px] font-mono text-text-muted shrink-0" aria-live="polite">
+              {filteredBodies.length}/{bodies.length}
+            </span>
+            <button
+              onClick={() => setFilter('')}
+              className="text-text-muted hover:text-text-primary shrink-0"
+              aria-label={t('tree.filterClear')}
+              title={t('tree.filterClear')}
+            >
+              <X size={12} />
+            </button>
+          </>
+        )}
+      </div>
       <div className="flex-1 overflow-y-auto flex flex-col">
         {/* Bodies section */}
         <div className="p-1">
@@ -251,8 +298,10 @@ export function BrowserTree() {
           </button>
           {!collapsed.bodies && (bodies.length === 0 ? (
             <p className="text-xs text-text-muted p-2">{t('panel.noObjects')}</p>
+          ) : hasFilter && filteredBodies.length === 0 ? (
+            <p className="text-xs text-text-muted p-2">{t('tree.noMatches')}</p>
           ) : (
-            bodies.map((body) =>
+            filteredBodies.map((body) =>
               renaming?.id === body.id ? (
                 <div key={body.id} className="w-full flex items-center gap-2 px-2 py-1">
                   <Box size={14} className="text-text-muted" />
@@ -310,8 +359,11 @@ export function BrowserTree() {
           ))}
         </div>
 
-        {/* Reference geometry section */}
-        {(planes.length > 0 || axes.length > 0 || points.length > 0 || coordSystems.length > 0) && (
+        {/* Reference geometry section (filtered by name too; hides entirely
+            when a filter matches none of its rows) */}
+        {(hasFilter
+          ? filteredPlanes.length + filteredAxes.length + filteredPoints.length + filteredCoordSystems.length > 0
+          : planes.length > 0 || axes.length > 0 || points.length > 0 || coordSystems.length > 0) && (
           <div className="border-t border-panel-border p-1">
             <button
               onClick={() => toggleSection('refs')}
@@ -321,16 +373,16 @@ export function BrowserTree() {
               <span className="font-mono w-2">{collapsed.refs ? '▸' : '▾'}</span>{t('panel.referenceGeometry')}
             </button>
             {!collapsed.refs && (<>
-            {planes.map((p) => (
+            {filteredPlanes.map((p) => (
               <RefRow key={p.id} icon={<Frame size={12} />} name={p.name} onDelete={() => removePlane(p.id)} deleteLabel={t('menu.delete')} />
             ))}
-            {axes.map((a) => (
+            {filteredAxes.map((a) => (
               <RefRow key={a.id} icon={<Slash size={12} />} name={a.name} onDelete={() => removeAxis(a.id)} deleteLabel={t('menu.delete')} />
             ))}
-            {points.map((p) => (
+            {filteredPoints.map((p) => (
               <RefRow key={p.id} icon={<Dot size={12} />} name={p.name} onDelete={() => removePoint(p.id)} deleteLabel={t('menu.delete')} />
             ))}
-            {coordSystems.map((c) => (
+            {filteredCoordSystems.map((c) => (
               <RefRow key={c.id} icon={<Axis3d size={12} />} name={c.name} onDelete={() => removeCoordinateSystem(c.id)} deleteLabel={t('menu.delete')} />
             ))}
             </>)}
@@ -351,10 +403,30 @@ export function BrowserTree() {
           {!collapsed.history && (<>
           {featureTree.features.length > 0 && (
             <div className="px-2 py-0.5 text-[10px] text-text-muted">
-              {featureTree.features.length} {featureTree.features.length === 1 ? 'feature' : 'features'}
+              {hasFilter
+                ? `${filteredFeatures.length}/${featureTree.features.length}`
+                : `${featureTree.features.length} ${featureTree.features.length === 1 ? 'feature' : 'features'}`}
             </div>
           )}
-          <FeatureEditor />
+          {/* While filtering, the interactive FeatureEditor (which reads the
+              store directly) is swapped for a read-only list of the matching
+              feature names; clearing the filter brings it back unchanged. */}
+          {hasFilter ? (
+            filteredFeatures.length === 0 ? (
+              <p className="text-xs text-text-muted p-2">{t('tree.noMatches')}</p>
+            ) : (
+              <div className="space-y-0.5">
+                {filteredFeatures.map((f) => (
+                  <div key={f.id} className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary">
+                    <History size={10} className="text-text-muted shrink-0" />
+                    <span className="truncate">{f.name}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : (
+            <FeatureEditor />
+          )}
           </>)}
         </div>
       </div>

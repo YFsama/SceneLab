@@ -31,6 +31,8 @@ import { useT } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
 import { formatDragDelta } from '../../lib/viewport/dragMove';
 import { sectionPlane } from '../../lib/render/section';
+import { setViewportCapture } from '../../lib/render/capture';
+import { buildBoundsTree, ASYNC_BVH_TRIANGLE_THRESHOLD } from '../../lib/workers/bvhWorkerClient';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
   top: { pos: new THREE.Vector3(0, 10, 0), up: new THREE.Vector3(0, 0, -1) },
@@ -140,6 +142,79 @@ function disposeSprite(s: THREE.Sprite) {
   const mat = s.material as THREE.SpriteMaterial;
   mat.map?.dispose();
   mat.dispose();
+}
+
+/**
+ * A text sprite that redraws ONE persistent canvas in place instead of
+ * allocating a canvas + CanvasTexture (with a GPU upload) per text change.
+ * The sketch preview label changes on every mousemove, so this removes the
+ * per-move allocation and texture-upload churn entirely; identical text is a
+ * no-op (no upload at all).
+ */
+class LiveTextSprite {
+  readonly sprite: THREE.Sprite;
+  private readonly canvas = document.createElement('canvas');
+  private readonly tex: THREE.CanvasTexture;
+  private readonly ctx: CanvasRenderingContext2D;
+  private current = '';
+  private readonly fontPx = 64;
+  private readonly pad = 10;
+
+  constructor() {
+    this.tex = new THREE.CanvasTexture(this.canvas);
+    this.ctx = this.canvas.getContext('2d')!;
+    this.sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: this.tex, transparent: true, depthTest: false }),
+    );
+    this.sprite.visible = false;
+  }
+
+  /** Redraw the label (or hide it for empty text); skips upload when unchanged. */
+  set(text: string, hex: number, worldHeight = 0.8): void {
+    if (!text) {
+      this.sprite.visible = false;
+      return;
+    }
+    this.sprite.visible = true;
+    if (text === this.current) return;
+    this.ctx.font = `bold ${this.fontPx}px sans-serif`;
+    const textW = Math.ceil(this.ctx.measureText(text).width);
+    this.canvas.width = textW + this.pad * 2;
+    this.canvas.height = this.fontPx + this.pad * 2;
+    this.ctx.font = `bold ${this.fontPx}px sans-serif`; // canvas resize resets it
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillStyle = `#${hex.toString(16).padStart(6, '0')}`;
+    this.ctx.fillText(text, this.pad, this.canvas.height / 2);
+    this.tex.needsUpdate = true;
+    this.sprite.scale.set((this.canvas.width / this.canvas.height) * worldHeight, worldHeight, 1);
+    this.current = text;
+  }
+
+  dispose(): void {
+    this.tex.dispose();
+    (this.sprite.material as THREE.SpriteMaterial).dispose();
+  }
+}
+
+/**
+ * Apply (or clear, offset=null) the body drag preview as a pure mesh/edge
+ * transform. Geometry stays untouched while dragging — no per-frame mesh,
+ * normal or BVH rebuilds; endSelectionDrag bakes the offset once. Edge line
+ * objects share the bodyId userData so both slide together.
+ */
+function applyDragPreview(
+  groups: { bodies: THREE.Group | null; edges: THREE.Group | null },
+  selectedIds: string[],
+  offset: { x: number; y: number; z: number } | null,
+) {
+  for (const g of [groups.bodies, groups.edges]) {
+    if (!g) continue;
+    for (const child of g.children) {
+      const id = child.userData.bodyId as string | undefined;
+      if (!id || !selectedIds.includes(id)) continue;
+      child.position.set(offset?.x ?? 0, offset?.y ?? 0, offset?.z ?? 0);
+    }
+  }
 }
 
 export function ViewportCanvas() {
@@ -255,10 +330,77 @@ export function ViewportCanvas() {
   const frameIdRef2 = useRef<number>(0);
   // Mesh cache: maps bodyId → { body (reference), mesh, edges } for incremental rebuild.
   const meshCacheRef = useRef<Map<string, { body: typeof bodies[0]; mesh: THREE.Mesh; edges: THREE.LineSegments | null }>>(new Map());
+  // Shared preview assets (rubber-band materials + live label sprite): created
+  // once on first use, reused across mousemoves — the old per-frame code
+  // allocated materials, canvases and CanvasTexture GPU uploads every move.
+  const previewAssetsRef = useRef<{
+    markers: Map<number, THREE.PointsMaterial>;
+    guide: THREE.LineBasicMaterial;
+    line: THREE.LineBasicMaterial;
+    label: LiveTextSprite;
+  } | null>(null);
+  const previewAssets = () => (previewAssetsRef.current ??= {
+    markers: new Map<number, THREE.PointsMaterial>(),
+    guide: new THREE.LineBasicMaterial({ color: 0x6c7086, depthTest: false }),
+    line: new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false }),
+    label: new LiveTextSprite(),
+  });
+  useEffect(() => () => {
+    const a = previewAssetsRef.current;
+    if (a) {
+      a.guide.dispose();
+      a.line.dispose();
+      for (const m of a.markers.values()) m.dispose();
+      a.label.dispose();
+      previewAssetsRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    // Last camera state published to the ViewCube — skip the event (and its
+    // per-frame allocations + spurious cube re-renders) when nothing moved.
+    let lastPub = { px: NaN, py: NaN, pz: NaN, tx: NaN, ty: NaN, tz: NaN };
+
+    const renderScene = () => {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const cam = cameraRef.current;
+      const ortho = orthoCameraRef.current;
+      const controls = controlsRef.current;
+      if (!renderer || !scene || !cam || !ortho || !controls) return;
+      // Keep both cameras in sync: copy the active camera's transform to the
+      // inactive one so switching projection is instantaneous.
+      const proj = useStore.getState().projection;
+      const activeCam: THREE.Camera = proj === 'orthographic' ? ortho : cam;
+      if (proj === 'orthographic') {
+        ortho.position.copy(cam.position);
+        ortho.up.copy(cam.up);
+        ortho.lookAt(controls.target);
+      } else {
+        cam.position.copy(ortho.position);
+        cam.up.copy(ortho.up);
+      }
+      renderer.render(scene, activeCam);
+      // Publish camera state so the ViewCube can sync its rotation — only
+      // when the transform actually changed (hover recolours and sketch
+      // previews dirty the frame without moving the camera).
+      const t = controls.target;
+      if (
+        cam.position.x !== lastPub.px || cam.position.y !== lastPub.py || cam.position.z !== lastPub.pz ||
+        t.x !== lastPub.tx || t.y !== lastPub.ty || t.z !== lastPub.tz
+      ) {
+        lastPub = { px: cam.position.x, py: cam.position.y, pz: cam.position.z, tx: t.x, ty: t.y, tz: t.z };
+        window.dispatchEvent(new CustomEvent('viewport-camera-update', {
+          detail: {
+            position: { x: cam.position.x, y: cam.position.y, z: cam.position.z },
+            target: { x: t.x, y: t.y, z: t.z },
+          },
+        }));
+      }
+    };
 
     const animate = () => {
       frameIdRef2.current = requestAnimationFrame(animate);
@@ -268,32 +410,7 @@ export function ViewportCanvas() {
         if (moved) dirtyRef.current = true;
       }
       if (dirtyRef.current) {
-        const renderer = rendererRef.current;
-        const scene = sceneRef.current;
-        const cam = cameraRef.current;
-        const ortho = orthoCameraRef.current;
-        if (renderer && scene && cam && ortho) {
-          // Keep both cameras in sync: copy the active camera's transform to the
-          // inactive one so switching projection is instantaneous.
-          const proj = useStore.getState().projection;
-          const activeCam: THREE.Camera = proj === 'orthographic' ? ortho : cam;
-          if (proj === 'orthographic') {
-            ortho.position.copy(cam.position);
-            ortho.up.copy(cam.up);
-            ortho.lookAt(controls!.target);
-          } else {
-            cam.position.copy(ortho.position);
-            cam.up.copy(ortho.up);
-          }
-          renderer.render(scene, activeCam);
-          // Publish camera state so the ViewCube can sync its rotation.
-          window.dispatchEvent(new CustomEvent('viewport-camera-update', {
-            detail: {
-              position: { x: cam.position.x, y: cam.position.y, z: cam.position.z },
-              target: { x: controls!.target.x, y: controls!.target.y, z: controls!.target.z },
-            },
-          }));
-        }
+        renderScene();
         dirtyRef.current = false;
       }
     };
@@ -308,9 +425,9 @@ export function ViewportCanvas() {
       alpha: false,
       // Ask the OS to pick the discrete GPU on dual-GPU machines.
       powerPreference: 'high-performance',
-      // Keep the last frame readable so screenshots / AI-vision capture
-      // (canvas.toDataURL) return the rendered image instead of a black frame.
-      preserveDrawingBuffer: true,
+      // No preserveDrawingBuffer: it costs GPU bandwidth on every frame.
+      // Captures force a fresh render first via the capture service
+      // (lib/render/capture.ts) instead of keeping an old frame readable.
     });
     // Clamp the device pixel ratio: above 2x the extra fragments cost a lot of
     // GPU time for no visible gain on a CAD viewport.
@@ -323,6 +440,11 @@ export function ViewportCanvas() {
     // so switching never forces every material to recompile.
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // CAD scenes are mostly static: only re-render the shadow map when bodies,
+    // visibility or the light actually change (mesh-rebuild effect, drag
+    // preview, shadow toggle) instead of on every rendered frame.
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
     // Stable id so AI vision capture (and tests) can find the WebGL canvas
     // instead of whichever canvas happens to be first in the DOM.
     renderer.domElement.id = 'viewport-canvas';
@@ -367,6 +489,11 @@ export function ViewportCanvas() {
     // than the orbit centre, so you can zoom into the detail you're pointing at.
     controls.zoomToCursor = true;
     controlsRef.current = controls;
+
+    // Fresh-render capture service: screenshots / AI vision / PNG export force
+    // a render immediately before reading pixels, so preserveDrawingBuffer
+    // stays off (no per-frame GPU cost of keeping the buffer readable).
+    setViewportCapture(() => { renderScene(); return renderer.domElement; });
 
     const grid = new THREE.GridHelper(20, 20, 0x313244, 0x313244);
     grid.material.opacity = 0.5;
@@ -492,9 +619,16 @@ export function ViewportCanvas() {
 
     animate();
 
+    // Last applied resize values — ResizeObserver fires per frame during
+    // drags, and renderer.setSize reallocates the drawing buffer even when
+    // the dimensions didn't change.
+    let lastSize = { w: -1, h: -1, dpr: -1 };
     const onResize = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      if (w === lastSize.w && h === lastSize.h && dpr === lastSize.dpr) return;
+      lastSize = { w, h, dpr };
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       // Update ortho camera frustum to match the new aspect ratio.
@@ -506,7 +640,7 @@ export function ViewportCanvas() {
         oc.updateProjectionMatrix();
       }
       // Re-clamp in case the window moved to a monitor with a different DPR.
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(dpr);
       renderer.setSize(w, h);
       dirtyRef.current = true;
     };
@@ -531,6 +665,7 @@ export function ViewportCanvas() {
       cancelAnimationFrame(frameIdRef2.current);
       ro.disconnect();
       controls.dispose();
+      setViewportCapture(null);
       // Dispose shared sketch materials
       lineMat.dispose();
       pointMat.dispose();
@@ -592,6 +727,62 @@ export function ViewportCanvas() {
       window.removeEventListener('viewport-camera-orbit', onOrbit);
       window.removeEventListener('viewport-camera-request', onRequest);
     };
+  }, []);
+
+  // AI face-picking ("shell this wall"): the select_face_at_viewport AI tool
+  // dispatches 'scenelab:pick-face' with image-space normalized coordinates;
+  // this raycasts with the live camera and drives the face selection exactly
+  // like a Ctrl+click would. window.dispatchEvent is synchronous, so the
+  // resolve callback in the detail completes the tool's Promise in-place.
+  useEffect(() => {
+    const onPickFace = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        xNorm: number;
+        yNorm: number;
+        additive?: boolean;
+        resolve: (hit: { faceId: string; bodyId: string } | null) => void;
+      };
+      const groups = bodiesGroupRef.current;
+      const cam = useStore.getState().projection === 'orthographic'
+        ? orthoCameraRef.current
+        : cameraRef.current;
+      if (!groups || !cam) { d.resolve(null); return; }
+      raycasterRef.current.setFromCamera(
+        new THREE.Vector2(d.xNorm * 2 - 1, -(d.yNorm * 2 - 1)),
+        cam,
+      );
+      // Hidden bodies are absent from the group, so the first hit is the pick.
+      const hit = raycasterRef.current.intersectObjects(groups.children, true)
+        .find((h) => h.faceIndex !== null && h.faceIndex !== undefined);
+      const triFaceIds = hit?.object.userData.triFaceIds as string[] | undefined;
+      const faceId = hit && hit.faceIndex !== null && hit.faceIndex !== undefined
+        ? triFaceIds?.[hit.faceIndex]
+        : undefined;
+      const bodyId = hit?.object.userData.bodyId as string | undefined;
+      if (!hit || !faceId || !bodyId) { d.resolve(null); return; }
+      const st = useStore.getState();
+      // selectObject clears the face selection — select the body FIRST, then
+      // set the faces (face-scoped ops need the body selected too).
+      if (!st.selectedIds.includes(bodyId)) st.selectObject(bodyId);
+      const current = useStore.getState().selectedFaceIds;
+      st.setSelectedFaceIds(
+        d.additive ? (current.includes(faceId) ? current : [...current, faceId]) : [faceId],
+      );
+      d.resolve({ faceId, bodyId });
+    };
+    window.addEventListener('scenelab:pick-face', onPickFace);
+    return () => window.removeEventListener('scenelab:pick-face', onPickFace);
+  }, []);
+
+  // Command palette → viewport framing: the view.fitAll / view.fitSelection
+  // registry commands dispatch this (the F / Shift+F keys stay local).
+  useEffect(() => {
+    const onFit = (e: Event) => {
+      const d = (e as CustomEvent).detail as { selection?: boolean };
+      fitViewRef.current?.(!!d.selection);
+    };
+    window.addEventListener('scenelab:fit-view', onFit);
+    return () => window.removeEventListener('scenelab:fit-view', onFit);
   }, []);
 
   useEffect(() => {
@@ -833,18 +1024,19 @@ export function ViewportCanvas() {
     const previewGroup = previewGroupRef.current;
     if (!previewGroup) return;
 
+    // Remove last frame's preview objects. Their geometries are per-frame and
+    // tiny; the MATERIALS and the label sprite are shared preview assets,
+    // reused across mousemoves — never disposed here (see previewAssetsRef).
     while (previewGroup.children.length > 0) {
       const child = previewGroup.children[0]!;
       previewGroup.remove(child);
       if (child instanceof THREE.Line || child instanceof THREE.Points) {
         child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
-      } else if (child instanceof THREE.Sprite) {
-        disposeSprite(child);
       }
     }
 
     if (sketchActive && mousePos && sketchTool !== 'select') {
+      const assets = previewAssets();
       const pvFrame = SKETCH_PLANE_FRAMES[sketchPlaneId] ?? SKETCH_PLANE_FRAMES.xz;
       const v = (x: number, y: number) => {
         const p = new THREE.Vector3(
@@ -859,11 +1051,15 @@ export function ViewportCanvas() {
       const m = mousePos;
       const s = drawStart;
       // A marker dot at a sketch point, drawn on top (depthTest off) so it's
-      // always visible regardless of the geometry behind it.
+      // always visible regardless of the geometry behind it. The material is
+      // cached per dot size; its colour is (re)set per use.
       const marker = (x: number, y: number, color: number, size: number) => {
+        const mat = assets.markers.get(size)
+          ?? assets.markers.set(size, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false })).get(size)!;
+        mat.color.setHex(color);
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.Float32BufferAttribute([x, 0.01, y], 3));
-        return new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
+        return new THREE.Points(g, mat);
       };
       // Current cursor — turns green (and larger) when snapped onto an existing
       // point, line midpoint or the origin, so it's clear where it will connect.
@@ -874,14 +1070,13 @@ export function ViewportCanvas() {
       // an existing point's X or Y, draw a faint line to that point.
       if (!onPoint) {
         const align = inferAlignment(m, candidates, 1e-6);
-        const guideMat = () => new THREE.LineBasicMaterial({ color: 0x6c7086, depthTest: false });
         if (align.guideX) {
           const g = new THREE.BufferGeometry().setFromPoints([v(align.guideX.x, align.guideX.y), v(m.x, m.y)]);
-          previewGroup.add(new THREE.Line(g, guideMat()));
+          previewGroup.add(new THREE.Line(g, assets.guide));
         }
         if (align.guideY) {
           const g = new THREE.BufferGeometry().setFromPoints([v(align.guideY.x, align.guideY.y), v(m.x, m.y)]);
-          previewGroup.add(new THREE.Line(g, guideMat()));
+          previewGroup.add(new THREE.Line(g, assets.guide));
         }
       }
       if (s) {
@@ -917,25 +1112,24 @@ export function ViewportCanvas() {
         if (pts.length >= 2) {
           const geo = new THREE.BufferGeometry().setFromPoints(pts);
           // Solid, bright, always-on-top line — far more visible than a dashed one.
-          const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false }));
-          previewGroup.add(line);
+          previewGroup.add(new THREE.Line(geo, assets.line));
         }
         // Live size readout next to the cursor so you can see the dimensions
-        // while dragging (SolidWorks shows W×H / radius as you draw).
+        // while dragging (SolidWorks shows W×H / radius as you draw). The
+        // sprite redraws its own canvas in place — no per-mousemove texture
+        // allocation or GPU upload churn.
         const labelEnd = sketchTool === 'line' ? inferLineEnd(s, m).point : m;
         const label = previewDimensionLabel(sketchTool, s, labelEnd, polygonSides);
-        if (label) {
-          const sprite = makeTextSprite(label, 0xf9e2af, 0.35);
-          sprite.position.set(m.x + 0.5, 0.06, m.y + 0.5);
-          previewGroup.add(sprite);
-        }
+        assets.label.set(label ?? '', 0xf9e2af, 0.35);
+        assets.label.sprite.position.set(m.x + 0.5, 0.06, m.y + 0.5);
+        previewGroup.add(assets.label.sprite);
       }
       // Polyline preview: show a line from the last committed point to the cursor.
       if (sketchTool === 'polyline') {
         const pl = useStore.getState().polylineLast;
         if (pl) {
           const geo = new THREE.BufferGeometry().setFromPoints([v(pl.x, pl.y), v(m.x, m.y)]);
-          previewGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xf9e2af, depthTest: false })));
+          previewGroup.add(new THREE.Line(geo, assets.line));
           previewGroup.add(marker(pl.x, pl.y, 0xa6e3a1, 11));
         }
       }
@@ -1001,6 +1195,8 @@ export function ViewportCanvas() {
 
     const cache = meshCacheRef.current;
     const visibleIds = new Set(bodies.filter((b) => !hiddenIds.includes(b.id)).map((b) => b.id));
+    // Whether this pass actually changed the shadow-casting geometry.
+    let shadowDirty = false;
 
     // 1) Remove bodies no longer present or now hidden.
     for (const [id, entry] of cache) {
@@ -1015,6 +1211,7 @@ export function ViewportCanvas() {
           (entry.edges.material as THREE.Material).dispose();
         }
         cache.delete(id);
+        shadowDirty = true;
       }
     }
 
@@ -1027,6 +1224,7 @@ export function ViewportCanvas() {
         // Body unchanged and wireframe matches — reuse as-is.
         continue;
       }
+      shadowDirty = true;
 
       // Dispose old mesh/edges if rebuilding.
       if (cached) {
@@ -1044,11 +1242,22 @@ export function ViewportCanvas() {
       // Build mesh with per-vertex colors (for face highlighting).
       const geo = new THREE.BufferGeometry();
       const { positions, indices, triFaceIds } = buildBodyMeshArrays(body);
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geo.setIndex(indices);
+      const positionsF32 = new Float32Array(positions);
+      geo.setAttribute('position', new THREE.BufferAttribute(positionsF32, 3));
+      // BVH for the accelerated raycaster (body/face picking). Large meshes
+      // (big STL/STEP imports) build their tree in a worker so the import
+      // doesn't freeze the UI; until it lands, picking silently uses the
+      // default raycast. Explicit Uint32 index keeps the worker's serialized
+      // tree rehydratable element-type-exact.
+      if (triFaceIds.length >= ASYNC_BVH_TRIANGLE_THRESHOLD) {
+        const indicesU32 = new Uint32Array(indices);
+        geo.setIndex(new THREE.BufferAttribute(indicesU32, 1));
+        void buildBoundsTree(geo, positionsF32, indicesU32);
+      } else {
+        geo.setIndex(indices);
+        geo.computeBoundsTree();
+      }
       geo.computeVertexNormals();
-      // BVH for the accelerated raycaster (body/face picking).
-      geo.computeBoundsTree();
       // Initialize vertex colors to the base body color.
       const baseR = 0x89 / 255, baseG = 0xb4 / 255, baseB = 0xfa / 255;
       const colors = new Float32Array(positions.length);
@@ -1087,6 +1296,10 @@ export function ViewportCanvas() {
       cache.set(body.id, { body, mesh, edges });
     }
 
+    if (shadowDirty) {
+      const renderer = rendererRef.current;
+      if (renderer) renderer.shadowMap.needsUpdate = true;
+    }
     dirtyRef.current = true;
   }, [bodies, hiddenIds, wireframe]);
 
@@ -1394,6 +1607,11 @@ export function ViewportCanvas() {
     const ground = shadowGroundRef.current;
     if (light) light.castShadow = groundShadows;
     if (ground) ground.visible = groundShadows;
+    // Re-enabling shadows needs a fresh map (it may have gone stale while off).
+    if (groundShadows) {
+      const renderer = rendererRef.current;
+      if (renderer) renderer.shadowMap.needsUpdate = true;
+    }
     dirtyRef.current = true;
   }, [groundShadows]);
 
@@ -1698,6 +1916,21 @@ export function ViewportCanvas() {
         const n = useStore.getState().dragSelectionBy(stepX, 0, stepZ);
         if (n > 0) {
           drag.applied = { x: targetX, y: 0, z: targetZ };
+          // Preview as a pure transform: slide the existing meshes/edges
+          // instead of rebuilding geometry + BVH every pointermove. The store
+          // bakes the accumulated offset into the bodies once, on release.
+          // Only DIRECT bodies preview — feature-tree bodies stay put by
+          // design, so they must not slide and snap back.
+          const st = useStore.getState();
+          const sel = new Set(st.selectedIds);
+          applyDragPreview(
+            { bodies: bodiesGroupRef.current, edges: edgesGroupRef.current },
+            st.directBodies.filter((b) => sel.has(b.id)).map((b) => b.id),
+            st.dragOffset,
+          );
+          const renderer = rendererRef.current;
+          if (renderer) renderer.shadowMap.needsUpdate = true;
+          dirtyRef.current = true;
           setDragReadout(formatDragDelta(drag.applied));
         } else {
           // The selection has no direct bodies (feature-driven) — stop the
@@ -2301,6 +2534,12 @@ export function ViewportCanvas() {
         e.preventDefault();
         e.stopImmediatePropagation();
         bodyDragRef.current = null;
+        // Drop the preview transform (geometry was never touched).
+        applyDragPreview(
+          { bodies: bodiesGroupRef.current, edges: edgesGroupRef.current },
+          useStore.getState().selectedIds,
+          null,
+        );
         useStore.getState().cancelSelectionDrag();
         if (containerRef.current) containerRef.current.style.cursor = '';
         setDragReadout(null);
@@ -2384,9 +2623,10 @@ export function ViewportCanvas() {
       }
       // Arrow keys nudge the selection on the ground plane (top-view mapping):
       // ←/→ = X, ↑/↓ = Z; PageUp/PageDown = vertical (Y). Shift = 10mm coarse
-      // step, else 1mm. Skipped in sketch.
+      // step, Alt = 0.1mm fine step (Fusion modifier-stepped nudging), else 1mm.
+      // Skipped in sketch.
       if (!sketchActive && (e.key.startsWith('Arrow') || e.key === 'PageUp' || e.key === 'PageDown')) {
-        const step = e.shiftKey ? 10 : 1;
+        const step = e.altKey ? 0.1 : e.shiftKey ? 10 : 1;
         const move =
           e.key === 'ArrowLeft' ? [-step, 0, 0]
           : e.key === 'ArrowRight' ? [step, 0, 0]
@@ -2397,11 +2637,12 @@ export function ViewportCanvas() {
           : null;
         if (move && nudgeSelected(move[0]!, move[1]!, move[2]!) > 0) e.preventDefault();
       }
-      // In a sketch, arrows nudge the selected entity by the grid step.
+      // In a sketch, arrows nudge the selected entity by the grid step
+      // (Shift = 10× coarse, Alt = 0.1× fine, like the 3D nudge modifiers).
       if (sketchActive && e.key.startsWith('Arrow')) {
         const id = useStore.getState().selectedSketchId;
         if (id) {
-          const step = (e.shiftKey ? 10 : 1) * useStore.getState().gridSize;
+          const step = (e.altKey ? 0.1 : e.shiftKey ? 10 : 1) * useStore.getState().gridSize;
           const d =
             e.key === 'ArrowLeft' ? [-step, 0]
             : e.key === 'ArrowRight' ? [step, 0]
@@ -2511,7 +2752,9 @@ export function ViewportCanvas() {
   const handleMouseUp = useCallback(
     (e: React.MouseEvent) => {
       // Finish a body drag-move. A press without motion falls through as a
-      // normal click (endSelectionDrag already dropped the empty snapshot).
+      // normal click (endSelectionDrag leaves no history entry for it). The
+      // preview transform stays until the bake's rebuild swaps in fresh meshes
+      // at the final position — no snap-back frame.
       if (bodyDragRef.current) {
         bodyDragRef.current = null;
         useStore.getState().endSelectionDrag();

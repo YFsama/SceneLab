@@ -141,6 +141,12 @@ interface AppState {
   addFeature: (feature: Feature) => void;
   removeFeature: (id: string) => void;
   updateFeature: (id: string, mutator: (f: Feature) => Feature) => void;
+  /**
+   * Reorder a feature in the timeline (Fusion drag-reorder). Dependency order
+   * is enforced; returns false and pushes no undo entry for an illegal or
+   * no-op move.
+   */
+  moveFeature: (id: string, toIndex: number) => boolean;
   recomputeTree: () => void;
   /** Combined render list: feature-tree bodies + direct bodies. */
   bodies: SolidBody[];
@@ -196,14 +202,19 @@ interface AppState {
   /** Silent in-place translate of the selected direct bodies (no undo entry). */
   translateSelectionLive: (dx: number, dy: number, dz: number) => number;
   /**
-   * Viewport drag-move of the selection. `beginSelectionDrag` snapshots history
-   * once; `dragSelectionBy` applies silent deltas (no per-frame undo entries);
-   * `endSelectionDrag` drops the snapshot again when nothing moved (a plain
-   * click, not a drag); `cancelSelectionDrag` (Esc) restores the pre-drag state.
+   * Viewport drag-move of the selection (Fusion-style preview transform):
+   * `beginSelectionDrag` arms the drag; `dragSelectionBy` accumulates deltas
+   * into `dragOffset` WITHOUT touching body geometry — the viewport shows the
+   * motion as a mesh transform, so no per-frame mesh/BVH rebuilds;
+   * `endSelectionDrag` bakes the accumulated offset into the bodies as ONE
+   * undoable translate (a press without motion leaves no history entry);
+   * `cancelSelectionDrag` (Esc) just drops the preview.
    */
   bodyDragging: boolean;
   /** Whether the current drag actually moved anything (a no-move press is a click). */
   dragMovedThisDrag: boolean;
+  /** Accumulated preview offset of the active drag (null when not dragging). */
+  dragOffset: Vec3 | null;
   beginSelectionDrag: () => void;
   dragSelectionBy: (dx: number, dy: number, dz: number) => number;
   endSelectionDrag: () => void;
@@ -923,6 +934,20 @@ export const useStore = create<AppState>((set, get) => {
     set({ featureTree: tree, projectDirty: true });
     recombine();
   },
+  moveFeature: (id, toIndex) => {
+    pushUndo();
+    const tree = get().featureTree;
+    if (!tree.moveFeature(id, toIndex)) {
+      // Illegal or no-op drop — drop the snapshot we just pushed (same rule as
+      // a click-without-motion in the viewport drag).
+      set((s) => ({ undoStack: s.undoStack.slice(0, -1) }));
+      return false;
+    }
+    tree.recompute();
+    set({ featureTree: tree, projectDirty: true });
+    recombine();
+    return true;
+  },
   recomputeTree: () => {
     get().featureTree.recompute();
     recombine();
@@ -1196,29 +1221,40 @@ export const useStore = create<AppState>((set, get) => {
 
   bodyDragging: false,
   dragMovedThisDrag: false,
+  dragOffset: null,
   beginSelectionDrag: () => {
-    pushUndo();
-    set({ bodyDragging: true, dragMovedThisDrag: false });
+    set({ bodyDragging: true, dragMovedThisDrag: false, dragOffset: null });
   },
   dragSelectionBy: (dx, dy, dz) => {
     if (!get().bodyDragging) return 0;
-    const n = get().translateSelectionLive(dx, dy, dz);
-    if (n > 0) set({ dragMovedThisDrag: true });
+    const { selectedIds, directBodies } = get();
+    const sel = new Set(selectedIds);
+    const n = directBodies.filter((b) => sel.has(b.id)).length;
+    if (n === 0) return 0; // nothing direct selected
+    // Preview only: accumulate the offset; the viewport applies it as a mesh
+    // transform. Geometry is baked once, on endSelectionDrag.
+    const prev = get().dragOffset ?? { x: 0, y: 0, z: 0 };
+    set({
+      dragOffset: { x: prev.x + dx, y: prev.y + dy, z: prev.z + dz },
+      dragMovedThisDrag: true,
+    });
     return n;
   },
   endSelectionDrag: () => {
-    const { bodyDragging, dragMovedThisDrag } = get();
+    const { bodyDragging, dragMovedThisDrag, dragOffset } = get();
     if (!bodyDragging) return;
-    // A press without motion was a click, not a drag — drop the no-op
-    // snapshot so undo doesn't step through empty entries.
-    if (!dragMovedThisDrag) set((s) => ({ undoStack: s.undoStack.slice(0, -1) }));
-    set({ bodyDragging: false, dragMovedThisDrag: false });
-    if (dragMovedThisDrag) get().markOnboardingStep('move');
+    if (dragMovedThisDrag && dragOffset) {
+      // Bake the preview into the bodies as a single undoable translate.
+      pushUndo();
+      get().translateSelectionLive(dragOffset.x, dragOffset.y, dragOffset.z);
+      get().markOnboardingStep('move');
+    }
+    set({ bodyDragging: false, dragMovedThisDrag: false, dragOffset: null });
   },
   cancelSelectionDrag: () => {
     if (!get().bodyDragging) return;
-    set({ bodyDragging: false, dragMovedThisDrag: false });
-    get().undo();
+    // The preview never touched geometry — dropping the offset restores the view.
+    set({ bodyDragging: false, dragMovedThisDrag: false, dragOffset: null });
   },
   moveSelectionTo: (target) => {
     const { selectedIds, bodies } = get();

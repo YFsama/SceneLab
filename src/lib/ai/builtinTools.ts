@@ -2135,6 +2135,125 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'select_face_at_viewport',
+    description:
+      'Select the CAD face under a point of the viewport image you were shown. ' +
+      'x/y are normalized 0..1 of THAT image, origin top-left, y down (the image ' +
+      "center is 0.5,0.5). Use it when the user refers to a visible face ('shell " +
+      "this wall'): pick the face, then pass the returned faceId to shell/fillet " +
+      'as faceIds. If a crop region was captured, coordinates are mapped to the ' +
+      'full viewport automatically. Call it BEFORE any modifying tool (face ids ' +
+      'regenerate after edits) and after any set_view. On a miss, adjust the ' +
+      'point and retry at most once. additive=true keeps previously picked faces ' +
+      '(multi-face shell), default replaces.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Normalized x (0..1) in the image you were shown' },
+        y: { type: 'number', description: 'Normalized y (0..1, 0 = top) in the image you were shown' },
+        additive: { type: 'boolean', description: 'Add to the current face selection instead of replacing it' },
+      },
+      required: ['x', 'y'],
+    },
+    execute: async (args) => {
+      const x = assertNumber(args.x, 'x');
+      const y = assertNumber(args.y, 'y');
+      const additive = args.additive === true;
+      // A cropped vision capture shows only part of the viewport — map the
+      // image-space point back into full-viewport space before picking.
+      const region = useStore.getState().visionRegion;
+      const full = region && region.w > 0.01 && region.h > 0.01
+        ? { x: region.x + x * region.w, y: region.y + y * region.h }
+        : { x, y };
+      const hit = await new Promise<{ faceId: string; bodyId: string } | null>((resolve) => {
+        // dispatchEvent is synchronous; the timeout covers a missing listener
+        // (viewport not mounted) instead of hanging the tool loop.
+        const timer = setTimeout(() => resolve(null), 2000);
+        window.dispatchEvent(new CustomEvent('scenelab:pick-face', {
+          detail: {
+            xNorm: full.x,
+            yNorm: full.y,
+            additive,
+            resolve: (v: { faceId: string; bodyId: string } | null) => {
+              clearTimeout(timer);
+              resolve(v);
+            },
+          },
+        }));
+      });
+      if (!hit) {
+        throw new Error(
+          'No face found at those viewport coordinates — adjust x/y toward the face center and retry once',
+        );
+      }
+      return { success: true, faceId: hit.faceId, bodyId: hit.bodyId };
+    },
+  });
+
+  registerTool({
+    name: 'select_face',
+    description:
+      'Directly select a known face id on a body (ids from list_faces). ' +
+      'Selects the body first, then the face — exactly what face-scoped tools need.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body that owns the face' },
+        faceId: { type: 'string', description: 'Face id from list_faces' },
+      },
+      required: ['bodyId', 'faceId'],
+    },
+    execute: async (args) => {
+      const bodyId = assertString(args.bodyId, 'bodyId');
+      const faceId = assertString(args.faceId, 'faceId');
+      const store = useStore.getState();
+      const body = store.bodies.find((b) => b.id === bodyId);
+      if (!body) throw new Error(`Body ${bodyId} not found`);
+      if (!body.faces.some((f) => f.id === faceId)) throw new Error(`Face ${faceId} not found on body ${bodyId}`);
+      if (!store.selectedIds.includes(bodyId)) store.selectObject(bodyId);
+      const current = useStore.getState().selectedFaceIds;
+      useStore.getState().setSelectedFaceIds(
+        current.includes(faceId) ? current : [...current, faceId],
+      );
+      return { success: true, faceId, bodyId };
+    },
+  });
+
+  registerTool({
+    name: 'clear_face_selection',
+    description: 'Clear the picked-face selection (after finishing face-scoped operations)',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      useStore.getState().setSelectedFaceIds([]);
+      return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'select_body',
+    description: 'Select bodies by id in the viewport (the user sees the highlight). Use describe_scene/list tools for ids.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyIds: { type: 'array', items: { type: 'string' }, description: 'Body ids to select' },
+      },
+      required: ['bodyIds'],
+    },
+    execute: async (args) => {
+      if (!Array.isArray(args.bodyIds)) throw new Error('bodyIds must be an array');
+      const ids = args.bodyIds.map((id) => assertString(id, 'bodyIds[]'));
+      const store = useStore.getState();
+      const valid = ids.filter((id) => store.bodies.some((b) => b.id === id));
+      if (valid.length !== ids.length) {
+        const missing = ids.filter((id) => !valid.includes(id));
+        throw new Error(`Body ids not found: ${missing.join(', ')}`);
+      }
+      store.setSelectedIds(valid);
+      return { success: true, selectedIds: valid };
+    },
+  });
+
+  registerTool({
     name: 'set_projection',
     description: 'Switch between perspective and orthographic camera projection',
     parameters: {

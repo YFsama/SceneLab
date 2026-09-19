@@ -12,6 +12,7 @@ import {
   createMirrorFeature,
   createSweepFeature,
   createLoftFeature,
+  canReorderFeatures,
 } from './tree';
 import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
 import { computeVolume } from '../geometry/brep';
@@ -468,5 +469,85 @@ describe('incremental recompute', () => {
     tree.updateFeature(base.id, (f) => ({ ...f, suppressed: true }));
     tree.recompute();
     expect(tree.getResult(child.id)!.error).toBeTruthy();
+  });
+});
+
+describe('timeline drag-reorder', () => {
+  it('moves an independent feature and reorders the evaluation order', () => {
+    const tree = new FeatureTree();
+    const a = boxExtrude();
+    const b = boxExtrude();
+    const c = boxExtrude();
+    tree.addFeature(a);
+    tree.addFeature(b);
+    tree.addFeature(c);
+    expect(tree.moveFeature(c.id, 0)).toBe(true);
+    expect(tree.features.map((f) => f.id)).toEqual([c.id, a.id, b.id]);
+  });
+
+  it('refuses to move a feature before its parent', () => {
+    const tree = new FeatureTree();
+    const base = boxExtrude();
+    const child = createFilletFeature([], 1, [base.id]);
+    tree.addFeature(base);
+    tree.addFeature(child);
+    expect(tree.moveFeature(child.id, 0)).toBe(false);
+    expect(tree.features.map((f) => f.id)).toEqual([base.id, child.id]);
+  });
+
+  it('refuses to move a feature after its dependent', () => {
+    const tree = new FeatureTree();
+    const base = boxExtrude();
+    const child = createFilletFeature([], 1, [base.id]);
+    tree.addFeature(base);
+    tree.addFeature(child);
+    // Moving the parent to the end would put it after the fillet that consumes it.
+    expect(tree.moveFeature(base.id, 1)).toBe(false);
+    expect(tree.features.map((f) => f.id)).toEqual([base.id, child.id]);
+  });
+
+  it('clamps out-of-range targets and treats a same-place move as a no-op', () => {
+    const tree = new FeatureTree();
+    const a = boxExtrude();
+    const b = boxExtrude();
+    tree.addFeature(a);
+    tree.addFeature(b);
+    expect(tree.moveFeature(a.id, 99)).toBe(true); // clamped to the end
+    expect(tree.features.map((f) => f.id)).toEqual([b.id, a.id]);
+    expect(tree.moveFeature(a.id, 1)).toBe(false); // already there (from 1 → 1)
+    expect(tree.moveFeature(a.id, -5)).toBe(true); // clamps back to the front
+    expect(tree.features.map((f) => f.id)).toEqual([a.id, b.id]);
+    expect(tree.moveFeature('missing', 0)).toBe(false);
+  });
+
+  it('reorder keeps bodies valid and reuses memoized results', () => {
+    const tree = new FeatureTree();
+    const base = boxExtrude();
+    const child = createFilletFeature([], 1, [base.id]);
+    tree.addFeature(base);
+    tree.addFeature(child);
+    tree.recompute();
+    const baseBody = tree.getResult(base.id)!.bodies[0]!;
+    const childBody = tree.getResult(child.id)!.bodies[0]!;
+    expect(tree.moveFeature(base.id, 0)).toBe(false); // dependency-guarded, nothing changes
+    tree.recompute();
+    expect(tree.getResult(base.id)!.bodies[0]).toBe(baseBody);
+    expect(tree.getResult(child.id)!.bodies[0]).toBe(childBody);
+  });
+
+  it('canReorderFeatures mirrors moveFeature legality (pure, no mutation)', () => {
+    const tree = new FeatureTree();
+    const base = boxExtrude();
+    const child = createFilletFeature([], 1, [base.id]);
+    const tail = boxExtrude();
+    tree.addFeature(base);
+    tree.addFeature(child);
+    tree.addFeature(tail);
+    const before = [...tree.features];
+    expect(canReorderFeatures(tree.features, child.id, 0)).toBe(false);
+    expect(canReorderFeatures(tree.features, base.id, 2)).toBe(false);
+    expect(canReorderFeatures(tree.features, tail.id, 0)).toBe(true);
+    expect(canReorderFeatures(tree.features, base.id, 0)).toBe(true);
+    expect(tree.features).toEqual(before); // pure check, order untouched
   });
 });

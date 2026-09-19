@@ -6,6 +6,7 @@ import { showToast } from '../../lib/toast';
 import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../../lib/projectActions';
 import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
 import { framingBodies } from '../../lib/render/fitView';
+import { captureFreshCanvas } from '../../lib/render/capture';
 
 export function ProjectMenu() {
   const { t } = useT();
@@ -115,7 +116,10 @@ export function ProjectMenu() {
   };
 
   const handleExportPNG = () => {
-    const canvas = document.querySelector('canvas');
+    // captureFreshCanvas forces a render right before reading pixels, so the
+    // export works without preserveDrawingBuffer and always shows the current
+    // frame (not whatever was last dirty).
+    const canvas = captureFreshCanvas();
     if (!canvas) {
       showToast(t('toast.noViewport'), 'warning');
       return;
