@@ -741,3 +741,15 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
   v0.9.0 re-tagged on the fix commit. New rule for releases: verify the exact
   COMMITTED tree (git stash -u → lint/tsc/vitest → pop) before tagging, never
   the working tree, and always with tsbuildinfo cleared.
+- `2026-09-19`: Pass #15 — drag-and-drop import + constraint badges (1860 tests / 127 files green; lint/tsc/build/E2E 4/4 OK).
+  - **Drag-and-drop import** (TinkerCAD/Fusion/Onshape parity): `lib/io/importFiles.ts`
+    extracts the mesh-import routing from ProjectMenu into one shared entry point
+    (`classifyDroppedFile` pure router + `importMeshFile` + `openProjectFile`);
+    `DropZone` adds window-wide dragenter/depth-counted overlay ("Drop to import",
+    supported types listed) and routes drops — meshes merge, a `.studio3d`
+    replaces the scene after the dirty guard, unknown types toast the accepted
+    list. ProjectMenu's picker now calls the same importer.
+  - **Constraint badges** (Fusion/SolidWorks): `constraintGlyphs` maps every
+    applied constraint to an anchor + glyph (H, V, ∥, ⊥, ●, FIX, =, D<value>,
+    R, ⊙, T, SYM) — rendered green beside the amber size labels in the sketch
+    viewport, so sketches show both their sizes and their rules.

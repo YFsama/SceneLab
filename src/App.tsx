@@ -31,6 +31,7 @@ import { ScaleDialog } from './components/ui/ScaleDialog';
 import { HollowDialog } from './components/ui/HollowDialog';
 import { WelcomeCard } from './components/ui/WelcomeCard';
 import { SectionPanel } from './components/ui/SectionPanel';
+import { DropZone } from './components/ui/DropZone';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -103,6 +104,7 @@ export default function App() {
       <StatusBar />
 
       {/* Overlay UI */}
+      <DropZone />
       <ToastHost />
       <ConfirmDialog />
       <NumericPromptDialog />

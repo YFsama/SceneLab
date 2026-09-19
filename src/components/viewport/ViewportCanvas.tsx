@@ -31,6 +31,7 @@ import { useT } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
 import { formatDragDelta } from '../../lib/viewport/dragMove';
 import { sectionPlane } from '../../lib/render/section';
+import { constraintGlyphs } from '../../lib/sketch/constraintGlyphs';
 import { setViewportCapture } from '../../lib/render/capture';
 import { buildBoundsTree, ASYNC_BVH_TRIANGLE_THRESHOLD } from '../../lib/workers/bvhWorkerClient';
 
@@ -1204,6 +1205,14 @@ export function ViewportCanvas() {
             group.add(s);
           }
         }
+      }
+      // Constraint badges (Fusion/SolidWorks-style): H/V/∥/⊥/R/… at the
+      // anchor of each applied constraint, in green to separate them from
+      // the amber size labels.
+      for (const g of constraintGlyphs(currentSketch)) {
+        const s = makeTextSprite(g.text, 0xa6e3a1, 0.24);
+        s.position.copy(d2w(g.x, g.y)).addScaledVector(dimFrame.u, 0.9);
+        group.add(s);
       }
     }
     dirtyRef.current = true;

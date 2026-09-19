@@ -18,6 +18,13 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ## Key Features
 
+- **Drag-and-drop import**: drop STL / OBJ / STEP / 3MF files (or a whole
+  `.studio3d` project) anywhere onto the window — a full-viewport overlay
+  confirms the target, meshes merge into the scene, a project replaces it
+  (dirty-guarded). The menu picker and the drop zone share one importer.
+- **Constraint badges in sketches** (Fusion/SolidWorks-style): applied
+  constraints render as small green glyphs (H, V, ∥, ⊥, R, D…) at their
+  entities, so a sketch's rules are visible at a glance.
 - **AI face-picking** ("shell this wall"): with vision on, the assistant
   estimates the point over the feature you mean and selects that CAD face
   through the real viewport raycast — then shells/fillets it in the same
