@@ -753,3 +753,17 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     applied constraint to an anchor + glyph (H, V, ∥, ⊥, ●, FIX, =, D<value>,
     R, ⊙, T, SYM) — rendered green beside the amber size labels in the sketch
     viewport, so sketches show both their sizes and their rules.
+- `2026-09-19`: Pass #16 — release v0.10.0 (1860 tests / 127 files green; committed-tree gates + E2E 4/4).
+  - **Animated view transitions** (Fusion feel): 'viewport-camera-snap' now
+    tweens over 250 ms — view direction rotates along the sphere via quaternion
+    slerp (identity→full-rotation partial application, which also handles the
+    exact 180° front↔back flip), up-vector eases, ease-out cubic; the pivot is
+    controls.target (the old code re-anchored to the world origin and silently
+    changed zoom after panning). Cancelled by a new snap, ViewCube drag
+    (onOrbit) or any manual orbit start (controls 'start'), and on unmount.
+  - **Scope-explicit fillet/chamfer labels**: the body context menu now says
+    "Fillet all edges…" vs "Fillet {n} selected edge(s)…" based on the
+    Alt+click edge sub-selection — empty-scope-means-all was correct behaviour
+    but invisible; i18n en/zh, deps array fixed for selectedEdgeIds.
+  - v0.10.0 packages passes #15 (drag-and-drop import, constraint badges) and
+    #16; version synced across the four manifests, CHANGELOG entry added.

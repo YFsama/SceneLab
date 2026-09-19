@@ -236,6 +236,9 @@ export function ViewportCanvas() {
   const shadowGroundRef = useRef<THREE.Mesh | null>(null);
   // The key light that casts the ground shadow (toggle flips castShadow).
   const dirLightRef = useRef<THREE.DirectionalLight | null>(null);
+  // In-flight standard-view transition (requestAnimationFrame id) — animated
+  // view snaps; cancelled by a new snap, a ViewCube drag or user orbiting.
+  const snapTweenRef = useRef<number | null>(null);
   const edgesGroupRef = useRef<THREE.Group | null>(null);
   const edgeHighlightRef = useRef<THREE.Group | null>(null);
   const comGroupRef = useRef<THREE.Group | null>(null);
@@ -708,20 +711,48 @@ export function ViewportCanvas() {
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
+    const cancelSnapTween = () => {
+      if (snapTweenRef.current !== null) {
+        cancelAnimationFrame(snapTweenRef.current);
+        snapTweenRef.current = null;
+      }
+    };
+
     const onSnap = (e: Event) => {
       const d = (e as CustomEvent).detail as {
         position: { x: number; y: number; z: number };
         up: { x: number; y: number; z: number };
       };
       const dist = camera.position.distanceTo(controls.target);
-      camera.position.set(d.position.x * dist, d.position.y * dist, d.position.z * dist);
-      camera.up.set(d.up.x, d.up.y, d.up.z);
-      controls.update();
-      if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
-      dirtyRef.current = true;
+      // Fusion-style animated view change: slerp the view direction along the
+      // sphere (quaternion handles the 180° front↔back flip) over 250 ms.
+      cancelSnapTween();
+      const fromDir = camera.position.clone().sub(controls.target);
+      const fromLen = fromDir.length();
+      if (fromLen < 1e-9) return;
+      fromDir.divideScalar(fromLen);
+      const toDir = new THREE.Vector3(d.position.x, d.position.y, d.position.z).normalize();
+      const fromUp = camera.up.clone();
+      const toUp = new THREE.Vector3(d.up.x, d.up.y, d.up.z);
+      const rot = new THREE.Quaternion().setFromUnitVectors(fromDir, toDir);
+      const start = performance.now();
+      const DURATION = 250;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / DURATION);
+        const k = 1 - Math.pow(1 - t, 3); // ease-out cubic
+        const partial = new THREE.Quaternion().slerp(rot, k);
+        camera.position.copy(fromDir).applyQuaternion(partial).multiplyScalar(dist).add(controls.target);
+        camera.up.copy(fromUp).lerp(toUp, k).normalize();
+        controls.update();
+        if (ortho) { ortho.position.copy(camera.position); ortho.up.copy(camera.up); }
+        dirtyRef.current = true;
+        snapTweenRef.current = t < 1 ? requestAnimationFrame(step) : null;
+      };
+      snapTweenRef.current = requestAnimationFrame(step);
     };
 
     const onOrbit = (e: Event) => {
+      cancelSnapTween();
       const d = (e as CustomEvent).detail as {
         position: { x: number; y: number; z: number };
         up: { x: number; y: number; z: number };
@@ -747,10 +778,14 @@ export function ViewportCanvas() {
     window.addEventListener('viewport-camera-snap', onSnap);
     window.addEventListener('viewport-camera-orbit', onOrbit);
     window.addEventListener('viewport-camera-request', onRequest);
+    // Manual orbit/pan/zoom instantly cancels an in-flight view transition.
+    controls.addEventListener('start', cancelSnapTween);
     return () => {
       window.removeEventListener('viewport-camera-snap', onSnap);
       window.removeEventListener('viewport-camera-orbit', onOrbit);
       window.removeEventListener('viewport-camera-request', onRequest);
+      controls.removeEventListener('start', cancelSnapTween);
+      cancelSnapTween();
     };
   }, []);
 
@@ -2362,9 +2397,12 @@ export function ViewportCanvas() {
         {
           // Parametric modify features (Fusion timeline style). Tree-produced
           // bodies gain a child feature; direct bodies are edited in place.
+          // Fillet/chamfer labels state their scope explicitly — Alt+click
+          // edges scope them, otherwise they hit EVERY edge (Fusion behaviour,
+          // but only readable when the menu says so).
           label: t('menu.feature'),
           submenu: [
-            { label: t('feature.fillet'), onClick: pre(() => {
+            { label: selectedEdgeIds.length > 0 ? t('menu.filletEdges', { n: selectedEdgeIds.length }) : t('menu.filletAllEdges'), onClick: pre(() => {
               useStore.getState().openNumericPrompt({
                 titleKey: 'feature.fillet', labelKey: 'feature.filletPrompt',
                 initial: 2, min: 0.01,
@@ -2374,7 +2412,7 @@ export function ViewportCanvas() {
                 },
               });
             }) },
-            { label: t('feature.chamfer'), onClick: pre(() => {
+            { label: selectedEdgeIds.length > 0 ? t('menu.chamferEdges', { n: selectedEdgeIds.length }) : t('menu.chamferAllEdges'), onClick: pre(() => {
               useStore.getState().openNumericPrompt({
                 titleKey: 'feature.chamfer', labelKey: 'feature.chamferPrompt',
                 initial: 2, min: 0.01,
@@ -2467,7 +2505,7 @@ export function ViewportCanvas() {
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, selectedIds, hiddenIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, projection, annotations],
+    [bodies, t, selectedIds, hiddenIds, selectedEdgeIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, projection, annotations],
   );
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,
