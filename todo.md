@@ -693,3 +693,15 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     all conflict with existing bindings — candidates for a future keymap pass.
   - **v0.8.0**: version synced (package.json / Cargo.toml / tauri.conf.json /
     Cargo.lock).
+- `2026-09-19`: Pass #14 — sketch offset entity (1824 tests / 124 files green; lint/tsc/build/E2E 4/4 OK).
+  - **Offset entity** (SolidWorks 草图等距偏移): `offsetEntity` in the sketch
+    engine copies a line perpendicular to itself (signed distance), grows/shrinks
+    circles and arcs about their centre (negative = inward, refuses collapse),
+    points/unknown ids rejected. Store `offsetSketchEntity` pushes one sketch-
+    undo entry, selects the new entity, and drops the snapshot again when
+    nothing was created (a no-op offset can't pollute undo).
+  - **Entries**: SketchToolbar action button (MoveDiagonal icon, disabled without
+    an offsetable selection) + the sketch right-click menu — both open the shared
+    NumericPrompt with a signed distance (negative allowed for inward offsets);
+    the prompt's label says so in both locales (sketch.offset / offsetPrompt).
+  - No hotkey on purpose — candidates were noted for a future keymap pass.

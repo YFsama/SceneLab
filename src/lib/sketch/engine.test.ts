@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createSketch, addPoint, addLine, addRectangle, addCircle, addArc, addPolygon,
   addConstraint, removeEntity, removeConstraint, solveSketch, snapTargets,
-  detectRectangle, resizeRectangle, closestPointPair, filletSketchCorner,
+  detectRectangle, resizeRectangle, closestPointPair, filletSketchCorner, offsetEntity,
 } from './engine';
 
 describe('createSketch', () => {
@@ -740,5 +740,60 @@ describe('filletSketchCorner', () => {
     // (r = 4 lands exactly on the endpoints, which is still legal.)
     expect(filletSketchCorner(s2, c!, d!, 5)).toBe(false);
     expect(filletSketchCorner(s2, c!, d!, 1)).toBe(true);
+  });
+});
+
+describe('offsetEntity (SolidWorks offset)', () => {
+  it('offsets a line perpendicular to itself, keeping length and direction', () => {
+    const s = createSketch('xz');
+    const line = addLine(s, 0, 0, 30, 40); // length 50, unit normal (-0.8, 0.6)
+    const id = offsetEntity(s, line.id, 10);
+    expect(id).toBeTruthy();
+    const copy = s.entities.get(id!)!;
+    expect(copy.type).toBe('line');
+    const p1 = s.entities.get((copy as { p1Id: string }).p1Id)! as { x: number; y: number };
+    const p2 = s.entities.get((copy as { p2Id: string }).p2Id)! as { x: number; y: number };
+    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeCloseTo(50, 6);
+    expect(p1.x).toBeCloseTo(-8, 6); // 0 + (-0.8)*10
+    expect(p1.y).toBeCloseTo(6, 6); // 0 + 0.6*10
+  });
+
+  it('negative distance offsets a line to the other side', () => {
+    const s = createSketch('xz');
+    const line = addLine(s, 0, 0, 10, 0);
+    const id = offsetEntity(s, line.id, -4);
+    const copy = s.entities.get(id!)!;
+    const p1 = s.entities.get((copy as { p1Id: string }).p1Id)! as { x: number; y: number };
+    expect(p1.x).toBeCloseTo(0, 6);
+    expect(p1.y).toBeCloseTo(-4, 6);
+  });
+
+  it('grows and shrinks circles about their centre; refuses collapse', () => {
+    const s = createSketch('xz');
+    const c = addCircle(s, 1, 2, 5);
+    const grown = offsetEntity(s, c.id, 3);
+    expect((s.entities.get(grown!) as { radius: number }).radius).toBeCloseTo(8, 9);
+    const shrunk = offsetEntity(s, c.id, -3);
+    expect((s.entities.get(shrunk!) as { radius: number }).radius).toBeCloseTo(2, 9);
+    expect(offsetEntity(s, c.id, -5)).toBeNull(); // would collapse
+  });
+
+  it('offsets an arc keeping centre and sweep', () => {
+    const s = createSketch('xz');
+    const a = addArc(s, 0, 0, 4, 0, Math.PI / 2);
+    const id = offsetEntity(s, a.id, 2);
+    const copy = s.entities.get(id!)!;
+    expect(copy.type).toBe('arc');
+    expect((copy as { radius: number }).radius).toBeCloseTo(6, 9);
+    expect((copy as { startAngle: number }).startAngle).toBeCloseTo(0, 9);
+    expect((copy as { endAngle: number }).endAngle).toBeCloseTo(Math.PI / 2, 9);
+  });
+
+  it('rejects zero distances, unknown ids and points', () => {
+    const s = createSketch('xz');
+    const line = addLine(s, 0, 0, 5, 0);
+    expect(offsetEntity(s, line.id, 0)).toBeNull();
+    expect(offsetEntity(s, 'missing', 3)).toBeNull();
+    expect(offsetEntity(s, s.entities.get(line.p1Id)!.id, 3)).toBeNull();
   });
 });

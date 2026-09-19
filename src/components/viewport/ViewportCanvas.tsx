@@ -244,9 +244,33 @@ export function ViewportCanvas() {
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   // Live drag-move readout ("Δ 20, -10 mm") shown while a body drag is active.
-  const [dragReadout, setDragReadout] = useState<string | null>(null);
-  // Box-selection state: when left-dragging on empty space, draws a screen rectangle.
-  const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  // Ref-driven DOM updates, not state: a setState per pointermove re-renders
+  // this whole component every frame of a drag; the overlay is pure pixels.
+  const dragReadoutRef = useRef<HTMLSpanElement | null>(null);
+  const setDragReadout = (text: string | null) => {
+    const el = dragReadoutRef.current;
+    if (!el) return;
+    el.textContent = text ?? '';
+    el.style.display = text ? 'block' : 'none';
+  };
+  // Box-selection rectangle (and AI-vision crop): also ref-driven for the same
+  // per-pointermove reason. selRectRef is the logical value readers use.
+  const selRectBoxRef = useRef<HTMLDivElement | null>(null);
+  const selRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const setSelRect = (r: { x1: number; y1: number; x2: number; y2: number } | null) => {
+    selRectRef.current = r;
+    const el = selRectBoxRef.current;
+    if (!el) return;
+    if (!r) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.style.left = `${Math.min(r.x1, r.x2)}px`;
+    el.style.top = `${Math.min(r.y1, r.y2)}px`;
+    el.style.width = `${Math.abs(r.x2 - r.x1)}px`;
+    el.style.height = `${Math.abs(r.y2 - r.y1)}px`;
+  };
   const selRectStartRef = useRef<{ x: number; y: number; hitBody: boolean } | null>(null);
   const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
   const visionDragRef = useRef<{ x: number; y: number } | null>(null); // AI vision crop drag origin
@@ -1948,7 +1972,8 @@ export function ViewportCanvas() {
         const container = containerRef.current;
         if (container) {
           const rect = container.getBoundingClientRect();
-          setSelRect((prev) => prev ? { ...prev, x2: e.clientX - rect.left, y2: e.clientY - rect.top } : null);
+          const prev = selRectRef.current;
+          if (prev) setSelRect({ ...prev, x2: e.clientX - rect.left, y2: e.clientY - rect.top });
         }
       }
       if (!sketchActive) {
@@ -2045,6 +2070,22 @@ export function ViewportCanvas() {
         label: isConstruction ? t('sketch.normalGeometry') : t('sketch.construction'),
         onClick: () => useStore.getState().toggleSketchConstruction(selectedSketchId),
       });
+      // Offset (equidistant copy) — SolidWorks' offset entity, for the
+      // offsetable kinds only; signed distance (negative = inward for circles).
+      if (ent && (ent.type === 'line' || ent.type === 'circle' || ent.type === 'arc')) {
+        items.push({
+          label: t('sketch.offset'),
+          onClick: () => {
+            useStore.getState().openNumericPrompt({
+              titleKey: 'sketch.offset',
+              labelKey: 'sketch.offsetPrompt',
+              initial: 5,
+              min: -1e6,
+              onApply: (val) => { useStore.getState().offsetSketchEntity(selectedSketchId, val); },
+            });
+          },
+        });
+      }
       // Context-sensitive constraint submenu, aware of the whole multi-selection
       // (SolidWorks: select two entities, right-click, pick the constraint).
       // Two-entity offers only appear when the selection pair is valid for them.
@@ -2762,7 +2803,7 @@ export function ViewportCanvas() {
         setDragReadout(null);
       }
       // AI vision region: finalize the crop rectangle (normalized 0..1).
-      if (visionDragRef.current && selRect) {
+      if (visionDragRef.current && selRectRef.current) {
         const container = containerRef.current;
         if (container) {
           const rect = container.getBoundingClientRect();
@@ -2788,7 +2829,7 @@ export function ViewportCanvas() {
         return;
       }
       // Box selection: if we were drawing a selection rectangle, finalize it.
-      if (selRectStartRef.current && !selRectStartRef.current.hitBody && selRect) {
+      if (selRectStartRef.current && !selRectStartRef.current.hitBody && selRectRef.current) {
         const container = containerRef.current;
         if (container) {
           const rect = container.getBoundingClientRect();
@@ -2899,7 +2940,7 @@ export function ViewportCanvas() {
       setDrawStart(null);
       setDimBuffer('');
     },
-    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, selRect, setPolylineLast, t],
+    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, setPolylineLast, t],
   );
 
   return (
@@ -2917,18 +2958,12 @@ export function ViewportCanvas() {
         role="img"
         aria-label={t('viewport.title')}
       />
-      {selRect && (
-        <div
-          className="absolute border-2 border-accent bg-accent/10 pointer-events-none z-20"
-          style={{
-            left: Math.min(selRect.x1, selRect.x2),
-            top: Math.min(selRect.y1, selRect.y2),
-            width: Math.abs(selRect.x2 - selRect.x1),
-            height: Math.abs(selRect.y2 - selRect.y1),
-          }}
-          aria-hidden="true"
-        />
-      )}
+      <div
+        ref={selRectBoxRef}
+        className="absolute border-2 border-accent bg-accent/10 pointer-events-none z-20"
+        style={{ display: 'none' }}
+        aria-hidden="true"
+      />
       {hoverLabel && !sketchActive && !measureActive && (
         <div
           className="absolute z-10 px-1.5 py-0.5 rounded bg-panel/90 border border-panel-border text-[10px] text-text-primary pointer-events-none whitespace-nowrap"
@@ -2939,15 +2974,14 @@ export function ViewportCanvas() {
         </div>
       )}
       {/* Live drag-move offset readout (bottom-left, next to the type-ahead
-          dimension entry's slot) so beginners see how far a drag went. */}
-      {dragReadout && (
-        <div
-          className="absolute z-20 bottom-3 left-3 px-2 py-1 rounded bg-panel/90 backdrop-blur-sm border border-accent/60 text-xs text-text-primary pointer-events-none font-mono"
-          aria-live="polite"
-        >
-          {dragReadout}
-        </div>
-      )}
+          dimension entry's slot) so beginners see how far a drag went.
+          Ref-driven DOM text update — no React state per pointermove. */}
+      <span
+        ref={dragReadoutRef}
+        className="absolute z-20 bottom-3 left-3 px-2 py-1 rounded bg-panel/90 backdrop-blur-sm border border-accent/60 text-xs text-text-primary pointer-events-none font-mono"
+        style={{ display: 'none' }}
+        aria-live="polite"
+      />
       {/* Type-ahead dimension entry: shows the buffered value and the tool's
           expected format while a draw is in progress. */}
       {dimBuffer && sketchActive && drawStart && (

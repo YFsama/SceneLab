@@ -517,3 +517,42 @@ export function filletSketchCorner(
   addArc(sketch, cx, cy, radius, startAngle, endAngle);
   return true;
 }
+
+/**
+ * Offset (equidistant copy) of a sketch entity — SolidWorks' offset entity.
+ * Lines copy perpendicular to themselves; circles/arcs grow or shrink about
+ * their centre (negative distance = inward, must stay positive-radius).
+ * Returns the new entity id, or null when the entity isn't offsetable / the
+ * distance is zero / a shrinking circle would collapse.
+ */
+export function offsetEntity(sketch: Sketch, entityId: string, distance: number): string | null {
+  if (!Number.isFinite(distance) || Math.abs(distance) < 1e-9) return null;
+  const e = sketch.entities.get(entityId);
+  if (!e) return null;
+  if (e.type === 'line') {
+    const p1 = sketch.entities.get(e.p1Id);
+    const p2 = sketch.entities.get(e.p2Id);
+    if (p1?.type !== 'point' || p2?.type !== 'point') return null;
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) return null;
+    const nx = -dy / len;
+    const ny = dx / len;
+    return addLine(
+      sketch,
+      p1.x + nx * distance, p1.y + ny * distance,
+      p2.x + nx * distance, p2.y + ny * distance,
+    ).id;
+  }
+  if (e.type === 'circle' || e.type === 'arc') {
+    const c = sketch.entities.get(e.centerId);
+    if (c?.type !== 'point') return null;
+    const r = e.radius + distance;
+    if (!(r > 0.01)) return null;
+    return e.type === 'circle'
+      ? addCircle(sketch, c.x, c.y, r).id
+      : addArc(sketch, c.x, c.y, r, e.startAngle, e.endAngle).id;
+  }
+  return null;
+}

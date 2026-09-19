@@ -66,7 +66,10 @@ export async function buildBoundsTree(
 ): Promise<void> {
   const w = getWorker();
   if (!w) {
-    geometry.computeBoundsTree();
+    // No Worker host (tests/jsdom): build synchronously. `computeBoundsTree`
+    // only exists where the viewport's prototype patch ran, so construct the
+    // tree directly — identical result.
+    geometry.boundsTree = new MeshBVH(geometry);
     return;
   }
   const id = nextReqId++;

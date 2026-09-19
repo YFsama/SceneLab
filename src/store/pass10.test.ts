@@ -118,3 +118,44 @@ describe('store — ground shadows toggle', () => {
     expect(localStorage.getItem('scenelab.groundShadows')).toBe('true');
   });
 });
+
+describe('store — offsetSketchEntity (SolidWorks offset entity)', () => {
+  beforeEach(() => {
+    const sk = createSketch('xz');
+    useStore.setState({
+      featureTree: new FeatureTree(), bodies: [], directBodies: [], objectIds: [],
+      selectedIds: [], undoStack: [], redoStack: [],
+      currentSketch: sk, sketchActive: true, sketchUndoStack: [], sketchRedoStack: [],
+      selectedSketchId: null, selectedSketchIds: [],
+    });
+  });
+
+  it('creates the offset copy, selects it and records one sketch undo entry', () => {
+    const sk = useStore.getState().currentSketch!;
+    const line = addLine(sk, 0, 0, 10, 0);
+    const undoLen = useStore.getState().sketchUndoStack.length;
+    const newId = useStore.getState().offsetSketchEntity(line.id, 3);
+    expect(newId).toBeTruthy();
+    const st = useStore.getState();
+    // 2 pts + line, then the copy adds 2 new pts + the offset line.
+    expect(st.currentSketch!.entities.size).toBe(6);
+    expect(st.selectedSketchId).toBe(newId);
+    expect(st.sketchUndoStack.length).toBe(undoLen + 1);
+    // Sketch undo restores the pre-offset entity set.
+    st.sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(3);
+  });
+
+  it('failure leaves the sketch and undo stack untouched', () => {
+    const sk = useStore.getState().currentSketch!;
+    const line = addLine(sk, 0, 0, 10, 0);
+    const circle = addCircle(sk, 0, 0, 4);
+    const undoLen = useStore.getState().sketchUndoStack.length;
+    expect(useStore.getState().offsetSketchEntity('missing', 3)).toBeNull();
+    expect(useStore.getState().offsetSketchEntity(circle.id, -10)).toBeNull(); // would collapse
+    expect(useStore.getState().offsetSketchEntity(line.id, 0)).toBeNull();
+    // line = 2 pts + line, circle = centre pt + circle → 5, unchanged.
+    expect(useStore.getState().currentSketch!.entities.size).toBe(5);
+    expect(useStore.getState().sketchUndoStack.length).toBe(undoLen);
+  });
+});

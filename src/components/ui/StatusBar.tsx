@@ -41,6 +41,10 @@ export function StatusBar() {
   })();
   const sketchActive = useStore((s) => s.sketchActive);
   const currentSketch = useStore((s) => s.currentSketch);
+  // Undo/redo depth (Fusion's timeline position made glanceable: how much
+  // history is available behind/ahead of the current state).
+  const undoDepth = useStore((s) => s.undoStack.length);
+  const redoDepth = useStore((s) => s.redoStack.length);
   const gridSize = useStore((s) => s.gridSize);
   const setGridSize = useStore((s) => s.setGridSize);
   const sketchTool = useStore((s) => s.sketchTool);
@@ -150,6 +154,14 @@ export function StatusBar() {
         )}
         <span>{t('status.objects')}: {objectCount}</span>
         <span>{t('status.selected')}: {selectedCount}</span>
+        {(undoDepth > 0 || redoDepth > 0) && (
+          <span
+            className="font-mono text-text-muted hidden sm:inline"
+            title={t('status.history')}
+          >
+            ↺ {undoDepth} · ↻ {redoDepth}
+          </span>
+        )}
         {oneBodyDims && <span className="font-mono text-text-secondary">{oneBodyDims}</span>}
         {oneBodyMaterial && <span className="text-text-muted">{oneBodyMaterial}</span>}
         {multiDims && <span className="font-mono text-text-secondary">{multiDims}</span>}

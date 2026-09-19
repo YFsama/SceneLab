@@ -1,6 +1,6 @@
 import { useStore, type SketchTool } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { MousePointer2, Minus, Square, Circle, CircleDot, Hexagon, Box, RotateCw, LogOut } from 'lucide-react';
+import { MousePointer2, Minus, Square, Circle, CircleDot, Hexagon, Box, RotateCw, LogOut, MoveDiagonal } from 'lucide-react';
 
 const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[] = [
   { tool: 'select', icon: MousePointer2, shortcut: 'V' },
@@ -11,6 +11,21 @@ const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[
   { tool: 'polygon', icon: Hexagon, shortcut: 'P' },
 ];
 
+/** Opens the offset-distance prompt for the selected line/circle/arc. */
+function promptOffset() {
+  const st = useStore.getState();
+  const id = st.selectedSketchId;
+  const ent = id ? st.currentSketch?.entities.get(id) : undefined;
+  if (!ent || (ent.type !== 'line' && ent.type !== 'circle' && ent.type !== 'arc')) return;
+  st.openNumericPrompt({
+    titleKey: 'sketch.offset',
+    labelKey: 'sketch.offsetPrompt',
+    initial: 5,
+    min: -1e6,
+    onApply: (val) => { useStore.getState().offsetSketchEntity(id!, val); },
+  });
+}
+
 export function SketchToolbar() {
   const { t } = useT();
   const current = useStore((s) => s.sketchTool);
@@ -20,6 +35,12 @@ export function SketchToolbar() {
   const setWorkspace = useStore((s) => s.setWorkspace);
   const setShowExtrudeDialog = useStore((s) => s.setShowExtrudeDialog);
   const setShowRevolveDialog = useStore((s) => s.setShowRevolveDialog);
+  const selectedSketchId = useStore((s) => s.selectedSketchId);
+  const currentSketch = useStore((s) => s.currentSketch);
+  const offsettableSelected = (() => {
+    const e = selectedSketchId ? currentSketch?.entities.get(selectedSketchId) : undefined;
+    return !!e && (e.type === 'line' || e.type === 'circle' || e.type === 'arc');
+  })();
 
   const exitSketch = () => {
     setSketchActive(false);
@@ -71,6 +92,19 @@ export function SketchToolbar() {
         title={t('feature.revolve')}
       >
         <RotateCw size={18} />
+      </button>
+
+      {/* Offset (equidistant copy) of the selected line/circle/arc —
+          SolidWorks' offset entity. Disabled without an offsetable selection. */}
+      <button
+        onClick={promptOffset}
+        disabled={!offsettableSelected}
+        className="w-9 h-9 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label={t('sketch.offset')}
+        aria-disabled={!offsettableSelected}
+        title={t('sketch.offset')}
+      >
+        <MoveDiagonal size={18} />
       </button>
 
       <button

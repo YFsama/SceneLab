@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, type DetectedRectangle } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, offsetEntity, type DetectedRectangle } from '../lib/sketch/engine';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
@@ -127,6 +127,8 @@ interface AppState {
   resizeSketchLine: (id: string, length: number) => boolean;
   /** Set a sketch circle/arc's radius, keeping its centre; false if not round / invalid. */
   resizeSketchCircle: (id: string, radius: number) => boolean;
+  /** Offset (equidistant copy) a line/circle/arc by a signed distance; returns the new entity id, or null. */
+  offsetSketchEntity: (id: string, distance: number) => string | null;
   /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
   toggleSketchConstruction: (id: string) => void;
   /** 2D corner fillet between two lines: trim to the tangent points + arc. */
@@ -873,6 +875,19 @@ export const useStore = create<AppState>((set, get) => {
     e.radius = radius;
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
+  },
+  offsetSketchEntity: (id, distance) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return null;
+    pushSketchUndo();
+    const newId = offsetEntity(sketch, id, distance);
+    if (newId === null) {
+      // Nothing was created — drop the now-pointless undo snapshot.
+      set((s) => ({ sketchUndoStack: s.sketchUndoStack.slice(0, -1) }));
+      return null;
+    }
+    set({ currentSketch: { ...sketch }, selectedSketchId: newId, projectDirty: true });
+    return newId;
   },
   toggleSketchConstruction: (id) => {
     const sketch = get().currentSketch;
