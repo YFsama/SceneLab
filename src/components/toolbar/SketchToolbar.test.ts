@@ -3,7 +3,7 @@ import type { SketchTool } from '../../store/app';
 import { useStore } from '../../store/app';
 import { createSketch, addCircle } from '../../lib/sketch/engine';
 import { translations } from '../../lib/i18n';
-import { act, type ReactNode } from 'react';
+import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { SketchToolbar } from './SketchToolbar';
 
@@ -119,7 +119,7 @@ describe('SketchToolbar offset button (rendered)', () => {
   });
 
   it('renders with the English label and is disabled without a selection', async () => {
-    const m = await mountToolbar(<SketchToolbar />);
+    const m = await mountToolbar(createElement(SketchToolbar));
     try {
       const btn = offsetButton(m.container);
       expect(btn).not.toBeNull();
@@ -133,9 +133,9 @@ describe('SketchToolbar offset button (rendered)', () => {
 
   it('renders with the Chinese label in the zh locale', async () => {
     useStore.getState().setLocale('zh');
-    const m = await mountToolbar(<SketchToolbar />);
+    const m = await mountToolbar(createElement(SketchToolbar));
     try {
-      const btn = m.container.querySelector(
+      const btn = m.container.querySelector<HTMLButtonElement>(
         `button[aria-label="${translations.zh!['sketch.offset']!}"]`,
       );
       expect(btn).not.toBeNull();
@@ -152,7 +152,7 @@ describe('SketchToolbar offset button (rendered)', () => {
     useStore.getState().setCurrentSketch(sketch);
     useStore.getState().setSelectedSketchId(circle.id);
 
-    const m = await mountToolbar(<SketchToolbar />);
+    const m = await mountToolbar(createElement(SketchToolbar));
     try {
       const btn = offsetButton(m.container);
       expect(btn).not.toBeNull();
@@ -169,8 +169,10 @@ describe('SketchToolbar offset button (rendered)', () => {
       expect(prompt!.min).toBe(-1e6);
 
       // Simulate the dialog's Apply: close, then run the callback.
-      useStore.getState().closeNumericPrompt();
-      prompt!.onApply(2);
+      await act(async () => {
+        useStore.getState().closeNumericPrompt();
+        prompt!.onApply(2);
+      });
       const circles = [...useStore.getState().currentSketch!.entities.values()].filter(
         (e) => e.type === 'circle',
       );

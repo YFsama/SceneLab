@@ -734,3 +734,10 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     inradius-violation rejection with zero mutation, open-chain/NaN/unknown-id
     rejection, miter spike clamp ≤ d/0.35).
   - **v0.9.0**: version synced across the four manifest files; CHANGELOG entry.
+- `2026-09-19`: Pass #14c — release-process fix. v0.8.0 AND v0.9.0 tags both
+  shipped mid-edit states (an undeclared-method call; then JSX inside a .ts
+  test file) that local checks missed because the concurrent session's fixes
+  were already in the working tree. Both root causes are now fixed on main;
+  v0.9.0 re-tagged on the fix commit. New rule for releases: verify the exact
+  COMMITTED tree (git stash -u → lint/tsc/vitest → pop) before tagging, never
+  the working tree, and always with tsbuildinfo cleared.
