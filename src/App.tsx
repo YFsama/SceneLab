@@ -18,6 +18,7 @@ import { NumericPromptDialog } from './components/ui/NumericPrompt';
 import { RevolveDialog } from './components/ui/RevolveDialog';
 import { AIPanel } from './components/panels/AIPanel';
 import { CAMPanel } from './components/panels/CAMPanel';
+import { ParametersPanel } from './components/panels/ParametersPanel';
 import { useKeyboardShortcuts, initShortcuts } from './lib/hooks/useKeyboardShortcuts';
 import { useAutosave } from './lib/hooks/useAutosave';
 import { SkipLink } from './components/ui/SkipLink';
@@ -32,6 +33,7 @@ import { HollowDialog } from './components/ui/HollowDialog';
 import { WelcomeCard } from './components/ui/WelcomeCard';
 import { SectionPanel } from './components/ui/SectionPanel';
 import { DropZone } from './components/ui/DropZone';
+import { RestoreBanner } from './components/ui/RestoreBanner';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -106,6 +108,10 @@ export default function App() {
       {/* Overlay UI */}
       <DropZone />
       <ToastHost />
+      {/* Crash recovery: probe the stored autosave at boot and offer it. */}
+      <RestoreBanner />
+      {/* Fusion-style Parameters dialog (opened via the command palette). */}
+      <ParametersPanel />
       <ConfirmDialog />
       <NumericPromptDialog />
       <ExtrudeDialog />
