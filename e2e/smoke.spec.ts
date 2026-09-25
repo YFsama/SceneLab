@@ -116,3 +116,71 @@ test('drag a body to move it, as one undo step', async ({ page }) => {
   const undone = await readCenter();
   expect(Math.abs(undone![0]! - before![0]!) + Math.abs(undone![2]! - before![2]!)).toBeLessThan(1e-6);
 });
+
+test('Alt+drag duplicates the body in one motion (clone-drag)', async ({ page }) => {
+  await page.goto('/');
+
+  // Insert a Box through the context menu.
+  await page.locator('#viewport-canvas').click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await menu.getByRole('menuitem', { name: /insert/i }).first().hover();
+  await menu.getByRole('menuitem', { name: /insert/i }).first().click();
+  await page.getByRole('menuitem', { name: 'Box' }).click();
+  await page.getByRole('dialog').press('Enter');
+  await page.keyboard.press('f');
+  await page.waitForTimeout(300);
+
+  // Read the status bar "Objects: N" counter.
+  const countObjects = (): Promise<number> =>
+    page.evaluate(() => {
+      const m = /Objects:\s*(\d+)/.exec(document.body.textContent ?? '');
+      return m ? +m[1]! : -1;
+    });
+
+  const before = await countObjects();
+  expect(before).toBeGreaterThanOrEqual(1);
+
+  const vb = (await page.locator('#viewport-canvas').boundingBox())!;
+  const cx = vb.x + vb.width / 2;
+  const cy = vb.y + vb.height / 2;
+
+  // Alt+drag: press with Alt, MOVE (that's what triggers the lazy duplicate),
+  // release. The copies slide away from the original.
+  await page.mouse.move(cx, cy);
+  await page.keyboard.down('Alt');
+  await page.mouse.down();
+  await page.mouse.move(cx + 140, cy + 40, { steps: 10 });
+  await page.keyboard.up('Alt');
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  const after = await countObjects();
+  expect(after).toBe(before + 1); // exactly one duplicate was created
+});
+
+test('M toggles the measure tool and the status bar shows undo depth', async ({ page }) => {
+  await page.goto('/');
+
+  // Plain M arms measure (SolidWorks/Onshape muscle memory): the toolbar
+  // toggle reflects the armed state via aria-pressed.
+  const measureBtn = page.locator('button[aria-pressed]').filter({ hasText: '' }).first();
+  // Target the measure button precisely by its accessible name.
+  const measureToggle = page.getByRole('button', { name: /measure/i }).first();
+  await expect(measureToggle).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('m');
+  await expect(measureToggle).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('m');
+  await expect(measureToggle).toHaveAttribute('aria-pressed', 'false');
+  void measureBtn;
+
+  // After an edit (insert a box) the status bar exposes the history depth.
+  await page.locator('#viewport-canvas').click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await menu.getByRole('menuitem', { name: /insert/i }).first().hover();
+  await menu.getByRole('menuitem', { name: /insert/i }).first().click();
+  await page.getByRole('menuitem', { name: 'Box' }).click();
+  await page.getByRole('dialog').press('Enter');
+  await page.waitForTimeout(200);
+  const status = await page.evaluate(() => document.querySelector('footer[role=status]')?.textContent ?? '');
+  expect(status).toMatch(/↺\s*1/);
+});

@@ -214,7 +214,7 @@ export function initBuiltinCommands(): void {
   registerCommand({ id: 'view.showAll', label: 'Show all bodies', category: 'View', shortcut: 'Shift+Tab', run: () => s().showAllBodies() });
   registerCommand({ id: 'view.toggleWireframe', label: 'Toggle wireframe', category: 'View', run: () => s().setWireframe(!s().wireframe) });
   registerCommand({ id: 'view.toggleGrid', label: 'Toggle grid', category: 'View', shortcut: 'G', run: () => s().setShowGrid(!s().showGrid) });
-  registerCommand({ id: 'view.measure', label: 'Measure (toggle)', category: 'View', run: () => s().setMeasureActive(!s().measureActive) });
+  registerCommand({ id: 'view.measure', label: 'Measure (toggle)', category: 'View', shortcut: 'M', run: () => s().setMeasureActive(!s().measureActive) });
   registerCommand({ id: 'project.new', label: 'New document', category: 'Project', shortcut: 'Ctrl+N', run: async () => { if (await confirmDiscardIfDirty('project.new')) s().newProject(); } });
   registerCommand({ id: 'project.saveFile', label: 'Save project (.studio3d)', category: 'Project', shortcut: 'Ctrl+S', run: () => saveProjectToFile() });
   registerCommand({ id: 'project.openFile', label: 'Open project (.studio3d)', category: 'Project', shortcut: 'Ctrl+O', run: () => { void openProjectFromFile(); } });
@@ -280,5 +280,15 @@ export function initBuiltinCommands(): void {
     category: 'View',
     shortcut: 'Shift+F',
     run: () => { window.dispatchEvent(new CustomEvent('scenelab:fit-view', { detail: { selection: true } })); },
+  });
+  // Fusion-style Parameters dialog: every driving dimension in the document in
+  // one editable table. Opened via the same window-event decoupling as the fit
+  // commands so the registry stays independent of the component tree; the
+  // label re-localizes with the locale (kept in sync by ParametersPanel).
+  registerCommand({
+    id: 'params.open',
+    label: s().locale === 'zh' ? '参数…' : 'Parameters…',
+    category: 'Edit',
+    run: () => { window.dispatchEvent(new CustomEvent('scenelab:open-parameters')); },
   });
 }

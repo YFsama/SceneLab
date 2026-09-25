@@ -9,7 +9,7 @@ import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import type { Feature, FeatureType } from '../../lib/features/types';
 import {
   History, PenTool, Box, RotateCw, Spline, Layers, Circle, Triangle, Square,
-  Scaling, Copy, RefreshCw, FlipHorizontal, RefreshCcwDot,
+  Scaling, Copy, RefreshCw, FlipHorizontal, RefreshCcwDot, CircleDot,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -26,6 +26,7 @@ const FEATURE_ICONS: Record<FeatureType, LucideIcon> = {
   linearArray: Copy,
   circularArray: RefreshCw,
   mirror: FlipHorizontal,
+  hole: CircleDot,
 };
 
 /**
@@ -39,6 +40,9 @@ const FEATURE_ICONS: Record<FeatureType, LucideIcon> = {
 export function TimelineBar() {
   const { t } = useT();
   const featureTree = useStore((s) => s.featureTree);
+  // The tree object mutates in place, so the version counter is the change
+  // signal (e.g. keyboard reorders re-render through it).
+  const featureVersion = useStore((s) => s.featureVersion);
   const selectObject = useStore((s) => s.selectObject);
   const updateFeature = useStore((s) => s.updateFeature);
   const removeFeature = useStore((s) => s.removeFeature);
@@ -118,6 +122,7 @@ export function TimelineBar() {
       className="h-9 bg-panel border-t border-panel-border flex items-center gap-1 px-2 overflow-x-auto shrink-0"
       role="toolbar"
       aria-label={t('timeline.title')}
+      data-feature-version={featureVersion}
     >
       <span className="flex items-center gap-1 text-text-muted shrink-0 pr-1" title={t('timeline.title')}>
         <History size={12} />

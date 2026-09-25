@@ -245,3 +245,135 @@ function aabb(body: SolidBody): { min: Vec3; max: Vec3 } {
   }
   return { min, max };
 }
+
+/** Measure tool mode: two-point distance, three-point angle, or single-face area. */
+export type MeasureMode = 'distance' | 'angle' | 'area';
+
+/** The face targeted by the area mode: ids into the scene's bodies. */
+export interface MeasureFacePick {
+  bodyId: string;
+  faceId: string;
+}
+
+/** What the measure HUD renders: a formatted value and the 3D point it anchors to. */
+export interface MeasureReadout {
+  text: string;
+  anchor: Vec3;
+}
+
+/**
+ * Angle in DEGREES at `vertex` between the rays to `a` and `b` (0–180), like
+ * Fusion's 3-point angle measure. Degenerate arms (zero length) read as 0.
+ * Note the argument order: vertex FIRST (unlike sketch/snap's a-b-c helper).
+ */
+export function angleBetweenRays(vertex: Vec3, a: Vec3, b: Vec3): number {
+  const u = sub(a, vertex);
+  const v = sub(b, vertex);
+  const lu = Math.hypot(u.x, u.y, u.z);
+  const lv = Math.hypot(v.x, v.y, v.z);
+  if (lu < 1e-12 || lv < 1e-12) return 0;
+  const d = Math.max(-1, Math.min(1, dot(u, v) / (lu * lv)));
+  return (Math.acos(d) * 180) / Math.PI;
+}
+
+/**
+ * Area of a 3D polygon by Newell's method: half the magnitude of the summed
+ * cross products of consecutive vertex pairs. Exact for planar loops (any
+ * orientation — no axis alignment needed) and the best average for nearly
+ * planar ones. 0 for fewer than 3 points.
+ */
+export function polygonArea3D(points: Vec3[]): number {
+  if (points.length < 3) return 0;
+  let nx = 0;
+  let ny = 0;
+  let nz = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]!;
+    const q = points[(i + 1) % points.length]!;
+    nx += p.y * q.z - p.z * q.y;
+    ny += p.z * q.x - p.x * q.z;
+    nz += p.x * q.y - p.y * q.x;
+  }
+  return 0.5 * Math.hypot(nx, ny, nz);
+}
+
+/**
+ * Area and area-weighted centroid of one face of a body: the face's ordered
+ * vertex loop is triangulated as a fan, each triangle's area comes from the
+ * cross-product magnitude, and the centroid is the area-weighted average of
+ * the triangle centroids. Null for an unknown face id or a loop with <3
+ * vertices; a degenerate (zero-area) loop reports area 0 with the vertex
+ * average as centroid.
+ */
+export function faceAreaAndCentroid(body: SolidBody, faceId: string): { area: number; centroid: Vec3 } | null {
+  const face = body.faces.find((f) => f.id === faceId);
+  if (!face || face.vertices.length < 3) return null;
+  const vs = face.vertices;
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (let i = 1; i < vs.length - 1; i++) {
+    const a = vs[0]!;
+    const b = vs[i]!;
+    const c = vs[i + 1]!;
+    const ab = sub(b, a);
+    const ac = sub(c, a);
+    const cr = { x: ab.y * ac.z - ab.z * ac.y, y: ab.z * ac.x - ab.x * ac.z, z: ab.x * ac.y - ab.y * ac.x };
+    const t = 0.5 * Math.hypot(cr.x, cr.y, cr.z);
+    area += t;
+    cx += ((a.x + b.x + c.x) / 3) * t;
+    cy += ((a.y + b.y + c.y) / 3) * t;
+    cz += ((a.z + b.z + c.z) / 3) * t;
+  }
+  if (area <= 1e-12) {
+    const n = vs.length;
+    const avg = (sel: (v: Vec3) => number) => vs.reduce((s, v) => s + sel(v), 0) / n;
+    return { area: 0, centroid: { x: avg((v) => v.x), y: avg((v) => v.y), z: avg((v) => v.z) } };
+  }
+  return { area, centroid: { x: cx / area, y: cy / area, z: cz / area } };
+}
+
+/**
+ * The measure HUD's readout, computed purely from the store's measure state so
+ * the viewport just renders it: locale-independent strings ("12.3 mm",
+ * "∠ 45.0°", "A 123.4 mm²") anchored at the midpoint of the distance chain,
+ * the angle's vertex, or the face's centroid. Null while the active mode
+ * doesn't have enough picks yet (HUD then shows the mode hint instead).
+ *
+ * - distance: path length over the picked chain (2 picks = the classic
+ *   point-to-point distance the tool has always shown);
+ * - angle: angle at the MIDDLE pick between the rays to picks 1 and 3;
+ * - area: the fan-triangulated area of the picked face.
+ */
+export function computeMeasureReadout(
+  mode: MeasureMode,
+  pts: Vec3[],
+  facePick: MeasureFacePick | null,
+  bodies: SolidBody[],
+): MeasureReadout | null {
+  if (mode === 'distance') {
+    if (pts.length < 2) return null;
+    let length = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const d = sub(pts[i]!, pts[i - 1]!);
+      length += Math.hypot(d.x, d.y, d.z);
+    }
+    const first = pts[0]!;
+    const last = pts[pts.length - 1]!;
+    return {
+      text: `${length.toFixed(1)} mm`,
+      anchor: { x: (first.x + last.x) / 2, y: (first.y + last.y) / 2, z: (first.z + last.z) / 2 },
+    };
+  }
+  if (mode === 'angle') {
+    if (pts.length < 3) return null;
+    return { text: `∠ ${angleBetweenRays(pts[1]!, pts[0]!, pts[2]!).toFixed(1)}°`, anchor: pts[1]! };
+  }
+  if (!facePick) return null;
+  const body = bodies.find((b) => b.id === facePick.bodyId);
+  if (!body) return null;
+  const face = faceAreaAndCentroid(body, facePick.faceId);
+  if (!face) return null;
+  return { text: `A ${face.area.toFixed(1)} mm²`, anchor: face.centroid };
+}

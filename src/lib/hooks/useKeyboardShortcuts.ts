@@ -88,7 +88,15 @@ export function initShortcuts(): void {
       store.setSketchActive(true);
     }
   });
-  registerShortcut('m', () => store.setWorkspace('model'));
+  // SolidWorks/Onshape muscle memory: plain M toggles the measure tool. The
+  // model-workspace jump moved to Shift+M (Esc already returns from a sketch).
+  registerShortcut('m', () => {
+    if (!useStore.getState().sketchActive) {
+      const s = useStore.getState();
+      s.setMeasureActive(!s.measureActive);
+    }
+  });
+  registerShortcut('shift+m', () => store.setWorkspace('model'));
   registerShortcut('d', () => store.setWorkspace('drawing'));
   registerShortcut('c', () => store.setWorkspace('cam'));
 

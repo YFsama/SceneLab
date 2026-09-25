@@ -44,6 +44,15 @@ export function ExtrudeDialog() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="extrude-title"
+      onKeyDown={(e) => {
+        // Enter commits from anywhere in the dialog (the input included) —
+        // autofocus on the button is not reliable across mounts. Enter on a
+        // focused button already clicks it; don't double-fire.
+        if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
+          e.preventDefault();
+          handleExtrude();
+        }
+      }}
     >
       <div
         ref={dialogRef}

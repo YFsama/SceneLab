@@ -86,10 +86,10 @@ export function StatusBar() {
 
   return (
     <footer
-      className="h-6 bg-panel border-t border-panel-border flex items-center justify-between px-3 text-xs text-text-muted"
+      className="h-6 bg-panel border-t border-panel-border flex items-center justify-between px-3 text-xs text-text-muted overflow-hidden"
       role="status"
     >
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 overflow-hidden whitespace-nowrap flex-1 min-w-0">
         {editingName !== null ? (
           <input
             autoFocus

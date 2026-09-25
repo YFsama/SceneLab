@@ -1,6 +1,7 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
+import { topFaceHolePlacement } from '../features/tree';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { booleanOp, hollowBody, mirrorMerge } from '../geometry/boolean';
@@ -9,6 +10,10 @@ import { listDimensions } from '../sketch/dimensions';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
 import { importSTLAscii, importOBJ, importSTEP, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { exportSTEP } from '../io/step';
+import { makeNoteId } from '../io/drawingNotes';
+import { trimSketchEntityAt, extendSketchEntityTo } from '../sketch/trim';
+import { offsetSketchProfile } from '../sketch/offset';
+import { faceAreaAndCentroid } from '../geometry/measure';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
 import { LIBRARY_PARTS } from '../library/parts';
 import { SAMPLE_PROJECTS } from '../library/samples';
@@ -231,6 +236,96 @@ export function registerBuiltinTools(): void {
         args.value !== undefined ? assertNumber(args.value, 'value') : undefined,
       );
       return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'trim_sketch_entity',
+    description:
+      'TRIM a sketch entity (Fusion TRIM): the piece of the entity containing (x, y) is removed at every crossing with other lines. ' +
+      'Lines keep their other pieces; circles/arcs become arcs per surviving span; an entity with no crossings is deleted entirely. ' +
+      'Use entity ids from draw_* tools; (x,y) is the sketch-space point marking the piece to delete.',
+    parameters: {
+      type: 'object',
+      properties: {
+        entityId: { type: 'string', description: 'Entity id to trim' },
+        x: { type: 'number', description: 'Sketch x of the piece to delete' },
+        y: { type: 'number', description: 'Sketch y of the piece to delete' },
+      },
+      required: ['entityId', 'x', 'y'],
+    },
+    execute: async (args) => {
+      const entityId = assertString(args.entityId, 'entityId');
+      const x = assertNumber(args.x, 'x');
+      const y = assertNumber(args.y, 'y');
+      const st = useStore.getState();
+      const sketch = st.currentSketch;
+      if (!sketch) throw new Error('No active sketch');
+      if (!trimSketchEntityAt(sketch, entityId, { x, y })) {
+        throw new Error('Nothing was trimmed — the entity is not trimmable (points/rectangles) or was missing');
+      }
+      st.setCurrentSketch({ ...sketch });
+      useStore.setState({ projectDirty: true });
+      return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'extend_sketch_entity',
+    description:
+      'EXTEND a sketch line or arc toward (x, y) to the nearest crossing with another line (Fusion EXTEND). ' +
+      'The endpoint nearest the point moves; circles are not extendable; false when no boundary lies in that direction.',
+    parameters: {
+      type: 'object',
+      properties: {
+        entityId: { type: 'string', description: 'Entity id to extend' },
+        x: { type: 'number', description: 'Sketch x of the extension direction' },
+        y: { type: 'number', description: 'Sketch y of the extension direction' },
+      },
+      required: ['entityId', 'x', 'y'],
+    },
+    execute: async (args) => {
+      const entityId = assertString(args.entityId, 'entityId');
+      const x = assertNumber(args.x, 'x');
+      const y = assertNumber(args.y, 'y');
+      const st = useStore.getState();
+      const sketch = st.currentSketch;
+      if (!sketch) throw new Error('No active sketch');
+      if (!extendSketchEntityTo(sketch, entityId, { x, y })) {
+        throw new Error('Nothing to extend to in that direction (or the entity is not extendable)');
+      }
+      st.setCurrentSketch({ ...sketch });
+      useStore.setState({ projectDirty: true });
+      return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'offset_sketch_entity',
+    description:
+      'OFFSET (equidistant copy) of a sketch entity: circles/arcs scale about their centre, a line copies its whole closed loop with mitered corners. ' +
+      'Positive distance = outward/larger, negative = inward; returns the new entity ids. Collapses are refused.',
+    parameters: {
+      type: 'object',
+      properties: {
+        entityId: { type: 'string', description: 'Entity id to offset' },
+        distance: { type: 'number', description: 'Signed offset distance (negative = inward)' },
+      },
+      required: ['entityId', 'distance'],
+    },
+    execute: async (args) => {
+      const entityId = assertString(args.entityId, 'entityId');
+      const distance = assertNumber(args.distance, 'distance');
+      const st = useStore.getState();
+      const sketch = st.currentSketch;
+      if (!sketch) throw new Error('No active sketch');
+      const ids = offsetSketchProfile(sketch, entityId, distance);
+      if (!ids) {
+        throw new Error('Offset refused — the entity is not offsetable or the copy would collapse');
+      }
+      st.setCurrentSketch({ ...sketch });
+      useStore.setState({ projectDirty: true });
+      return { success: true, newEntityIds: ids };
     },
   });
 
@@ -594,6 +689,57 @@ export function registerBuiltinTools(): void {
       const result = applyShell(body, faceIds, args.thickness as number);
       store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
+    },
+  });
+
+  registerTool({
+    name: 'create_hole',
+    description:
+      'Drill a hole in a body (Fusion HOLE): subtracts a cylinder of the given diameter, drilled DOWN (−Y) ' +
+      'from (x, y, z). Omit x/y/z to drill from the body\'s top-face centroid; omit depth for a through hole. ' +
+      'Replaces the body and returns the new body id plus the removed volume.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        diameter: { type: 'number', description: 'Hole diameter in mm (> 0.1)' },
+        depth: { type: 'number', description: 'Hole depth in mm (omit for a through hole)' },
+        x: { type: 'number', description: 'Hole centre X (mm; omit all of x/y/z for the top-face centroid)' },
+        y: { type: 'number', description: 'Hole centre Y (mm)' },
+        z: { type: 'number', description: 'Hole centre Z (mm)' },
+      },
+      required: ['diameter'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const diameter = assertNumber(args.diameter, 'diameter');
+      const depth = args.depth !== undefined && args.depth !== null ? assertNumber(args.depth, 'depth') : null;
+      const hasXyz = args.x !== undefined || args.y !== undefined || args.z !== undefined;
+      let center: Vec3;
+      if (args.x !== undefined && args.y !== undefined && args.z !== undefined) {
+        center = { x: assertNumber(args.x, 'x'), y: assertNumber(args.y, 'y'), z: assertNumber(args.z, 'z') };
+      } else if (hasXyz) {
+        throw new Error('Provide all of x, y and z — or none to drill from the top-face centroid');
+      } else {
+        center = topFaceHolePlacement(body).center;
+      }
+
+      const volumeBefore = Math.abs(computeVolume(body));
+      const idsBefore = new Set(useStore.getState().bodies.map((b) => b.id));
+      if (!useStore.getState().applyHoleToBody(body.id, diameter, depth, center)) {
+        throw new Error('Hole rejected — check that the body exists and the diameter/depth are valid');
+      }
+      const bodiesAfter = useStore.getState().bodies;
+      const holed = bodiesAfter.find((b) => !idsBefore.has(b.id)) ?? bodiesAfter.find((b) => b.id === body.id);
+      const volumeAfter = holed ? Math.abs(computeVolume(holed)) : volumeBefore;
+      return {
+        success: true,
+        bodyId: holed?.id ?? body.id,
+        diameter,
+        depth,
+        throughAll: depth === null,
+        volumeRemoved: Number((volumeBefore - volumeAfter).toFixed(3)),
+      };
     },
   });
 
@@ -2025,8 +2171,7 @@ export function registerBuiltinTools(): void {
         bodyIdB: { type: 'string', description: 'Second body ID' },
       },
       required: ['bodyIdA', 'bodyIdB'],
-    },
-    execute: async (args) => {
+    },    execute: async (args) => {
       const a = resolveBody(assertString(args.bodyIdA, 'bodyIdA'));
       const b = resolveBody(assertString(args.bodyIdB, 'bodyIdB'));
       const ca = computeCentroid(a);
@@ -2048,6 +2193,38 @@ export function registerBuiltinTools(): void {
         // Overlap volume (mm³) when they interfere — SolidWorks-style.
         interferenceVolumeMm3: interfere ? Number(interferenceVolume(a, b).toFixed(1)) : 0,
       };
+    },
+  });
+
+  registerTool({
+    name: 'measure_face_area',
+    description:
+      'Area (mm²) and centroid of ONE face of a body (use list_faces for face ids). ' +
+      'Omit faceId to get every face area; a triangle-fan over the face vertex loop (Newell-verified).',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID' },
+        faceId: { type: 'string', description: 'Face id from list_faces (optional — all faces when omitted)' },
+      },
+      required: ['bodyId'],
+    },
+    execute: async (args) => {
+      const body = resolveBody(assertString(args.bodyId, 'bodyId'));
+      if (args.faceId !== undefined) {
+        const r = faceAreaAndCentroid(body, assertString(args.faceId, 'faceId'));
+        if (!r) throw new Error(`Face ${String(args.faceId)} not found on body ${body.id}`);
+        return {
+          faceId: args.faceId,
+          areaMm2: Number(r.area.toFixed(3)),
+          centroid: { x: Number(r.centroid.x.toFixed(3)), y: Number(r.centroid.y.toFixed(3)), z: Number(r.centroid.z.toFixed(3)) },
+        };
+      }
+      const faces = listFaces(body).map((f) => ({
+        faceId: f.id,
+        areaMm2: Number(f.area.toFixed(3)),
+      }));
+      return { totalAreaMm2: Number(faces.reduce((s, f) => s + f.areaMm2, 0).toFixed(3)), faces };
     },
   });
 
@@ -2296,6 +2473,34 @@ export function registerBuiltinTools(): void {
         surfaceSpeed: fs.surfaceSpeed,
         chipLoad: fs.chipLoad,
       };
+    },
+  });
+
+  registerTool({
+    name: 'add_drawing_note',
+    description:
+      'Add a text note to the drawing sheet (title-block-style remark, finish callout, assembly instruction). ' +
+      'x/y are optional sheet coordinates in the 800×600 drawing space (origin top-left); omitted positions ' +
+      'stack the notes down the left margin so consecutive calls never overlap.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Note text (single line)' },
+        x: { type: 'number', description: 'Optional sheet x (0..800)' },
+        y: { type: 'number', description: 'Optional sheet y (0..600+)' },
+      },
+      required: ['text'],
+    },
+    execute: async (args) => {
+      const text = assertString(args.text, 'text').trim();
+      if (!text) throw new Error('Note text must not be empty');
+      const st = useStore.getState();
+      const n = st.drawingNotes.length;
+      const x = typeof args.x === 'number' && Number.isFinite(args.x) ? args.x : 40;
+      const y = typeof args.y === 'number' && Number.isFinite(args.y) ? args.y : 540 + (n % 8) * 18;
+      const note = { id: makeNoteId(), x, y, text };
+      st.addDrawingNote(note);
+      return { success: true, noteId: note.id, x: note.x, y: note.y };
     },
   });
 

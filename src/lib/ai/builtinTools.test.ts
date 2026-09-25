@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { registerBuiltinTools } from './builtinTools';
 import { getTool, getAllTools, clearTools } from './toolRegistry';
 import { useStore } from '../../store/app';
-import { createBox } from '../geometry';
+import { createBox, computeVolume } from '../geometry';
 import type { Vec3 } from '../geometry/types';
 import { createSketch, addRectangle } from '../sketch/engine';
 
@@ -22,7 +22,7 @@ describe('registerBuiltinTools registration', () => {
       'create_stock',
       // sketch/features
       'create_sketch', 'draw_line', 'draw_circle', 'draw_arc', 'add_constraint', 'extrude', 'revolve',
-      'fillet', 'chamfer', 'shell', 'linear_array', 'circular_array', 'mirror',
+      'fillet', 'chamfer', 'shell', 'create_hole', 'linear_array', 'circular_array', 'mirror',
       // transform / scene
       'move_body', 'rotate_body', 'scale_body', 'resize_to_target', 'arrange_on_plate', 'delete_body',
       'clear_scene', 'describe_scene', 'measure_distance', 'get_dimensions', 'list_bodies',
@@ -36,6 +36,11 @@ describe('registerBuiltinTools registration', () => {
       'suggest_feeds_speeds', 'set_view',
       // selection control (vision → face-scoped ops)
       'select_face_at_viewport', 'select_face', 'clear_face_selection', 'select_body',
+      // drawing annotation
+      'add_drawing_note',
+      // sketch editing (Fusion 2D suite)
+      'trim_sketch_entity', 'extend_sketch_entity', 'offset_sketch_entity',
+      'measure_face_area',
     ]) {
       expect(names).toContain(n);
     }
@@ -802,5 +807,171 @@ describe('modeling AI tools', () => {
     const tool = getTool('create_standard_planes')!;
     await tool.execute({});
     expect(useStore.getState().planes.length).toBe(3);
+  });
+});
+
+describe('add_drawing_note tool', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().newProject();
+  });
+
+  it('adds a note with stacked default placement and returns its id', async () => {
+    const r1 = (await getTool('add_drawing_note')!.execute({ text: 'Anodize after deburr' })) as { success: boolean; noteId: string; y: number };
+    const r2 = (await getTool('add_drawing_note')!.execute({ text: 'Second' })) as { noteId: string; y: number };
+    expect(r1.success).toBe(true);
+    expect(r2.y).toBeGreaterThan(r1.y); // stacked, never overlapping
+    const notes = useStore.getState().drawingNotes;
+    expect(notes.map((n) => n.text)).toEqual(['Anodize after deburr', 'Second']);
+    expect(notes.map((n) => n.id)).toContain(r1.noteId);
+  });
+
+  it('honors explicit sheet coordinates', async () => {
+    await getTool('add_drawing_note')!.execute({ text: 'At corner', x: 700, y: 80 });
+    const n = useStore.getState().drawingNotes[0]!;
+    expect(n.x).toBe(700);
+    expect(n.y).toBe(80);
+  });
+
+  it('rejects empty text', async () => {
+    await expect(getTool('add_drawing_note')!.execute({ text: '   ' })).rejects.toThrow(/empty/i);
+    expect(useStore.getState().drawingNotes).toEqual([]);
+  });
+
+  it('the edit is one undo entry (drawing sheet is history-covered)', async () => {
+    await getTool('add_drawing_note')!.execute({ text: 'undo me' });
+    useStore.getState().undo();
+    expect(useStore.getState().drawingNotes).toEqual([]);
+  });
+});
+
+describe('AI sketch editing tools (trim/extend/offset)', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().setSketchActive(true);
+    useStore.getState().setCurrentSketch(createSketch('xz'));
+  });
+
+  it('offset_sketch_entity grows a circle and returns the new id', async () => {
+    const store = useStore.getState();
+    const circle = store.addSketchCircle(0, 0, 10);
+    const r = (await getTool('offset_sketch_entity')!.execute({ entityId: circle, distance: 2 })) as { newEntityIds: string[] };
+    const copy = useStore.getState().currentSketch!.entities.get(r.newEntityIds[0]!);
+    expect(copy?.type === 'circle' && copy.radius).toBeCloseTo(12, 9);
+  });
+
+  it('offset_sketch_entity throws when the offset would collapse', async () => {
+    const store = useStore.getState();
+    const circle = store.addSketchCircle(0, 0, 2);
+    await expect(
+      getTool('offset_sketch_entity')!.execute({ entityId: circle, distance: -3 }),
+    ).rejects.toThrow(/refused|collapse/i);
+  });
+
+  it('trim_sketch_entity deletes an uncrossed line entirely', async () => {
+    const store = useStore.getState();
+    const line = store.addSketchLine(0, 0, 10, 10);
+    const before = useStore.getState().currentSketch!.entities.size;
+    await getTool('trim_sketch_entity')!.execute({ entityId: line, x: 5, y: 5 });
+    // The line plus its two endpoints are gone.
+    expect(useStore.getState().currentSketch!.entities.size).toBe(before - 3);
+  });
+
+  it('trim/extend throw without an active sketch', async () => {
+    useStore.getState().setCurrentSketch(null);
+    await expect(getTool('trim_sketch_entity')!.execute({ entityId: 'x', x: 0, y: 0 })).rejects.toThrow(/No active sketch/);
+    await expect(getTool('extend_sketch_entity')!.execute({ entityId: 'x', x: 0, y: 0 })).rejects.toThrow(/No active sketch/);
+  });
+
+  it('extend_sketch_entity reaches the crossing boundary', async () => {
+    const store = useStore.getState();
+    const line = store.addSketchLine(0, 0, 5, 0);
+    store.addSketchLine(10, -5, 10, 5);
+    await getTool('extend_sketch_entity')!.execute({ entityId: line, x: 9, y: 0 });
+    const e = useStore.getState().currentSketch!.entities.get(line);
+    if (e?.type !== 'line') throw new Error('line missing');
+    const p2 = useStore.getState().currentSketch!.entities.get(e.p2Id);
+    expect(p2?.type === 'point' && p2.x).toBeCloseTo(10, 6);
+  });
+});
+
+describe('measure_face_area tool', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.setState({ bodies: [createBox(10, 10, 10)] });
+  });
+
+  it('returns a single face area with centroid (box cap = 100 mm²)', async () => {
+    const body = useStore.getState().bodies[0]!;
+    const faceId = body.faces[0]!.id;
+    const r = (await getTool('measure_face_area')!.execute({ bodyId: body.id, faceId })) as { areaMm2: number };
+    expect(r.areaMm2).toBeCloseTo(100, 1);
+  });
+
+  it('omitting faceId lists every face plus the total (box = 600 mm²)', async () => {
+    const body = useStore.getState().bodies[0]!;
+    const r = (await getTool('measure_face_area')!.execute({ bodyId: body.id })) as { totalAreaMm2: number; faces: unknown[] };
+    expect(r.faces.length).toBe(body.faces.length);
+    expect(r.totalAreaMm2).toBeCloseTo(600, 0);
+  });
+
+  it('unknown face id throws a retryable error', async () => {
+    const body = useStore.getState().bodies[0]!;
+    await expect(getTool('measure_face_area')!.execute({ bodyId: body.id, faceId: 'face_9999' })).rejects.toThrow(/not found/);
+  });
+});
+
+describe('create_hole tool', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    // 20 mm cube, top face at y = 20, volume 8000.
+    const box = createBox(20, 20, 20);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+  });
+
+  it('drills a through hole at the top-face centroid by default', async () => {
+    const r = (await getTool('create_hole')!.execute({ diameter: 8 })) as {
+      success: boolean; bodyId: string; throughAll: boolean; depth: number | null; volumeRemoved: number;
+    };
+    expect(r.success).toBe(true);
+    expect(r.throughAll).toBe(true);
+    expect(r.depth).toBeNull();
+    const ideal = Math.PI * 4 * 4 * 20; // πr²·20
+    expect(r.volumeRemoved).toBeGreaterThanOrEqual(ideal * 0.9);
+    expect(r.volumeRemoved).toBeLessThanOrEqual(ideal * 1.1);
+    // The scene body was replaced by the drilled one.
+    const holed = useStore.getState().bodies.find((b) => b.id === r.bodyId);
+    expect(holed).toBeDefined();
+    expect(Math.abs(computeVolume(holed!))).toBeLessThan(8000 - ideal * 0.9 + 1e-6);
+  });
+
+  it('drills a blind hole to the requested depth from an explicit centre', async () => {
+    const r = (await getTool('create_hole')!.execute({ diameter: 8, depth: 5, x: 0, y: 20, z: 0 })) as {
+      success: boolean; throughAll: boolean; depth: number | null; volumeRemoved: number;
+    };
+    expect(r.success).toBe(true);
+    expect(r.throughAll).toBe(false);
+    expect(r.depth).toBe(5);
+    const ideal = Math.PI * 4 * 4 * 5; // πr²·5
+    expect(r.volumeRemoved).toBeGreaterThanOrEqual(ideal * 0.9);
+    expect(r.volumeRemoved).toBeLessThanOrEqual(ideal * 1.1);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeLessThan(8000);
+  });
+
+  it('rejects an unknown body with a retryable error', async () => {
+    await expect(getTool('create_hole')!.execute({ bodyId: 'nope', diameter: 4 })).rejects.toThrow(/not found/);
+  });
+
+  it('rejects partial x/y/z centres and invalid sizes', async () => {
+    await expect(getTool('create_hole')!.execute({ diameter: 8, x: 0 })).rejects.toThrow(/all of x, y and z/);
+    await expect(getTool('create_hole')!.execute({ diameter: 0.05 })).rejects.toThrow(/rejected/i);
   });
 });

@@ -32,9 +32,10 @@ const GROUPS: Group[] = [
     titleKey: 'shortcuts.workspaces',
     rows: [
       { keys: 'S', labelKey: 'toolbar.sketch' },
-      { keys: 'M', labelKey: 'toolbar.model' },
+      { keys: 'Shift+M', labelKey: 'toolbar.model' },
       { keys: 'D', labelKey: 'toolbar.drawing' },
       { keys: 'C', labelKey: 'toolbar.cam' },
+      { keys: 'M', labelKey: 'shortcuts.measure' },
     ],
   },
   {
@@ -65,6 +66,7 @@ const GROUPS: Group[] = [
       { keys: 'F2', labelKey: 'menu.rename' },
       { keys: '← ↑ → ↓ / PgUp / PgDn', labelKey: 'shortcuts.nudge' },
       { keys: 'LMB drag', labelKey: 'shortcuts.dragBody' },
+      { keys: 'Alt+LMB drag', labelKey: 'shortcuts.altDragDuplicate' },
       { keys: 'E', labelKey: 'feature.extrude' },
       { keys: 'Ctrl+I', labelKey: 'menu.isolate' },
       { keys: 'Del', labelKey: 'menu.delete' },

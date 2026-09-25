@@ -23,6 +23,7 @@ import { MATERIALS } from '../../lib/materials';
 import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
 import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
+import { faceAreaAndCentroid } from '../../lib/geometry/measure';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { runCommand, recentCommands } from '../../lib/commands/registry';
@@ -278,9 +279,11 @@ export function ViewportCanvas() {
   const selRectStartRef = useRef<{ x: number; y: number; hitBody: boolean } | null>(null);
   const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
   const visionDragRef = useRef<{ x: number; y: number } | null>(null); // AI vision crop drag origin
-  // Active body drag-move: the drag plane height, the grab point, and the
-  // snapped offset already applied (deltas are cumulative, not per-frame).
-  const bodyDragRef = useRef<{ planeY: number; start: { x: number; y: number; z: number }; applied: { x: number; y: number; z: number } } | null>(null);
+  // Active body drag-move: the drag plane height, the grab point, the snapped
+  // offset already applied (deltas are cumulative, not per-frame), and whether
+  // this drag is a clone-drag (Alt+drag duplicates the selection on first
+  // motion, then slides the copies).
+  const bodyDragRef = useRef<{ planeY: number; start: { x: number; y: number; z: number }; applied: { x: number; y: number; z: number }; duplicateArmed?: boolean } | null>(null);
   const visionSelectActive = useStore((s) => s.visionSelectActive);
   // Type-ahead sketch dimensions: keystrokes accumulated while a draw is in
   // progress ("25" or "20x30"); Enter commits the entity at that exact size.
@@ -330,6 +333,9 @@ export function ViewportCanvas() {
   const measureActive = useStore((s) => s.measureActive);
   const measurePts = useStore((s) => s.measurePts);
   const addMeasurePoint = useStore((s) => s.addMeasurePoint);
+  const measureMode = useStore((s) => s.measureMode);
+  const setMeasureMode = useStore((s) => s.setMeasureMode);
+  const measureFacePick = useStore((s) => s.measureFacePick);
   const annotations = useStore((s) => s.annotations);
   const addAnnotation = useStore((s) => s.addAnnotation);
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
@@ -341,6 +347,24 @@ export function ViewportCanvas() {
   const setHoveredId = useStore((s) => s.setHoveredId);
   const [measureHover, setMeasureHover] = useState<{ x: number; y: number; z: number; snapped: boolean } | null>(null);
   const measureGroupRef = useRef<THREE.Group | null>(null);
+  // Measure-mode snap targets (vertices + edge midpoints + face centres),
+  // cached per body REFERENCE — building them per hover mousemove allocated
+  // thousands of points on every move for large imported bodies.
+  const measureSnapCacheRef = useRef<Map<string, { body: typeof bodies[0]; diag: number; targets: { x: number; y: number; z: number }[] }>>(new Map());
+  const measureSnapTargets = useCallback((b: typeof bodies[0]) => {
+    const cache = measureSnapCacheRef.current;
+    const cached = cache.get(b.id);
+    if (cached && cached.body === b) return cached;
+    const bb = combinedBounds([b]);
+    const entry = {
+      body: b,
+      diag: bb ? Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) : 1,
+      targets: [...b.vertices, ...edgeMidpoints(b), ...faceCenters(b)],
+    };
+    if (cache.size > 64) cache.clear(); // stale ids of removed bodies — cheap reset
+    cache.set(b.id, entry);
+    return entry;
+  }, []);
   const annotationGroupRef = useRef<THREE.Group | null>(null);
   const setSketchActive = useStore((s) => s.setSketchActive);
   const exitSketch = useStore((s) => s.exitSketch);
@@ -828,11 +852,16 @@ export function ViewportCanvas() {
       st.setSelectedFaceIds(
         d.additive ? (current.includes(faceId) ? current : [...current, faceId]) : [faceId],
       );
+      // Inline visual confirmation: the face highlight paints via the
+      // selection effect; a toast names the body so the user sees WHICH part
+      // the AI just picked without hunting for the orange tint.
+      const body = useStore.getState().bodies.find((b) => b.id === bodyId);
+      showToast(`${t('ai.facePicked')} ${body?.name ?? bodyId}`, 'success');
       d.resolve({ faceId, bodyId });
     };
     window.addEventListener('scenelab:pick-face', onPickFace);
     return () => window.removeEventListener('scenelab:pick-face', onPickFace);
-  }, []);
+  }, [t]);
 
   // Command palette → viewport framing: the view.fitAll / view.fitSelection
   // registry commands dispatch this (the F / Shift+F keys stay local).
@@ -1815,6 +1844,21 @@ export function ViewportCanvas() {
       if (!container || !camera || !scene) return;
 
       if (sketchActive) {
+        // Trim / Extend are click-then-act tools (Fusion): the click both
+        // picks the target entity and drives the cut/extension; the tool
+        // stays armed for consecutive cuts.
+        if ((sketchTool === 'trim' || sketchTool === 'extend') && currentSketch) {
+          const p = getSketchPoint(e);
+          if (p) {
+            const id = pickSketchEntity(currentSketch, p, Math.max(gridSize, 0.4));
+            if (id) useStore.getState().setSelectedSketchId(id);
+            const ok = sketchTool === 'trim'
+              ? useStore.getState().trimSketchAt(p)
+              : useStore.getState().extendSketchTo(p);
+            if (!ok) showToast(t(sketchTool === 'trim' ? 'sketch.trimMiss' : 'sketch.extendMiss'), 'warning');
+          }
+          return;
+        }
         // In the select tool, clicking near an entity selects it (for deletion).
         // Ctrl/Shift+click toggles multi-select for two-entity constraints
         // (SolidWorks: select a pair, then pick the constraint).
@@ -1878,9 +1922,18 @@ export function ViewportCanvas() {
 
       // Measure mode: each click drops a point on the surface under the cursor;
       // after two points the readout shows the distance. A third click restarts.
+      // Area mode instead picks the FACE under the cursor (Fusion Measure).
       if (measureActive) {
         if (!bodiesGroup) return;
         const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+        if (useStore.getState().measureMode === 'area') {
+          const triFaceIds = hit?.object.userData.triFaceIds as string[] | undefined;
+          const bodyId = hit?.object.userData.bodyId as string | undefined;
+          if (hit && triFaceIds && hit.faceIndex !== null && hit.faceIndex !== undefined && bodyId) {
+            useStore.getState().setMeasureFacePick({ bodyId, faceId: triFaceIds[hit.faceIndex] ?? '' });
+          }
+          return;
+        }
         if (hit) {
           let pt = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
           // Snap to the hit body's nearest corner (within 10% of its size) for
@@ -1952,7 +2005,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, sketchTool, currentSketch, gridSize, sketchPlaneId, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds],
+    [sketchActive, sketchTool, currentSketch, gridSize, sketchPlaneId, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds, t],
   );
 
   const handleMouseMove = useCallback(
@@ -1981,6 +2034,21 @@ export function ViewportCanvas() {
         const stepX = targetX - drag.applied.x;
         const stepZ = targetZ - drag.applied.z;
         if (Math.abs(stepX) < 1e-9 && Math.abs(stepZ) < 1e-9) return;
+        // Clone-drag (Alt+drag): duplicate the selection on FIRST motion only,
+        // then the rest of the drag slides the copies. A press that never
+        // moves stays a plain Alt+click (edge sub-selection).
+        if (drag.duplicateArmed) {
+          drag.duplicateArmed = false;
+          const dup = useStore.getState().duplicateSelected();
+          if (dup.length === 0) {
+            bodyDragRef.current = null;
+            useStore.getState().endSelectionDrag();
+            if (containerRef.current) containerRef.current.style.cursor = '';
+            setDragReadout(null);
+            return;
+          }
+          container.style.cursor = 'grabbing';
+        }
         const n = useStore.getState().dragSelectionBy(stepX, 0, stepZ);
         if (n > 0) {
           drag.applied = { x: targetX, y: 0, z: targetZ };
@@ -2037,10 +2105,9 @@ export function ViewportCanvas() {
           let pt = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
           let snapped = false;
           const b = bodies.find((x) => x.id === (hit.object.userData.bodyId as string | undefined));
-          const bb = b && combinedBounds([b]);
-          if (b && bb) {
-            const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
-            const v = nearestVertexWithin(pt, [...b.vertices, ...edgeMidpoints(b), ...faceCenters(b)], diag * 0.1);
+          if (b) {
+            const { diag, targets } = measureSnapTargets(b);
+            const v = nearestVertexWithin(pt, targets, diag * 0.1);
             if (v) { pt = v; snapped = true; }
           }
           setMeasureHover({ ...pt, snapped });
@@ -2066,7 +2133,7 @@ export function ViewportCanvas() {
       // Latest sketch-space cursor for type-ahead dimension entry (Enter).
       mouseSketchRef.current = pt;
     },
-    [sketchActive, measureActive, bodies, getSketchPoint, setHoveredId],
+    [sketchActive, measureActive, bodies, getSketchPoint, setHoveredId, measureSnapTargets],
   );
 
   // Right-click a body in the 3D view → select it and open its context menu.
@@ -2429,6 +2496,27 @@ export function ViewportCanvas() {
                 onApply: (v) => {
                   const ok = useStore.getState().applyShellFeature(v);
                   showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                },
+              });
+            }) },
+            { label: t('feature.hole'), onClick: pre(() => {
+              // Two-step entry (Fusion's hole dialog condensed): diameter
+              // first, then depth — 0 drills through-all. The hole starts at
+              // the body's top-face centroid, drilling straight down.
+              useStore.getState().openNumericPrompt({
+                titleKey: 'feature.hole', labelKey: 'feature.holeDiameter',
+                initial: 5, min: 0.1,
+                onApply: (d) => {
+                  useStore.getState().openNumericPrompt({
+                    titleKey: 'feature.hole', labelKey: 'feature.holeDepth',
+                    initial: 0, min: 0,
+                    onApply: (h) => {
+                      const ok = useStore.getState().applyHoleToBody(
+                        useStore.getState().selectedIds[0] ?? '', d, h > 0 ? h : null,
+                      );
+                      showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                    },
+                  });
                 },
               });
             }) },
@@ -2817,8 +2905,13 @@ export function ViewportCanvas() {
         const st0 = useStore.getState();
         if (
           dragBodyId && !measureActive && !st0.visionSelectActive &&
-          !e.ctrlKey && !e.altKey && !e.shiftKey && !st0.bodyDragging
+          !e.ctrlKey && !e.shiftKey && !st0.bodyDragging
         ) {
+          // Alt is dual-use: Alt+CLICK stays the edge sub-selection pick, but
+          // Alt+DRAG on a body duplicates the selection and slides the copies
+          // (Fusion/SolidWorks clone-drag). The duplicate is created lazily on
+          // first motion so a plain Alt+click never leaves copies behind.
+          const duplicateArmed = e.altKey;
           // Grabbing an unselected body selects it first, so the whole
           // selection slides together.
           if (!st0.selectedIds.includes(dragBodyId)) st0.selectObject(dragBodyId);
@@ -2829,8 +2922,9 @@ export function ViewportCanvas() {
             planeY: hit!.point.y,
             start: { x: hit!.point.x, y: hit!.point.y, z: hit!.point.z },
             applied: { x: 0, y: 0, z: 0 },
+            duplicateArmed,
           };
-          container.style.cursor = 'grabbing';
+          container.style.cursor = duplicateArmed ? 'copy' : 'grabbing';
         }
       }
     },
@@ -2845,7 +2939,14 @@ export function ViewportCanvas() {
       // at the final position — no snap-back frame.
       if (bodyDragRef.current) {
         bodyDragRef.current = null;
+        const moved = useStore.getState().dragMovedThisDrag;
         useStore.getState().endSelectionDrag();
+        if (moved) {
+          // The press became a real drag — suppress the trailing click so it
+          // can't re-run click semantics (an Alt-drag would otherwise toggle
+          // an edge pick on release).
+          selRectCommittedRef.current = true;
+        }
         if (containerRef.current) containerRef.current.style.cursor = '';
         setDragReadout(null);
       }
@@ -3094,13 +3195,60 @@ export function ViewportCanvas() {
         <ContextMenu x={sketchMenu.x} y={sketchMenu.y} items={sketchMenuItems()} onClose={() => setSketchMenu(null)} />
       )}
       {measureActive && (
-        <div className="absolute top-2 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono pointer-events-none space-y-0.5">
-          {measureHover && (
+        <div className="absolute top-12 left-2 px-2 py-1 bg-panel/90 backdrop-blur-sm border border-panel-border rounded text-[10px] text-text-secondary font-mono space-y-0.5">
+          {/* Mode switcher (Fusion Measure): distance / angle / area. */}
+          <div className="flex gap-1 pointer-events-auto">
+            {(['distance', 'angle', 'area'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMeasureMode(m)}
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                  measureMode === m ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
+                }`}
+                aria-pressed={measureMode === m}
+              >
+                {t(`measure.${m}`)}
+              </button>
+            ))}
+          </div>
+          {measureMode !== 'area' && measureHover && (
             <div className={measureHover.snapped ? 'text-success' : 'text-text-muted'}>
               → ({measureHover.x.toFixed(2)}, {measureHover.y.toFixed(2)}, {measureHover.z.toFixed(2)})
             </div>
           )}
-          {measurePts.length < 2 ? (
+          {measureMode === 'area' ? (
+            (() => {
+              const body = bodies.find((b) => b.id === measureFacePick?.bodyId);
+              const r = body && measureFacePick ? faceAreaAndCentroid(body, measureFacePick.faceId) : null;
+              if (!r) return <span className="text-accent">{t('measure.modeHint')}</span>;
+              return (
+                <>
+                  <div className="text-accent">{t('measure.area')}: {r.area.toFixed(2)} mm²</div>
+                  <div>centroid: ({r.centroid.x.toFixed(2)}, {r.centroid.y.toFixed(2)}, {r.centroid.z.toFixed(2)})</div>
+                  <div className="text-text-muted">{t('measure.modeHint')}</div>
+                </>
+              );
+            })()
+          ) : measureMode === 'angle' ? (
+            measurePts.length < 3 ? (
+              <span className="text-accent">{t('measure.modeHint')} ({measurePts.length}/3)</span>
+            ) : (() => {
+              const [a, b, c] = measurePts as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }, { x: number; y: number; z: number }];
+              const ang = angleAtVertex(a, b, c);
+              return (
+                <>
+                  <div className="text-accent">{t('measure.angle')}: {ang.toFixed(1)}°</div>
+                  <div className="text-text-muted">{t('measure.modeHint')}</div>
+                  <button
+                    className="mt-1 px-1.5 py-0.5 rounded bg-accent/20 text-accent text-[10px] hover:bg-accent/30 pointer-events-auto"
+                    onClick={() => addAnnotation({ id: `ann_${Date.now()}`, name: t('measure.annotation'), points: [a, b, c], value: ang, kind: 'angle' })}
+                  >
+                    {t('measure.saveAnnotation')}
+                  </button>
+                </>
+              );
+            })()
+          ) : measurePts.length < 2 ? (
             <>
               <span className="text-accent">{t('measure.hint')} ({measurePts.length}/3)</span>
               {measurePts.length === 1 && (() => {
