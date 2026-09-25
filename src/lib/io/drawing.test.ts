@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { projectBody, projectBodies, exportDrawingSVG } from './drawing';
+import {
+  projectBody,
+  projectBodies,
+  exportDrawingSVG,
+  clipSegmentToCircle,
+  clipViewToCircle,
+  viewTransform,
+  type DrawingView,
+} from './drawing';
 import { createBox, createCylinder } from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
+import { detailPointToSheet } from './drawingNotes';
 
 describe('projectBody', () => {
   const box = createBox(10, 20, 10);
@@ -240,5 +249,167 @@ describe('section views', () => {
   it('no section faces without a section plane', () => {
     const view = projectBodies([createBox(10, 10, 10)], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
     expect(view.sectionFaces).toBeUndefined();
+  });
+});
+
+describe('clipSegmentToCircle (detail-view crop)', () => {
+  const circle = { center: { x: 0, y: 0 }, radius: 10 };
+
+  it('keeps a fully-inside segment unchanged', () => {
+    const seg = clipSegmentToCircle({ x: -3, y: -2 }, { x: 4, y: 2 }, circle);
+    expect(seg).toEqual({ start: { x: -3, y: -2 }, end: { x: 4, y: 2 } });
+  });
+
+  it('drops a fully-outside segment', () => {
+    expect(clipSegmentToCircle({ x: 20, y: 0 }, { x: 30, y: 0 }, circle)).toBeNull();
+    expect(clipSegmentToCircle({ x: -30, y: 40 }, { x: -20, y: 40 }, circle)).toBeNull();
+  });
+
+  it('clips a crossing segment to the exact chord endpoints', () => {
+    // Horizontal segment through the centre: chord is (-10,0)-(10,0).
+    const seg = clipSegmentToCircle({ x: -25, y: 0 }, { x: 25, y: 0 }, circle)!;
+    expect(seg.start.x).toBeCloseTo(-10, 9);
+    expect(seg.start.y).toBeCloseTo(0, 9);
+    expect(seg.end.x).toBeCloseTo(10, 9);
+    expect(seg.end.y).toBeCloseTo(0, 9);
+  });
+
+  it('clips a segment entering the circle (outside → inside)', () => {
+    // From (0,-25) up to (0,0): kept part enters at (0,-10) and ends at (0,0).
+    const seg = clipSegmentToCircle({ x: 0, y: -25 }, { x: 0, y: 0 }, circle)!;
+    expect(seg.start.y).toBeCloseTo(-10, 9);
+    expect(seg.start.x).toBeCloseTo(0, 9);
+    expect(seg.end).toEqual({ x: 0, y: 0 });
+  });
+
+  it('clips a segment leaving the circle (inside → outside)', () => {
+    const seg = clipSegmentToCircle({ x: 0, y: 0 }, { x: 0, y: 25 }, circle)!;
+    expect(seg.start).toEqual({ x: 0, y: 0 });
+    expect(seg.end.y).toBeCloseTo(10, 9);
+  });
+
+  it('drops a tangent segment (zero-length chord)', () => {
+    // Touches the circle at exactly one point along its length.
+    expect(clipSegmentToCircle({ x: -25, y: 10 }, { x: 25, y: 10 }, circle)).toBeNull();
+  });
+
+  it('drops a segment whose line misses the circle entirely', () => {
+    // Parallel to the crossing case but offset beyond the radius.
+    expect(clipSegmentToCircle({ x: -25, y: 11 }, { x: 25, y: 11 }, circle)).toBeNull();
+  });
+});
+
+describe('clipViewToCircle', () => {
+  const view: DrawingView = {
+    name: 'Front',
+    lines: [
+      { start: { x: -25, y: 0 }, end: { x: 25, y: 0 } }, // crossing → chord (-10,0)-(10,0)
+      { start: { x: -25, y: 20 }, end: { x: 25, y: 20 } }, // outside → dropped
+      { start: { x: -3, y: -3 }, end: { x: 3, y: 3 } }, // inside → kept whole
+    ],
+    arcs: [],
+    dimensions: [],
+    bounds: { min: { x: -25, y: 0 }, max: { x: 25, y: 20 } },
+  };
+
+  it('keeps only segments with some part inside the circle', () => {
+    const lines = clipViewToCircle(view, { center: { x: 0, y: 0 }, radius: 10 });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.start.x).toBeCloseTo(-10, 9);
+    expect(lines[0]!.end.x).toBeCloseTo(10, 9);
+    expect(lines[1]).toEqual({ start: { x: -3, y: -3 }, end: { x: 3, y: 3 } });
+  });
+});
+
+describe('viewTransform', () => {
+  const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+  const cell = { x: 400, y: 300, w: 400, h: 300 };
+
+  it('maps model +y to sheet-up (screen y inverts)', () => {
+    const t = viewTransform(view, cell);
+    const bottom = t.toSheet({ x: 0, y: view.bounds.min.y });
+    const top = t.toSheet({ x: 0, y: view.bounds.max.y });
+    expect(bottom.y).toBeGreaterThan(top.y);
+  });
+
+  it('toModel is the exact inverse of toSheet', () => {
+    const t = viewTransform(view, cell);
+    for (const p of [
+      { x: view.bounds.min.x, y: view.bounds.min.y },
+      { x: view.bounds.max.x, y: view.bounds.max.y },
+      { x: 1.25, y: -2.5 },
+      { x: -4, y: 3 },
+    ]) {
+      const back = t.toModel(t.toSheet(p));
+      expect(back.x).toBeCloseTo(p.x, 9);
+      expect(back.y).toBeCloseTo(p.y, 9);
+    }
+  });
+
+  it('fits the view inside the cell padding', () => {
+    const t = viewTransform(view, cell);
+    const p1 = t.toSheet({ x: view.bounds.min.x, y: view.bounds.min.y });
+    const p2 = t.toSheet({ x: view.bounds.max.x, y: view.bounds.max.y });
+    expect(p1.x).toBeGreaterThanOrEqual(cell.x + 40);
+    expect(p2.x).toBeLessThanOrEqual(cell.x + cell.w - 40);
+  });
+});
+
+describe('detail-view geometry', () => {
+  it('crops a known rectangle at 2x into the expected panel segments', () => {
+    // A 100x100 rectangle centred so the bottom edge crosses a circle of
+    // radius 10 at (50, 0): the chord is (40,0)-(60,0).
+    const view: DrawingView = {
+      name: 'Front',
+      lines: [{ start: { x: 0, y: 0 }, end: { x: 100, y: 0 } }],
+      arcs: [],
+      dimensions: [],
+      bounds: { min: { x: 0, y: 0 }, max: { x: 100, y: 100 } },
+    };
+    const center = { x: 50, y: 0 };
+    const clipped = clipViewToCircle(view, { center, radius: 10 });
+    expect(clipped).toHaveLength(1);
+    // Panel: source scale 1 px/mm, magnification 2 → 2 px/mm.
+    const panel = { cx: 400, cy: 500, rPx: 20, sourceScale: 1, effectiveScale: 2, detailIndex: 0, letter: 'A', title: 'DETAIL A (2:1)' };
+    const p1 = detailPointToSheet(clipped[0]!.start, center, panel);
+    const p2 = detailPointToSheet(clipped[0]!.end, center, panel);
+    // (40,0) → 400 + (40-50)*2 = 380; (60,0) → 400 + (60-50)*2 = 420; y stays 500.
+    expect(p1).toEqual({ x: 380, y: 500 });
+    expect(p2).toEqual({ x: 420, y: 500 });
+    // The whole chord fits inside the border circle.
+    expect(Math.hypot(p1.x - panel.cx, p1.y - panel.cy)).toBeLessThanOrEqual(panel.rPx);
+    expect(Math.hypot(p2.x - panel.cx, p2.y - panel.cy)).toBeLessThanOrEqual(panel.rPx);
+  });
+
+  it('SVG export includes the detail border circle, label and source circle', () => {
+    // 200mm body: source scale ≈ 1.6 px/mm → a 25mm circle at 2x (~80px)
+    // stays under the panel cap, so the title is exactly "(2:1)".
+    const box = createBox(200, 200, 200);
+    const view = projectBody(box, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG([view], 800, 600, {
+      details: [{ id: 'ddetail_1', viewIndex: 0, center: { x: 0, y: 0 }, radius: 25, scale: 2 }],
+    });
+    expect(svg).toContain('DETAIL A (2:1)');
+    expect((svg.match(/<circle/g) ?? []).length).toBeGreaterThanOrEqual(2); // border + source indicator
+    // The strip grows the sheet beyond the base 600px height.
+    const height = Number(/<svg[^>]*height="(\d+)"/.exec(svg)![1]);
+    expect(height).toBeGreaterThan(600);
+    expect(svg).toContain(`viewBox="0 0 800 ${height}"`);
+  });
+
+  it('SVG export includes note text at its sheet position', () => {
+    const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG([view], 800, 600, {
+      notes: [{ id: 'dnote_1', x: 123.5, y: 456.25, text: 'Break all sharp edges' }],
+    });
+    expect(svg).toContain('Break all sharp edges');
+    expect(svg).toContain('x="123.50"');
+    expect(svg).toContain('y="456.25"');
+  });
+
+  it('SVG without extras keeps the classic 800x600 sheet', () => {
+    const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG([view], 800, 600);
+    expect(svg).toContain('viewBox="0 0 800 600"');
   });
 });

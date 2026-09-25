@@ -1,4 +1,5 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
+import { layoutDetailPanels, detailPointToSheet, type DetailPanelInput, type DrawingDetail, type DrawingNote } from './drawingNotes';
 
 export interface DrawingLine {
   start: { x: number; y: number };
@@ -42,6 +43,102 @@ export interface SectionPlane {
   normal: Vec3;
   /** Plane offset: the plane is the set {p : p·normal = offset}. */
   offset: number;
+}
+
+/** Circular crop region for detail views (model coords of a view's projection). */
+export interface ClipCircle {
+  center: { x: number; y: number };
+  radius: number;
+}
+
+/**
+ * Clip a segment to the interior of a circle (detail-view crop): keep it whole
+ * when both endpoints lie inside, drop it when entirely outside, and trim it
+ * to the chord where it crosses the border. Returns null for no overlap
+ * (tangency counts as no overlap — a zero-length chord draws nothing).
+ */
+export function clipSegmentToCircle(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  circle: ClipCircle,
+): DrawingLine | null {
+  const { center, radius } = circle;
+  const r2 = radius * radius;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const fx = start.x - center.x;
+  const fy = start.y - center.y;
+  const da = fx * fx + fy * fy;
+  const db = (end.x - center.x) ** 2 + (end.y - center.y) ** 2;
+  if (da <= r2 && db <= r2) return { start, end };
+  const a = dx * dx + dy * dy;
+  if (a === 0) return null; // degenerate point segment
+  // |start + t·d − center|² = r²  →  a·t² + 2b·t + c = 0
+  const b = fx * dx + fy * dy;
+  const c = da - r2;
+  const disc = b * b - a * c;
+  if (disc < 0) return null; // the segment's line misses the circle
+  const sq = Math.sqrt(disc);
+  const lo = Math.max((-b - sq) / a, 0);
+  const hi = Math.min((-b + sq) / a, 1);
+  if (lo > hi || hi - lo < 1e-12) return null;
+  return {
+    start: { x: start.x + dx * lo, y: start.y + dy * lo },
+    end: { x: start.x + dx * hi, y: start.y + dy * hi },
+  };
+}
+
+/** Crop a view's projected lines to a circle (detail-view geometry). */
+export function clipViewToCircle(view: DrawingView, circle: ClipCircle): DrawingLine[] {
+  const out: DrawingLine[] = [];
+  for (const line of view.lines) {
+    const seg = clipSegmentToCircle(line.start, line.end, circle);
+    if (seg) out.push(seg);
+  }
+  return out;
+}
+
+/**
+ * How a view is placed in one grid cell of the sheet: fit into the cell
+ * (minus padding and the 20px title strip) and centre, with model +y mapped
+ * to sheet-up. `toModel` is the exact inverse of `toSheet` (used to turn a
+ * sheet click on a view into model coords, e.g. placing a detail view).
+ */
+export interface ViewTransform {
+  /** px per model unit. */
+  scale: number;
+  toSheet(p: { x: number; y: number }): { x: number; y: number };
+  toModel(p: { x: number; y: number }): { x: number; y: number };
+}
+
+/** Compute a view's placement in a grid cell (origin at the cell's top-left). */
+export function viewTransform(
+  view: DrawingView,
+  cell: { x: number; y: number; w: number; h: number },
+  padding = 40,
+): ViewTransform {
+  const viewW = view.bounds.max.x - view.bounds.min.x;
+  const viewH = view.bounds.max.y - view.bounds.min.y;
+  const scaleX = (cell.w - padding * 2) / (viewW || 1);
+  const scaleY = (cell.h - padding * 2 - 20) / (viewH || 1);
+  const scale = Math.min(scaleX, scaleY);
+  const offsetX = cell.x + padding + (cell.w - padding * 2 - viewW * scale) / 2;
+  const offsetY = cell.y + 20 + padding + (cell.h - padding * 2 - 20 - viewH * scale) / 2;
+  return {
+    scale,
+    toSheet(p) {
+      return {
+        x: (p.x - view.bounds.min.x) * scale + offsetX,
+        y: cell.h - ((p.y - view.bounds.min.y) * scale + offsetY) + cell.y,
+      };
+    },
+    toModel(p) {
+      return {
+        x: view.bounds.min.x + (p.x - offsetX) / scale,
+        y: view.bounds.min.y + (cell.h + cell.y - offsetY - p.y) / scale,
+      };
+    },
+  };
 }
 
 /** Project a 3D body onto a 2D plane for drawing */
@@ -311,11 +408,20 @@ function cross(a: Vec3, b: Vec3): Vec3 {
   };
 }
 
+/** Extra sheet annotations the SVG exporter can include alongside the views. */
+export interface DrawingSheetExtras {
+  /** Detail-view definitions (see drawingNotes.ts); viewIndex indexes `views`. */
+  details?: DrawingDetail[];
+  /** Text notes at sheet px ({x, y} of an 800×600-base sheet). */
+  notes?: DrawingNote[];
+}
+
 /** Export one or more drawing views as SVG, laid out in a grid like the canvas */
 export function exportDrawingSVG(
   views: DrawingView | DrawingView[],
   width = 800,
   height = 600,
+  extras: DrawingSheetExtras = {},
 ): string {
   const list = Array.isArray(views) ? views : [views];
   const cols = Math.min(2, Math.max(1, list.length));
@@ -324,45 +430,47 @@ export function exportDrawingSVG(
   const cellH = height / rows;
   const padding = 40;
 
+  // Detail panels live in a strip below the base sheet, sized off the
+  // first-view grid cells (the canvas uses the same math). Details whose
+  // viewIndex is stale (no source view) get sourceScale 0 and are skipped.
+  const detailInputs: DetailPanelInput[] = (extras.details ?? []).map((d) => {
+    const source = d.viewIndex >= 0 && d.viewIndex < list.length ? list[d.viewIndex]! : undefined;
+    return {
+      scale: d.scale,
+      radius: d.radius,
+      sourceScale: source ? viewTransform(source, { x: 0, y: 0, w: cellW, h: cellH }, padding).scale : 0,
+    };
+  });
+  const { panels, stripHeight } = layoutDetailPanels(detailInputs, width, height, cellW, cellH);
+  const totalHeight = height + stripHeight;
+
   let svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${totalHeight}" viewBox="0 0 ${width} ${totalHeight}">
   <defs>
     <pattern id="sectionHatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
       <line x1="0" y1="0" x2="0" y2="6" stroke="#555" stroke-width="0.5" />
     </pattern>
   </defs>
-  <rect width="${width}" height="${height}" fill="white" />
+  <rect width="${width}" height="${totalHeight}" fill="white" />
 `;
 
-  for (let i = 0; i < list.length; i++) {
-    const view = list[i]!;
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const ox = col * cellW;
-    const oy = row * cellH;
+  const placements = list.map((view, i) => ({
+    view,
+    ox: (i % cols) * cellW,
+    oy: Math.floor(i / cols) * cellH,
+    transform: viewTransform(view, { x: (i % cols) * cellW, y: Math.floor(i / cols) * cellH, w: cellW, h: cellH }, padding),
+  }));
 
-    const viewWidth = view.bounds.max.x - view.bounds.min.x;
-    const viewHeight = view.bounds.max.y - view.bounds.min.y;
-    const scaleX = (cellW - padding * 2) / (viewWidth || 1);
-    const scaleY = (cellH - padding * 2 - 20) / (viewHeight || 1);
-    const scale = Math.min(scaleX, scaleY);
-    const offsetX = ox + padding + (cellW - padding * 2 - viewWidth * scale) / 2;
-    const offsetY = oy + 20 + padding + (cellH - padding * 2 - 20 - viewHeight * scale) / 2;
-
-    const transform = (p: { x: number; y: number }) => ({
-      x: (p.x - view.bounds.min.x) * scale + offsetX,
-      y: cellH - ((p.y - view.bounds.min.y) * scale + offsetY) + oy,
-    });
-
+  for (const { view, ox, oy, transform } of placements) {
     svg += `  <g stroke="black" stroke-width="1" fill="none">\n`;
     for (const line of view.lines) {
-      const p1 = transform(line.start);
-      const p2 = transform(line.end);
+      const p1 = transform.toSheet(line.start);
+      const p2 = transform.toSheet(line.end);
       svg += `    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" />\n`;
     }
     for (const arc of view.arcs) {
-      const c = transform(arc.center);
-      svg += `    <circle cx="${c.x}" cy="${c.y}" r="${arc.radius * scale}" />\n`;
+      const c = transform.toSheet(arc.center);
+      svg += `    <circle cx="${c.x}" cy="${c.y}" r="${arc.radius * transform.scale}" />\n`;
     }
     svg += '  </g>\n';
 
@@ -370,7 +478,7 @@ export function exportDrawingSVG(
     if (view.sectionFaces && view.sectionFaces.length > 0) {
       svg += `  <g fill="url(#sectionHatch)" stroke="#555" stroke-width="0.5">\n`;
       for (const face of view.sectionFaces) {
-        const pts = face.map(transform);
+        const pts = face.map((p) => transform.toSheet(p));
         if (pts.length < 3) continue;
         const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ') + ' Z';
         svg += `    <path d="${d}" />\n`;
@@ -380,8 +488,8 @@ export function exportDrawingSVG(
 
     svg += `  <g stroke="red" stroke-width="0.5" fill="red" font-size="10">\n`;
     for (const dim of view.dimensions) {
-      const p1 = transform(dim.start);
-      const p2 = transform(dim.end);
+      const p1 = transform.toSheet(dim.start);
+      const p2 = transform.toSheet(dim.end);
       const mx = (p1.x + p2.x) / 2;
       const my = (p1.y + p2.y) / 2;
       svg += `    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke-dasharray="2,2" />\n`;
@@ -391,6 +499,35 @@ export function exportDrawingSVG(
 
     // View title (top-centre of the cell)
     svg += `  <text x="${ox + cellW / 2}" y="${oy + 20}" text-anchor="middle" font-size="14" font-weight="bold">${escapeXml(view.name)}</text>\n`;
+  }
+
+  // Detail views: thin source circle on the parent view + magnified panel.
+  const details = extras.details ?? [];
+  for (const panel of panels) {
+    const detail = details[panel.detailIndex]!;
+    const source = placements[detail.viewIndex]!;
+    const srcC = source.transform.toSheet(detail.center);
+    const srcR = detail.radius * source.transform.scale;
+    svg += `  <circle cx="${srcC.x.toFixed(2)}" cy="${srcC.y.toFixed(2)}" r="${srcR.toFixed(2)}" fill="none" stroke="#555" stroke-width="0.5" />\n`;
+
+    svg += `  <g stroke="black" stroke-width="1" fill="none">\n`;
+    svg += `    <clipPath id="detailClip${panel.detailIndex}"><circle cx="${panel.cx.toFixed(2)}" cy="${panel.cy.toFixed(2)}" r="${panel.rPx.toFixed(2)}" /></clipPath>\n`;
+    svg += `    <circle cx="${panel.cx.toFixed(2)}" cy="${panel.cy.toFixed(2)}" r="${panel.rPx.toFixed(2)}" fill="white" stroke="black" stroke-width="1.5" />\n`;
+    svg += `    <g clip-path="url(#detailClip${panel.detailIndex})">\n`;
+    for (const line of clipViewToCircle(source.view, { center: detail.center, radius: detail.radius })) {
+      const p1 = detailPointToSheet(line.start, detail.center, panel);
+      const p2 = detailPointToSheet(line.end, detail.center, panel);
+      svg += `      <line x1="${p1.x.toFixed(2)}" y1="${p1.y.toFixed(2)}" x2="${p2.x.toFixed(2)}" y2="${p2.y.toFixed(2)}" />\n`;
+    }
+    svg += `    </g>\n`;
+    svg += '  </g>\n';
+    svg += `  <text x="${panel.cx.toFixed(2)}" y="${(panel.cy + panel.rPx + 16).toFixed(2)}" text-anchor="middle" font-size="12" font-weight="bold">${escapeXml(panel.title)}</text>\n`;
+  }
+
+  // Notes: plain text at sheet positions.
+  for (const note of extras.notes ?? []) {
+    if (!note.text) continue;
+    svg += `  <text x="${note.x.toFixed(2)}" y="${note.y.toFixed(2)}" font-size="12" fill="black">${escapeXml(note.text)}</text>\n`;
   }
 
   svg += '</svg>';
