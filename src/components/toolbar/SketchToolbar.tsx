@@ -1,6 +1,6 @@
 import { useStore, type SketchTool } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { MousePointer2, Minus, Square, Circle, CircleDot, Hexagon, Box, RotateCw, LogOut, MoveDiagonal } from 'lucide-react';
+import { MousePointer2, Minus, Square, Circle, CircleDot, Hexagon, Box, RotateCw, LogOut, MoveDiagonal, Scissors, ArrowRightToLine } from 'lucide-react';
 
 const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[] = [
   { tool: 'select', icon: MousePointer2, shortcut: 'V' },
@@ -109,6 +109,37 @@ export function SketchToolbar() {
         title={!offsettableSelected ? `${t('sketch.offset')} — ${t('sketch.offsetHint')}` : t('sketch.offset')}
       >
         <MoveDiagonal size={18} />
+      </button>
+
+      {/* Trim / Extend — click-then-act tools (Fusion's TRIM/EXTEND): picking
+          the tool arms it; the viewport's next click performs the operation on
+          the entity under the cursor via trimSketchAt / extendSketchTo. */}
+      <button
+        onClick={() => setTool('trim')}
+        className={`w-9 h-9 flex items-center justify-center rounded transition-colors
+          ${current === 'trim'
+            ? 'bg-accent text-white'
+            : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+          }`}
+        aria-label={t('sketch.trim')}
+        aria-pressed={current === 'trim'}
+        title={`${t('sketch.trim')} — ${t('sketch.trimHint')}`}
+      >
+        <Scissors size={18} />
+      </button>
+
+      <button
+        onClick={() => setTool('extend')}
+        className={`w-9 h-9 flex items-center justify-center rounded transition-colors
+          ${current === 'extend'
+            ? 'bg-accent text-white'
+            : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+          }`}
+        aria-label={t('sketch.extend')}
+        aria-pressed={current === 'extend'}
+        title={`${t('sketch.extend')} — ${t('sketch.extendHint')}`}
+      >
+        <ArrowRightToLine size={18} />
       </button>
 
       <button

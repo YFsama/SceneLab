@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { SketchTool } from '../../store/app';
 import { useStore } from '../../store/app';
-import { createSketch, addCircle } from '../../lib/sketch/engine';
+import { createSketch, addCircle, addLine } from '../../lib/sketch/engine';
 import { translations } from '../../lib/i18n';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -180,6 +180,108 @@ describe('SketchToolbar offset button (rendered)', () => {
       expect(useStore.getState().selectedSketchIds).toHaveLength(1); // copy selected
     } finally {
       await unmountToolbar(m);
+    }
+  });
+});
+
+// --- Rendered coverage: the Trim / Extend tool buttons ------------------------
+// Click-then-act tools: clicking arms the tool (sketchTool state); the
+// viewport performs the actual trim/extend on its next click.
+
+describe('SketchToolbar trim/extend buttons (rendered)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      locale: 'en',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      numericPrompt: null,
+      sketchTool: 'select',
+    });
+  });
+
+  function toolButton(container: HTMLElement, key: 'sketch.trim' | 'sketch.extend'): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>(
+      `button[aria-label="${translations.en![key]!}"]`,
+    );
+  }
+
+  it('renders both buttons with English labels and arms the trim tool on click', async () => {
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const trim = toolButton(m.container, 'sketch.trim');
+      const extend = toolButton(m.container, 'sketch.extend');
+      expect(trim).not.toBeNull();
+      expect(extend).not.toBeNull();
+      expect(trim!.getAttribute('aria-pressed')).toBe('false');
+
+      await act(async () => {
+        trim!.click();
+      });
+      expect(useStore.getState().sketchTool).toBe('trim');
+      expect(trim!.getAttribute('aria-pressed')).toBe('true');
+      expect(extend!.getAttribute('aria-pressed')).toBe('false');
+
+      await act(async () => {
+        extend!.click();
+      });
+      expect(useStore.getState().sketchTool).toBe('extend');
+    } finally {
+      await unmountToolbar(m);
+    }
+  });
+
+  it('renders with the Chinese labels in the zh locale', async () => {
+    useStore.getState().setLocale('zh');
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const trim = m.container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${translations.zh!['sketch.trim']!}"]`,
+      );
+      const extend = m.container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${translations.zh!['sketch.extend']!}"]`,
+      );
+      expect(trim).not.toBeNull();
+      expect(extend).not.toBeNull();
+
+      await act(async () => {
+        trim!.click();
+      });
+      expect(useStore.getState().sketchTool).toBe('trim');
+    } finally {
+      await unmountToolbar(m);
+      useStore.getState().setLocale('en');
+    }
+  });
+
+  it('arming trim and clicking a line through the store trims it end-to-end (toolbar → viewport contract)', async () => {
+    const sketch = createSketch('xy');
+    const target = addLine(sketch, 0, 0, 10, 0);
+    addLine(sketch, 5, -5, 5, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(target.id);
+
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      await act(async () => {
+        toolButton(m.container, 'sketch.trim')!.click();
+      });
+      expect(useStore.getState().sketchTool).toBe('trim');
+
+      // What the viewport's click handler will do with the armed tool: target
+      // the selection and call the store action with the sketch-space point.
+      let ok = false;
+      await act(async () => {
+        const st = useStore.getState();
+        const id = st.selectedSketchIds[0] ?? st.selectedSketchId;
+        expect(id).toBe(target.id);
+        ok = st.trimSketchAt({ x: 2, y: 0 });
+      });
+      expect(ok).toBe(true);
+      expect(useStore.getState().currentSketch!.entities.has(target.id)).toBe(false);
+    } finally {
+      await unmountToolbar(m);
+      useStore.getState().setSketchTool('select');
     }
   });
 });
