@@ -767,3 +767,200 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     but invisible; i18n en/zh, deps array fixed for selectedEdgeIds.
   - v0.10.0 packages passes #15 (drag-and-drop import, constraint badges) and
     #16; version synced across the four manifests, CHANGELOG entry added.
+- `2026-09-20`: Pass #17 — the todo-zeroing round: keymap + drawing detail/notes + AI pick ack, v0.11.0 (1895 tests / 128 files green; lint/tsc/build/E2E 5/5/cargo OK).
+  - **Keymap pass (the standing "future keymap" item)**: plain **M now toggles
+    Measure** (SolidWorks/Onshape muscle memory; sketch-mode gated); the model-
+    workspace jump moved to **Shift+M** (Esc already returns from sketch).
+    Registry `view.measure` carries the shortcut; ShortcutsHelp rows updated
+    (en/zh).
+  - **Alt+drag clone** (Fusion/SolidWorks clone-drag): Alt+drag on a body
+    duplicates the selection lazily on FIRST motion (a plain Alt+click stays
+    the edge sub-selection and never leaves copies), shows the `copy` cursor,
+    then slides the copies like a normal drag. Moved drags suppress the
+    trailing click (an Alt-drag would otherwise toggle an edge pick on
+    release). Verified end-to-end in Playwright: object count 1→2.
+  - **Drawing detail views** (Agent E): toolbar Detail toggle → click a view →
+    25 mm-radius crop of that projection at 2×, rendered in a growing strip
+    below the sheet with a circular border, "DETAIL A (2:1)" labels (A…Z, AA),
+    dashed source circle on the parent view (Fusion convention); segment–
+    circle chord clipping (`clipViewToCircle`) beside the existing section
+    half-space clip; right-click deletes. Panel size capped at 0.45×cell with
+    an honestly-recomputed ratio label.
+  - **Drawing notes** (Agent E): toolbar Note toggle → click the sheet →
+    inline editable text note (Enter/Escape/blur, empty drops), hover-× /
+    right-click delete; SVG export emits `<text>`, PNG/PDF include notes via
+    the canvas snapshot route.
+  - **AI face-pick acknowledgement**: the `scenelab:pick-face` listener now
+    toasts the picked body's name alongside the orange face highlight.
+  - **Honest limitation recorded**: drawing state (details/notes/section axis)
+    is session-scoped — `.studio3d` does not serialize any drawing data today
+    and no file-format was invented for this pass; adding drawing
+    serialization is the natural next pass.
+  - **v0.11.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-09-20`: Pass #18 — drawing-sheet persistence + history, v0.12.0 (1904 tests / 128 files green; lint/tsc/build/E2E 5/5/cargo OK).
+  - **Drawing state is now document state**: `SerializedDrawing` block in the
+    `.studio3d` project file (sectionAxis + details + notes) with defensive
+    `deserializeDrawing` (unknown axis / non-array fields fall back to
+    defaults). Optional field, FILE_VERSION unchanged — old files load clean,
+    old app versions ignore the block. Wired through every save path (Ctrl+S /
+    native save / autosave / crash-recovery snapshot) and load path (browser /
+    native / autosave restore). Sheet edits set projectDirty.
+  - **Undo covers the sheet**: HistorySnapshot extended to
+    {directBodies, hiddenIds, features, drawingSectionAxis, drawingDetails,
+    drawingNotes}; every drawing action (note add/update/remove, detail
+    add/remove, section-axis change) pushes exactly one entry — modelling and
+    sheet edits interleave in one LIFO history (tested).
+  - **`add_drawing_note` AI tool**: sheet-coordinate optional; default
+    placement stacks down the left margin (never overlapping); rejects empty
+    text; one undo entry. Contract-tested (4 cases).
+  - DrawingCanvas's local sectionAxis state moved into the store
+    (`drawingSectionAxis`) so the axis survives save/load and undo.
+  - **v0.12.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-09-21`: Pass #19 — sketch trim/extend + measure-hover caching, v0.13.0 (1930 tests / 129 files green; lint/tsc/build/E2E 6/6/cargo OK).
+  - **Trim** (Agent F + coordinator wiring): `lib/sketch/trim.ts` — line
+    pieces between segment-segment intersections, the clicked piece deleted,
+    kept pieces REUSE existing junction point ids by position key (rectangle
+    corners stay id-shared, constraints survive); no crossings → whole entity
+    deleted (Fusion "trim to nothing"); a line-cut circle becomes the arc
+    complement of the deleted span. Click-then-act: viewport click picks the
+    entity and drives the cut in one motion, tool stays armed for consecutive
+    cuts, miss shows a bilingual hint. One sketch-undo entry per action
+    (snapshot self-cleans on failure).
+  - **Extend** (Agent F): line endpoint nearest the click moves to the
+    closest forward crossing; arcs sweep along their own growth direction to
+    the first full-circle line hit outside the current span; circles rejected;
+    no boundary → warning toast, geometry untouched.
+  - **Measure-hover snap caching** (coordinator): vertices + edge midpoints +
+    face centres cached per body REFERENCE (position-keyed invalidation,
+    >64 entries reset) — measuring over large imported bodies no longer
+    rebuilds thousands of points per mousemove.
+  - **E2E**: M toggles measure (aria-pressed both ways) + the status-bar
+    `↺ n` history-depth readout appears after an edit.
+  - **v0.13.0**: version synced across the four manifests; CHANGELOG entry.
+  - Noted for a future pass: trim ON an arc (currently lines/circles only);
+    >2-point circle cuts emit a single complement arc.
+- `2026-09-21`: Pass #20 — arc trim + multi-span cuts + AI sketch editing + dialog i18n, v0.14.0 (1943 tests / 129 files green; lint/tsc/build/E2E 6/6/cargo OK).
+  - **Arc trim**: sweep-space parameterization (t ∈ [0, span] along the arc's
+    own direction, CW-safe); only crossings INSIDE the arc's span bound
+    pieces; the clicked piece goes, each surviving piece stays as an arc with
+    the same centre/radius/construction flag; uncrossed arcs trim to nothing.
+    6 new geometry tests (incl. CW arc, doubly-crossed arc → two pieces,
+    construction carry).
+  - **Multi-span circle cuts**: a 4-crossing circle clicked in one span now
+    keeps THREE arcs (one per surviving span) instead of one merged complement
+    — Fusion never merges disconnected spans.
+  - **AI sketch editing**: trim/extend/offset registered as AI tools operating
+    on the active sketch by entity id + sketch coordinates; retryable errors;
+    5 contract tests.
+  - **Dialog i18n zeroed** (Agent G): audit found 7 of 8 dialogs already
+    localized — the real gap was FeatureEditor's edit dialogs (hardcoded
+    "Edit Revolve"/"Distance (mm)"/"Symmetric"/Cancel/Apply…). Now fully
+    bilingual; 8 new key pairs; zh uses the map's existing CAD terminology;
+    bilingual render tests; a11y label/htmlFor pairs added on touched fields.
+  - **v0.14.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-09-21`: Pass #21 — agent-team round: measure angle/area + sketch-entry fix + E2E 6→9, v0.15.0 (1972 tests / 129 files green; lint/tsc/build/E2E 9/9/cargo OK).
+  - **Measure angle + area** (Agent H math/store + coordinator viewport
+    wiring): HUD mode switcher (distance/angle/area, aria-pressed);
+    angle = 3 points (vertex-middle, `angleAtVertex` degrees), area = one
+    face click (fan-triangulated area + area-weighted centroid); angle
+    results save as persistent annotations; mode switch resets picks;
+    hover preview suppressed in area mode. 22 new math tests (rotation
+    invariance, Newell cross-check, degenerate guards) + 5 store tests.
+    Known naming wart recorded: measure.ts `angleAtVertex(vertex,a,b)` vs
+    snap.ts `angleAtVertex(a,b,c)` (vertex-middle) — migrate the snap.ts
+    call sites in a future pass.
+  - **E2E expansion** (Agent I): trim flow (entity counter 6→5, Ctrl+Z → 6),
+    extrude-dialog expression (`20/2` with live `= 10` preview → timeline
+    chip + body), drawing-note flow (place/edit/dirty-dot/undo-depth). Each
+    new test verified with --repeat-each=3; full suite 9/9 twice.
+  - **Real UX bug found by the E2E agent and FIXED** (coordinator): the
+    toolbar / S-key entered "sketch active" without creating a
+    `currentSketch` — every drawing tool silently no-op'd until a datum
+    plane was clicked. `setWorkspace('sketch')` now starts a sketch on the
+    current/default plane when none exists (existing sketches resume
+    untouched); 2 store tests.
+  - **Known fidelity item recorded (not fixed)**: undo/redo always set
+    projectDirty — undoing back to the saved state doesn't clear the dirty
+    dot. Proper fix needs a last-saved snapshot comparison
+    (src/store/app.ts undo/redo). Noted for a future pass.
+  - **AI system prompt** now teaches trim/extend/offset sketch editing tools.
+  - **v0.15.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-09-21`: Pass #22 — agent-team round: data safety + dirty fidelity + 4 E2E-found bug fixes, v0.16.0 (1993 tests / 130 files green; lint/tsc/build/E2E 12/12/cargo OK).
+  - **Boot autosave-restore banner** (Agent J): probe-only on boot (no
+    auto-restore existed — investigation confirmed); Restore reuses
+    restoreAutosave's deserialize path, Discard clears the localStorage key
+    (native Rust snapshots have no clear command — they age out via the
+    newest-20 prune, noted in code); session-dismiss keeps the key. 14 tests.
+  - **Dirty-dot fidelity** (coordinator): saved-state fingerprint captured on
+    explicit save / load / new; undo+redo compare against it — returning to
+    exactly the saved state clears the dot (4 tests, incl. rename-only
+    difference stays dirty).
+  - **E2E round 3** (Agent K): timeline HTML5 drag-reorder AND Alt+→ keyboard
+    reorder through a real two-entry sketch→extrude build; measure three-point
+    angle + Area mode (400 mm² exact on a 20mm cube). Suite 9→12, each new
+    test --repeat-each=3 ×2. Playwright config gains E2E_PORT (host's 5174 is
+    squatted by an unkillable Docker proxy).
+  - **Four real bugs the E2E agent found, all fixed by the coordinator**:
+    (1) in-place tree mutation never notified subscribers — keyboard
+    reorders left stale chip labels; `featureVersion` counter now bumps on
+    every tree mutation and TimelineBar/FeatureEditor subscribe to it;
+    (2) StatusBar selection-hint wrapped at 1280px and overlapped the
+    timeline (truncate now); (3) ExtrudeDialog Enter didn't commit from the
+    input (dialog-level Enter handler, button-target guard against double
+    fire); (4) measure HUD sat under the floating primitive bar (moved
+    top-2 → top-12, E2E selector updated).
+  - **Cleanup**: measure.ts's vertex-first angle helper renamed
+    `angleBetweenRays` (no more parameter-order collision with snap.ts's
+    vertex-middle `angleAtVertex`); new AI tool `measure_face_area`
+    (single face area+centroid, or all-faces list with total; 3 contract
+    tests).
+  - **v0.16.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-09-22`: Pass #23 — agent-team round: parametric hole feature + QA sweep, v0.17.0 (2015 tests / 132 files green; lint/tsc/build/E2E 15/15/cargo OK).
+  - **Parametric HOLE feature** (Agent L + coordinator wiring): Fusion's
+    most-used feature. HoleFeature {center, direction, diameter, depth|null};
+    evaluator consumes the parent and difference-cuts a Rodrigues-oriented
+    cylinder (exact Manifold, voxel fallback; through-all cutter length =
+    2× bbox diagonal). Timeline chip (CircleDot icon, ⌀D×depth/∞ summary),
+    studio3d round-trip, suppress, `.studio3d` case. Store applyHoleToBody
+    (tree → timeline feature; direct → undoable direct edit via the shared
+    drillHoleInBody kernel). Entry: body context menu Feature → Hole as two
+    chained NumericPrompts (diameter → depth, 0 = through). AI `create_hole`
+    (4 contract tests; volume math validated empirically 0.99–1.03 ratios).
+    System prompt teaches it.
+  - **featureVersion gap fixed in applyModifyFeature too** (coordinator):
+    fillet/chamfer/shell/arrays applied via the menu had the same
+    stale-timeline-render root cause as the keyboard-reorder bug — the shared
+    modify path now bumps the version counter (Agent L's hole action patched
+    likewise).
+  - **QA sweep** (Agent; first dispatch hit a provider rate limit, re-ran):
+    CommandPalette (5 tests: filter/keyboard/execute-via-event/Escape —
+    zero coverage before) + SectionPanel (5 tests: axis tabs/offset slider/
+    flip/close). E2E 12→15: offset flow (entities 2→4→2 — circle offset adds
+    ring + fresh centre point, documented as intended behaviour) and
+    restore-banner flow (handcrafted autosave JSON via addInitScript; banner
+    shows name+age, Discard clears key, Restore rebuilds the body). Each new
+    E2E --repeat-each=3.
+  - **v0.17.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-09-22`: Pass #24 — agent-team round: parameters panel + counterbored holes + boot perf, v0.18.0 (2046 tests / 133 files green; lint/tsc/build/E2E 17/17/cargo OK).
+  - **Parameters panel** (Agent N): Fusion Parameters-dialog parity — every
+    numeric driving value (10 feature types × their params + current-sketch
+    distance/radius constraints) in one editable table; edits route through
+    updateFeature / new updateSketchConstraintValue (solves + republishes);
+    suppressed dimmed; live via featureVersion; palette command. 18 tests.
+  - **Counterbore/countersink holes** (Agent O): HoleParams gains optional
+    counterbore {diameter,depth} / countersink {diameter,angleDeg} (cbore wins
+    when both); countersink = truncated cone with EXACT included angle (depth
+    clamp recomputes the truncation radius). GD&T chip summaries (⌴/⌵);
+    HoleEditDialog with expression inputs + cross-validation. Volume tests use
+    the exact-union formula (the naive one double-counts the hole overlap —
+    documented); measured ratio 0.9936 = the 32-gon cutter factor. E2E
+    hole.spec.ts: 2 flows (sketch→extrude tree path with chip+undo; direct
+    Insert-Box path documented as chip-less direct edit), 3× stable.
+  - **Boot perf** (coordinator): vendor split via manualChunks — main chunk
+    1441→640 KB (gzip 385→168), three/react/icons cache independently;
+    Manifold WASM warmup deferred to requestIdleCallback (2 s timeout cap).
+  - **Third featureVersion root-cause fixed** (Agent O found, coordinator
+    patched): applyUndoSnapshot bumps featureVersion — Ctrl+Z now repaints
+    the timeline/feature lists (same in-place-mutation class as the keyboard-
+    reorder and menu-modify bugs).
+  - **v0.18.0**: version synced across the four manifests; CHANGELOG entry.

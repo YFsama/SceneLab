@@ -60,6 +60,11 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
   analysis).
 - **Paste in place** (Ctrl+Shift+V): clipboard copies land at the originals'
   exact positions instead of the cascading paste offset (SolidWorks).
+- **Alt+drag clone** (Fusion/SolidWorks): hold Alt and drag a body to
+  duplicate-and-slide the copies in one motion — a plain Alt+click still picks
+  edges, the duplicate only happens once you actually move.
+- **Measure on M** (SolidWorks/Onshape): plain M toggles the measure tool;
+  the model workspace jump lives on Shift+M.
 - **Beginner parts library** (B): a searchable, categorized gallery of 25
   parametric parts — practical-size basics, mechanical hardware (hex nut,
   washer, bushing, flange, L/U brackets, gear, knob), M3–M8 hole cutters and
@@ -74,11 +79,18 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - **Fusion-style bottom timeline**: the feature tree rendered as chips in
   build order with parameter summaries — click selects the produced body,
   double-click edits the feature, right-click suppresses/deletes.
+- **Parameters panel** (palette → "Parameters…"): every driving value in the
+  document — feature parameters (extrude/fillet/hole ⌀+depth/arrays/…) and
+  sketch distance/radius constraints — in one editable table.
 - **Welcome guide + starter projects**: an empty scene shows a first-run card
   (quick actions, four one-click samples — phone stand, pen cup, gear set,
   nameplate — and a persisted getting-started checklist that ticks off
   insert → move → AI → save); reopen it from the command palette.
 - **Perspective/orthographic projection toggle** (Shift+P)
+- **Sketch editing suite**: trim (click a segment piece to remove it — kept
+  pieces reuse junction points so constraints survive; line-cut circles
+  become arcs), extend to the nearest crossing, profile offset with mitered
+  corners, corner fillets
 - **Sketch constraints**: 12 solver constraint types (tangent, symmetric included). Single-entity ones
   (horizontal / vertical / fixed / radius) apply from the right-click menu or
   shortcuts; select **two** entities (Ctrl/Shift+click) and the menu offers
@@ -95,7 +107,10 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - **Rectangle width/height editing** (detect and resize)
 - **Multi-plane sketch support** (XY, XZ, YZ planes)
 - **Section views** in the drawing workspace (X/Y/Z mid-plane cut, hatched
-  cross-sections) and **PDF export**
+  cross-sections), **detail views** (click a view to crop a 2× circular
+  region with DETAIL A/B labels), **editable text notes** and **PDF export** —
+  the whole sheet (section axis, details, notes) saves with the project and
+  is covered by undo/redo
 - **Sweep & loft features**: twisted sweeps along 3D paths, multi-section
   lofts between sketch features (Fusion-style timeline entries)
 - **Editable drawing dimensions**: click a red dimension on the drawing and
@@ -164,7 +179,8 @@ src/
   volumes; watertightness is asserted in tests).
 - **Feature tree**: sketch → extrude / revolve / sweep (straight path + twist),
   plus fillet (arc-segment approximation), chamfer (per-face offset), shell,
-  linear & circular arrays, and mirror — created from the body context menu and
+  **holes** (diameter + depth or through-all, exact boolean cut), linear &
+  circular arrays, and mirror — created from the body context menu and
   evaluated as a DAG. On tree-produced bodies these are **parametric**: the
   operation joins the timeline and replays on recompute; on AI-created/imported
   bodies they apply as undoable direct edits. Consuming ops replace their parent
@@ -208,8 +224,10 @@ feeds & speeds calculator (surfaced in the CAM panel and as an AI tool).
 ### Persistence
 
 Projects save/load as `.studio3d` round-tripping the full parametric feature
-tree **and** direct (AI-created/imported) bodies. Theme, locale and the AI API
-key persist across reloads.
+tree, direct (AI-created/imported) bodies, reference geometry **and the
+drawing sheet** (section axis, detail views, text notes) — all of it inside
+one undo/redo history. Theme, locale and the AI API key persist across
+reloads.
 
 ### IO (`lib/io`)
 
@@ -291,7 +309,7 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 
 ## Quality
 
-- Every `lib/*` module has vitest tests (1835+ tests, 125 files) plus Rust unit tests
+- Every `lib/*` module has vitest tests (2046+ tests, 133 files) plus Rust unit tests
 - AI tool calls have contract tests (input → expected output)
 - Geometry verified with analytic checks: volumes vs closed-form formulas,
   translation invariance, and watertightness (no boundary loops); exact booleans
@@ -299,7 +317,8 @@ Desktop icons are generated from `src-tauri/icon-source.svg` via
 - ESLint + tsc strict + zero warnings required for merge
 - CI runs lint + typecheck + tests + build, plus Rust fmt/clippy/check
 
-- **Playwright E2E** smoke flows (app boot, insert via context menu) — `npm run test:e2e`
+- **Playwright E2E** flows (app boot, context-menu insert, drag/clone-drag,
+  measure toggle, sketch trim, expression extrude, drawing notes, timeline reorder, measure modes, sketch offset, restore banner) — `npm run test:e2e` (E2E_PORT overrides the port)
 
 ## License
 
