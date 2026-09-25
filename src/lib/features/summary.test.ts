@@ -14,6 +14,7 @@ import {
   createLinearArrayFeature,
   createCircularArrayFeature,
   createMirrorFeature,
+  createHoleFeature,
 } from './tree';
 import { createSketch, addRectangle } from '../sketch/engine';
 
@@ -56,5 +57,36 @@ describe('featureSummary (timeline chip labels)', () => {
     expect(featureSummary(fillet)).toBe('r2.5');
     const scale = tree.features.find((f) => f.type === 'scale')!;
     expect(featureSummary(scale)).toBe('x→42');
+  });
+
+  it('summarizes holes with counterbore/countersink (⌴ / ⌵ annotations)', () => {
+    const sf = treeWithEveryType().features[0]!; // any parent id
+    expect(featureSummary(createHoleFeature(
+      { center: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: null },
+      [sf.id],
+    ))).toBe('⌀6×∞');
+    expect(featureSummary(createHoleFeature(
+      {
+        center: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: 12.5,
+        counterbore: { diameter: 10, depth: 3 },
+      },
+      [sf.id],
+    ))).toBe('⌀6×12.5 ⌴10×3');
+    expect(featureSummary(createHoleFeature(
+      {
+        center: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: null,
+        countersink: { diameter: 10, angleDeg: 90 },
+      },
+      [sf.id],
+    ))).toBe('⌀6×∞ ⌵10°90');
+    // Both present: the summary follows the evaluator's counterbore preference.
+    expect(featureSummary(createHoleFeature(
+      {
+        center: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: null,
+        counterbore: { diameter: 10, depth: 3 },
+        countersink: { diameter: 12, angleDeg: 60 },
+      },
+      [sf.id],
+    ))).toBe('⌀6×∞ ⌴10×3');
   });
 });

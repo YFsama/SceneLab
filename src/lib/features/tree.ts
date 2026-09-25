@@ -9,13 +9,16 @@ import type {
   FilletFeature,
   ChamferFeature,
   ShellFeature,
+  HoleFeature,
+  HoleParams,
   ScaleFeature,
   LinearArrayFeature,
   CircularArrayFeature,
   MirrorFeature,
 } from './types';
 import type { SolidBody, Vec3 } from '../geometry/types';
-import { createExtrude, createRevolve, createLoftSections } from '../geometry/brep';
+import { createExtrude, createRevolve, createLoftSections, createCylinder, createCone, computeBoundingBox, computeBoundingBoxDiagonal } from '../geometry/brep';
+import { booleanOp } from '../geometry/boolean';
 import {
   applyFillet,
   applyChamfer,
@@ -24,7 +27,9 @@ import {
   applyCircularArray,
   applyMirror,
   resizeBodyAxis,
+  rotateBody,
   sweepBody,
+  translateBody,
 } from '../geometry/operations';
 import { solveSketch } from '../sketch/engine';
 import type { Sketch } from '../sketch/types';
@@ -200,6 +205,8 @@ export class FeatureTree {
         return this.evaluateChamfer(feature);
       case 'shell':
         return this.evaluateShell(feature);
+      case 'hole':
+        return this.evaluateHole(feature);
       case 'scale':
         return this.evaluateScale(feature);
       case 'linearArray':
@@ -294,6 +301,13 @@ export class FeatureTree {
     if (!parent) throw new Error('Shell requires a parent body');
     this.consumed.add(parent.featureId);
     return { bodies: [applyShell(parent.body, feature.params.faceIds, feature.params.thickness)] };
+  }
+
+  private evaluateHole(feature: HoleFeature): FeatureResult {
+    const parent = this.firstParentBody(feature);
+    if (!parent) throw new Error('Hole requires a parent body');
+    this.consumed.add(parent.featureId);
+    return { bodies: [drillHoleInBody(parent.body, feature.params)] };
   }
 
   private evaluateScale(feature: ScaleFeature): FeatureResult {
@@ -561,6 +575,20 @@ export function createShellFeature(
   };
 }
 
+export function createHoleFeature(
+  params: HoleFeature['params'],
+  parentIds: string[],
+): HoleFeature {
+  return {
+    id: genId('feat'),
+    type: 'hole',
+    name: 'Hole',
+    suppressed: false,
+    parentIds,
+    params,
+  };
+}
+
 export function createScaleFeature(
   axis: 'x' | 'y' | 'z',
   target: number,
@@ -620,6 +648,162 @@ export function createMirrorFeature(
     parentIds,
     params: { plane, keepOriginal },
   };
+}
+
+/**
+ * Drill a hole in `body`: subtract a `diameter` cylinder that starts at
+ * `center` and extends `depth` along `direction` (null depth = through-all,
+ * a cutter twice the bounding-box diagonal centred on the start point so it
+ * fully spans the parent along the drill axis). An optional counterbore
+ * (second, wider cylinder from the same entry point) or countersink
+ * (truncated cone whose included angle meets the hole diameter at its base)
+ * widens the entry — the counterbore wins when both are present. Shared by
+ * the hole feature evaluator and the store's direct-body edit path.
+ */
+export function drillHoleInBody(
+  body: SolidBody,
+  params: HoleParams,
+): SolidBody {
+  const { center, direction, diameter, depth, counterbore, countersink } = params;
+  if (!Number.isFinite(diameter) || diameter <= 0) throw new Error('Hole diameter must be positive');
+  if (depth !== null && (!Number.isFinite(depth) || depth <= 0)) {
+    throw new Error('Hole depth must be positive (or null for through-all)');
+  }
+  const len = Math.hypot(direction.x, direction.y, direction.z);
+  if (len < 1e-10) throw new Error('Hole direction cannot be zero');
+  const d = { x: direction.x / len, y: direction.y / len, z: direction.z / len };
+
+  // Through-all spans any chord of the bounding box: the diagonal is the
+  // largest possible distance between two points in it.
+  const height = depth ?? computeBoundingBoxDiagonal(body) * 2;
+  // Blind holes start exactly at `center`; a through-all cutter is centred on
+  // it (pulled back by half its length) so it out-runs the parent both ways.
+  const backUp = depth === null ? height / 2 : 0;
+
+  // createCylinder builds a 32-gon prism along +Y with its base centred on the
+  // origin — rotate +Y onto the drill direction, then move the base into place.
+  let cutter = createCylinder(diameter / 2, height);
+  cutter = rotateUpToDirection(cutter, d);
+  cutter = translateBody(
+    cutter,
+    { x: center.x - d.x * backUp, y: center.y - d.y * backUp, z: center.z - d.z * backUp },
+    'Hole cutter',
+  );
+
+  let result = booleanOp(body, cutter, 'difference', 48);
+  if (!result) throw new Error('Hole removed the entire parent body');
+
+  if (counterbore) {
+    result = drillCounterbore(result, center, d, diameter, counterbore, height);
+  } else if (countersink) {
+    result = drillCountersink(result, center, d, diameter, countersink, height);
+  }
+  return { ...result, name: body.name };
+}
+
+/** Counterbore: a second, wider cylinder from the same entry point. */
+function drillCounterbore(
+  body: SolidBody,
+  center: Vec3,
+  d: Vec3,
+  holeDiameter: number,
+  cb: { diameter: number; depth: number },
+  throughHeight: number,
+): SolidBody {
+  if (!Number.isFinite(cb.diameter) || cb.diameter <= holeDiameter) {
+    throw new Error('Counterbore diameter must exceed the hole diameter');
+  }
+  if (!Number.isFinite(cb.depth) || cb.depth <= 0) {
+    throw new Error('Counterbore depth must be positive');
+  }
+  // Like a blind hole, the counterbore starts exactly at the entry point; its
+  // depth is clamped to the through-all cutter length so it can never out-run
+  // the parent geometry by an unbounded amount.
+  const depth = Math.min(cb.depth, throughHeight);
+  let cutter = createCylinder(cb.diameter / 2, depth);
+  cutter = rotateUpToDirection(cutter, d);
+  cutter = translateBody(cutter, center, 'Counterbore cutter');
+  const result = booleanOp(body, cutter, 'difference', 48);
+  if (!result) throw new Error('Counterbore removed the entire parent body');
+  return result;
+}
+
+/**
+ * Countersink: a truncated cone (frustum) whose top face is the countersink
+ * diameter at the entry point, tapering with the full included angle until it
+ * meets the hole diameter at depth (D − d)/2 / tan(angle/2).
+ */
+function drillCountersink(
+  body: SolidBody,
+  center: Vec3,
+  d: Vec3,
+  holeDiameter: number,
+  cs: { diameter: number; angleDeg: number },
+  throughHeight: number,
+): SolidBody {
+  if (!Number.isFinite(cs.diameter) || cs.diameter <= holeDiameter) {
+    throw new Error('Countersink diameter must exceed the hole diameter');
+  }
+  // Clamp the included angle to a sane machining range (1°…179°) before
+  // halving; the depth is then bounded by the through-all cutter length.
+  const angleDeg = Math.min(179, Math.max(1, Number.isFinite(cs.angleDeg) ? cs.angleDeg : 90));
+  const halfAngle = (angleDeg * Math.PI) / 180 / 2;
+  const idealDepth = ((cs.diameter - holeDiameter) / 2) / Math.tan(halfAngle);
+  const depth = Math.min(idealDepth, throughHeight);
+  if (!(depth > 1e-9)) throw new Error('Countersink depth degenerated to zero');
+  // If the depth was clamped, the frustum stops short of the hole diameter —
+  // keep the angle exact and recompute the truncated top radius instead.
+  const topRadius = Math.max(
+    holeDiameter / 2,
+    cs.diameter / 2 - depth * Math.tan(halfAngle),
+  );
+  // createCone tapers from radiusBottom at y = 0 up to radiusTop at y = height —
+  // exactly the frustum needed with its wide face on the entry point.
+  let cutter = createCone(cs.diameter / 2, topRadius, depth);
+  cutter = rotateUpToDirection(cutter, d);
+  cutter = translateBody(cutter, center, 'Countersink cutter');
+  const result = booleanOp(body, cutter, 'difference', 48);
+  if (!result) throw new Error('Countersink removed the entire parent body');
+  return result;
+}
+
+/** Rotate a body built along +Y so +Y maps onto the (unit) direction. */
+function rotateUpToDirection(body: SolidBody, d: Vec3): SolidBody {
+  // Rotation axis = cross(+Y, d) = (d.z, 0, −d.x); angle from sin/cos parts.
+  const sin = Math.hypot(d.z, d.x);
+  if (sin < 1e-9) {
+    if (d.y > 0) return body; // already along +Y
+    // Straight down: flip 180° about X.
+    return rotateBody(body, { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } }, Math.PI);
+  }
+  const angle = Math.atan2(sin, d.y);
+  return rotateBody(body, { origin: { x: 0, y: 0, z: 0 }, direction: { x: d.z / sin, y: 0, z: -d.x / sin } }, angle);
+}
+
+/**
+ * Default hole placement for a body (Fusion's hole-on-face pick): the centroid
+ * of the topmost up-facing face, drilling straight down (−Y).
+ */
+export function topFaceHolePlacement(body: SolidBody): { center: Vec3; direction: Vec3 } {
+  let best: { y: number; center: Vec3 } | null = null;
+  for (const f of body.faces) {
+    if (f.normal.y <= 0.9) continue; // up-facing planar faces only
+    const n = f.vertices.length;
+    if (n === 0) continue;
+    let cx = 0, cy = 0, cz = 0;
+    for (const v of f.vertices) { cx += v.x; cy += v.y; cz += v.z; }
+    const c = { x: cx / n, y: cy / n, z: cz / n };
+    if (!best || c.y > best.y) best = { y: c.y, center: c };
+  }
+  return {
+    center: best ? best.center : computeBoundingBoxCenterOf(body),
+    direction: { x: 0, y: -1, z: 0 },
+  };
+}
+
+function computeBoundingBoxCenterOf(body: SolidBody): Vec3 {
+  const bb = computeBoundingBox(body);
+  return { x: (bb.min.x + bb.max.x) / 2, y: bb.max.y, z: (bb.min.z + bb.max.z) / 2 };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
   FeatureTree,
   createSketchFeature,
@@ -7,6 +7,7 @@ import {
   createFilletFeature,
   createChamferFeature,
   createShellFeature,
+  createHoleFeature,
   createLinearArrayFeature,
   createCircularArrayFeature,
   createMirrorFeature,
@@ -16,7 +17,8 @@ import {
 } from './tree';
 import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
 import { computeVolume } from '../geometry/brep';
-import type { SweepFeature, LoftFeature } from './types';
+import { warmUpBooleanEngine } from '../geometry/boolean';
+import type { SweepFeature, LoftFeature, HoleFeature } from './types';
 import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from '../io/studio3d';
 
 /** A standalone extrude feature that produces a box-like body (no parent sketch). */
@@ -172,6 +174,136 @@ describe('FeatureTree', () => {
     expect(tree.getResult(shell.id)?.error).toBeUndefined();
     // chamfer→shell chain still yields a single output solid.
     expect(tree.getLatestBodies().length).toBe(1);
+  });
+
+  it('drills a through hole: volume drops by ~πr²·depth of the box', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude(); // 10×10×10, volume 1000, top face at y = 10
+    tree.addFeature(ext);
+    tree.recompute();
+    const before = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    expect(before).toBeCloseTo(1000, 3);
+
+    const hole = createHoleFeature(
+      {
+        center: { x: 0, y: 10, z: 0 },
+        direction: { x: 0, y: -1, z: 0 },
+        diameter: 4,
+        depth: null, // through-all
+      },
+      [ext.id],
+    );
+    tree.addFeature(hole);
+    tree.recompute();
+
+    // The hole consumes its parent — exactly one output body.
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    expect(tree.getResult(hole.id)?.bodies).toHaveLength(1);
+    const removed = before - Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    const ideal = Math.PI * 2 * 2 * 10; // πr²·h
+    // Voxel/exact boolean tolerance ±10%.
+    expect(removed).toBeGreaterThan(ideal * 0.9);
+    expect(removed).toBeLessThan(ideal * 1.1);
+  });
+
+  it('drills a blind hole to the requested depth', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const before = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+
+    tree.addFeature(createHoleFeature(
+      {
+        center: { x: 0, y: 10, z: 0 },
+        direction: { x: 0, y: -1, z: 0 },
+        diameter: 4,
+        depth: 5,
+      },
+      [ext.id],
+    ));
+    tree.recompute();
+
+    const removed = before - Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    const ideal = Math.PI * 2 * 2 * 5; // πr²·depth
+    expect(removed).toBeGreaterThan(ideal * 0.9);
+    expect(removed).toBeLessThan(ideal * 1.1);
+  });
+
+  it('suppressing the hole restores the parent body', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const hole = createHoleFeature(
+      { center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: null },
+      [ext.id],
+    );
+    tree.addFeature(hole);
+    tree.recompute();
+    const drilled = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    expect(drilled).toBeLessThan(1000);
+
+    tree.updateFeature(hole.id, (f) => ({ ...f, suppressed: true }));
+    tree.recompute();
+    // Suppressed hole → the unconsumed extrude body is the only output again.
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(1000, 3);
+  });
+
+  it('records an error when a hole has no parent body', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(createHoleFeature(
+      { center: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: null },
+      ['missing'],
+    ));
+    tree.recompute();
+    expect(tree.getResult(tree.features[0]!.id)?.error).toContain('parent body');
+  });
+
+  it('hole feature survives a studio3d project round-trip', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.addFeature(createHoleFeature(
+      { center: { x: 1, y: 10, z: -2 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: 3 },
+      [ext.id],
+    ));
+    const json = saveToFile(serializeProject('Part', tree.features, []));
+    const features = deserializeFeatures(loadFromFile(json));
+    expect(features.map((f) => f.type)).toEqual(['extrude', 'hole']);
+    const hole = features[1] as HoleFeature;
+    expect(hole.params.diameter).toBe(6);
+    expect(hole.params.depth).toBe(3);
+    expect(hole.params.center).toEqual({ x: 1, y: 10, z: -2 });
+    expect(hole.params.direction).toEqual({ x: 0, y: -1, z: 0 });
+    expect(hole.parentIds).toEqual([ext.id]);
+  });
+
+  it('counterbore/countersink params survive a studio3d round-trip', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.addFeature(createHoleFeature(
+      {
+        center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: null,
+        counterbore: { diameter: 10, depth: 3 },
+      },
+      [ext.id],
+    ));
+    tree.addFeature(createHoleFeature(
+      {
+        center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: null,
+        countersink: { diameter: 10, angleDeg: 90 },
+      },
+      ['missing'],
+    ));
+    const json = saveToFile(serializeProject('Part', tree.features, []));
+    const features = deserializeFeatures(loadFromFile(json));
+    const cbHole = features[1] as HoleFeature;
+    expect(cbHole.params.counterbore).toEqual({ diameter: 10, depth: 3 });
+    const csHole = features[2] as HoleFeature;
+    expect(csHole.params.countersink).toEqual({ diameter: 10, angleDeg: 90 });
   });
 
   it('extrudes a sketched circle into a cylinder', () => {
@@ -549,5 +681,130 @@ describe('timeline drag-reorder', () => {
     expect(canReorderFeatures(tree.features, tail.id, 0)).toBe(true);
     expect(canReorderFeatures(tree.features, base.id, 0)).toBe(true);
     expect(tree.features).toEqual(before); // pure check, order untouched
+  });
+});
+
+/** A standalone 20×20×20 extrude (top face at y = 20) for the cb/cs volume math. */
+function boxExtrude20() {
+  return createExtrudeFeature(
+    {
+      profile: [
+        { x: -10, y: 0, z: -10 },
+        { x: 10, y: 0, z: -10 },
+        { x: 10, y: 0, z: 10 },
+        { x: -10, y: 0, z: 10 },
+      ],
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 20,
+    },
+    [],
+  );
+}
+
+describe('hole counterbore/countersink evaluator', () => {
+  // The runtime app always has the exact Manifold engine warm; do the same
+  // here so the volume math is measured against the exact boolean, not the
+  // blocky (and slow) voxel fallback.
+  beforeAll(() => warmUpBooleanEngine());
+
+  /** Build a 20mm box, drill `params` from the top-face centre, return the removed volume. */
+  function removedVolume(params: HoleFeature['params']): number {
+    const tree = new FeatureTree();
+    const ext = boxExtrude20();
+    tree.addFeature(ext);
+    tree.recompute();
+    const before = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    expect(before).toBeCloseTo(8000, 3);
+
+    tree.addFeature(createHoleFeature(params, [ext.id]));
+    tree.recompute();
+    expect(tree.getResult(tree.features[1]!.id)?.error).toBeUndefined();
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    return before - Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+  }
+
+  const entry = { center: { x: 0, y: 20, z: 0 }, direction: { x: 0, y: -1, z: 0 } };
+
+  it('counterbore: removed volume ≈ through cylinder + counterbore ring (±10%)', () => {
+    const removed = removedVolume({
+      ...entry,
+      diameter: 6,
+      depth: null, // through-all
+      counterbore: { diameter: 10, depth: 3 },
+    });
+    // The exact union of both cutters: the ⌀6 cylinder through the full 20mm
+    // plus the ⌀10×3 counterbore MINUS the ⌀6 part it already removed.
+    const ideal = Math.PI * 3 * 3 * 20 + (Math.PI * 5 * 5 * 3 - Math.PI * 3 * 3 * 3);
+    expect(removed).toBeGreaterThan(ideal * 0.9);
+    expect(removed).toBeLessThan(ideal * 1.1);
+  });
+
+  it('countersink: removed volume ≈ through cylinder + frustum − overlap (±10%)', () => {
+    const removed = removedVolume({
+      ...entry,
+      diameter: 6,
+      depth: null,
+      countersink: { diameter: 10, angleDeg: 90 },
+    });
+    // Cone depth: (10 − 6)/2 / tan(45°) = 2 mm. Truncated-cone volume
+    // V = πh/3·(R² + Rr + r²), minus the ⌀6 cylinder it overlaps.
+    const frustum = ((Math.PI * 2) / 3) * (5 * 5 + 5 * 3 + 3 * 3);
+    const ideal = Math.PI * 3 * 3 * 20 + (frustum - Math.PI * 3 * 3 * 2);
+    expect(removed).toBeGreaterThan(ideal * 0.9);
+    expect(removed).toBeLessThan(ideal * 1.1);
+  });
+
+  it('countersink honours a non-90° included angle', () => {
+    const removed = removedVolume({
+      ...entry,
+      diameter: 6,
+      depth: null,
+      countersink: { diameter: 12, angleDeg: 60 },
+    });
+    // Depth: (12 − 6)/2 / tan(30°) = 3 / 0.5774 ≈ 5.196 mm.
+    const h = 3 / Math.tan(Math.PI / 6);
+    const frustum = ((Math.PI * h) / 3) * (6 * 6 + 6 * 3 + 3 * 3);
+    const ideal = Math.PI * 3 * 3 * 20 + (frustum - Math.PI * 3 * 3 * h);
+    expect(removed).toBeGreaterThan(ideal * 0.9);
+    expect(removed).toBeLessThan(ideal * 1.1);
+  });
+
+  it('prefers the counterbore when both counterbore and countersink are present', () => {
+    // The countersink band (⌀8 90°) and the counterbore band (⌀10×3) are >10%
+    // apart, so the tolerance itself proves which cutter ran.
+    const removed = removedVolume({
+      ...entry,
+      diameter: 6,
+      depth: null,
+      counterbore: { diameter: 10, depth: 3 },
+      countersink: { diameter: 8, angleDeg: 90 },
+    });
+    const ideal = Math.PI * 3 * 3 * 20 + (Math.PI * 5 * 5 * 3 - Math.PI * 3 * 3 * 3);
+    expect(removed).toBeGreaterThan(ideal * 0.9);
+    expect(removed).toBeLessThan(ideal * 1.1);
+  });
+
+  it('records an error when the counterbore is not wider than the hole', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude20();
+    tree.addFeature(ext);
+    tree.addFeature(createHoleFeature(
+      { ...entry, diameter: 6, depth: null, counterbore: { diameter: 6, depth: 2 } },
+      [ext.id],
+    ));
+    tree.recompute();
+    expect(tree.getResult(tree.features[1]!.id)?.error).toContain('Counterbore');
+  });
+
+  it('records an error when the countersink is not wider than the hole', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude20();
+    tree.addFeature(ext);
+    tree.addFeature(createHoleFeature(
+      { ...entry, diameter: 6, depth: null, countersink: { diameter: 4, angleDeg: 90 } },
+      [ext.id],
+    ));
+    tree.recompute();
+    expect(tree.getResult(tree.features[1]!.id)?.error).toContain('Countersink');
   });
 });

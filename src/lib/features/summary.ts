@@ -24,6 +24,13 @@ export function featureSummary(f: Feature): string {
       return `${n(f.params.distance)}mm`;
     case 'shell':
       return `t${n(f.params.thickness)}`;
+    case 'hole': {
+      // ⌴ is the GD&T counterbore symbol, ⌵ the countersink symbol.
+      let s = `⌀${n(f.params.diameter)}×${f.params.depth === null ? '∞' : n(f.params.depth)}`;
+      if (f.params.counterbore) s += ` ⌴${n(f.params.counterbore.diameter)}×${n(f.params.counterbore.depth)}`;
+      else if (f.params.countersink) s += ` ⌵${n(f.params.countersink.diameter)}°${n(f.params.countersink.angleDeg)}`;
+      return s;
+    }
     case 'scale':
       return `${f.params.axis}→${n(f.params.target)}`;
     case 'linearArray':

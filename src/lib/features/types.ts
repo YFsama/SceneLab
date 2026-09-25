@@ -10,6 +10,7 @@ export type FeatureType =
   | 'fillet'
   | 'chamfer'
   | 'shell'
+  | 'hole'
   | 'scale'
   | 'linearArray'
   | 'circularArray'
@@ -85,6 +86,39 @@ export interface ShellFeature extends FeatureBase {
   };
 }
 
+/** Parameters of a parametric hole (Fusion 360 HOLE feature). */
+export interface HoleParams {
+  /** World-space point the hole starts drilling from. */
+  center: Vec3;
+  /** Unit axis the hole drills ALONG (from `center` into the material). */
+  direction: Vec3;
+  diameter: number;
+  /** null = through-all. */
+  depth: number | null;
+  /**
+   * Counterbore: a flat-bottom widening of the hole entry, cut as a second,
+   * wider cylinder drilled from the same entry point.
+   */
+  counterbore?: { diameter: number; depth: number };
+  /**
+   * Countersink: a conical widening of the hole entry, cut as a truncated
+   * cone whose full included `angleDeg` meets the hole diameter at its base.
+   * Mutually exclusive with `counterbore` — the evaluator prefers the
+   * counterbore when both are present.
+   */
+  countersink?: { diameter: number; angleDeg: number };
+}
+
+/**
+ * Parametric hole (Fusion 360 HOLE): subtracts a cylinder of `diameter` from
+ * the parent body, drilled from `center` along `direction`. `depth` null
+ * drills through the entire parent.
+ */
+export interface HoleFeature extends FeatureBase {
+  type: 'hole';
+  params: HoleParams;
+}
+
 /**
  * Dimension-driven resize: scales one world axis so the body's extent along it
  * equals `target` mm (a driving dimension — upstream changes are re-fitted to
@@ -133,6 +167,7 @@ export type Feature =
   | FilletFeature
   | ChamferFeature
   | ShellFeature
+  | HoleFeature
   | ScaleFeature
   | LinearArrayFeature
   | CircularArrayFeature

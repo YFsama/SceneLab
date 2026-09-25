@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../store/app';
@@ -13,12 +13,15 @@ import {
   createFilletFeature,
   createChamferFeature,
   createShellFeature,
+  createHoleFeature,
   createLinearArrayFeature,
   createCircularArrayFeature,
   createMirrorFeature,
 } from '../../lib/features/tree';
 import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from '../../lib/io';
+import { warmUpBooleanEngine } from '../../lib/geometry/boolean';
 import { createSketch, addRectangle } from '../../lib/sketch/engine';
+import type { Feature, HoleParams } from '../../lib/features/types';
 
 // Real coverage: every feature type the FeatureEditor can list must survive a
 // full project round-trip (serialize → deserialize), so editing/suppressing
@@ -193,6 +196,176 @@ describe('NumericEditDialog expression fields (rendered dialog)', () => {
       expect(unchanged && unchanged.type === 'fillet' && unchanged.params.radius).toBe(2);
     } finally {
       await unmountDialog(mounted);
+    }
+  });
+});
+
+describe('HoleEditDialog (rendered dialog)', () => {
+  // Exact boolean engine (as in the running app) so the recomputes behind
+  // Apply stay fast instead of hitting the slow voxel fallback.
+  beforeAll(() => warmUpBooleanEngine());
+
+  /** Extrude a 20×20×10 box and drill `params` from its top face (y = 10). */
+  function holedTree(params: Omit<HoleParams, 'center' | 'direction'>) {
+    const tree = new FeatureTree();
+    const ext = createExtrudeFeature(
+      {
+        profile: [
+          { x: -10, y: 0, z: -10 }, { x: 10, y: 0, z: -10 },
+          { x: 10, y: 0, z: 10 }, { x: -10, y: 0, z: 10 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 10,
+        symmetric: false,
+      },
+      [],
+    );
+    tree.addFeature(ext);
+    const hole = createHoleFeature(
+      { center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, ...params },
+      [ext.id],
+    );    tree.addFeature(hole);
+    tree.recompute();
+    useStore.setState({
+      featureTree: tree,
+      directBodies: [],
+      bodies: [],
+      undoStack: [],
+      selectedIds: [],
+    });
+    return hole;
+  }
+
+  it('edits diameter and depth; ∞ commits through-all (null)', async () => {
+    const hole = holedTree({ diameter: 4, depth: 5 });
+    const mounted = await mountDialog(
+      createElement(FeatureEditDialog, { feature: hole, onClose: () => {} }),
+    );
+    try {
+      const inputs = mounted.container.querySelectorAll('input');
+      expect(inputs).toHaveLength(2); // diameter + depth (no cb/cs rows)
+      expect((inputs[0] as HTMLInputElement).value).toBe('4');
+      expect((inputs[1] as HTMLInputElement).value).toBe('5');
+
+      await typeInto(inputs[0] as HTMLInputElement, '6/3'); // expression → 2
+      await typeInto(inputs[1] as HTMLInputElement, '∞');
+      expect(mounted.container.textContent).toContain('= 2');
+      expect(applyButton(mounted.container).disabled).toBe(false);
+
+      await act(async () => { applyButton(mounted.container).click(); });
+      const updated = useStore.getState().featureTree.features
+        .find((f) => f.type === 'hole');
+      expect(updated && updated.type === 'hole' && updated.params.diameter).toBe(2);
+      expect(updated && updated.type === 'hole' && updated.params.depth).toBeNull();
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+
+  it('shows counterbore rows when present and applies edits', async () => {
+    const hole = holedTree({
+      diameter: 4, depth: null,
+      counterbore: { diameter: 8, depth: 2 },
+    });
+    const mounted = await mountDialog(
+      createElement(FeatureEditDialog, { feature: hole, onClose: () => {} }),
+    );
+    try {
+      const inputs = mounted.container.querySelectorAll('input');
+      expect(inputs).toHaveLength(4); // diameter, depth, cb ⌀, cb depth
+      expect((inputs[2] as HTMLInputElement).value).toBe('8');
+      expect((inputs[3] as HTMLInputElement).value).toBe('2');
+
+      await typeInto(inputs[2] as HTMLInputElement, '10');
+      await typeInto(inputs[3] as HTMLInputElement, '3');
+      await act(async () => { applyButton(mounted.container).click(); });
+      const updated = useStore.getState().featureTree.features
+        .find((f) => f.type === 'hole');
+      expect(updated && updated.type === 'hole' && updated.params.counterbore)
+        .toEqual({ diameter: 10, depth: 3 });
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+
+  it('shows countersink rows when present; a non-wider countersink disables Apply', async () => {
+    const hole = holedTree({
+      diameter: 4, depth: null,
+      countersink: { diameter: 8, angleDeg: 90 },
+    });
+    const mounted = await mountDialog(
+      createElement(FeatureEditDialog, { feature: hole, onClose: () => {} }),
+    );
+    try {
+      const inputs = mounted.container.querySelectorAll('input');
+      expect(inputs).toHaveLength(4); // diameter, depth, cs ⌀, cs angle
+      expect((inputs[3] as HTMLInputElement).value).toBe('90');
+
+      // A countersink not wider than the hole is invalid — Apply refuses.
+      await typeInto(inputs[2] as HTMLInputElement, '4');
+      expect(applyButton(mounted.container).disabled).toBe(true);
+
+      await typeInto(inputs[2] as HTMLInputElement, '12');
+      await typeInto(inputs[3] as HTMLInputElement, '82');
+      expect(applyButton(mounted.container).disabled).toBe(false);
+      await act(async () => { applyButton(mounted.container).click(); });
+      const updated = useStore.getState().featureTree.features
+        .find((f) => f.type === 'hole');
+      expect(updated && updated.type === 'hole' && updated.params.countersink)
+        .toEqual({ diameter: 12, angleDeg: 82 });
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+});
+
+describe('FeatureEditDialog localization (rendered dialog)', () => {
+  /** Render a one-feature dialog and return its text content. */
+  async function dialogText(feature: Feature): Promise<string> {
+    const mounted = await mountDialog(
+      createElement(FeatureEditDialog, { feature, onClose: () => {} }),
+    );
+    try {
+      return mounted.container.textContent ?? '';
+    } finally {
+      await unmountDialog(mounted);
+    }
+  }
+
+  it('extrude edit dialog follows the zh locale', async () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    const sf = createSketchFeature(sketch);
+    const extrude = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 5, symmetric: false },
+      [sf.id],
+    );
+    useStore.getState().setLocale('zh');
+    try {
+      const text = await dialogText(extrude);
+      expect(text).toContain('编辑拉伸');
+      expect(text).toContain('距离 (mm)');
+      expect(text).toContain('对称');
+      expect(text).toContain('取消');
+      expect(text).toContain('应用');
+    } finally {
+      useStore.getState().setLocale('en');
+    }
+  });
+
+  it('numeric edit dialog labels follow the zh locale', async () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    const sf = createSketchFeature(sketch);
+    const fillet = createFilletFeature([], 2, [sf.id]);
+    useStore.getState().setLocale('zh');
+    try {
+      const text = await dialogText(fillet);
+      expect(text).toContain('半径 (mm)');
+      expect(text).toContain('取消');
+      expect(text).toContain('应用');
+    } finally {
+      useStore.getState().setLocale('en');
     }
   });
 });
