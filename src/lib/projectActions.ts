@@ -1,7 +1,7 @@
 import { useStore } from '../store/app';
 import { confirm } from './confirm';
 import { translations } from './i18n';
-import { serializeProject, saveToFile, downloadFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, readFileAsText } from './io';
+import { serializeProject, saveToFile, downloadFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, readFileAsText } from './io';
 import { showToast } from './toast';
 import { isTauri, callNative } from './runtime';
 
@@ -22,7 +22,7 @@ export async function openProjectFromFile(): Promise<void> {
       const [json, name] = picked;
       const project = loadFromFile(json);
       useStore.getState().loadProject(
-        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project),
+        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project),
       );
       showToast(`${tr('toast.loaded')} "${name}"`, 'success');
       return;
@@ -40,7 +40,7 @@ export async function openProjectFromFile(): Promise<void> {
     try {
       const project = loadFromFile(await readFileAsText(file));
       useStore.getState().loadProject(
-        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project),
+        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project),
       );
       showToast(`${tr('toast.loaded')} "${project.name}"`, 'success');
     } catch (err) {
@@ -54,11 +54,13 @@ export async function openProjectFromFile(): Promise<void> {
  * the dirty flag — the canonical "Save" used by the toolbar and Ctrl+S.
  * Desktop writes a real file through a native Save dialog; browsers download. */
 export async function saveProjectToFile(): Promise<void> {
-  const s = useStore.getState();
-  try {
-    const project = serializeProject(s.projectName, s.featureTree.features, s.bodies, s.directBodies, {
-      planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
-    });
+    const s = useStore.getState();
+    try {
+      const project = serializeProject(s.projectName, s.featureTree.features, s.bodies, s.directBodies, {
+        planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
+      }, {
+        sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes,
+      });
     const json = saveToFile(project);
     if (isTauri()) {
       const savedPath = (await callNative('save_project_file', {
@@ -69,7 +71,9 @@ export async function saveProjectToFile(): Promise<void> {
     } else {
       downloadFile(json, `${s.projectName}.studio3d`);
     }
-    s.setProjectDirty(false);
+    // Capture the saved state as the clean baseline — undoing future edits
+    // back to exactly this point clears the dirty dot again.
+    useStore.getState().captureSavedFingerprint();
     useStore.getState().markOnboardingStep('save');
     showToast(tr('toast.projectSaved'), 'success');
   } catch (e) {

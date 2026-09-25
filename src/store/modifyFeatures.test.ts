@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume } from '../lib/geometry/brep';
+import { warmUpBooleanEngine } from '../lib/geometry/boolean';
 import { createSketch, addRectangle, addCircle, addLine } from '../lib/sketch/engine';
 import type { SolidBody } from '../lib/geometry/types';
 
@@ -162,6 +163,111 @@ describe('modify feature actions', () => {
     const produced = tree.getLatestBodies()[0]!;
     expect(tree.findFeatureIdForBody(produced.id)).toBe(tree.features[0]!.id);
     expect(tree.findFeatureIdForBody('nope')).toBeUndefined();
+  });
+});
+
+describe('applyHoleToBody (hole feature action)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
+    });
+  });
+
+  it('adds a parametric hole feature to a tree body (drills from the top face)', () => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+    const volBefore = Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(volBefore).toBeCloseTo(1000, 3);
+
+    expect(useStore.getState().applyHoleToBody(bodyId, 4, null)).toBe(true);
+
+    const t2 = useStore.getState().featureTree;
+    expect(t2.features).toHaveLength(2);
+    const hole = t2.features[1]!;
+    expect(hole.type).toBe('hole');
+    if (hole.type === 'hole') {
+      expect(hole.parentIds).toEqual([t2.features[0]!.id]);
+      expect(hole.params.diameter).toBe(4);
+      expect(hole.params.depth).toBeNull();
+      expect(hole.params.direction).toEqual({ x: 0, y: -1, z: 0 });
+      // Default placement: centroid of the 10×10×10 box's top face (y = 10).
+      expect(hole.params.center).toEqual({ x: 0, y: 10, z: 0 });
+    }
+    // Parent consumed — one body out, with the hole volume removed.
+    expect(useStore.getState().bodies).toHaveLength(1);
+    const volAfter = Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(volAfter).toBeLessThan(volBefore);
+    const ideal = Math.PI * 2 * 2 * 10;
+    expect(volBefore - volAfter).toBeGreaterThan(ideal * 0.9);
+    expect(volBefore - volAfter).toBeLessThan(ideal * 1.1);
+  });
+
+  it('drills a direct body with an undoable direct edit', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    const undoDepth = useStore.getState().undoStack.length;
+
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 5)).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeLessThan(1000);
+    // Exactly one new undo entry for the direct edit.
+    expect(useStore.getState().undoStack.length).toBe(undoDepth + 1);
+
+    useStore.getState().undo();
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+  });
+
+  it('rejects invalid diameters, depths and unknown bodies', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().applyHoleToBody(box.id, 0.1, null)).toBe(false); // diameter must exceed 0.1
+    expect(useStore.getState().applyHoleToBody(box.id, -4, null)).toBe(false);
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 0)).toBe(false); // depth 0 is not through-all
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 0.1)).toBe(false); // depth must exceed 0.1
+    expect(useStore.getState().applyHoleToBody('nope', 4, null)).toBe(false);
+    // Nothing was drilled — the box is untouched.
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+  });
+
+  it('updateFeature can widen an applied hole with a counterbore (FeatureEditor path)', async () => {
+    // Warm the exact boolean engine as the running app does — the voxel
+    // fallback compounds error over the second (counterbore) difference.
+    await warmUpBooleanEngine();
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+    expect(useStore.getState().applyHoleToBody(bodyId, 4, null)).toBe(true);
+
+    const volPlain = Math.abs(computeVolume(useStore.getState().bodies[0]!));
+
+    // The FeatureEditor applies parametric edits through updateFeature.
+    const holeId = useStore.getState().featureTree.features
+      .find((f) => f.type === 'hole')!.id;
+    useStore.getState().updateFeature(holeId, (f) =>
+      f.type === 'hole'
+        ? { ...f, params: { ...f.params, counterbore: { diameter: 8, depth: 2 } } }
+        : f,
+    );
+
+    const hole = useStore.getState().featureTree.features.find((f) => f.id === holeId)!;
+    expect(hole.type === 'hole' && hole.params.counterbore).toEqual({ diameter: 8, depth: 2 });
+    // The recompute behind updateFeature removed the counterbore ring as well:
+    // extra volume = π(4² − 2²)·2 = 24π ≈ 75.4 (±10% boolean tolerance).
+    const volCountersunk = Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    const extra = volPlain - volCountersunk;
+    expect(extra).toBeGreaterThan(24 * Math.PI * 0.9);
+    expect(extra).toBeLessThan(24 * Math.PI * 1.1);
   });
 });
 

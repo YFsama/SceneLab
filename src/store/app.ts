@@ -1,17 +1,20 @@
 import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
-import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, offsetEntity, type DetectedRectangle } from '../lib/sketch/engine';
+import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, offsetEntity, createSketch, solveSketch, type DetectedRectangle } from '../lib/sketch/engine';
 import { offsetSketchProfile } from '../lib/sketch/offset';
+import { trimSketchEntityAt, extendSketchEntityTo } from '../lib/sketch/trim';
 import type { Feature } from '../lib/features/types';
-import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature } from '../lib/features/tree';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, type SerializedReferenceGeometry } from '../lib/io';
+import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createHoleFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature, drillHoleInBody, topFaceHolePlacement } from '../lib/features/tree';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, type SerializedReferenceGeometry, type SerializedDrawing } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
+import type { MeasureFacePick, MeasureMode } from '../lib/geometry/measure';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, asyncBooleanOp, asyncHollowBody, type BooleanOp } from '../lib/geometry/boolean';
 import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, resizeBodyAxis, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
 import { computeBoundingBoxCenter } from '../lib/geometry/brep';
 import { findLibraryPart } from '../lib/library/parts';
 import { isTauri, callNative } from '../lib/runtime';
+import type { DrawingDetail, DrawingNote, DrawingSectionAxis } from '../lib/io/drawingNotes';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 
@@ -55,10 +58,20 @@ export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus' | '
 export type ThemeMode = 'dark' | 'light' | 'high-contrast';
 export type Locale = 'en' | 'zh';
 export type WorkspaceMode = 'sketch' | 'model' | 'drawing' | 'cam';
-export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'polyline' | 'constraint';
+export type SketchTool = 'select' | 'line' | 'rect' | 'circle' | 'arc' | 'polygon' | 'polyline' | 'constraint' | 'trim' | 'extend';
 export type ViewDirection = 'top' | 'front' | 'right' | 'iso' | 'back' | 'bottom' | 'left';
 export type ProjectionMode = 'perspective' | 'orthographic';
 export type SketchPlaneId = 'xy' | 'xz' | 'yz';
+
+/** One undo/redo history entry: scene, feature tree AND drawing sheet. */
+interface HistorySnapshot {
+  directBodies: SolidBody[];
+  hiddenIds: string[];
+  features: Feature[];
+  drawingSectionAxis: DrawingSectionAxis;
+  drawingDetails: DrawingDetail[];
+  drawingNotes: DrawingNote[];
+}
 
 interface AppState {
   // Theme & locale
@@ -107,6 +120,13 @@ interface AppState {
   /** Add a regular polygon (sides line segments) centred at (cx,cy). */
   addSketchPolygon: (cx: number, cy: number, radius: number, sides: number) => void;
   addSketchConstraint: (type: import('../lib/sketch/types').ConstraintType, entityIds: string[], value?: number) => void;
+  /**
+   * Edit a driving sketch dimension (a 'distance' or 'radius' constraint with a
+   * value) on the current sketch, re-solving the sketch so dependent geometry
+   * follows. Returns false (nothing changed, no undo entry) for an unknown id,
+   * a non-dimensional constraint, or a non-positive/invalid value.
+   */
+  updateSketchConstraintValue: (id: string, value: number) => boolean;
   /** Currently-selected sketch entity (for highlight/deletion); null if none. */
   selectedSketchId: string | null;
   setSelectedSketchId: (id: string | null) => void;
@@ -138,6 +158,22 @@ interface AppState {
    * the copy would collapse.
    */
   offsetSelectedSketch: (distance: number) => boolean;
+  /**
+   * Fusion-style sketch Trim of the current selection (first multi-select id
+   * or the primary one) at `cutPoint`: remove the piece of the entity the
+   * point lies on — bounded by crossings with other lines, and the whole
+   * entity when nothing crosses it (a crossed circle becomes the
+   * complementary arc). False (nothing changed) when the selection isn't
+   * trimmable; the trimmed entity drops out of the selection.
+   */
+  trimSketchAt: (cutPoint: { x: number; y: number }) => boolean;
+  /**
+   * Fusion-style sketch Extend of the current selection toward `toward`: move
+   * the line endpoint nearest the click (or sweep an arc's nearer end) out to
+   * the first crossing with another line. False when there is nothing to
+   * extend to (nothing changes).
+   */
+  extendSketchTo: (toward: { x: number; y: number }) => boolean;
   /** Toggle the construction flag on a sketch entity (excluded from extrude/revolve profiles). */
   toggleSketchConstruction: (id: string) => void;
   /** 2D corner fillet between two lines: trim to the tangent points + arc. */
@@ -149,6 +185,9 @@ interface AppState {
 
   // Feature tree
   featureTree: FeatureTree;
+  /** Bumped on every feature-tree mutation. The tree object mutates in place
+   * (same reference), so components rendering the tree subscribe to this. */
+  featureVersion: number;
   addFeature: (feature: Feature) => void;
   removeFeature: (id: string) => void;
   updateFeature: (id: string, mutator: (f: Feature) => Feature) => void;
@@ -296,16 +335,16 @@ interface AppState {
    * immutable once in the tree (edits replace them via updateFeature), so a
    * shallow array copy is a complete snapshot.
    */
-  undoStack: { directBodies: SolidBody[]; hiddenIds: string[]; features: Feature[] }[];
-  redoStack: { directBodies: SolidBody[]; hiddenIds: string[]; features: Feature[] }[];
-  /** Revert the last change (scene or feature tree); returns true if something was undone. */
+  undoStack: HistorySnapshot[];
+  redoStack: HistorySnapshot[];
+  /** Revert the last change (scene, feature tree, or drawing sheet); returns true if something was undone. */
   undo: () => boolean;
   /** Re-apply the last undone change; returns true if something was redone. */
   redo: () => boolean;
   clearScene: () => void;
   /** Start a fresh, clean, untitled document (empties everything). */
   newProject: () => void;
-  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry) => void;
+  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry, drawing?: SerializedDrawing) => void;
 
   // Reference geometry — datum planes (SolidWorks Front/Top/Right + custom).
   planes: PlaneDefinition[];
@@ -353,6 +392,20 @@ interface AppState {
   annotations: AnnotationDefinition[];
   addAnnotation: (a: AnnotationDefinition) => void;
   removeAnnotation: (id: string) => void;
+
+  // Drawing sheet state (drawing workspace): section-view axis, detail-view
+  // definitions and text notes — serialized with the project and covered by
+  // the undo/redo history like every other edit.
+  drawingSectionAxis: DrawingSectionAxis;
+  setDrawingSectionAxis: (axis: DrawingSectionAxis) => void;
+  drawingDetails: DrawingDetail[];
+  addDrawingDetail: (d: DrawingDetail) => void;
+  removeDrawingDetail: (id: string) => void;
+  drawingNotes: DrawingNote[];
+  addDrawingNote: (n: DrawingNote) => void;
+  updateDrawingNote: (id: string, text: string) => void;
+  removeDrawingNote: (id: string) => void;
+
   /** Place a body into a coordinate system's frame (rigid transform), replacing it; null if missing. */
   placeBodyInCoordinateSystem: (bodyId: string, csId: string) => string | null;
   /** Split a body by a datum plane into its two halves; returns the new body ids (empty if it failed). */
@@ -414,7 +467,7 @@ interface AppState {
   /** Last dimensions used per primitive kind, so the insert dialog reuses them. */
   lastPrimitiveParams: Partial<Record<PrimitiveKind, Record<string, number>>>;
   rememberPrimitiveParams: (kind: PrimitiveKind, params: Record<string, number>) => void;
-  /** Measure tool: when on, clicking points in the viewport measures distance. */
+  /** Measure tool: when on, clicks in the viewport feed the active measure mode. */
   measureActive: boolean;
   setMeasureActive: (v: boolean) => void;
   /**
@@ -433,6 +486,14 @@ interface AppState {
   addMeasurePoint: (p: Vec3) => void;
   /** Drop the most recent measure point (Backspace), to re-pick a mis-click. */
   removeLastMeasurePoint: () => void;
+  /** Active measure mode: distance (2+ picks), angle (3 picks: vertex + two rays), area (one face pick). */
+  measureMode: MeasureMode;
+  /** Switch the measure mode; resets any in-progress picks. */
+  setMeasureMode: (mode: MeasureMode) => void;
+  /** Face targeted by the area mode: ids of the body and its picked face. */
+  measureFacePick: MeasureFacePick | null;
+  /** Set (or clear with null) the face measured in area mode. */
+  setMeasureFacePick: (pick: MeasureFacePick | null) => void;
   performExtrude: (distance: number, symmetric: boolean) => void;
   performRevolve: (angle: number) => void;
   /**
@@ -453,6 +514,14 @@ interface AppState {
   applyCircularArrayFeature: (count: number) => boolean;
   /** Mirror across a world plane through the body's bounding-box centre. */
   applyMirrorFeature: (plane: 'xy' | 'xz' | 'yz', keepOriginal: boolean) => boolean;
+  /**
+   * Drill a hole (Fusion HOLE) in the given body: tree bodies get a parametric
+   * hole feature on the timeline, direct bodies an undoable direct edit.
+   * Drills down (−Y) from `center` or, by default, the body's top-face
+   * centroid. `depth` null = through-all. False when the body is missing or
+   * the parameters are invalid (diameter/depth must exceed 0.1 mm).
+   */
+  applyHoleToBody: (bodyId: string, diameter: number, depth: number | null, center?: Vec3) => boolean;
   /**
    * Editable drawing dimension write-back: resize the given body so its extent
    * along the world axis equals `value` mm. Tree bodies get (or update) a
@@ -529,12 +598,30 @@ interface AppState {
   setProjectName: (n: string) => void;
   projectDirty: boolean;
   setProjectDirty: (d: boolean) => void;
+  /** Fingerprint of the last saved/loaded baseline (null = never baselined). */
+  savedFingerprint: string | null;
+  /** Mark the CURRENT state as the saved baseline (called after explicit
+   * saves and project loads) — undo/redo compare against it for the dot. */
+  captureSavedFingerprint: () => void;
   /** Serialize the project to localStorage if dirty; returns true if it saved. */
   autosave: () => boolean;
   /** Restore the last autosaved project; returns true if one was loaded. */
   restoreAutosave: () => boolean;
   /** Whether an autosave snapshot exists to restore. */
   hasAutosave: () => boolean;
+  /**
+   * Crash-recovery probe (boot-time): what the RestoreBanner offers — the
+   * stored autosave's project name, save time and age in minutes (null fields
+   * when the stored JSON doesn't carry them; null probe = nothing to offer).
+   * The app PROBES and offers recovery; it never silently auto-restores.
+   */
+  autosaveProbe: { name: string | null; savedAt: number | null; ageMinutes: number | null } | null;
+  /** Read the stored autosave's name + timestamp into `autosaveProbe` (boot). */
+  probeAutosave: () => void;
+  /** Hide the restore banner for this session (the stored autosave is kept). */
+  dismissAutosaveProbe: () => void;
+  /** Delete the stored autosave (localStorage key) and hide the banner. */
+  discardAutosave: () => void;
 }
 
 export const useStore = create<AppState>((set, get) => {
@@ -562,23 +649,47 @@ export const useStore = create<AppState>((set, get) => {
         directBodies: s.directBodies,
         hiddenIds: s.hiddenIds,
         features: [...s.featureTree.features],
+        drawingSectionAxis: s.drawingSectionAxis,
+        drawingDetails: s.drawingDetails,
+        drawingNotes: s.drawingNotes,
       }].slice(-50),
       redoStack: [],
     }));
   };
-  /** Restore a snapshot: direct bodies, visibility, and the feature list. */
-  const applyUndoSnapshot = (snap: { directBodies: SolidBody[]; hiddenIds: string[]; features: Feature[] }) => {
+  /** Restore a snapshot: direct bodies, visibility, feature list, drawing sheet. */
+  const applyUndoSnapshot = (snap: HistorySnapshot) => {
     const tree = get().featureTree;
     tree.features.length = 0;
     tree.features.push(...snap.features);
     tree.recompute();
-    set({ featureTree: tree, directBodies: snap.directBodies, hiddenIds: snap.hiddenIds });
+    set({
+      featureTree: tree,
+      directBodies: snap.directBodies,
+      hiddenIds: snap.hiddenIds,
+      drawingSectionAxis: snap.drawingSectionAxis,
+      drawingDetails: snap.drawingDetails,
+      drawingNotes: snap.drawingNotes,
+      // The tree mutates in place — the version bump is what makes undo/redo
+      // repaint the timeline and the feature lists.
+      featureVersion: get().featureVersion + 1,
+    });
     recombine();
   };
   // Separate history for sketch edits — Ctrl+Z while sketching undoes the sketch.
   const pushSketchUndo = () => {
     const s = get().currentSketch;
     if (s) set((st) => ({ sketchUndoStack: [...st.sketchUndoStack, cloneSketch(s)].slice(-50), sketchRedoStack: [] }));
+  };
+
+  /** Stable fingerprint of the CURRENT project state (everything the file
+   * format carries, timestamps excluded) — the baseline undo/redo compare
+   * against for the dirty dot. */
+  const projectFingerprint = (): string => {
+    const s = get();
+    const p = serializeProject(s.projectName, s.featureTree.features, [], s.directBodies, {
+      planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
+    }, { sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes });
+    return JSON.stringify({ ...p, metadata: undefined });
   };
 
   /** The first selected body, or undefined. */
@@ -640,7 +751,7 @@ export const useStore = create<AppState>((set, get) => {
       pushUndo();
       tree.addFeature(buildFeature([parentId]));
       tree.recompute();
-      set({ featureTree: tree, projectDirty: true });
+      set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
       recombine();
       return true;
     }
@@ -669,7 +780,27 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   workspace: 'model',
-  setWorkspace: (workspace) => set({ workspace }),
+  setWorkspace: (workspace) => {
+    if (workspace === 'sketch') {
+      // Entering the sketch workspace actually STARTS (or resumes) a sketch:
+      // previously the toolbar/S-key path left `currentSketch` null and every
+      // drawing tool silently no-op'd until a datum plane was clicked in the
+      // viewport. A default-plane sketch makes the tools work immediately;
+      // the viewport's plane-click flow still picks an explicit plane.
+      const { sketchActive, currentSketch, sketchPlaneId } = get();
+      if (!sketchActive || !currentSketch) {
+        const planeId = currentSketch ? sketchPlaneId : (sketchPlaneId || 'xz');
+        set({
+          workspace,
+          sketchActive: true,
+          sketchPlaneId: planeId,
+          ...(currentSketch ? {} : { currentSketch: createSketch(planeId) }),
+        });
+        return;
+      }
+    }
+    set({ workspace });
+  },
 
   sketchTool: 'select',
   setSketchTool: (sketchTool) => set({ sketchTool }),
@@ -771,6 +902,31 @@ export const useStore = create<AppState>((set, get) => {
     pushSketchUndo();
     addConstraint(sketch, type, entityIds, value);
     set({ currentSketch: { ...sketch }, projectDirty: true });
+  },
+  updateSketchConstraintValue: (id, value) => {
+    const sketch = get().currentSketch;
+    if (!sketch) return false;
+    const c = sketch.constraints.get(id);
+    // Only driving dimensions (distance/radius with a numeric value) are editable.
+    if (!c || (c.type !== 'distance' && c.type !== 'radius') || typeof c.value !== 'number') return false;
+    if (!(value > 0.01)) return false; // non-positive / NaN sizes are rejected
+    pushSketchUndo();
+    c.value = value;
+    // Re-solve so dependent geometry follows the new dimension. The solver
+    // reports the new point positions in its result map (radii it writes in
+    // place) — write the points back into the entities (the viewport renders
+    // them directly) and publish with the same currentSketch spread the other
+    // sketch actions use.
+    const solved = solveSketch(sketch);
+    for (const [pid, p] of solved) {
+      const e = sketch.entities.get(pid);
+      if (e?.type === 'point') {
+        e.x = p.x;
+        e.y = p.y;
+      }
+    }
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
   },
   selectedSketchId: null,
   selectedSketchIds: [],
@@ -921,6 +1077,44 @@ export const useStore = create<AppState>((set, get) => {
     });
     return true;
   },
+  trimSketchAt: (cutPoint) => {
+    const s = get();
+    const sketch = s.currentSketch;
+    if (!sketch) return false;
+    // Same target resolution as the other sketch actions: first multi-select
+    // id, falling back to the primary selection.
+    const id = s.selectedSketchIds[0] ?? s.selectedSketchId;
+    if (!id) return false;
+    pushSketchUndo();
+    if (!trimSketchEntityAt(sketch, id, cutPoint)) {
+      // Nothing was trimmed — drop the now-pointless undo snapshot.
+      set((st) => ({ sketchUndoStack: st.sketchUndoStack.slice(0, -1) }));
+      return false;
+    }
+    // The trimmed entity was replaced (or deleted) — drop it from the selection.
+    set((st) => ({
+      currentSketch: { ...sketch },
+      selectedSketchId: st.selectedSketchId === id ? null : st.selectedSketchId,
+      selectedSketchIds: st.selectedSketchIds.filter((x) => x !== id),
+      projectDirty: true,
+    }));
+    return true;
+  },
+  extendSketchTo: (toward) => {
+    const s = get();
+    const sketch = s.currentSketch;
+    if (!sketch) return false;
+    const id = s.selectedSketchIds[0] ?? s.selectedSketchId;
+    if (!id) return false;
+    pushSketchUndo();
+    if (!extendSketchEntityTo(sketch, id, toward)) {
+      // Nothing was extended — drop the now-pointless undo snapshot.
+      set((st) => ({ sketchUndoStack: st.sketchUndoStack.slice(0, -1) }));
+      return false;
+    }
+    set({ currentSketch: { ...sketch }, projectDirty: true });
+    return true;
+  },
   toggleSketchConstruction: (id) => {
     const sketch = get().currentSketch;
     if (!sketch) return;
@@ -955,6 +1149,7 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   featureTree: new FeatureTree(),
+  featureVersion: 0,
   bodies: [],
   directBodies: [],
   addFeature: (feature) => {
@@ -962,7 +1157,7 @@ export const useStore = create<AppState>((set, get) => {
     const tree = get().featureTree;
     tree.addFeature(feature);
     tree.recompute();
-    set({ featureTree: tree, projectDirty: true });
+    set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
     recombine();
   },
   removeFeature: (id) => {
@@ -970,7 +1165,7 @@ export const useStore = create<AppState>((set, get) => {
     const tree = get().featureTree;
     tree.removeFeature(id);
     tree.recompute();
-    set({ featureTree: tree, projectDirty: true });
+    set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
     recombine();
   },
   updateFeature: (id, mutator) => {
@@ -978,7 +1173,7 @@ export const useStore = create<AppState>((set, get) => {
     const tree = get().featureTree;
     tree.updateFeature(id, mutator);
     tree.recompute();
-    set({ featureTree: tree, projectDirty: true });
+    set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
     recombine();
   },
   moveFeature: (id, toIndex) => {
@@ -991,12 +1186,15 @@ export const useStore = create<AppState>((set, get) => {
       return false;
     }
     tree.recompute();
-    set({ featureTree: tree, projectDirty: true });
+    // The tree object mutates in place, so `featureTree: tree` alone never
+    // notifies subscribers — the version counter is what makes reorder render.
+    set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
     recombine();
     return true;
   },
   recomputeTree: () => {
     get().featureTree.recompute();
+    set((s) => ({ featureVersion: s.featureVersion + 1 }));
     recombine();
   },
 
@@ -1687,36 +1885,56 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies, hiddenIds, featureTree } = get();
+    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
     // Capture the current state BEFORE restoring — applyUndoSnapshot clears
     // the (shared) feature array in place.
-    const current = { directBodies, hiddenIds, features: [...featureTree.features] };
+    const current: HistorySnapshot = {
+      directBodies,
+      hiddenIds,
+      features: [...featureTree.features],
+      drawingSectionAxis,
+      drawingDetails,
+      drawingNotes,
+    };
     applyUndoSnapshot(prev);
+    // Returning to EXACTLY the saved state clears the dirty dot (the
+    // fingerprint comparison); without a baseline yet, any undo stays dirty.
+    const saved = get().savedFingerprint;
+    const clean = saved !== null && projectFingerprint() === saved;
     set((s) => ({
       undoStack: s.undoStack.slice(0, -1),
       redoStack: [...s.redoStack, current],
       selectedIds: [],
       selectedFaceIds: [],
       selectedEdgeIds: [],
-      projectDirty: true,
+      projectDirty: !clean,
     }));
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies, hiddenIds, featureTree } = get();
+    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
-    const current = { directBodies, hiddenIds, features: [...featureTree.features] };
+    const current: HistorySnapshot = {
+      directBodies,
+      hiddenIds,
+      features: [...featureTree.features],
+      drawingSectionAxis,
+      drawingDetails,
+      drawingNotes,
+    };
     applyUndoSnapshot(next);
+    const saved = get().savedFingerprint;
+    const clean = saved !== null && projectFingerprint() === saved;
     set((s) => ({
       redoStack: s.redoStack.slice(0, -1),
       undoStack: [...s.undoStack, current],
       selectedIds: [],
       selectedFaceIds: [],
       selectedEdgeIds: [],
-      projectDirty: true,
+      projectDirty: !clean,
     }));
     return true;
   },
@@ -1736,6 +1954,9 @@ export const useStore = create<AppState>((set, get) => {
       points: [],
       coordSystems: [],
       annotations: [],
+      drawingSectionAxis: 'off',
+      drawingDetails: [],
+      drawingNotes: [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -1746,8 +1967,9 @@ export const useStore = create<AppState>((set, get) => {
   newProject: () => {
     get().clearScene();
     set({ projectName: 'Untitled', projectDirty: false, workspace: 'model', selectedSketchId: null, selectedSketchIds: [] });
+    set({ savedFingerprint: projectFingerprint() }); // fresh baseline — clean until edited
   },
-  loadProject: (features, name, directBodies = [], referenceGeometry) => {
+  loadProject: (features, name, directBodies = [], referenceGeometry, drawing) => {
     const tree = new FeatureTree();
     for (const f of features) tree.addFeature(f);
     tree.recompute();
@@ -1764,6 +1986,9 @@ export const useStore = create<AppState>((set, get) => {
       points: referenceGeometry?.points ?? [],
       coordSystems: referenceGeometry?.coordSystems ?? [],
       annotations: referenceGeometry?.annotations ?? [],
+      drawingSectionAxis: drawing?.sectionAxis ?? 'off',
+      drawingDetails: drawing?.details ?? [],
+      drawingNotes: drawing?.notes ?? [],
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -1772,6 +1997,7 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: false,
     });
     recombine();
+    set({ savedFingerprint: projectFingerprint() }); // the loaded file is the baseline
   },
 
   planes: [],
@@ -1879,6 +2105,34 @@ export const useStore = create<AppState>((set, get) => {
   annotations: [],
   addAnnotation: (a) => set((s) => ({ annotations: [...s.annotations, a], projectDirty: true })),
   removeAnnotation: (id) => set((s) => ({ annotations: s.annotations.filter((a) => a.id !== id), projectDirty: true })),
+
+  drawingSectionAxis: 'off',
+  setDrawingSectionAxis: (axis) => {
+    pushUndo();
+    set({ drawingSectionAxis: axis, projectDirty: true });
+  },
+  drawingDetails: [],
+  addDrawingDetail: (d) => {
+    pushUndo();
+    set((s) => ({ drawingDetails: [...s.drawingDetails, d], projectDirty: true }));
+  },
+  removeDrawingDetail: (id) => {
+    pushUndo();
+    set((s) => ({ drawingDetails: s.drawingDetails.filter((d) => d.id !== id), projectDirty: true }));
+  },
+  drawingNotes: [],
+  addDrawingNote: (n) => {
+    pushUndo();
+    set((s) => ({ drawingNotes: [...s.drawingNotes, n], projectDirty: true }));
+  },
+  updateDrawingNote: (id, text) => {
+    pushUndo();
+    set((s) => ({ drawingNotes: s.drawingNotes.map((n) => (n.id === id ? { ...n, text } : n)), projectDirty: true }));
+  },
+  removeDrawingNote: (id) => {
+    pushUndo();
+    set((s) => ({ drawingNotes: s.drawingNotes.filter((n) => n.id !== id), projectDirty: true }));
+  },
   placeBodyInCoordinateSystem: (bodyId, csId) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     const cs = get().coordSystems.find((c) => c.id === csId);
@@ -1988,10 +2242,20 @@ export const useStore = create<AppState>((set, get) => {
       return { lastPrimitiveParams: next };
     }),
   measureActive: false,
-  setMeasureActive: (measureActive) => set({ measureActive, measurePts: [] }),
+  setMeasureActive: (measureActive) => set({ measureActive, measurePts: [], measureFacePick: null }),
   measurePts: [],
-  addMeasurePoint: (p) => set((s) => ({ measurePts: s.measurePts.length >= 3 ? [p] : [...s.measurePts, p] })),
-  removeLastMeasurePoint: () => set((s) => ({ measurePts: s.measurePts.slice(0, -1) })),
+  addMeasurePoint: (p) => set((s) =>
+    // Area mode measures a picked face (setMeasureFacePick); stray point
+    // clicks in that mode are ignored rather than feeding the point array.
+    s.measureMode === 'area' ? {} : { measurePts: s.measurePts.length >= 3 ? [p] : [...s.measurePts, p] },
+  ),
+  removeLastMeasurePoint: () => set((s) =>
+    s.measureMode === 'area' ? { measureFacePick: null } : { measurePts: s.measurePts.slice(0, -1) },
+  ),
+  measureMode: 'distance',
+  setMeasureMode: (measureMode) => set({ measureMode, measurePts: [], measureFacePick: null }),
+  measureFacePick: null,
+  setMeasureFacePick: (measureFacePick) => set({ measureFacePick }),
 
   visionSelectActive: false,
   setVisionSelectActive: (visionSelectActive) => set({ visionSelectActive }),
@@ -2140,6 +2404,37 @@ export const useStore = create<AppState>((set, get) => {
       !keepOriginal,
     ),
 
+  // Hole drills down (−Y) from an explicit centre or the body's top-face
+  // centroid — the same default placement the AI create_hole tool uses.
+  applyHoleToBody: (bodyId, diameter, depth, center) => {
+    if (!Number.isFinite(diameter) || diameter <= 0.1) return false;
+    if (depth !== null && (!Number.isFinite(depth) || depth <= 0.1)) return false;
+    const s = get();
+    const body = s.bodies.find((b) => b.id === bodyId);
+    if (!body) return false;
+    const start = center ?? topFaceHolePlacement(body).center;
+    const direction: Vec3 = { x: 0, y: -1, z: 0 };
+
+    const tree = s.featureTree;
+    const parentId = tree.findFeatureIdForBody(bodyId);
+    if (parentId) {
+      pushUndo();
+      tree.addFeature(createHoleFeature({ center: start, direction, diameter, depth }, [parentId]));
+      tree.recompute();
+      set((st) => ({ featureTree: tree, projectDirty: true, featureVersion: st.featureVersion + 1 }));
+      recombine();
+      return true;
+    }
+    pushUndo();
+    const holed = drillHoleInBody(body, { center: start, direction, diameter, depth });
+    set((st) => ({
+      directBodies: st.directBodies.map((b) => (b.id === bodyId ? holed : b)),
+      projectDirty: true,
+    }));
+    recombine();
+    return true;
+  },
+
   setDimensionTarget: (driver, value) => {
     if (!(value > 0) || !Number.isFinite(value)) return false;
     const body = get().bodies.find((b) => b.id === driver.bodyId);
@@ -2279,13 +2574,28 @@ export const useStore = create<AppState>((set, get) => {
   setProjectName: (projectName) => set({ projectName }),
   projectDirty: false,
   setProjectDirty: (projectDirty) => set({ projectDirty }),
+  /** Fingerprint of the last explicitly saved/loaded baseline; null = none
+   * yet. Undo/redo compare the restored state against it so returning to
+   * exactly the saved state clears the dirty dot (Office/Fusion behaviour)
+   * instead of staying dirty forever. */
+  savedFingerprint: null as string | null,
+  captureSavedFingerprint: (): void => {
+    set({ savedFingerprint: projectFingerprint(), projectDirty: false });
+  },
 
   autosave: () => {
     if (typeof localStorage === 'undefined') return false;
-    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations } = get();
+    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes } = get();
     if (!projectDirty) return false;
     try {
-      const project = serializeProject(projectName, featureTree.features, [], directBodies, { planes, axes, points, coordSystems, annotations });
+      const project = serializeProject(
+        projectName,
+        featureTree.features,
+        [],
+        directBodies,
+        { planes, axes, points, coordSystems, annotations },
+        { sectionAxis: drawingSectionAxis, details: drawingDetails, notes: drawingNotes },
+      );
       const json = saveToFile(project);
       localStorage.setItem(AUTOSAVE_KEY, json);
       // Desktop belt-and-braces: a native crash-recovery snapshot beside the
@@ -2305,12 +2615,49 @@ export const useStore = create<AppState>((set, get) => {
     if (!raw) return false;
     try {
       const project = loadFromFile(raw);
-      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project));
+      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project));
       return true;
     } catch {
       return false;
     }
   },
   hasAutosave: () => typeof localStorage !== 'undefined' && localStorage.getItem(AUTOSAVE_KEY) !== null,
+
+  // Crash-recovery probe: offer the stored autosave at boot, never auto-restore
+  // it (Fusion/Office parity — the user decides). The name/timestamp come from
+  // the same JSON autosave() wrote (metadata.modified), so there is no parallel
+  // format knowledge here; the actual reload still goes through restoreAutosave.
+  autosaveProbe: null,
+  probeAutosave: () => {
+    if (typeof localStorage === 'undefined') return;
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (raw === null) {
+      set({ autosaveProbe: null });
+      return;
+    }
+    try {
+      const p = JSON.parse(raw) as { name?: unknown; metadata?: { modified?: unknown } };
+      const name = typeof p.name === 'string' && p.name.trim() !== '' ? p.name : null;
+      const modified = typeof p.metadata?.modified === 'string' ? Date.parse(p.metadata.modified) : NaN;
+      // Age computed once here (not during render) — Date.now() in a component
+      // would trip React's purity rules.
+      const ageMinutes = Number.isFinite(modified)
+        ? Math.max(0, Math.floor((Date.now() - modified) / 60_000))
+        : null;
+      set({ autosaveProbe: { name, savedAt: Number.isFinite(modified) ? modified : null, ageMinutes } });
+    } catch {
+      // Present but unparseable — still offer the banner so Discard can clear
+      // the junk key; the age phrase is simply omitted.
+      set({ autosaveProbe: { name: null, savedAt: null, ageMinutes: null } });
+    }
+  },
+  dismissAutosaveProbe: () => set({ autosaveProbe: null }),
+  discardAutosave: () => {
+    // No Rust clear command exists for the native snapshots (src-tauri only
+    // prunes them to the newest 20), so Discard drops the localStorage copy —
+    // the primary restore source — and lets native copies age out.
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(AUTOSAVE_KEY);
+    set({ autosaveProbe: null });
+  },
   };
 });

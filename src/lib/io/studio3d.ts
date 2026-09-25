@@ -8,6 +8,7 @@ import type {
   FilletFeature,
   ChamferFeature,
   ShellFeature,
+  HoleFeature,
   ScaleFeature,
   LinearArrayFeature,
   CircularArrayFeature,
@@ -17,6 +18,7 @@ import type { SolidBody } from '../geometry/types';
 import type { SketchEntity, SketchConstraint } from '../sketch/types';
 import type { PlaneDefinition } from '../geometry/types';
 import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition, AnnotationDefinition } from '../geometry/referenceGeometry';
+import type { DrawingDetail, DrawingNote, DrawingSectionAxis } from './drawingNotes';
 
 /** Datum planes/axes/points/coordinate systems — plain serializable reference geometry. */
 export interface SerializedReferenceGeometry {
@@ -25,6 +27,13 @@ export interface SerializedReferenceGeometry {
   points: PointDefinition[];
   coordSystems: CoordinateSystemDefinition[];
   annotations: AnnotationDefinition[];
+}
+
+/** Drawing-sheet state (drawing workspace): section axis, detail views, notes. */
+export interface SerializedDrawing {
+  sectionAxis: DrawingSectionAxis;
+  details: DrawingDetail[];
+  notes: DrawingNote[];
 }
 
 export interface ProjectFile {
@@ -36,6 +45,8 @@ export interface ProjectFile {
   directBodies?: SolidBody[];
   /** Datum planes/axes/points (reference geometry). */
   referenceGeometry?: SerializedReferenceGeometry;
+  /** Drawing-sheet state (optional: older files predate it). */
+  drawing?: SerializedDrawing;
   metadata: {
     created: string;
     modified: string;
@@ -71,12 +82,14 @@ export function serializeProject(
   bodies: SolidBody[],
   directBodies: SolidBody[] = [],
   referenceGeometry: SerializedReferenceGeometry = { planes: [], axes: [], points: [], coordSystems: [], annotations: [] },
+  drawing: SerializedDrawing | null = null,
 ): ProjectFile {
   return {
     version: FILE_VERSION,
     name,
     directBodies,
     referenceGeometry,
+    ...(drawing ? { drawing } : {}),
     features: features.map((f) => ({
       id: f.id,
       type: f.type,
@@ -115,6 +128,7 @@ function serializeFeatureData(feature: Feature): unknown {
     case 'fillet':
     case 'chamfer':
     case 'shell':
+    case 'hole':
     case 'scale':
     case 'linearArray':
     case 'circularArray':
@@ -137,6 +151,19 @@ export function deserializeReferenceGeometry(project: ProjectFile): SerializedRe
     points: Array.isArray(rg?.points) ? rg.points : [],
     coordSystems: Array.isArray(rg?.coordSystems) ? rg.coordSystems : [],
     annotations: Array.isArray(rg?.annotations) ? rg.annotations : [],
+  };
+}
+
+/** Drawing-sheet state stored in a loaded project (defaults for older files). */
+export function deserializeDrawing(project: ProjectFile): SerializedDrawing {
+  const d = project.drawing;
+  const axis = typeof d?.sectionAxis === 'string' && ['off', 'x', 'y', 'z'].includes(d.sectionAxis)
+    ? d.sectionAxis
+    : 'off';
+  return {
+    sectionAxis: axis,
+    details: Array.isArray(d?.details) ? d.details : [],
+    notes: Array.isArray(d?.notes) ? d.notes : [],
   };
 }
 
@@ -176,6 +203,8 @@ export function deserializeFeatures(project: ProjectFile): Feature[] {
         return { ...base, type: 'chamfer', params: sf.data } as ChamferFeature;
       case 'shell':
         return { ...base, type: 'shell', params: sf.data } as ShellFeature;
+      case 'hole':
+        return { ...base, type: 'hole', params: sf.data } as HoleFeature;
       case 'scale':
         return { ...base, type: 'scale', params: sf.data } as ScaleFeature;
       case 'linearArray':

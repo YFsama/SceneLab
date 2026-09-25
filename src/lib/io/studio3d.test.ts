@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, saveToFile, loadFromFile } from './studio3d';
+import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, saveToFile, loadFromFile, type SerializedDrawing } from './studio3d';
 import { createBox, computeVolume } from '../geometry/brep';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
@@ -301,5 +301,37 @@ describe('project metadata', () => {
   it('rejects wrong version', () => {
     const json = '{"version":2,"name":"test","features":[],"bodies":[]}';
     expect(() => loadFromFile(json)).toThrow('Unsupported file version');
+  });
+});
+
+describe('drawing sheet serialization', () => {
+  it('round-trips section axis, details and notes', () => {
+    const drawing: SerializedDrawing = {
+      sectionAxis: 'y',
+      details: [{ id: 'd1', viewIndex: 0, center: { x: 5, y: -3 }, radius: 25, scale: 2 }],
+      notes: [{ id: 'n1', x: 40, y: 540, text: '所有尖角 R2' }],
+    };
+    const project = serializeProject('drawing-test', [], [], [], undefined, drawing);
+    const loaded = loadFromFile(saveToFile(project));
+    const back = deserializeDrawing(loaded);
+    expect(back.sectionAxis).toBe('y');
+    expect(back.details).toEqual(drawing.details);
+    expect(back.notes).toEqual(drawing.notes);
+  });
+
+  it('omits the drawing block entirely when none is provided', () => {
+    const project = serializeProject('no-drawing', [], []);
+    expect(project.drawing).toBeUndefined();
+    // Old files (no drawing key) load with safe defaults.
+    expect(deserializeDrawing(project)).toEqual({ sectionAxis: 'off', details: [], notes: [] });
+  });
+
+  it('rejects a corrupt section axis and non-array fields defensively', () => {
+    const project = serializeProject('x', [], []);
+    (project as { drawing?: unknown }).drawing = { sectionAxis: 'diagonal', details: 'nope', notes: 7 };
+    const back = deserializeDrawing(project);
+    expect(back.sectionAxis).toBe('off');
+    expect(back.details).toEqual([]);
+    expect(back.notes).toEqual([]);
   });
 });

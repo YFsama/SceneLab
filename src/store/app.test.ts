@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, computeBoundingBox } from '../lib/geometry';
-import { createSketch, addRectangle, addLine, addCircle, closestPointPair } from '../lib/sketch/engine';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies } from '../lib/io';
+import { computeMeasureReadout } from '../lib/geometry/measure';
+import { createSketch, addRectangle, addLine, addCircle, addConstraint, closestPointPair } from '../lib/sketch/engine';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing } from '../lib/io';
+import { makeDetailId, makeNoteId } from '../lib/io/drawingNotes';
 
 describe('uniqueBodyName', () => {
   it('returns the name unchanged when free', () => {
@@ -2110,6 +2112,137 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().annotations).toEqual([]);
     });
   });
+
+  describe('drawing sheet state (details + notes)', () => {
+    beforeEach(() => useStore.getState().clearScene());
+
+    it('defaults to empty details and notes', () => {
+      expect(useStore.getState().drawingDetails).toEqual([]);
+      expect(useStore.getState().drawingNotes).toEqual([]);
+    });
+
+    it('addDrawingDetail / removeDrawingDetail manage detail definitions', () => {
+      const detail = { id: makeDetailId(), viewIndex: 0, center: { x: 5, y: 5 }, radius: 25, scale: 2 };
+      useStore.getState().addDrawingDetail(detail);
+      expect(useStore.getState().drawingDetails).toEqual([detail]);
+      useStore.getState().addDrawingDetail({ ...detail, id: makeDetailId(), viewIndex: 1 });
+      expect(useStore.getState().drawingDetails).toHaveLength(2);
+      useStore.getState().removeDrawingDetail(detail.id);
+      expect(useStore.getState().drawingDetails.map((d) => d.viewIndex)).toEqual([1]);
+    });
+
+    it('note actions add, update and remove by id', () => {
+      const a = { id: makeNoteId(), x: 100, y: 120, text: 'First note' };
+      const b = { id: makeNoteId(), x: 200, y: 220, text: 'Second note' };
+      useStore.getState().addDrawingNote(a);
+      useStore.getState().addDrawingNote(b);
+      expect(useStore.getState().drawingNotes).toEqual([a, b]);
+
+      useStore.getState().updateDrawingNote(a.id, 'Edited note');
+      const edited = useStore.getState().drawingNotes.find((n) => n.id === a.id)!;
+      expect(edited.text).toBe('Edited note');
+      // The other note is untouched, and position survives an edit.
+      expect(useStore.getState().drawingNotes.find((n) => n.id === b.id)!.text).toBe('Second note');
+      expect(edited.x).toBe(100);
+
+      useStore.getState().removeDrawingNote(b.id);
+      expect(useStore.getState().drawingNotes.map((n) => n.id)).toEqual([a.id]);
+      // Removing an unknown id is a no-op.
+      useStore.getState().removeDrawingNote('nope');
+      expect(useStore.getState().drawingNotes).toHaveLength(1);
+    });
+
+    it('updateDrawingNote on an unknown id changes nothing', () => {
+      useStore.getState().addDrawingNote({ id: 'dnote_x', x: 0, y: 0, text: 'keep' });
+      useStore.getState().updateDrawingNote('missing', 'other');
+      expect(useStore.getState().drawingNotes).toEqual([{ id: 'dnote_x', x: 0, y: 0, text: 'keep' }]);
+    });
+
+    it('generated note and detail ids are unique', () => {
+      const notes = Array.from({ length: 20 }, () => ({ id: makeNoteId(), x: 0, y: 0, text: 'x' }));
+      for (const n of notes) useStore.getState().addDrawingNote(n);
+      expect(new Set(useStore.getState().drawingNotes.map((n) => n.id)).size).toBe(20);
+      const details = Array.from({ length: 20 }, (_, i) => ({
+        id: makeDetailId(),
+        viewIndex: i % 4,
+        center: { x: 0, y: 0 },
+        radius: 25,
+        scale: 2,
+      }));
+      for (const d of details) useStore.getState().addDrawingDetail(d);
+      expect(new Set(useStore.getState().drawingDetails.map((d) => d.id)).size).toBe(20);
+    });
+
+    it('clearScene clears both arrays', () => {
+      useStore.getState().addDrawingNote({ id: 'dnote_1', x: 1, y: 2, text: 'x' });
+      useStore.getState().addDrawingDetail({ id: 'ddetail_1', viewIndex: 0, center: { x: 0, y: 0 }, radius: 25, scale: 2 });
+      useStore.getState().clearScene();
+      expect(useStore.getState().drawingNotes).toEqual([]);
+      expect(useStore.getState().drawingDetails).toEqual([]);
+    });
+
+    it('loadProject starts a fresh sheet when no drawing block is passed', () => {
+      useStore.getState().addDrawingNote({ id: 'dnote_1', x: 1, y: 2, text: 'old' });
+      useStore.getState().addDrawingDetail({ id: 'ddetail_1', viewIndex: 0, center: { x: 0, y: 0 }, radius: 25, scale: 2 });
+      useStore.getState().setDrawingSectionAxis('x');
+      useStore.getState().loadProject([]);
+      expect(useStore.getState().drawingNotes).toEqual([]);
+      expect(useStore.getState().drawingDetails).toEqual([]);
+      expect(useStore.getState().drawingSectionAxis).toBe('off');
+    });
+
+    it('sheet edits mark the project dirty (drawing state is serialized)', () => {
+      useStore.getState().clearScene(); // clearScene sets projectDirty
+      useStore.getState().newProject(); // resets dirty flag
+      useStore.getState().addDrawingNote({ id: 'dnote_1', x: 1, y: 2, text: 'x' });
+      useStore.getState().addDrawingDetail({ id: 'ddetail_1', viewIndex: 0, center: { x: 0, y: 0 }, radius: 25, scale: 2 });
+      useStore.getState().updateDrawingNote('dnote_1', 'y');
+      useStore.getState().setDrawingSectionAxis('z');
+      expect(useStore.getState().projectDirty).toBe(true);
+    });
+
+    it('sheet edits are one undo entry each; undo/redo restore the whole sheet', () => {
+      useStore.getState().newProject();
+      useStore.getState().addDrawingNote({ id: 'dnote_1', x: 1, y: 2, text: 'note' });
+      expect(useStore.getState().undoStack).toHaveLength(1);
+      useStore.getState().undo();
+      expect(useStore.getState().drawingNotes).toEqual([]);
+      useStore.getState().redo();
+      expect(useStore.getState().drawingNotes.map((n) => n.text)).toEqual(['note']);
+
+      useStore.getState().setDrawingSectionAxis('y');
+      useStore.getState().setDrawingSectionAxis('x');
+      useStore.getState().undo();
+      expect(useStore.getState().drawingSectionAxis).toBe('y');
+      useStore.getState().undo();
+      expect(useStore.getState().drawingSectionAxis).toBe('off');
+    });
+
+    it('a saved project round-trips the whole drawing sheet back through loadProject', () => {
+      useStore.getState().newProject();
+      const note = { id: makeNoteId(), x: 40, y: 540, text: '打磨后装配' };
+      const detail = { id: makeDetailId(), viewIndex: 2, center: { x: -4, y: 6 }, radius: 25, scale: 2 };
+      useStore.getState().addDrawingNote(note);
+      useStore.getState().addDrawingDetail(detail);
+      useStore.getState().setDrawingSectionAxis('x');
+
+      const s = useStore.getState();
+      const project = serializeProject('sheet', s.featureTree.features, s.bodies, s.directBodies, undefined, {
+        sectionAxis: s.drawingSectionAxis,
+        details: s.drawingDetails,
+        notes: s.drawingNotes,
+      });
+      const loaded = loadFromFile(saveToFile(project));
+      // Fresh scene, then restore — the sheet must survive the round trip.
+      useStore.getState().clearScene();
+      useStore.getState().loadProject(
+        deserializeFeatures(loaded), loaded.name, deserializeDirectBodies(loaded), undefined, deserializeDrawing(loaded),
+      );
+      expect(useStore.getState().drawingNotes).toEqual([note]);
+      expect(useStore.getState().drawingDetails).toEqual([detail]);
+      expect(useStore.getState().drawingSectionAxis).toBe('x');
+    });
+  });
 });
 
 describe('sketch multi-selection', () => {
@@ -2246,5 +2379,416 @@ describe('offsetSelectedSketch (Fusion sketch Offset)', () => {
     expect(useStore.getState().offsetSelectedSketch(-2)).toBe(false); // radius would be -1
     expect(useStore.getState().currentSketch!.entities.size).toBe(before);
     expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+  });
+});
+
+describe('trimSketchAt / extendSketchTo (Fusion sketch Trim & Extend)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      sketchUndoStack: [],
+      sketchRedoStack: [],
+      projectDirty: false,
+    });
+  });
+
+  it('trim through the store is one sketch-undo entry and undo restores the line', () => {
+    const sketch = createSketch('xy');
+    const target = addLine(sketch, 0, 0, 10, 0);
+    addLine(sketch, 5, -5, 5, 5); // crosses at (5,0)
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(target.id);
+
+    expect(useStore.getState().trimSketchAt({ x: 2, y: 0 })).toBe(true);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(1); // exactly one entry
+    // The trimmed entity is gone from the sketch AND the selection.
+    const trimmed = useStore.getState().currentSketch!;
+    expect(trimmed.entities.has(target.id)).toBe(false);
+    expect(useStore.getState().selectedSketchIds).toEqual([]);
+    expect(useStore.getState().projectDirty).toBe(true);
+
+    expect(useStore.getState().sketchUndo()).toBe(true);
+    const restored = useStore.getState().currentSketch!;
+    expect(restored.entities.has(target.id)).toBe(true);
+    expect(restored.entities.size).toBe(6); // both lines + all 4 points back
+  });
+
+  it('a failed trim drops the pushed snapshot and mutates nothing', () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0);
+    addLine(sketch, 5, -5, 5, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    // Multi-selection resolves to a missing entity — nothing to trim.
+    useStore.setState({ selectedSketchIds: ['missing_1'] });
+    const before = useStore.getState().currentSketch!.entities.size;
+
+    expect(useStore.getState().trimSketchAt({ x: 2, y: 0 })).toBe(false);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0); // snapshot dropped
+    expect(useStore.getState().currentSketch!.entities.size).toBe(before);
+  });
+
+  it('extend through the store moves the endpoint and is one undo entry', () => {
+    const sketch = createSketch('xy');
+    const target = addLine(sketch, 0, 0, 5, 0);
+    addLine(sketch, 10, -5, 10, 5); // boundary to extend to
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(target.id);
+
+    expect(useStore.getState().extendSketchTo({ x: 20, y: 0 })).toBe(true);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(1);
+    // The entity keeps its id; p2 moved to (10,0).
+    const s1 = useStore.getState().currentSketch!;
+    const e1 = s1.entities.get(target.id);
+    const p2 = e1?.type === 'line' ? s1.entities.get(e1.p2Id) : null;
+    expect(p2?.type === 'point' && p2.x).toBeCloseTo(10, 9);
+
+    expect(useStore.getState().sketchUndo()).toBe(true);
+    const s2 = useStore.getState().currentSketch!;
+    const e2 = s2.entities.get(target.id);
+    const p2back = e2?.type === 'line' ? s2.entities.get(e2.p2Id) : null;
+    expect(p2back?.type === 'point' && p2back.x).toBeCloseTo(5, 9);
+  });
+
+  it('a failed extend drops the pushed snapshot', () => {
+    const sketch = createSketch('xy');
+    const target = addLine(sketch, 0, 0, 5, 0);
+    addLine(sketch, 8, 3, 12, 3); // parallel — nothing to extend to
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().setSelectedSketchId(target.id);
+
+    expect(useStore.getState().extendSketchTo({ x: 20, y: 0 })).toBe(false);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+    expect(useStore.getState().projectDirty).toBe(false);
+  });
+});
+
+describe('measure modes (distance / angle / area)', () => {
+  // The whole block shares one store instance with the rest of the file —
+  // leave the measure state parked (inactive, distance mode, no picks).
+  const reset = () => {
+    useStore.getState().setMeasureActive(false);
+    useStore.getState().setMeasureMode('distance');
+  };
+
+  it('defaults to distance mode; switching modes resets picks', () => {
+    reset();
+    expect(useStore.getState().measureMode).toBe('distance');
+    useStore.getState().setMeasureActive(true);
+    useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
+    expect(useStore.getState().measurePts).toHaveLength(1);
+
+    useStore.getState().setMeasureMode('angle');
+    expect(useStore.getState().measureMode).toBe('angle');
+    expect(useStore.getState().measurePts).toHaveLength(0);
+
+    useStore.getState().addMeasurePoint({ x: 1, y: 0, z: 0 });
+    useStore.getState().setMeasureMode('distance');
+    expect(useStore.getState().measurePts).toHaveLength(0);
+    reset();
+  });
+
+  it('angle mode accumulates three points (vertex + two rays) and the fourth restarts', () => {
+    reset();
+    useStore.getState().setMeasureMode('angle');
+    // Nothing to show until the third pick.
+    useStore.getState().addMeasurePoint({ x: 1, y: 0, z: 0 });
+    useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
+    expect(computeMeasureReadout('angle', useStore.getState().measurePts, null, [])).toBeNull();
+    useStore.getState().addMeasurePoint({ x: 0, y: 1, z: 0 });
+    expect(useStore.getState().measurePts).toHaveLength(3);
+    const read = computeMeasureReadout('angle', useStore.getState().measurePts, null, []);
+    expect(read?.text).toBe('∠ 90.0°');
+    expect(read?.anchor).toEqual({ x: 0, y: 0, z: 0 });
+
+    useStore.getState().addMeasurePoint({ x: 9, y: 9, z: 9 }); // fourth pick restarts
+    expect(useStore.getState().measurePts).toEqual([{ x: 9, y: 9, z: 9 }]);
+    reset();
+  });
+
+  it('distance mode still measures two points (unchanged behaviour)', () => {
+    reset();
+    useStore.getState().setMeasureActive(true);
+    useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
+    useStore.getState().addMeasurePoint({ x: 3, y: 4, z: 0 });
+    const read = computeMeasureReadout('distance', useStore.getState().measurePts, null, []);
+    expect(read?.text).toBe('5.0 mm');
+    reset();
+  });
+
+  it('area mode stores the face pick, ignores point clicks, and resets on mode change', () => {
+    reset();
+    const box = createBox(10, 20, 30);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().setMeasureActive(true);
+    useStore.getState().setMeasureMode('area');
+
+    // Point clicks don't feed the point array in area mode.
+    useStore.getState().addMeasurePoint({ x: 1, y: 1, z: 1 });
+    expect(useStore.getState().measurePts).toHaveLength(0);
+    expect(computeMeasureReadout('area', useStore.getState().measurePts, useStore.getState().measureFacePick, useStore.getState().bodies)).toBeNull();
+
+    const bottom = box.faces.find((f) => f.vertices.every((v) => Math.abs(v.y) < 1e-9))!;
+    useStore.getState().setMeasureFacePick({ bodyId: box.id, faceId: bottom.id });
+    expect(useStore.getState().measureFacePick).toEqual({ bodyId: box.id, faceId: bottom.id });
+
+    const st = useStore.getState();
+    const read = computeMeasureReadout('area', st.measurePts, st.measureFacePick, st.bodies);
+    expect(read?.text).toBe('A 300.0 mm²');
+    expect(read?.anchor.y).toBeCloseTo(0, 6);
+
+    // Backspace drops the face pick; switching mode resets it too.
+    useStore.getState().removeLastMeasurePoint();
+    expect(useStore.getState().measureFacePick).toBeNull();
+    useStore.getState().setMeasureFacePick({ bodyId: box.id, faceId: bottom.id });
+    useStore.getState().setMeasureMode('distance');
+    expect(useStore.getState().measureFacePick).toBeNull();
+
+    reset();
+    useStore.getState().removeDirectBody(box.id);
+  });
+
+  it('toggling the measure tool off clears points and the face pick', () => {
+    reset();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().setMeasureActive(true);
+    useStore.getState().setMeasureMode('area');
+    useStore.getState().setMeasureFacePick({ bodyId: box.id, faceId: box.faces[0]!.id });
+    useStore.getState().setMeasureMode('distance');
+    useStore.getState().addMeasurePoint({ x: 0, y: 0, z: 0 });
+    useStore.getState().setMeasureActive(false);
+    expect(useStore.getState().measurePts).toHaveLength(0);
+    expect(useStore.getState().measureFacePick).toBeNull();
+    useStore.getState().removeDirectBody(box.id);
+  });
+});
+
+describe('setWorkspace sketch entry', () => {
+  it('entering the sketch workspace starts a sketch when none is active (tools work immediately)', () => {
+    useStore.getState().clearScene();
+    useStore.getState().newProject();
+    useStore.setState({ sketchActive: false, currentSketch: null });
+    useStore.getState().setWorkspace('sketch');
+    expect(useStore.getState().sketchActive).toBe(true);
+    expect(useStore.getState().currentSketch).not.toBeNull();
+    expect(useStore.getState().workspace).toBe('sketch');
+    // And drawing actually works: a line lands in the fresh sketch.
+    const id = useStore.getState().addSketchLine(0, 0, 5, 5);
+    expect(id).not.toBe('');
+    expect(useStore.getState().currentSketch!.entities.size).toBeGreaterThan(2);
+  });
+
+  it('resumes an existing sketch instead of replacing it', () => {
+    useStore.getState().clearScene();
+    const sketch = createSketch('xy');
+    useStore.setState({ sketchActive: true, currentSketch: sketch });
+    useStore.getState().setWorkspace('sketch');
+    expect(useStore.getState().currentSketch).toBe(sketch);
+  });
+});
+
+describe('dirty-dot fidelity (saved-state fingerprint)', () => {
+  it('undo back to the saved baseline clears the dirty dot; redo dirties again', () => {
+    useStore.getState().newProject();
+    useStore.getState().addPrimitive('box'); // one edit → dirty
+    expect(useStore.getState().projectDirty).toBe(true);
+    // Simulate an explicit save of THIS state.
+    useStore.getState().captureSavedFingerprint();
+    expect(useStore.getState().projectDirty).toBe(false);
+
+    useStore.getState().addPrimitive('sphere'); // edit away from the baseline
+    expect(useStore.getState().projectDirty).toBe(true);
+    useStore.getState().undo(); // back to the saved box-only state
+    expect(useStore.getState().projectDirty).toBe(false);
+    useStore.getState().redo(); // forward to the sphere again
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
+
+  it('without a baseline (never saved), undo stays dirty', () => {
+    useStore.getState().newProject();
+    // newProject captures a baseline — clear it to simulate the never-saved case.
+    useStore.setState({ savedFingerprint: null });
+    useStore.getState().addPrimitive('box');
+    useStore.getState().undo();
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
+
+  it('loadProject captures the loaded file as the baseline', () => {
+    useStore.getState().loadProject([]);
+    expect(useStore.getState().savedFingerprint).not.toBeNull();
+    expect(useStore.getState().projectDirty).toBe(false);
+  });
+
+  it('a state that only differs in name is still a different fingerprint', () => {
+    useStore.getState().newProject();
+    useStore.getState().captureSavedFingerprint();
+    useStore.getState().setProjectName('renamed');
+    useStore.getState().addPrimitive('box');
+    useStore.getState().undo();
+    // Back to baseline geometry but the NAME differs from the saved snapshot → dirty.
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
+});
+
+describe('autosave recovery probe (RestoreBanner store side)', () => {
+  beforeEach(() => {
+    localStorage.removeItem('scenelab.autosave');
+    useStore.setState({ autosaveProbe: null });
+  });
+
+  it('probeAutosave surfaces the project name and save time from a seeded autosave', () => {
+    useStore.getState().newProject();
+    useStore.getState().setProjectName('Crash Part');
+    useStore.getState().addPrimitive('box'); // dirty → autosave writes
+    expect(useStore.getState().autosave()).toBe(true);
+
+    // Simulate a reboot: the in-memory state is gone, only the key remains.
+    useStore.getState().probeAutosave();
+    const probe = useStore.getState().autosaveProbe;
+    expect(probe).not.toBeNull();
+    expect(probe!.name).toBe('Crash Part');
+    expect(probe!.savedAt).not.toBeNull();
+    expect(Date.now() - probe!.savedAt!).toBeLessThan(60_000); // metadata.modified, just now
+    expect(probe!.ageMinutes).toBe(0); // saved moments ago
+  });
+
+  it('probeAutosave stays null without an autosave', () => {
+    useStore.getState().probeAutosave();
+    expect(useStore.getState().autosaveProbe).toBeNull();
+  });
+
+  it('a stored autosave without a parseable timestamp probes with the age omitted', () => {
+    localStorage.setItem(
+      'scenelab.autosave',
+      JSON.stringify({ version: 1, name: 'No Time', features: [], bodies: [], metadata: {} }),
+    );
+    useStore.getState().probeAutosave();
+    expect(useStore.getState().autosaveProbe).toEqual({ name: 'No Time', savedAt: null, ageMinutes: null });
+  });
+
+  it('discardAutosave clears the stored key and the probe', () => {
+    useStore.getState().newProject();
+    useStore.getState().addPrimitive('box');
+    expect(useStore.getState().autosave()).toBe(true);
+    useStore.getState().probeAutosave();
+    expect(useStore.getState().autosaveProbe).not.toBeNull();
+
+    useStore.getState().discardAutosave();
+    expect(localStorage.getItem('scenelab.autosave')).toBeNull();
+    expect(useStore.getState().hasAutosave()).toBe(false);
+    expect(useStore.getState().autosaveProbe).toBeNull();
+  });
+
+  it('dismissAutosaveProbe hides the banner for the session but keeps the stored autosave', () => {
+    useStore.getState().newProject();
+    useStore.getState().addPrimitive('box');
+    expect(useStore.getState().autosave()).toBe(true);
+    useStore.getState().probeAutosave();
+
+    useStore.getState().dismissAutosaveProbe();
+    expect(useStore.getState().autosaveProbe).toBeNull();
+    expect(localStorage.getItem('scenelab.autosave')).not.toBeNull();
+    expect(useStore.getState().hasAutosave()).toBe(true);
+  });
+});
+
+describe('updateSketchConstraintValue (Parameters panel driving dimensions)', () => {
+  beforeEach(() => {
+    useStore.getState().setCurrentSketch(null);
+  });
+
+  it('updates a distance constraint and re-solves so the line length follows', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0); // length 10 along +X
+    const c = addConstraint(sketch, 'distance', [line.p1Id, line.p2Id], 10);
+    useStore.getState().setCurrentSketch(sketch);
+    const p2Before = { ...sketch.entities.get(line.p2Id) as { x: number; y: number } };
+
+    expect(useStore.getState().updateSketchConstraintValue(c.id, 20)).toBe(true);
+
+    const s = useStore.getState().currentSketch!;
+    expect(s.constraints.get(c.id)!.value).toBe(20);
+    const p1 = s.entities.get(line.p1Id) as { x: number; y: number };
+    const p2 = s.entities.get(line.p2Id) as { x: number; y: number };
+    // The solver moved an endpoint so |p1→p2| now matches the new dimension.
+    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeCloseTo(20, 6);
+    expect(p2.x).not.toBeCloseTo(p2Before.x, 6);
+  });
+
+  it('updates a radius constraint and re-solves the circle radius', () => {
+    const sketch = createSketch('xy');
+    const circle = addCircle(sketch, 0, 0, 5);
+    const c = addConstraint(sketch, 'radius', [circle.id], 5);
+    useStore.getState().setCurrentSketch(sketch);
+
+    expect(useStore.getState().updateSketchConstraintValue(c.id, 8)).toBe(true);
+
+    const s = useStore.getState().currentSketch!;
+    expect(s.constraints.get(c.id)!.value).toBe(8);
+    const updated = s.entities.get(circle.id) as { radius: number };
+    expect(updated.radius).toBeCloseTo(8, 6);
+  });
+
+  it('rejects non-positive values without touching the sketch or the history', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    const c = addConstraint(sketch, 'distance', [line.p1Id, line.p2Id], 10);
+    useStore.getState().setCurrentSketch(sketch);
+
+    expect(useStore.getState().updateSketchConstraintValue(c.id, 0)).toBe(false);
+    expect(useStore.getState().updateSketchConstraintValue(c.id, -3)).toBe(false);
+    expect(useStore.getState().updateSketchConstraintValue(c.id, Number.NaN)).toBe(false);
+    expect(useStore.getState().currentSketch!.constraints.get(c.id)!.value).toBe(10);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0); // no orphan undo entry
+  });
+
+  it('returns false for an unknown constraint id or a missing current sketch', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    addConstraint(sketch, 'distance', [line.p1Id, line.p2Id], 10);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().updateSketchConstraintValue('cstr_nope', 20)).toBe(false);
+
+    useStore.getState().setCurrentSketch(null);
+    expect(useStore.getState().updateSketchConstraintValue('whatever', 20)).toBe(false);
+  });
+
+  it('returns false for a non-dimensional constraint (no numeric value)', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    const c = addConstraint(sketch, 'horizontal', [line.id]);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().updateSketchConstraintValue(c.id, 20)).toBe(false);
+  });
+
+  it('pushes exactly one sketch-undo entry and undo restores the old value', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 10, 0);
+    const c = addConstraint(sketch, 'distance', [line.p1Id, line.p2Id], 10);
+    useStore.getState().setCurrentSketch(sketch);
+
+    expect(useStore.getState().updateSketchConstraintValue(c.id, 20)).toBe(true);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(1);
+
+    useStore.getState().sketchUndo();
+    const restored = useStore.getState().currentSketch!.constraints.get(c.id)!;
+    expect(restored.value).toBe(10);
+    const p1 = useStore.getState().currentSketch!.entities.get(line.p1Id) as { x: number; y: number };
+    const p2 = useStore.getState().currentSketch!.entities.get(line.p2Id) as { x: number; y: number };
+    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeCloseTo(10, 6);
+  });
+});
+
+describe('undo/redo repaint the timeline (featureVersion)', () => {
+  it('applyUndoSnapshot bumps featureVersion so tree views re-render', () => {
+    useStore.getState().newProject();
+    useStore.getState().addPrimitive('box');
+    const v0 = useStore.getState().featureVersion;
+    useStore.getState().undo();
+    expect(useStore.getState().featureVersion).toBeGreaterThan(v0);
+    useStore.getState().redo();
+    expect(useStore.getState().featureVersion).toBeGreaterThan(v0 + 1);
   });
 });
