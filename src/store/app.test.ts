@@ -3,7 +3,7 @@ import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, computeBoundingBox } from '../lib/geometry';
 import { computeMeasureReadout } from '../lib/geometry/measure';
-import { createSketch, addRectangle, addLine, addCircle, addConstraint, closestPointPair } from '../lib/sketch/engine';
+import { createSketch, addRectangle, addLine, addCircle, addConstraint, addPoint, closestPointPair } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing } from '../lib/io';
 import { makeDetailId, makeNoteId } from '../lib/io/drawingNotes';
 
@@ -1507,6 +1507,33 @@ describe('app store — direct bodies', () => {
     expect([p2.x, p2.y]).toEqual([7, -3]);
   });
 
+  it('nudgeSketchEntity on an entity without points leaves no orphan undo snapshot', () => {
+    const sketch = createSketch('xy');
+    const pt = addPoint(sketch, 3, 4); // a point has no movable points of its own
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().nudgeSketchEntity(pt.id, 2, -3)).toBe(false);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+    expect(useStore.getState().nudgeSketchEntity('nope', 2, -3)).toBe(false);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+    // A failed nudge must not consume a later undo step: the next real edit
+    // still undoes to its own pre-edit state.
+    const line = addLine(sketch, 0, 0, 5, 0);
+    useStore.getState().nudgeSketchEntity(line.id, 1, 1);
+    useStore.getState().sketchUndo();
+    const p1 = useStore.getState().currentSketch!.entities.get(line.p1Id) as { x: number; y: number };
+    expect([p1.x, p1.y]).toEqual([0, 0]);
+  });
+
+  it('filletSketchCorner on parallel lines leaves no orphan undo snapshot', () => {
+    const sketch = createSketch('xy');
+    const la = addLine(sketch, 0, 0, 20, 0);
+    const lb = addLine(sketch, 0, 5, 20, 5); // parallel — no corner to fillet
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().filletSketchCorner(la.id, lb.id, 5)).toBe(false);
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0); // snapshot dropped
+    expect([...useStore.getState().currentSketch!.entities.values()].filter((e) => e.type === 'arc')).toHaveLength(0);
+  });
+
   it('addSketchRect creates 4 lines in the current sketch', () => {
     useStore.getState().setCurrentSketch(createSketch('xy'));
     useStore.getState().addSketchRect(0, 0, 10, 5);
@@ -1688,6 +1715,19 @@ describe('app store — direct bodies', () => {
     expect(await useStore.getState().combineSelected('union')).toBeNull();
   });
 
+  it('combineSelected resolves (never rejects) for two valid bodies', async () => {
+    useStore.getState().clearScene();
+    const a = createBox(10, 10, 10);
+    const b = translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 });
+    useStore.getState().addDirectBodies([a, b]);
+    useStore.getState().selectObject(a.id);
+    useStore.getState().toggleSelect(b.id);
+    // A geometry-engine crash must surface as a resolved null, not an unhandled
+    // rejection the UI can't distinguish from success.
+    const result = await useStore.getState().combineSelected('union');
+    expect(typeof result === 'string' || result === null).toBe(true);
+  });
+
   it('toggleSelect adds and removes ids for multi-select', () => {
     useStore.getState().deselectAll();
     useStore.getState().toggleSelect('a');
@@ -1745,12 +1785,16 @@ describe('app store — direct bodies', () => {
     expect(useStore.getState().projectDirty).toBe(true);
   });
 
-  it('removeDirectBody is a no-op for unknown id', () => {
+  it('removeDirectBody is a no-op for unknown id (no undo entry, no dirty flag)', () => {
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);
+    useStore.setState({ projectDirty: false, undoStack: [] });
     const countBefore = useStore.getState().bodies.length;
     useStore.getState().removeDirectBody('nonexistent');
     expect(useStore.getState().bodies.length).toBe(countBefore);
+    // A failed delete must not consume a Ctrl+Z step or light the dirty dot.
+    expect(useStore.getState().undoStack).toHaveLength(0);
+    expect(useStore.getState().projectDirty).toBe(false);
   });
 
   it('addDirectBody preserves body properties', () => {
@@ -2790,5 +2834,46 @@ describe('undo/redo repaint the timeline (featureVersion)', () => {
     expect(useStore.getState().featureVersion).toBeGreaterThan(v0);
     useStore.getState().redo();
     expect(useStore.getState().featureVersion).toBeGreaterThan(v0 + 1);
+  });
+});
+
+describe('arrangeScene (undoable arrange-on-plate)', () => {
+  it('replaces the whole scene with the arranged bodies as ONE undoable step', () => {
+    useStore.getState().newProject();
+    // A tree feature (sketch + extrude) plus one direct body.
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    useStore.getState().performExtrude(10, false);
+    useStore.getState().addDirectBody(createBox(5, 5, 5));
+    expect(useStore.getState().bodies).toHaveLength(2);
+    const v0 = useStore.getState().featureVersion;
+    const undoDepth = useStore.getState().undoStack.length;
+
+    const arranged = [
+      translateBody(createBox(10, 10, 10), { x: 0, y: -5, z: 0 }),
+      translateBody(createBox(6, 6, 6), { x: 20, y: -3, z: 0 }),
+    ];
+    useStore.getState().arrangeScene(arranged);
+
+    const s = useStore.getState();
+    // Scene replaced: only the arranged bodies remain, all selected, tree gone.
+    expect(s.directBodies.map((b) => b.id)).toEqual(arranged.map((b) => b.id));
+    expect(s.bodies.map((b) => b.id)).toEqual(arranged.map((b) => b.id));
+    expect(s.selectedIds).toEqual(arranged.map((b) => b.id));
+    expect(s.featureTree.features).toHaveLength(0);
+    expect(s.projectDirty).toBe(true);
+    expect(s.featureVersion).toBe(v0 + 1);
+    // Exactly one history entry was pushed for the whole arrange.
+    expect(s.undoStack.length).toBe(undoDepth + 1);
+
+    // Undo restores the pre-arrange scene including the feature tree.
+    useStore.getState().undo();
+    const u = useStore.getState();
+    expect(u.featureTree.features.map((f) => f.type)).toEqual(['sketch', 'extrude']);
+    expect(u.bodies).toHaveLength(2);
+    expect(u.directBodies.map((b) => b.name)).toEqual(['Box']);
+    // Project state (name) survives both the arrange and the undo.
+    expect(u.projectName).toBe('Untitled');
   });
 });

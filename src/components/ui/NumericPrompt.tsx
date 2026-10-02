@@ -20,9 +20,16 @@ export function NumericPromptDialog() {
   const { t } = useT();
   const promptState = useStore((s) => s.numericPrompt);
   const closeNumericPrompt = useStore((s) => s.closeNumericPrompt);
-  // Keyed remount on each open: the input starts from the prompt's initial
-  // value and self-selects, without effects setting state.
+  // Fresh value on each open: App mounts this dialog once, so a chained
+  // prompt (count → spacing) must reseed the field — the inner div's key
+  // alone doesn't remount this state holder. Adjusting during render is the
+  // React-blessed pattern and keeps the "no effects setting state" intent.
   const [value, setValue] = useState(() => String(promptState?.initial ?? ''));
+  const [lastPrompt, setLastPrompt] = useState(promptState);
+  if (promptState !== lastPrompt) {
+    setLastPrompt(promptState);
+    setValue(String(promptState?.initial ?? ''));
+  }
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {

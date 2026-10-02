@@ -205,4 +205,36 @@ describe('numeric prompt expression input (rendered dialog)', () => {
       await unmountDialog(mounted);
     }
   });
+
+  it('a chained prompt (count → spacing) reseeds the field with the new initial', async () => {
+    let appliedFirst: number | null = null;
+    const mounted = await openPrompt((v) => {
+      appliedFirst = v;
+      // The chained pattern the array/hole menu entries use: applying one
+      // prompt opens the next with a DIFFERENT initial value.
+      useStore.setState({
+        numericPrompt: {
+          titleKey: 'feature.linearArray',
+          labelKey: 'pattern.spacing',
+          initial: 10,
+          min: 0.01,
+          onApply: () => {},
+        },
+      });
+    });
+    try {
+      const input = mounted.container.querySelector('#numeric-prompt-input') as HTMLInputElement;
+      await typeInto(input, '4');
+      await clickEl(applyButton(mounted.container));
+      expect(appliedFirst).toBe(4);
+      expect(useStore.getState().numericPrompt).not.toBeNull();
+      // The second prompt must start from ITS initial (10), not the typed 4 —
+      // the dialog component never unmounts, so the value state must reseed.
+      const input2 = mounted.container.querySelector('#numeric-prompt-input') as HTMLInputElement;
+      expect(input2.value).toBe('10');
+    } finally {
+      useStore.getState().closeNumericPrompt();
+      await unmountDialog(mounted);
+    }
+  });
 });

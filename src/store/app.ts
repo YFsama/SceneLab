@@ -342,6 +342,14 @@ interface AppState {
   /** Re-apply the last undone change; returns true if something was redone. */
   redo: () => boolean;
   clearScene: () => void;
+  /**
+   * Replace the WHOLE scene with pre-arranged bodies ("arrange on plate") as
+   * ONE undoable step: the snapshot pushed first captures the pre-arrange
+   * bodies + feature tree, so undo restores them. Mirrors clearScene's
+   * tree/reset semantics EXCEPT the undo/redo history and project state
+   * (name, dirty flag) survive — this is an edit, not a new document.
+   */
+  arrangeScene: (bodies: SolidBody[]) => void;
   /** Start a fresh, clean, untitled document (empties everything). */
   newProject: () => void;
   loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry, drawing?: SerializedDrawing) => void;
@@ -762,6 +770,7 @@ export const useStore = create<AppState>((set, get) => {
       directBodies: replaceDirect
         ? s.directBodies.flatMap((b) => (b.id === body.id ? results : [b]))
         : [...s.directBodies, ...results],
+      projectDirty: true,
     }));
     recombine();
     return true;
@@ -1007,7 +1016,11 @@ export const useStore = create<AppState>((set, get) => {
       const p = sketch.entities.get(pid);
       if (p?.type === 'point') { p.x += dx; p.y += dy; moved = true; }
     }
-    if (!moved) return false;
+    if (!moved) {
+      // Nothing moved — drop the now-pointless undo snapshot.
+      set((s) => ({ sketchUndoStack: s.sketchUndoStack.slice(0, -1) }));
+      return false;
+    }
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
   },
@@ -1129,7 +1142,11 @@ export const useStore = create<AppState>((set, get) => {
     if (!sketch || !(radius > 0)) return false;
     pushSketchUndo();
     const ok = filletCorner(sketch, lineAId, lineBId, radius);
-    if (!ok) return false;
+    if (!ok) {
+      // Nothing was filleted — drop the now-pointless undo snapshot.
+      set((s) => ({ sketchUndoStack: s.sketchUndoStack.slice(0, -1) }));
+      return false;
+    }
     set({ currentSketch: { ...sketch }, projectDirty: true });
     return true;
   },
@@ -1389,6 +1406,10 @@ export const useStore = create<AppState>((set, get) => {
     set({ hiddenIds: [] });
   },
   removeDirectBody: (id) => {
+    // Unknown id (or a tree-produced body): nothing changes — skip the undo
+    // snapshot so a failed delete can't consume a Ctrl+Z step or light the
+    // dirty dot (the same no-op-pollution rule as the sketch actions).
+    if (!get().directBodies.some((b) => b.id === id)) return;
     pushUndo();
     set((s) => ({
       directBodies: s.directBodies.filter((b) => b.id !== id),
@@ -1964,6 +1985,38 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: true,
     });
   },
+  arrangeScene: (bodies) => {
+    // One undoable step: push BEFORE replacing, so undo restores the
+    // pre-arrange scene including the feature tree (the snapshot carries
+    // directBodies + features + drawing state).
+    pushUndo();
+    set((s) => ({
+      // The arranged bodies are fresh copies from arrangeOnPlate — store them
+      // as-is; the feature tree is folded away into them.
+      featureTree: new FeatureTree(),
+      directBodies: bodies,
+      selectedIds: bodies.map((b) => b.id),
+      hiddenIds: [],
+      clipboard: [],
+      pasteCount: 0,
+      renaming: null,
+      planes: [],
+      axes: [],
+      points: [],
+      coordSystems: [],
+      annotations: [],
+      drawingSectionAxis: 'off',
+      drawingDetails: [],
+      drawingNotes: [],
+      currentSketch: null,
+      sketchActive: false,
+      projectDirty: true,
+      // Unlike clearScene, undoStack/redoStack and the project name survive —
+      // undo must be able to take the scene back to before the arrange.
+      featureVersion: s.featureVersion + 1,
+    }));
+    recombine();
+  },
   newProject: () => {
     get().clearScene();
     set({ projectName: 'Untitled', projectDirty: false, workspace: 'model', selectedSketchId: null, selectedSketchIds: [] });
@@ -2152,8 +2205,15 @@ export const useStore = create<AppState>((set, get) => {
     if (sel.length < 2) return null;
     const [a, b] = sel as [SolidBody, SolidBody];
     // Exact when Manifold is warm (main thread, ms); voxel sampling otherwise
-    // runs in the geometry worker so the viewport keeps responding.
-    const result = await asyncBooleanOp(a, b, op);
+    // runs in the geometry worker so the viewport keeps responding. A worker
+    // crash surfaces as a rejected promise — turn it into a null so callers
+    // can treat it like any other failed combine.
+    let result: SolidBody | null;
+    try {
+      result = await asyncBooleanOp(a, b, op);
+    } catch {
+      return null;
+    }
     if (!result) return null;
     result.color = a.color;
     result.name = `${a.name} ${op === 'union' ? '+' : op === 'difference' ? '−' : '∩'} ${b.name}`;
@@ -2454,14 +2514,16 @@ export const useStore = create<AppState>((set, get) => {
         tree.addFeature(createScaleFeature(driver.axis, value, [parentId]));
       }
       tree.recompute();
-      set({ featureTree: tree, projectDirty: true });
+      // The tree mutates in place — bump the version so the timeline and
+      // dimension-driven panels re-render.
+      set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
       recombine();
       return true;
     }
     try {
       const resized = resizeBodyAxis(body, driver.axis, value);
       pushUndo();
-      set((s) => ({ directBodies: s.directBodies.map((b) => (b.id === driver.bodyId ? resized : b)) }));
+      set((s) => ({ directBodies: s.directBodies.map((b) => (b.id === driver.bodyId ? resized : b)), projectDirty: true }));
       recombine();
       return true;
     } catch {
@@ -2478,7 +2540,8 @@ export const useStore = create<AppState>((set, get) => {
     pushUndo();
     tree.addFeature(createLoftFeature({}, parents.map((p) => p.id)));
     tree.recompute();
-    set({ featureTree: tree, projectDirty: true });
+    // The tree mutates in place — bump the version so the timeline re-renders.
+    set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
     recombine();
     return true;
   },

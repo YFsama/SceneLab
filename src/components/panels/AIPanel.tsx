@@ -68,12 +68,14 @@ export function AIPanel() {
       timestamp: Date.now(),
     };
 
-    // Use functional updater to get latest messages
-    let currentMessages: AIMessage[] = [];
-    setMessages((prev) => {
-      currentMessages = [...prev, userMessage];
-      return currentMessages;
-    });
+    // Snapshot the conversation BEFORE updating state. React evaluates
+    // updater functions at render time, not synchronously at call time, so the
+    // old pattern (assigning a variable inside a setMessages updater and
+    // reading it after awaits) raced the API call against the next render.
+    // Building the list here from the current state guarantees the API always
+    // receives [...prev, userMessage] from one consistent snapshot.
+    const currentMessages: AIMessage[] = [...messages, userMessage];
+    setMessages(currentMessages);
     setInput('');
     setLoading(true);
 
@@ -84,7 +86,10 @@ export function AIPanel() {
       // to it — "look at THIS face".
       let screenshot: string | undefined;
       if (visionEnabled) {
-        const canvas = captureFreshCanvas() ?? document.querySelector('canvas');
+        // #viewport-canvas is the 3D viewport — capture.ts uses the same
+        // selector. A bare 'canvas' query can grab an unrelated 2D canvas
+        // (drawing sheet, crop helper) instead of the scene.
+        const canvas = captureFreshCanvas() ?? document.querySelector<HTMLCanvasElement>('#viewport-canvas');
         if (canvas) {
           const region = useStore.getState().visionRegion;
           if (region && region.w > 0.01 && region.h > 0.01) {
@@ -132,7 +137,8 @@ export function AIPanel() {
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      // Append to the same snapshot that was sent to the API.
+      setMessages([...currentMessages, assistantMessage]);
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       showToast(`${t('ai.error')}: ${errMsg}`, 'error');
@@ -141,11 +147,11 @@ export function AIPanel() {
         content: `${t('ai.error')}: ${errMsg}`,
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, errorMessage]);
+      setMessages([...currentMessages, errorMessage]);
     } finally {
       setLoading(false);
     }
-  }, [input, loading, apiKey, visionEnabled, t]);
+  }, [input, loading, apiKey, visionEnabled, messages, t]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

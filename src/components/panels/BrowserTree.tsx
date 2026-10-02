@@ -9,6 +9,7 @@ import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcr
 import { MATERIALS } from '../../lib/materials';
 import type { SolidBody } from '../../lib/geometry/types';
 import { matchesNameFilter } from '../../lib/treeFilter';
+import { showToast } from '../../lib/toast';
 
 export function BrowserTree() {
   const { t } = useT();
@@ -192,9 +193,9 @@ export function BrowserTree() {
         ? [{
             label: t('menu.combine'),
             submenu: [
-              { label: t('menu.union'), onClick: () => combineSelected('union') },
-              { label: t('menu.subtract'), onClick: () => combineSelected('difference') },
-              { label: t('menu.intersect'), onClick: () => combineSelected('intersect') },
+              { label: t('menu.union'), onClick: () => void combineSelected('union').then((id) => { if (id == null) showToast(t('toast.combineFailed'), 'warning'); }).catch(() => showToast(t('toast.combineFailed'), 'warning')) },
+              { label: t('menu.subtract'), onClick: () => void combineSelected('difference').then((id) => { if (id == null) showToast(t('toast.combineFailed'), 'warning'); }).catch(() => showToast(t('toast.combineFailed'), 'warning')) },
+              { label: t('menu.intersect'), onClick: () => void combineSelected('intersect').then((id) => { if (id == null) showToast(t('toast.combineFailed'), 'warning'); }).catch(() => showToast(t('toast.combineFailed'), 'warning')) },
               { label: t('menu.join'), onClick: () => joinSelected(), separatorBefore: true },
             ],
           }]

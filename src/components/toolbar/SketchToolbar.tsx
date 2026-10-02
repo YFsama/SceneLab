@@ -1,15 +1,7 @@
-import { useStore, type SketchTool } from '../../store/app';
+import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { MousePointer2, Minus, Square, Circle, CircleDot, Hexagon, Box, RotateCw, LogOut, MoveDiagonal, Scissors, ArrowRightToLine } from 'lucide-react';
-
-const tools: { tool: SketchTool; icon: typeof MousePointer2; shortcut: string }[] = [
-  { tool: 'select', icon: MousePointer2, shortcut: 'V' },
-  { tool: 'line', icon: Minus, shortcut: 'L' },
-  { tool: 'rect', icon: Square, shortcut: 'R' },
-  { tool: 'circle', icon: Circle, shortcut: 'O' },
-  { tool: 'arc', icon: CircleDot, shortcut: 'A' },
-  { tool: 'polygon', icon: Hexagon, shortcut: 'P' },
-];
+import { Box, RotateCw, LogOut, MoveDiagonal, Scissors, ArrowRightToLine } from 'lucide-react';
+import { SKETCH_TOOLS } from './sketchTools';
 
 /** Opens the offset-distance prompt for the selected entity (Fusion's Offset:
  * line loops offset mitered, circles/arcs/rectangles grow or shrink). */
@@ -58,7 +50,7 @@ export function SketchToolbar() {
       role="toolbar"
       aria-label={t('sketch.tools')}
     >
-      {tools.map(({ tool, icon: Icon, shortcut }) => (
+      {SKETCH_TOOLS.map(({ tool, icon: Icon, shortcut }) => (
         <button
           key={tool}
           onClick={() => setTool(tool)}

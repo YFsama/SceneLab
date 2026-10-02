@@ -1,7 +1,9 @@
 import { registerTool } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createSketch } from '../sketch/engine';
-import { topFaceHolePlacement } from '../features/tree';
+import { topFaceHolePlacement, createHoleFeature, drillHoleInBody } from '../features/tree';
+import { featureSummary } from '../features/summary';
+import type { Feature } from '../features/types';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { booleanOp, hollowBody, mirrorMerge } from '../geometry/boolean';
@@ -11,10 +13,8 @@ import { createBox, createBoundingBoxBody, createCylinder, createSphere, createC
 import { importSTLAscii, importOBJ, importSTEP, exportSTLAscii, exportOBJ, export3MF } from '../io';
 import { exportSTEP } from '../io/step';
 import { makeNoteId } from '../io/drawingNotes';
-import { trimSketchEntityAt, extendSketchEntityTo } from '../sketch/trim';
-import { offsetSketchProfile } from '../sketch/offset';
 import { faceAreaAndCentroid } from '../geometry/measure';
-import { assertNumber, assertBoolean, assertEnum, assertString, assertVec3 } from './validate';
+import { assertNumber, assertBoolean, assertEnum, assertString, assertStringArray, assertVec3 } from './validate';
 import { LIBRARY_PARTS } from '../library/parts';
 import { SAMPLE_PROJECTS } from '../library/samples';
 import { loadSampleProject } from '../library/loadSample';
@@ -61,6 +61,10 @@ function resolveBody(bodyId: unknown): SolidBody {
   return first;
 }
 
+/** Reason shared by every draw_* / constraint tool that no-op'd without a sketch. */
+const NO_SKETCH_REASON =
+  'No active sketch — call create_sketch (or create_sketch_on_plane) first';
+
 export function registerBuiltinTools(): void {
   // Sketch tools
   registerTool({
@@ -105,6 +109,9 @@ export function registerBuiltinTools(): void {
         assertNumber(args.x2, 'x2'),
         assertNumber(args.y2, 'y2'),
       );
+      // The store returns '' when there is no active sketch — never report
+      // success for a no-op.
+      if (!id) return { success: false, reason: NO_SKETCH_REASON };
       return { success: true, entityId: id };
     },
   });
@@ -129,6 +136,8 @@ export function registerBuiltinTools(): void {
         assertNumber(args.x2, 'x2'),
         assertNumber(args.y2, 'y2'),
       );
+      // '' means there was no active sketch to draw into.
+      if (!id) return { success: false, reason: NO_SKETCH_REASON };
       return { success: true, entityId: id };
     },
   });
@@ -151,6 +160,8 @@ export function registerBuiltinTools(): void {
         assertNumber(args.cy, 'cy'),
         assertNumber(args.radius, 'radius'),
       );
+      // '' means there was no active sketch to draw into.
+      if (!id) return { success: false, reason: NO_SKETCH_REASON };
       return { success: true, entityId: id };
     },
   });
@@ -170,11 +181,16 @@ export function registerBuiltinTools(): void {
     },
     execute: async (args) => {
       if (!useStore.getState().currentSketch) throw new Error('No active sketch — create one first');
+      const radius = assertNumber(args.radius, 'radius');
+      // The store silently drops a non-positive radius — surface it instead.
+      if (!(radius > 0)) {
+        return { success: false, reason: `Radius must be a positive number of millimetres (got ${radius})` };
+      }
       const sides = Math.max(3, Math.floor(assertNumber(args.sides, 'sides')));
       useStore.getState().addSketchPolygon(
         assertNumber(args.cx, 'cx'),
         assertNumber(args.cy, 'cy'),
-        assertNumber(args.radius, 'radius'),
+        radius,
         sides,
       );
       return { success: true, sides };
@@ -204,6 +220,8 @@ export function registerBuiltinTools(): void {
         assertNumber(args.startAngle, 'startAngle') * deg,
         assertNumber(args.endAngle, 'endAngle') * deg,
       );
+      // '' means there was no active sketch to draw into.
+      if (!id) return { success: false, reason: NO_SKETCH_REASON };
       return { success: true, entityId: id };
     },
   });
@@ -225,6 +243,10 @@ export function registerBuiltinTools(): void {
       required: ['type', 'entityIds'],
     },
     execute: async (args) => {
+      if (!useStore.getState().currentSketch) {
+        // addSketchConstraint silently no-ops without a sketch — report it.
+        return { success: false, reason: NO_SKETCH_REASON };
+      }
       const type = assertEnum(args.type, ['horizontal', 'vertical', 'parallel', 'perpendicular', 'coincident', 'fixed', 'equal', 'distance', 'radius', 'concentric'] as const, 'type');
       const entityIds = args.entityIds;
       if (!Array.isArray(entityIds) || !entityIds.every((e) => typeof e === 'string')) {
@@ -259,13 +281,14 @@ export function registerBuiltinTools(): void {
       const x = assertNumber(args.x, 'x');
       const y = assertNumber(args.y, 'y');
       const st = useStore.getState();
-      const sketch = st.currentSketch;
-      if (!sketch) throw new Error('No active sketch');
-      if (!trimSketchEntityAt(sketch, entityId, { x, y })) {
+      if (!st.currentSketch) throw new Error('No active sketch');
+      // Go through the store action (not the pure mutator): it snapshots the
+      // sketch onto the sketch-undo stack and pops it back off on failure.
+      // The action resolves its target from the selection, so select first.
+      useStore.setState({ selectedSketchId: entityId, selectedSketchIds: [entityId] });
+      if (!useStore.getState().trimSketchAt({ x, y })) {
         throw new Error('Nothing was trimmed — the entity is not trimmable (points/rectangles) or was missing');
       }
-      st.setCurrentSketch({ ...sketch });
-      useStore.setState({ projectDirty: true });
       return { success: true };
     },
   });
@@ -289,13 +312,13 @@ export function registerBuiltinTools(): void {
       const x = assertNumber(args.x, 'x');
       const y = assertNumber(args.y, 'y');
       const st = useStore.getState();
-      const sketch = st.currentSketch;
-      if (!sketch) throw new Error('No active sketch');
-      if (!extendSketchEntityTo(sketch, entityId, { x, y })) {
+      if (!st.currentSketch) throw new Error('No active sketch');
+      // Store action (sketch-undo covered, popped on failure); it resolves its
+      // target from the selection, so select the entity first.
+      useStore.setState({ selectedSketchId: entityId, selectedSketchIds: [entityId] });
+      if (!useStore.getState().extendSketchTo({ x, y })) {
         throw new Error('Nothing to extend to in that direction (or the entity is not extendable)');
       }
-      st.setCurrentSketch({ ...sketch });
-      useStore.setState({ projectDirty: true });
       return { success: true };
     },
   });
@@ -317,15 +340,18 @@ export function registerBuiltinTools(): void {
       const entityId = assertString(args.entityId, 'entityId');
       const distance = assertNumber(args.distance, 'distance');
       const st = useStore.getState();
-      const sketch = st.currentSketch;
-      if (!sketch) throw new Error('No active sketch');
-      const ids = offsetSketchProfile(sketch, entityId, distance);
-      if (!ids) {
+      if (!st.currentSketch) throw new Error('No active sketch');
+      // Route through the store's PROFILE offset — the same action the sketch
+      // toolbar uses — so a line offsets its whole closed loop with mitered
+      // corners (a bare parallel segment would diverge from the UI). The
+      // action is selection-based, pushes sketch undo, and pops it on refusal.
+      useStore.setState({ selectedSketchId: entityId, selectedSketchIds: [entityId] });
+      const ok = useStore.getState().offsetSelectedSketch(distance);
+      if (!ok) {
         throw new Error('Offset refused — the entity is not offsetable or the copy would collapse');
       }
-      st.setCurrentSketch({ ...sketch });
-      useStore.setState({ projectDirty: true });
-      return { success: true, newEntityIds: ids };
+      const newIds = useStore.getState().selectedSketchIds;
+      return { success: true, newEntityId: newIds[0] ?? null, newEntityIds: newIds };
     },
   });
 
@@ -599,10 +625,25 @@ export function registerBuiltinTools(): void {
     },
     execute: async (args) => {
       const store = useStore.getState();
-      store.performExtrude(
-        assertNumber(args.distance, 'distance'),
-        args.symmetric !== undefined ? assertBoolean(args.symmetric, 'symmetric') : false,
-      );
+      // Mirror the store's own guards (no sketch / non-positive distance are
+      // its only no-op cases) so the tool never claims success for a no-op.
+      if (!store.currentSketch) {
+        return { success: false, reason: NO_SKETCH_REASON };
+      }
+      const distance = assertNumber(args.distance, 'distance');
+      if (!(distance > 0)) {
+        return { success: false, reason: `Extrude distance must be a positive number of millimetres (got ${distance})` };
+      }
+      const symmetric = args.symmetric !== undefined ? assertBoolean(args.symmetric, 'symmetric') : false;
+      // performExtrude is void; the honest signal is whether a NEW body
+      // appeared (recompute swallows evaluator errors into zero bodies when
+      // the sketch has no usable profile — the create_hole pattern).
+      const idsBefore = new Set(useStore.getState().bodies.map((b) => b.id));
+      store.performExtrude(distance, symmetric);
+      const appeared = useStore.getState().bodies.some((b) => !idsBefore.has(b.id));
+      if (!appeared) {
+        return { success: false, reason: 'Extrude produced no solid — the sketch has no closed profile' };
+      }
       return { success: true };
     },
   });
@@ -617,9 +658,89 @@ export function registerBuiltinTools(): void {
       },
     },
     execute: async (args) => {
+      const store = useStore.getState();
+      // performRevolve silently no-ops without a sketch — its only guard.
+      if (!store.currentSketch) {
+        return { success: false, reason: NO_SKETCH_REASON };
+      }
       const angleDeg = args.angleDeg !== undefined ? assertNumber(args.angleDeg, 'angleDeg') : 360;
+      // performRevolve is void; the honest signal is whether a NEW body
+      // appeared (open profile → evaluator error → zero bodies).
+      const idsBefore = new Set(useStore.getState().bodies.map((b) => b.id));
       useStore.getState().performRevolve((angleDeg * Math.PI) / 180);
+      const appeared = useStore.getState().bodies.some((b) => !idsBefore.has(b.id));
+      if (!appeared) {
+        return { success: false, reason: 'Revolve produced no solid — the sketch has no closed profile' };
+      }
       return { success: true };
+    },
+  });
+
+  registerTool({
+    name: 'list_features',
+    description:
+      'List the parametric feature tree in timeline order: per feature its id, type, name, ' +
+      'suppressed flag and a short parameter summary. Use the ids with update_feature to edit ' +
+      'parameters (e.g. "make the extrude 30 mm", "fillet radius 3").',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const features = useStore.getState().featureTree.features;
+      return {
+        count: features.length,
+        features: features.map((f) => ({
+          id: f.id,
+          type: f.type,
+          name: f.name,
+          suppressed: f.suppressed,
+          summary: featureSummary(f),
+        })),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'update_feature',
+    description:
+      "Edit a feature's parameters with a shallow merge and recompute the model — e.g. " +
+      '{ "distance": 30 } on an extrude or { "radius": 3 } on a fillet. Use list_features for ' +
+      'feature ids and their current parameter values.',
+    parameters: {
+      type: 'object',
+      properties: {
+        featureId: { type: 'string', description: 'Feature id from list_features' },
+        params: {
+          type: 'object',
+          description: 'Parameter patch merged over the existing params (keys match the feature type, e.g. { "distance": 30 })',
+        },
+      },
+      required: ['featureId', 'params'],
+    },
+    execute: async (args) => {
+      const featureId = assertString(args.featureId, 'featureId');
+      const patch = args.params;
+      if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+        throw new Error('Expected params to be an object of parameter overrides');
+      }
+      const st = useStore.getState();
+      const existing = st.featureTree.getFeature(featureId);
+      if (!existing) {
+        return { success: false, reason: `Feature "${featureId}" not found — call list_features for valid ids` };
+      }
+      if (existing.type === 'sketch') {
+        return { success: false, reason: 'Sketch features have no editable params — edit the sketch entities instead' };
+      }
+      // Shallow params merge: {...f.params, ...patch}. updateFeature pushes
+      // undo, recomputes the tree and bumps featureVersion.
+      const current = existing.params as Record<string, unknown>;
+      const merged = { ...current, ...(patch as Record<string, unknown>) };
+      st.updateFeature(featureId, (f) => ({ ...f, params: merged }) as Feature);
+      return {
+        success: true,
+        featureId,
+        type: existing.type,
+        params: merged,
+        summary: featureSummary(useStore.getState().featureTree.getFeature(featureId)!),
+      };
     },
   });
 
@@ -639,8 +760,18 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const edgeIds = (args.edgeIds as string[]) ?? body.edges.map((e) => e.id);
-      const result = applyFillet(body, edgeIds, args.radius as number);
+      const radius = assertNumber(args.radius, 'radius');
+      // applyFillet early-returns the body unchanged for radius ≤ 0 — without
+      // this guard the no-op would still claim success and push an undo entry.
+      if (!(radius > 0)) {
+        return { success: false, reason: `Fillet radius must be positive (got ${radius})` };
+      }
+      const edgeIds = args.edgeIds !== undefined ? assertStringArray(args.edgeIds, 'edgeIds') : body.edges.map((e) => e.id);
+      const unknown = edgeIds.filter((id) => !body.edges.some((e) => e.id === id));
+      if (unknown.length > 0) {
+        return { success: false, reason: `Unknown edge ids on this body: ${unknown.join(', ')}` };
+      }
+      const result = applyFillet(body, edgeIds, radius);
       store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
@@ -662,8 +793,16 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const edgeIds = (args.edgeIds as string[]) ?? body.edges.map((e) => e.id);
-      const result = applyChamfer(body, edgeIds, args.distance as number);
+      const distance = assertNumber(args.distance, 'distance');
+      if (!(distance > 0)) {
+        return { success: false, reason: `Chamfer distance must be positive (got ${distance})` };
+      }
+      const edgeIds = args.edgeIds !== undefined ? assertStringArray(args.edgeIds, 'edgeIds') : body.edges.map((e) => e.id);
+      const unknown = edgeIds.filter((id) => !body.edges.some((e) => e.id === id));
+      if (unknown.length > 0) {
+        return { success: false, reason: `Unknown edge ids on this body: ${unknown.join(', ')}` };
+      }
+      const result = applyChamfer(body, edgeIds, distance);
       store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
@@ -685,8 +824,16 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const faceIds = (args.faceIds as string[]) ?? [body.faces[0]?.id ?? ''];
-      const result = applyShell(body, faceIds, args.thickness as number);
+      const thickness = assertNumber(args.thickness, 'thickness');
+      if (!(thickness > 0)) {
+        return { success: false, reason: `Wall thickness must be positive (got ${thickness})` };
+      }
+      const faceIds = args.faceIds !== undefined ? assertStringArray(args.faceIds, 'faceIds') : [body.faces[0]?.id ?? ''];
+      const unknown = faceIds.filter((id) => !body.faces.some((f) => f.id === id));
+      if (unknown.length > 0) {
+        return { success: false, reason: `Unknown face ids on this body: ${unknown.join(', ')}` };
+      }
+      const result = applyShell(body, faceIds, thickness);
       store.replaceBody(body.id, result);
       return { success: true, bodyId: result.id };
     },
@@ -697,6 +844,7 @@ export function registerBuiltinTools(): void {
     description:
       'Drill a hole in a body (Fusion HOLE): subtracts a cylinder of the given diameter, drilled DOWN (−Y) ' +
       'from (x, y, z). Omit x/y/z to drill from the body\'s top-face centroid; omit depth for a through hole. ' +
+      'An optional counterbore (flat-bottom widening) or countersink (conical widening) enlarges the entry. ' +
       'Replaces the body and returns the new body id plus the removed volume.',
     parameters: {
       type: 'object',
@@ -707,6 +855,24 @@ export function registerBuiltinTools(): void {
         x: { type: 'number', description: 'Hole centre X (mm; omit all of x/y/z for the top-face centroid)' },
         y: { type: 'number', description: 'Hole centre Y (mm)' },
         z: { type: 'number', description: 'Hole centre Z (mm)' },
+        counterbore: {
+          type: 'object',
+          properties: {
+            diameter: { type: 'number', description: 'Counterbore diameter in mm (> hole diameter)' },
+            depth: { type: 'number', description: 'Counterbore depth in mm from the entry face' },
+          },
+          required: ['diameter', 'depth'],
+          description: 'Flat-bottomed widening of the hole entry (e.g. a bolt-head recess)',
+        },
+        countersink: {
+          type: 'object',
+          properties: {
+            diameter: { type: 'number', description: 'Countersink (cone top) diameter in mm' },
+            angleDeg: { type: 'number', description: 'Full included cone angle in degrees (e.g. 90)' },
+          },
+          required: ['diameter', 'angleDeg'],
+          description: 'Conical widening of the hole entry (e.g. a flat-head screw seat); mutually exclusive with counterbore',
+        },
       },
       required: ['diameter'],
     },
@@ -714,6 +880,25 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const diameter = assertNumber(args.diameter, 'diameter');
       const depth = args.depth !== undefined && args.depth !== null ? assertNumber(args.depth, 'depth') : null;
+      if (args.counterbore !== undefined && args.countersink !== undefined) {
+        throw new Error('Provide either counterbore or countersink, not both');
+      }
+      const counterbore = args.counterbore === undefined ? undefined : (() => {
+        const o = args.counterbore as Record<string, unknown>;
+        const cbDiameter = assertNumber(o.diameter, 'counterbore.diameter');
+        const cbDepth = assertNumber(o.depth, 'counterbore.depth');
+        if (cbDiameter <= 0.1 || cbDepth <= 0.1) throw new Error('Counterbore diameter and depth must exceed 0.1 mm');
+        return { diameter: cbDiameter, depth: cbDepth };
+      })();
+      const countersink = args.countersink === undefined ? undefined : (() => {
+        const o = args.countersink as Record<string, unknown>;
+        const csDiameter = assertNumber(o.diameter, 'countersink.diameter');
+        const csAngle = assertNumber(o.angleDeg, 'countersink.angleDeg');
+        if (csDiameter <= 0.1 || !(csAngle > 0) || csAngle >= 180) {
+          throw new Error('Countersink diameter must exceed 0.1 mm and angleDeg be within (0, 180)');
+        }
+        return { diameter: csDiameter, angleDeg: csAngle };
+      })();
       const hasXyz = args.x !== undefined || args.y !== undefined || args.z !== undefined;
       let center: Vec3;
       if (args.x !== undefined && args.y !== undefined && args.z !== undefined) {
@@ -726,7 +911,26 @@ export function registerBuiltinTools(): void {
 
       const volumeBefore = Math.abs(computeVolume(body));
       const idsBefore = new Set(useStore.getState().bodies.map((b) => b.id));
-      if (!useStore.getState().applyHoleToBody(body.id, diameter, depth, center)) {
+      const direction: Vec3 = { x: 0, y: -1, z: 0 };
+      let applied: boolean;
+      if (!counterbore && !countersink) {
+        // The store's plain path covers both tree and direct bodies.
+        applied = useStore.getState().applyHoleToBody(body.id, diameter, depth, center);
+      } else {
+        // Counterbore/countersink variants: parametric feature for tree bodies,
+        // undoable direct edit otherwise (the store action only takes the plain
+        // cylinder params).
+        const st = useStore.getState();
+        const parentId = st.featureTree.findFeatureIdForBody(body.id);
+        const holeParams = { center, direction, diameter, depth, counterbore, countersink };
+        if (parentId) {
+          st.addFeature(createHoleFeature(holeParams, [parentId]));
+        } else {
+          st.replaceBody(body.id, drillHoleInBody(body, holeParams));
+        }
+        applied = true;
+      }
+      if (!applied) {
         throw new Error('Hole rejected — check that the body exists and the diameter/depth are valid');
       }
       const bodiesAfter = useStore.getState().bodies;
@@ -738,6 +942,8 @@ export function registerBuiltinTools(): void {
         diameter,
         depth,
         throughAll: depth === null,
+        counterbore: counterbore ?? undefined,
+        countersink: countersink ?? undefined,
         volumeRemoved: Number((volumeBefore - volumeAfter).toFixed(3)),
       };
     },
@@ -1356,8 +1562,10 @@ export function registerBuiltinTools(): void {
         assertNumber(args.bedZ, 'bedZ'),
         args.spacing !== undefined ? assertNumber(args.spacing, 'spacing') : undefined,
       );
-      store.clearScene();
-      useStore.getState().addDirectBodies(r.bodies);
+      // Replace the scene as ONE undoable step — undo restores the
+      // pre-arrange scene. (clearScene + re-adding would have wiped the whole
+      // global undo history.)
+      useStore.getState().arrangeScene(r.bodies);
       return { success: true, count: r.bodies.length, fits: r.fits, usedX: Number(r.usedX.toFixed(1)), usedZ: Number(r.usedZ.toFixed(1)) };
     },
   });
@@ -2124,6 +2332,18 @@ export function registerBuiltinTools(): void {
       const before = useStore.getState().bodies.length;
       useStore.getState().removeDirectBody(id);
       const after = useStore.getState().bodies.length;
+      // Nothing was removed — either the id doesn't exist or it belongs to a
+      // feature-tree body (only directly-created bodies are removable here).
+      // Report the miss honestly instead of "success" with removed: 0.
+      if (after === before) {
+        const exists = useStore.getState().bodies.some((b) => b.id === id);
+        return {
+          success: false,
+          reason: exists
+            ? `Body "${id}" is produced by the feature tree — remove its feature instead`
+            : `Body "${id}" not found`,
+        };
+      }
       return { success: true, removed: before - after };
     },
   });
@@ -2305,9 +2525,9 @@ export function registerBuiltinTools(): void {
       required: ['direction'],
     },
     execute: async (args) => {
-      const store = useStore.getState();
-      store.setViewDirection(args.direction as 'top' | 'front' | 'right' | 'iso');
-      return { success: true };
+      const direction = assertEnum(args.direction, ['top', 'front', 'right', 'iso'] as const, 'direction');
+      useStore.getState().setViewDirection(direction);
+      return { success: true, direction };
     },
   });
 
@@ -2441,9 +2661,9 @@ export function registerBuiltinTools(): void {
       required: ['mode'],
     },
     execute: async (args) => {
-      const store = useStore.getState();
-      store.setProjection(args.mode as 'perspective' | 'orthographic');
-      return { success: true, mode: args.mode };
+      const mode = assertEnum(args.mode, ['perspective', 'orthographic'] as const, 'mode');
+      useStore.getState().setProjection(mode);
+      return { success: true, mode };
     },
   });
 

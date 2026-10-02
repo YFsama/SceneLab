@@ -1,19 +1,6 @@
-import { useStore, type ViewDirection } from '../../store/app';
+import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-
-// The six standard orthographic views plus isometric. Shortcut badges match the
-// central hotkeys (initShortcuts): 1 front, 2 top, 3 right, 4 iso; the remaining
-// views are reachable here, via the right-click View Orientation menu, or the
-// command palette.
-const views: { dir: ViewDirection; shortcut?: string }[] = [
-  { dir: 'front', shortcut: '1' },
-  { dir: 'back', shortcut: '5' },
-  { dir: 'left', shortcut: '7' },
-  { dir: 'right', shortcut: '3' },
-  { dir: 'top', shortcut: '2' },
-  { dir: 'bottom', shortcut: '6' },
-  { dir: 'iso', shortcut: '4' },
-];
+import { VIEWS } from './viewcubeViews';
 
 export function ViewCube() {
   const { t } = useT();
@@ -28,7 +15,7 @@ export function ViewCube() {
       role="group"
       aria-label={t('viewport.controls')}
     >
-      {views.map(({ dir, shortcut }) => (
+      {VIEWS.map(({ dir, shortcut }) => (
         <button
           key={dir}
           onClick={() => setView(dir)}

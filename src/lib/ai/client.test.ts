@@ -22,6 +22,23 @@ describe('SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toContain('lay_flat'); // print prep
     expect(SYSTEM_PROMPT).toContain('compute_mass_properties'); // simulation
   });
+
+  it('teaches the major categories and the multi-body gotcha', () => {
+    expect(SYSTEM_PROMPT).toContain('boolean_op'); // booleans
+    expect(SYSTEM_PROMPT).toContain('hollow_body');
+    expect(SYSTEM_PROMPT).toContain('sweep');
+    expect(SYSTEM_PROMPT).toContain('import_mesh'); // interop
+    expect(SYSTEM_PROMPT).toContain('export_body');
+    expect(SYSTEM_PROMPT).toContain('insert_library_part'); // parts library
+    expect(SYSTEM_PROMPT).toContain('suggest_feeds_speeds'); // CAM
+    expect(SYSTEM_PROMPT).toContain('add_drawing_note'); // drawing sheet
+    expect(SYSTEM_PROMPT).toContain('set_body_appearance'); // presentation
+    expect(SYSTEM_PROMPT).toContain('counterbore'); // hole variants
+    expect(SYSTEM_PROMPT).toContain('update_feature'); // parametric edits
+    expect(SYSTEM_PROMPT).toContain('list_features');
+    // bodyId defaults to the FIRST body — the model must name the target.
+    expect(SYSTEM_PROMPT).toMatch(/FIRST body/);
+  });
 });
 
 describe('sendMessageWithTools', () => {
@@ -91,6 +108,46 @@ describe('sendMessageWithTools', () => {
     const second = bodies[1] as { messages: Array<{ content: unknown }> };
     const block = (second.messages[second.messages.length - 1]!.content as Array<{ is_error: boolean }>)[0]!;
     expect(block.is_error).toBe(true);
+  });
+
+  it('marks a RETURNED { success: false } payload with is_error too (not just thrown errors)', async () => {
+    const bodies: unknown[] = [];
+    const fetchFn = mockFetch(
+      [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'delete_body', input: {} }] },
+        { stop_reason: 'end_turn', content: [{ type: 'text', text: 'It was not there.' }] },
+      ],
+      bodies,
+    );
+    const executeTool = async (c: AIToolCall): Promise<AIToolResult> => ({
+      name: c.name,
+      result: { success: false, reason: 'body not found' },
+    });
+    const res = await sendMessageWithTools('key', [userMsg('delete it')], executeTool, { fetchFn });
+    expect(res.toolResults[0]!.error).toBeUndefined(); // returned, not thrown
+    const second = bodies[1] as { messages: Array<{ content: unknown }> };
+    const block = (second.messages[second.messages.length - 1]!.content as Array<{ is_error: boolean; content: string }>)[0]!;
+    expect(block.is_error).toBe(true);
+    expect(block.content).toContain('body not found'); // payload still delivered
+  });
+
+  it('does not flag successful tool payloads as errors', async () => {
+    const bodies: unknown[] = [];
+    const fetchFn = mockFetch(
+      [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'create_box', input: {} }] },
+        { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Made it.' }] },
+      ],
+      bodies,
+    );
+    const executeTool = async (c: AIToolCall): Promise<AIToolResult> => ({
+      name: c.name,
+      result: { success: true, bodyId: 'b1' },
+    });
+    await sendMessageWithTools('key', [userMsg('make a box')], executeTool, { fetchFn });
+    const second = bodies[1] as { messages: Array<{ content: unknown }> };
+    const block = (second.messages[second.messages.length - 1]!.content as Array<{ is_error: boolean }>)[0]!;
+    expect(block.is_error).toBe(false);
   });
 
   it('makes a final tool-free summary call when iterations are exhausted', async () => {

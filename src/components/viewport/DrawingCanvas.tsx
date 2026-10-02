@@ -495,7 +495,7 @@ export function DrawingCanvas() {
     }
     const svg = exportDrawingSVG(views, SHEET_W, SHEET_H, { details: drawingDetails, notes: drawingNotes });
     downloadFile(svg, 'drawing.svg');
-    showToast('SVG exported', 'success');
+    showToast(t('toast.svgExported'), 'success');
   };
 
   const handleExportPNG = () => {
@@ -509,7 +509,7 @@ export function DrawingCanvas() {
       a.download = 'drawing.png';
       a.click();
       URL.revokeObjectURL(url);
-      showToast('PNG exported', 'success');
+      showToast(t('toast.pngExported'), 'success');
     }, 'image/png');
   };
 
@@ -520,7 +520,7 @@ export function DrawingCanvas() {
     }
     const dxf = exportDXF(bodies);
     downloadFile(dxf, 'drawing.dxf');
-    showToast('DXF exported', 'success');
+    showToast(t('toast.dxfExported'), 'success');
   };
 
   const handleExportPDF = () => {
@@ -536,7 +536,7 @@ export function DrawingCanvas() {
     a.download = `${useStore.getState().projectName || 'drawing'}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('PDF exported', 'success');
+    showToast(t('toast.pdfExported'), 'success');
   };
 
   if (bodies.length === 0) {
@@ -638,7 +638,7 @@ export function DrawingCanvas() {
           height={sheetHeight}
           className="w-full h-full block"
           role="img"
-          aria-label="Drawing view"
+          aria-label={t('drawing.viewLabel')}
           onClick={handleCanvasClick}
           onDoubleClick={handleCanvasDblClick}
           onContextMenu={handleCanvasContextMenu}

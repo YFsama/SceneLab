@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import { registerBuiltinTools } from './builtinTools';
 import { getTool, getAllTools, clearTools } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createBox, computeVolume } from '../geometry';
+import { warmUpBooleanEngine } from '../geometry/boolean';
 import type { Vec3 } from '../geometry/types';
-import { createSketch, addRectangle } from '../sketch/engine';
+import { createSketch, addRectangle, addLine } from '../sketch/engine';
 
 describe('registerBuiltinTools registration', () => {
   it('registers the full tool set with no name collisions', () => {
@@ -23,6 +24,7 @@ describe('registerBuiltinTools registration', () => {
       // sketch/features
       'create_sketch', 'draw_line', 'draw_circle', 'draw_arc', 'add_constraint', 'extrude', 'revolve',
       'fillet', 'chamfer', 'shell', 'create_hole', 'linear_array', 'circular_array', 'mirror',
+      'list_features', 'update_feature',
       // transform / scene
       'move_body', 'rotate_body', 'scale_body', 'resize_to_target', 'arrange_on_plate', 'delete_body',
       'clear_scene', 'describe_scene', 'measure_distance', 'get_dimensions', 'list_bodies',
@@ -973,5 +975,294 @@ describe('create_hole tool', () => {
   it('rejects partial x/y/z centres and invalid sizes', async () => {
     await expect(getTool('create_hole')!.execute({ diameter: 8, x: 0 })).rejects.toThrow(/all of x, y and z/);
     await expect(getTool('create_hole')!.execute({ diameter: 0.05 })).rejects.toThrow(/rejected/i);
+  });
+});
+
+describe('honest failure reporting (tools never claim success on a no-op)', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().setCurrentSketch(null);
+  });
+
+  it('extrude without an active sketch returns success:false pointing at create_sketch', async () => {
+    const r = (await getTool('extrude')!.execute({ distance: 5 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/create_sketch/);
+  });
+
+  it('extrude with a non-positive distance returns success:false', async () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    const r = (await getTool('extrude')!.execute({ distance: 0 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/positive/i);
+  });
+
+  it('extrude succeeds on a real sketch and creates a body', async () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    const r = (await getTool('extrude')!.execute({ distance: 5 })) as { success: boolean };
+    expect(r.success).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
+  it('revolve without an active sketch returns success:false', async () => {
+    const r = (await getTool('revolve')!.execute({ angleDeg: 360 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/create_sketch/);
+  });
+
+  it('draw_* tools without an active sketch return success:false (not success with an empty id)', async () => {
+    const cases = [
+      ['draw_line', { x1: 0, y1: 0, x2: 1, y2: 1 }],
+      ['draw_rectangle', { x1: 0, y1: 0, x2: 1, y2: 1 }],
+      ['draw_circle', { cx: 0, cy: 0, radius: 2 }],
+      ['draw_arc', { cx: 0, cy: 0, radius: 2, startAngle: 0, endAngle: 90 }],
+    ] as const;
+    for (const [name, args] of cases) {
+      const r = (await getTool(name)!.execute({ ...args })) as { success: boolean; reason?: string; entityId?: string };
+      expect(r.success, name).toBe(false);
+      expect(r.reason, name).toMatch(/create_sketch/);
+      expect(r.entityId, name).toBeUndefined();
+    }
+  });
+
+  it('draw_polygon with a non-positive radius returns success:false', async () => {
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+    const r = (await getTool('draw_polygon')!.execute({ cx: 0, cy: 0, radius: 0, sides: 6 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/positive/i);
+  });
+
+  it('add_constraint without an active sketch returns success:false', async () => {
+    const r = (await getTool('add_constraint')!.execute({ type: 'horizontal', entityIds: ['e1'] })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/create_sketch/);
+  });
+
+  it('delete_body with an unknown id returns success:false', async () => {
+    const r = (await getTool('delete_body')!.execute({ bodyId: 'missing-body' })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/not found/i);
+  });
+
+  it('fillet/chamfer/shell reject non-numeric radius/distance/thickness', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    await expect(getTool('fillet')!.execute({ bodyId: box.id, radius: 'big' })).rejects.toThrow('number');
+    await expect(getTool('chamfer')!.execute({ bodyId: box.id, distance: null })).rejects.toThrow('number');
+    await expect(getTool('shell')!.execute({ bodyId: box.id, thickness: 'thin' })).rejects.toThrow('number');
+  });
+
+  it('extrude on an open profile (no closed loop) returns success:false', async () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0); // a single open segment — no closed profile
+    useStore.getState().setCurrentSketch(sketch);
+    const r = (await getTool('extrude')!.execute({ distance: 5 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/no closed profile/i);
+    expect(useStore.getState().bodies).toHaveLength(0);
+  });
+
+  it('fillet/chamfer/shell reject non-positive values and unknown edge/face ids without touching the body', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], undoStack: [] });
+    const cases = [
+      ['fillet', { bodyId: box.id, radius: 0 }, /positive/i],
+      ['fillet', { bodyId: box.id, radius: -1 }, /positive/i],
+      ['fillet', { bodyId: box.id, radius: 1, edgeIds: ['edge-nope'] }, /edge-nope/],
+      ['chamfer', { bodyId: box.id, distance: 0 }, /positive/i],
+      ['chamfer', { bodyId: box.id, distance: 2, edgeIds: ['edge-nope'] }, /edge-nope/],
+      ['shell', { bodyId: box.id, thickness: 0 }, /positive/i],
+      ['shell', { bodyId: box.id, thickness: 1, faceIds: ['face-nope'] }, /face-nope/],
+    ] as const;
+    for (const [name, args, reasonRe] of cases) {
+      const r = (await getTool(name)!.execute({ ...args })) as { success: boolean; reason?: string };
+      expect(r.success, name).toBe(false);
+      expect(r.reason, name).toMatch(reasonRe);
+    }
+    // Every case was a refused no-op: same body, no leaked undo entry.
+    expect(useStore.getState().bodies[0]!.id).toBe(box.id);
+    expect(useStore.getState().undoStack).toHaveLength(0);
+  });
+
+  it('delete_body on a feature-tree body says to remove its feature instead', async () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    await getTool('extrude')!.execute({ distance: 5 });
+    const treeBody = useStore.getState().bodies[0]!;
+    const r = (await getTool('delete_body')!.execute({ bodyId: treeBody.id })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/feature tree/i);
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+});
+
+describe('AI sketch offset keeps the toolbar loop semantics', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().setSketchActive(true);
+    useStore.getState().setCurrentSketch(createSketch('xy'));
+  });
+
+  it('offsetting one line of a drawn rectangle offsets the whole loop (4 new lines)', async () => {
+    const store = useStore.getState();
+    // Hand-drawn 10×6 rectangle: fresh points per segment, junctions by
+    // position (exactly what the freehand line tool produces).
+    store.addSketchLine(0, 0, 10, 0);
+    store.addSketchLine(10, 0, 10, 6);
+    store.addSketchLine(10, 6, 0, 6);
+    const base = store.addSketchLine(0, 6, 0, 0);
+    const r = (await getTool('offset_sketch_entity')!.execute({ entityId: base, distance: 2 })) as { newEntityIds: string[] };
+    // Loop offset (mitered frame), not a single bare parallel segment.
+    expect(r.newEntityIds).toHaveLength(4);
+    const sketch = useStore.getState().currentSketch!;
+    for (const id of r.newEntityIds) {
+      expect(sketch.entities.get(id)?.type).toBe('line');
+    }
+  });
+});
+
+describe('feature tree tools (list_features / update_feature)', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().setCurrentSketch(null);
+  });
+
+  /** Sketch a 10×10 rectangle, extrude it `distance` mm, return the extrude feature id. */
+  async function buildExtrudedBox(distance: number): Promise<string> {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.getState().setCurrentSketch(sketch);
+    const r = (await getTool('extrude')!.execute({ distance })) as { success: boolean };
+    expect(r.success).toBe(true);
+    const listed = (await getTool('list_features')!.execute({})) as { features: Array<{ id: string; type: string }> };
+    const extrude = listed.features.find((f) => f.type === 'extrude');
+    if (!extrude) throw new Error('extrude feature missing from list_features output');
+    return extrude.id;
+  }
+
+  it('list_features returns the built tree in order with ids, types and summaries', async () => {
+    await buildExtrudedBox(5);
+    const r = (await getTool('list_features')!.execute({})) as {
+      count: number;
+      features: Array<{ id: string; type: string; name: string; suppressed: boolean; summary: string }>;
+    };
+    expect(r.count).toBe(2);
+    expect(r.features.map((f) => f.type)).toEqual(['sketch', 'extrude']);
+    expect(r.features.every((f) => typeof f.id === 'string' && f.id.length > 0)).toBe(true);
+    expect(r.features.every((f) => f.suppressed === false)).toBe(true);
+    expect(r.features[1]!.summary).toBe('5mm');
+  });
+
+  it('update_feature patches an extrude distance and the recomputed body follows', async () => {
+    const featureId = await buildExtrudedBox(5);
+    const before = useStore.getState().bodies[0]!;
+    const ysBefore = before.vertices.map((v) => v.y);
+    const heightBefore = Math.max(...ysBefore) - Math.min(...ysBefore);
+
+    const r = (await getTool('update_feature')!.execute({ featureId, params: { distance: 20 } })) as {
+      success: boolean;
+      params: { distance: number };
+      summary: string;
+    };
+    expect(r.success).toBe(true);
+    expect(r.params.distance).toBe(20);
+    expect(r.summary).toBe('20mm');
+
+    // The feature itself kept the new value…
+    const listed = (await getTool('list_features')!.execute({})) as { features: Array<{ id: string; summary: string }> };
+    expect(listed.features.find((f) => f.id === featureId)!.summary).toBe('20mm');
+    // …and the recomputed body grew by exactly the delta (20 − 5 = 15 mm).
+    const after = useStore.getState().bodies[0]!;
+    const ysAfter = after.vertices.map((v) => v.y);
+    const heightAfter = Math.max(...ysAfter) - Math.min(...ysAfter);
+    expect(heightAfter).toBeCloseTo(heightBefore + 15, 3);
+  });
+
+  it('update_feature with an unknown id returns success:false', async () => {
+    await buildExtrudedBox(5);
+    const r = (await getTool('update_feature')!.execute({ featureId: 'feat_missing', params: { distance: 2 } })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/not found/i);
+  });
+
+  it('update_feature refuses sketch features (they have no params)', async () => {
+    await buildExtrudedBox(5);
+    const listed = (await getTool('list_features')!.execute({})) as { features: Array<{ id: string; type: string }> };
+    const sketchFeature = listed.features.find((f) => f.type === 'sketch')!;
+    const r = (await getTool('update_feature')!.execute({ featureId: sketchFeature.id, params: { distance: 2 } })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/sketch/i);
+  });
+});
+
+describe('arrange_on_plate undo contract', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().setCurrentSketch(null);
+  });
+
+  it('arranging is ONE undoable step — undo restores the pre-arrange scene', async () => {
+    const boxes = [createBox(10, 10, 10), createBox(10, 10, 10)];
+    useStore.setState({ bodies: [...boxes], directBodies: [...boxes] });
+    const idsBefore = useStore.getState().bodies.map((b) => b.id).sort();
+
+    const r = (await getTool('arrange_on_plate')!.execute({ bedX: 100, bedZ: 100 })) as { count: number; fits: boolean };
+    expect(r.count).toBe(2);
+    expect(r.fits).toBe(true);
+    expect(useStore.getState().bodies).toHaveLength(2);
+
+    // Ctrl+Z brings back the pre-arrange scene (same bodies) instead of being
+    // wiped along with the whole history (the old clearScene behaviour).
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().bodies.map((b) => b.id).sort()).toEqual(idsBefore);
+  });
+});
+
+describe('create_hole counterbore/countersink variants', () => {
+  // The counterbore path chains two boolean ops; with the cold voxel engine
+  // the second one (on the drilled mesh) takes minutes. Warm the exact
+  // Manifold engine first so the ops run in milliseconds.
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    const box = createBox(20, 20, 20);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+  });
+
+  it('drills a counterbored through hole that removes extra volume', async () => {
+    const r = (await getTool('create_hole')!.execute({
+      diameter: 4,
+      counterbore: { diameter: 8, depth: 3 },
+    })) as { success: boolean; volumeRemoved: number; counterbore?: { diameter: number; depth: number } };
+    expect(r.success).toBe(true);
+    expect(r.counterbore).toEqual({ diameter: 8, depth: 3 });
+    // Plain ⌀4 through hole ≈ π·2²·20 ≈ 251 mm³; the ⌀8×3 recess must add
+    // roughly π·(4²−2²)·3 ≈ 113 mm³ more.
+    const plain = Math.PI * 2 * 2 * 20;
+    expect(r.volumeRemoved).toBeGreaterThan(plain + 80);
+  });
+
+  it('rejects combining a counterbore with a countersink', async () => {
+    await expect(getTool('create_hole')!.execute({
+      diameter: 4,
+      counterbore: { diameter: 8, depth: 2 },
+      countersink: { diameter: 8, angleDeg: 90 },
+    })).rejects.toThrow(/not both/i);
   });
 });

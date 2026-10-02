@@ -6,72 +6,39 @@ import { translations } from '../../lib/i18n';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { SketchToolbar } from './SketchToolbar';
+import { SKETCH_TOOLS } from './sketchTools';
 
-// SketchToolbar is a React component — test the tool structure.
+// The toolbar is data-driven — test the real exported table so the component
+// cannot drift from it (previously this block re-declared the tool array and
+// even asserted a 'polyline' button that the component never had).
 
-describe('SketchToolbar tool structure', () => {
-  const tools: { tool: SketchTool; shortcut: string }[] = [
-    { tool: 'select', shortcut: 'V' },
-    { tool: 'line', shortcut: 'L' },
-    { tool: 'polyline', shortcut: 'Shift+L' },
-    { tool: 'rect', shortcut: 'R' },
-    { tool: 'circle', shortcut: 'O' },
-    { tool: 'arc', shortcut: 'A' },
-    { tool: 'polygon', shortcut: 'P' },
-  ];
-
-  it('has 7 sketch tools', () => {
-    expect(tools).toHaveLength(7);
+describe('SketchToolbar tool table', () => {
+  it('offers exactly select, line, rect, circle, arc and polygon, in bar order', () => {
+    expect(SKETCH_TOOLS.map((t) => t.tool)).toEqual<SketchTool[]>([
+      'select', 'line', 'rect', 'circle', 'arc', 'polygon',
+    ]);
   });
 
-  it('includes select, line, rect, circle, arc, polygon', () => {
-    const toolNames = tools.map((t) => t.tool);
-    expect(toolNames).toContain('select');
-    expect(toolNames).toContain('line');
-    expect(toolNames).toContain('rect');
-    expect(toolNames).toContain('circle');
-    expect(toolNames).toContain('arc');
-    expect(toolNames).toContain('polygon');
+  it('tools and shortcuts are unique', () => {
+    const tools = SKETCH_TOOLS.map((t) => t.tool);
+    const shortcuts = SKETCH_TOOLS.map((t) => t.shortcut);
+    expect(new Set(tools).size).toBe(tools.length);
+    expect(new Set(shortcuts).size).toBe(shortcuts.length);
   });
 
-  it('includes polyline', () => {
-    const toolNames = tools.map((t) => t.tool);
-    expect(toolNames).toContain('polyline');
+  it('keeps the V/L/R/O/A/P badge keys matching the initShortcuts hotkeys', () => {
+    // initShortcuts (useKeyboardShortcuts.ts) registers the same letters; the
+    // badge shown on the button must not disagree with the actual hotkey.
+    expect(SKETCH_TOOLS.map((t) => t.shortcut)).toEqual(['V', 'L', 'R', 'O', 'A', 'P']);
   });
 
-  it('select has shortcut V', () => {
-    const select = tools.find((t) => t.tool === 'select');
-    expect(select!.shortcut).toBe('V');
-  });
-
-  it('line has shortcut L', () => {
-    const line = tools.find((t) => t.tool === 'line');
-    expect(line!.shortcut).toBe('L');
-  });
-
-  it('polyline has shortcut Shift+L', () => {
-    const polyline = tools.find((t) => t.tool === 'polyline');
-    expect(polyline!.shortcut).toBe('Shift+L');
-  });
-
-  it('rect has shortcut R', () => {
-    const rect = tools.find((t) => t.tool === 'rect');
-    expect(rect!.shortcut).toBe('R');
-  });
-
-  it('circle has shortcut O', () => {
-    const circle = tools.find((t) => t.tool === 'circle');
-    expect(circle!.shortcut).toBe('O');
-  });
-
-  it('arc has shortcut A', () => {
-    const arc = tools.find((t) => t.tool === 'arc');
-    expect(arc!.shortcut).toBe('A');
-  });
-
-  it('polygon has shortcut P', () => {
-    const polygon = tools.find((t) => t.tool === 'polygon');
-    expect(polygon!.shortcut).toBe('P');
+  it('every tool has an icon and a label in both locales', () => {
+    for (const tool of SKETCH_TOOLS) {
+      expect(tool.icon).toBeTruthy();
+      const key = `sketch.${tool.tool}`;
+      expect(translations.en?.[key], key).toBeTruthy();
+      expect(translations.zh?.[key], key).toBeTruthy();
+    }
   });
 });
 

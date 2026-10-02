@@ -86,6 +86,15 @@ describe('modify feature actions', () => {
       useStore.getState().addDirectBody(createBox(10, 10, 10));
       expect(useStore.getState().applyFilletFeature(2)).toBe(false);
     });
+
+    it('a direct modify edit marks the project dirty', () => {
+      const box = createBox(10, 10, 10);
+      useStore.getState().addDirectBody(box);
+      useStore.getState().selectObject(box.id);
+      useStore.getState().setProjectDirty(false);
+      expect(useStore.getState().applyFilletFeature(2)).toBe(true);
+      expect(useStore.getState().projectDirty).toBe(true);
+    });
   });
 
   it('fillet scopes to the selected edges (Alt+click sub-selection)', () => {
@@ -292,6 +301,31 @@ describe('setDimensionTarget (editable drawing dimensions)', () => {
     expect(extentAlong(body, 'x')).toBeCloseTo(25, 3);
     expect(extentAlong(body, 'y')).toBeCloseTo(10, 3);
     expect(extentAlong(body, 'z')).toBeCloseTo(10, 3);
+  });
+
+  it('a direct resize marks the project dirty', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().setProjectDirty(false);
+    expect(useStore.getState().setDimensionTarget({ bodyId: box.id, axis: 'x' }, 25)).toBe(true);
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
+
+  it('a parametric dimension edit bumps featureVersion so panels re-render', () => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    const v0 = useStore.getState().featureVersion;
+    expect(useStore.getState().setDimensionTarget({ bodyId, axis: 'y' }, 25)).toBe(true);
+    expect(useStore.getState().featureVersion).toBe(v0 + 1);
+
+    // Repeated edits of the same dimension bump again (updateFeature path).
+    const bodyId2 = useStore.getState().bodies[0]!.id; // id changed by the scale
+    expect(useStore.getState().setDimensionTarget({ bodyId: bodyId2, axis: 'y' }, 40)).toBe(true);
+    expect(useStore.getState().featureVersion).toBe(v0 + 2);
   });
 
   it('direct resize is undoable', () => {
@@ -519,6 +553,26 @@ describe('loft from sketches', () => {
     useStore.setState({ featureTree: tree });
     expect(useStore.getState().performLoftFromSketches([feat.id])).toBe(false);
     expect(useStore.getState().performLoftFromSketches(['nope', 'also-nope'])).toBe(false);
+  });
+
+  it('bumps featureVersion so the timeline re-renders', () => {
+    useStore.setState({ featureTree: new FeatureTree(), directBodies: [], bodies: [], objectIds: [] });
+    const sketchA = createSketch('xy');
+    addRectangle(sketchA, -5, -5, 5, 5);
+    const sketchB = createSketch('xy');
+    addCircle(sketchB, 0, 0, 3);
+    const featA = createSketchFeature(sketchA);
+    const featB = createSketchFeature(sketchB);
+    const tree = useStore.getState().featureTree;
+    tree.addFeature(featA);
+    tree.addFeature(featB);
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+
+    const v0 = useStore.getState().featureVersion;
+    expect(useStore.getState().performLoftFromSketches([featA.id, featB.id])).toBe(true);
+    expect(useStore.getState().featureVersion).toBe(v0 + 1);
   });
 });
 

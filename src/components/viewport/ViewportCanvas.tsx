@@ -471,6 +471,9 @@ export function ViewportCanvas() {
     // instances this effect set up (refs are stable across the component life).
     const lineMat = sketchLineMatRef.current;
     const pointMat = sketchPointMatRef.current;
+    const hlMat = sketchHlMatRef.current;
+    const constructionMat = sketchConstructionMatRef.current;
+    const constructionPtMat = sketchConstructionPtMatRef.current;
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -564,6 +567,8 @@ export function ViewportCanvas() {
     const zl = makeTextSprite('Z', 0x89b4fa, 0.5); zl.position.set(0, 0, 2.3);
     axisLabels.add(xl, yl, zl);
     scene.add(axisLabels);
+    // Captured so the cleanup can dispose their canvas textures + materials.
+    const axisLabelSprites = [xl, yl, zl];
 
     // Soft, even studio lighting: a sky/ground hemisphere for ambient fill plus
     // a key and a dimmer back light so parts read as solid from any angle.
@@ -721,6 +726,22 @@ export function ViewportCanvas() {
       // Dispose shared sketch materials
       lineMat.dispose();
       pointMat.dispose();
+      hlMat.dispose();
+      constructionMat.dispose();
+      constructionPtMat.dispose();
+      // Gnomon label sprites (canvas textures) — same teardown as the sketch
+      // dimension sprites (disposeSprite).
+      for (const s of axisLabelSprites) disposeSprite(s);
+      // Grid + shadow ground were created once here and dropped otherwise.
+      gridRef.current?.geometry.dispose();
+      (gridRef.current?.material as THREE.Material | undefined)?.dispose();
+      axes.geometry.dispose();
+      (axes.material as THREE.Material).dispose();
+      const ground = shadowGroundRef.current;
+      if (ground) {
+        ground.geometry.dispose();
+        (ground.material as THREE.Material).dispose();
+      }
       renderer.dispose();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
@@ -2330,9 +2351,6 @@ export function ViewportCanvas() {
             });
           }
         }
-        if (constraintItems.length > 0) {
-          items.push({ label: t('sketch.addConstraint'), separatorBefore: true, submenu: constraintItems });
-        }
       }
     }
     const tools = ['select', 'line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] as const;
@@ -2423,6 +2441,16 @@ export function ViewportCanvas() {
       const split = (axis: Axis) => { const b = body(); if (b) { const h = splitAcrossAxis(b, axis); if (h.length) { removeDirectBody(bodyId); addDirectBodies(h); } } };
       const st = () => useStore.getState();
       const pre = (fn: () => void) => () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fn(); };
+      // Combine ops resolve to the new body id, or null when the boolean produced
+      // nothing (the store also guards rejections) — surface failures as a toast.
+      const combineToasted = (op: 'union' | 'difference' | 'intersect') => async () => {
+        try {
+          const id = await st().combineSelected(op);
+          if (id == null) showToast(t('toast.combineFailed'), 'warning');
+        } catch {
+          showToast(t('toast.combineFailed'), 'warning');
+        }
+      };
       // Grouped flyouts, matching the browser-tree menu.
       return [
         { label: t('viewport.fitSelection'), onClick: () => { if (!selectedIds.includes(bodyId)) selectObject(bodyId); fitViewRef.current?.(true); } },
@@ -2530,15 +2558,52 @@ export function ViewportCanvas() {
                 }),
               })),
             },
+            {
+              // Parametric arrays (timeline features on tree bodies, undoable
+              // direct edits otherwise) — unlike the Pattern menu's plain copies.
+              label: t('feature.linearArray'),
+              submenu: (['x', 'y', 'z'] as const).map((axis) => ({
+                label: axis.toUpperCase(),
+                onClick: pre(() => {
+                  useStore.getState().openNumericPrompt({
+                    titleKey: 'feature.linearArray', labelKey: 'pattern.count',
+                    initial: 3, min: 1,
+                    onApply: (count) => {
+                      useStore.getState().openNumericPrompt({
+                        titleKey: 'feature.linearArray', labelKey: 'pattern.spacing',
+                        initial: 10, min: 0.01,
+                        onApply: (spacing) => {
+                          const ok = useStore.getState().applyLinearArrayFeature(count, spacing, axis);
+                          showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                        },
+                      });
+                    },
+                  });
+                }),
+              })),
+            },
+            {
+              label: t('feature.circularArray'),
+              onClick: pre(() => {
+                useStore.getState().openNumericPrompt({
+                  titleKey: 'feature.circularArray', labelKey: 'pattern.count',
+                  initial: 6, min: 1,
+                  onApply: (count) => {
+                    const ok = useStore.getState().applyCircularArrayFeature(count);
+                    showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                  },
+                });
+              }),
+            },
           ],
         },
         ...(selectedIds.length >= 2
           ? [{
               label: t('menu.combine'),
               submenu: [
-                { label: t('menu.union'), onClick: () => st().combineSelected('union') },
-                { label: t('menu.subtract'), onClick: () => st().combineSelected('difference') },
-                { label: t('menu.intersect'), onClick: () => st().combineSelected('intersect') },
+                { label: t('menu.union'), onClick: combineToasted('union') },
+                { label: t('menu.subtract'), onClick: combineToasted('difference') },
+                { label: t('menu.intersect'), onClick: combineToasted('intersect') },
                 { label: t('menu.join'), onClick: () => st().joinSelected(), separatorBefore: true },
               ],
             }]
@@ -3224,7 +3289,7 @@ export function ViewportCanvas() {
               return (
                 <>
                   <div className="text-accent">{t('measure.area')}: {r.area.toFixed(2)} mm²</div>
-                  <div>centroid: ({r.centroid.x.toFixed(2)}, {r.centroid.y.toFixed(2)}, {r.centroid.z.toFixed(2)})</div>
+                  <div>{t('panel.centroid')}: ({r.centroid.x.toFixed(2)}, {r.centroid.y.toFixed(2)}, {r.centroid.z.toFixed(2)})</div>
                   <div className="text-text-muted">{t('measure.modeHint')}</div>
                 </>
               );
