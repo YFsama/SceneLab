@@ -2,6 +2,61 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.19.0] — 2026-10-03
+
+正确性 + AI 诚实性 + 参数化阵列轮（审计驱动，多 agent：3 路只读审计 →
+4 个实现者并行 → 独立审查 → 修复 3 个 P1/2 个 P2）。
+
+### 修复 (Fixes)
+
+- **P0 数据丢失**：直接体的圆角/倒角/抽壳/阵列/镜像修改（Feature 菜单路径）
+  此前不标脏——关窗即丢；`setDimensionTarget` 直接体路径同样漏标。全部补上。
+- **featureVersion 漏 bump 第三/四例**：工程图尺寸驱动编辑与放样特征
+  此前不刷新时间轴/参数表渲染（与 v0.16 键盘重排同根因），补齐。
+- **草图右键菜单"添加约束"子菜单重复渲染两次**（复制粘贴残留）——去除。
+- **无效操作不再污染撤销栈**：空推挪（nudge）、失败草图圆角、未知 id 的
+  实体删除不再留下"撤销后什么都没变"的空步骤或虚亮点脏标记。
+- **失败可感知**：布尔合并（Union/Subtract/Intersect，含几何 worker 崩溃）
+  与抽壳失败现在给出 toast 提示（抽壳对话框同时获得忙碌态防双击）；
+  工程图四种导出的提示与视口 centroid 标签完成双语化。
+- **视口卸载释放**：草图材质三件、坐标轴标签 sprite、网格、阴影地面、
+  坐标轴 helper 此前在切换工作区时被丢弃不释放，全部补 dispose。
+
+### AI (Honesty & Parity)
+
+- **工具不再谎报成功**：extrude/revolve 检测"是否真的产生了实体"（开轮廓
+  草图 → success:false）；draw_* 无活动草图、delete_body 未知 id/树体、
+  add_constraint 缺草图、fillet/chamfer/shell 非正值与未知边/面 id 全部
+  返回带原因的 success:false，且 client 把这类结果标记为 is_error 让
+  模型看到失败。
+- **AI 草图编辑不再破坏撤销**：trim/extend/offset 改走带撤销快照的
+  store 动作（此前直接改草图并清空草图撤销栈）；offset 保持与工具栏
+  相同的"整环+尖角"语义（独立审查发现的回归已修复）。
+- **arrange_on_plate 可撤销**：新 `arrangeScene` 动作把排版变成单个
+  撤销步骤——Ctrl+Z 恢复排版前的场景（含特征树），不再清空全局撤销。
+- **新工具**：`list_features`（时间轴清单）+ `update_feature`（参数补丁
+  ——"把圆角改成 3mm" 成为可能）；`create_hole` 支持沉头/锥沉参数。
+- **系统提示词按工作流分类重写**（旧内容零丢失），新增多体场景
+  bodyId 缺省指向第一个实体的警示。
+- **AIPanel**：视觉回退正确锁定 #viewport-canvas（此前可能抓到工程图
+  画布）；消息列表快照修复（首条消息竞态）；API key 管理不变。
+
+### 参数化 (Parametric)
+
+- **阵列特征接入 UI**（Fusion 时间轴对标）：实体右键 Feature 菜单新增
+  Linear array（X/Y/Z，数量→间距链式提示）与 Circular array（数量）——
+  树体获得时间轴特征（参数表免费获得行项），直接体获得可撤销直接编辑；
+  此前阵列菜单只有破坏性复制路径。
+- **链式数值提示框修复**：第二级提示（如数量→间距）此前显示上一级
+  键入值而非自己的初值，现在正确重置。
+
+### 测试 (Tests)
+
+- 4 个同义反复测试文件（PrimitiveBar/SketchToolbar/ViewCube/SketchToolbar
+  工具表）重写为针对真实导出的断言（表抽取到独立数据模块，变异验证
+  可检出漂移）；新增 ViewportCanvas 真渲染右键菜单测试（mock
+  WebGLRenderer/OrbitControls）与 DrawingCanvas 测试；2046 → 2093。
+
 ## [0.18.0] — 2026-09-22
 
 参数表 + 沉头孔 + 启动性能轮（多 agent）。

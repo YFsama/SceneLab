@@ -964,3 +964,96 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     the timeline/feature lists (same in-place-mutation class as the keyboard-
     reorder and menu-modify bugs).
   - **v0.18.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-10-03`: Pass #25 — audit-driven correctness + AI honesty round, v0.19.0 (2093 tests / 135 files green; lint/tsc/build/E2E 17/17 OK).
+  - **Method**: three parallel read-only audit agents (UX parity, code
+    quality, AI subsystem), findings verified against source by the
+    coordinator, then 4 parallel implementers with strict file ownership
+    (store / AI / viewport+drawing / test-truthfulness), i18n keys pre-seeded
+    by the coordinator as the single writer, then an independent fresh-context
+    review whose 3 P1 + 2 P2 findings were fixed before release.
+  - **P0 data loss** (Agent Q): applyModifyFeature's direct-body path never
+    set projectDirty — fillet/chamfer/shell/array/mirror edits on direct
+    bodies were invisible to the dirty dot/autosave and lost on close;
+    setDimensionTarget's direct path had the same hole. Both fixed; a
+    same-class sweep found no other direct-body mutation missing the flag.
+  - **featureVersion misses #4/#5** (Agent Q): setDimensionTarget (tree path)
+    and performLoftFromSketches mutated the tree in place without the bump —
+    timeline/ParametersPanel wouldn't repaint (same root cause class as the
+    two earlier bugs). Fixed with tests.
+  - **No-op undo pollution** (Agent Q): nudgeSketchEntity with no moved
+    points and filletSketchCorner failures left sketch-undo snapshots that
+    made the next Ctrl+Z restore an identical sketch — now popped on failure
+    (the offsetSketchEntity pattern).
+  - **arrangeScene** (Agent Q, contract consumer Agent A): whole-scene
+    replace as ONE undo entry (undo restores bodies + feature tree; undo
+    stacks and projectName survive); arrange_on_plate no longer wipes global
+    undo. Known limit (recorded): reference geometry (planes/axes/points/
+    annotations) is still outside HistorySnapshot — arrange clears it and
+    undo can't bring it back; the fix is a HistorySnapshot extension.
+  - **AI honesty** (Agent A): extrude/revolve detect "did a solid actually
+    appear" (open-profile → success:false); draw_* / delete_body /
+    add_constraint / set_view / set_projection report failure with reasons;
+    fillet/chamfer/shell validate positive values + known edge/face ids
+    (non-positive silently no-oped while claiming success and leaked an undo
+    entry); client.ts marks returned {success:false} tool results as
+    is_error per the Anthropic protocol. delete_body on a tree body now says
+    "remove its feature instead"; removeDirectBody early-returns for unknown
+    ids (no orphan undo/dirty).
+  - **AI sketch editing undoable** (Agent A): trim/extend/offset route through
+    the undo-snapshotting store actions (the direct-mutation path reset
+    sketchUndoStack/sketchRedoStack — a "snapshot before every AI op"
+    violation). Independent review caught a regression in the first version
+    (offset had silently switched to bare-segment semantics); fixed to the
+    toolbar's loop+miter semantics with a 4-new-lines rectangle test.
+  - **New AI tools** (Agent A): list_features (timeline inventory via the
+    pure featureSummary module) + update_feature (shallow params patch
+    through updateFeature — "make the fillet 3mm" is now expressible);
+    create_hole accepts counterbore/countersink. System prompt rewritten by
+    workflow category (zero old teachings lost, all ~70 cited tool names
+    verified to exist), now warns that omitted bodyId defaults to the FIRST
+    body in multi-body scenes.
+  - **AIPanel robustness** (Agent A): vision fallback targets #viewport-canvas
+    (could previously grab the drawing sheet's canvas); message list built
+    from a pre-setMessages snapshot (first-send race); the tool-loop's
+    {success:false} → is_error mapping is contract-tested.
+  - **Parametric arrays in the UI** (Agent V): the store's never-called
+    applyLinearArrayFeature/applyCircularArrayFeature now have Feature-menu
+    entries (Linear array X/Y/Z with chained count→spacing prompts, Circular
+    array with a count prompt, toasts on refusal) — tree bodies get timeline
+    features, direct bodies undoable edits; the old destructive Pattern menu
+    remains for non-parametric copies.
+  - **Duplicate constraint submenu removed** (Agent V): the sketch right-click
+    menu rendered "Add Constraint" twice (copy-paste double push). Verified
+    by a real-render test that temporarily re-introducing the block fails.
+  - **Failure surfacing** (Agent V + coordinator): combine (union/subtract/
+    intersect) and hollow failures toast now — combineSelected gained a
+    try/catch (worker crash = unhandled rejection before), HollowDialog got a
+    busy guard + warning toast + stays-open-on-failure; BrowserTree combine
+    items toast too (coordinator). Drawing export toasts + view aria-label +
+    viewport centroid label localized (keys pre-seeded by coordinator).
+  - **Viewport unmount disposal** (Agent V + coordinator): shared sketch
+    materials, gnomon label sprites, grid, shadow ground, AxesHelper — all
+    previously dropped, now disposed in the mount-effect cleanup.
+  - **Test truthfulness** (Agent T): the 4 tautological test files rewritten
+    against real exports (tables moved verbatim to primitives.ts /
+    sketchTools.ts / viewcubeViews.ts / viewcubeOrientations.ts — the
+    react-refresh rule forbids exporting constants from component files, so
+    the established workspaces.ts data-module pattern was used; the 26
+    orientation tables actually lived in InteractiveViewCube.tsx).
+    Mutation-verified: deleting an entry fails a test. The old SketchToolbar
+    test falsely claimed a "polyline" button that never existed. New real
+    ViewportCanvas render tests (mocked WebGLRenderer/OrbitControls) cover
+    the menu dedupe + array chains; NumericPrompt gained a chained-prompt
+    reseed test (second prompt now starts from ITS initial — render-time
+    state adjustment, the inner-div key never remounted the state holder).
+  - **Remaining open** (next-pass candidates): HistorySnapshot doesn't cover
+    reference geometry/annotations (arrange-undo gap); BoxSelection.test.ts
+    still tautological (logic lives inside ViewportCanvas.tsx — extract);
+    add_constraint doesn't validate unknown entity ids; arrangeScene doesn't
+    reset workspace; loft AI tool missing; drillHoleInBody uses the sync
+    boolean path (cold-engine cbore chains can block the UI ~seconds);
+    sketch mirror entities, camera bookmarks, CAM toolpath visualization +
+    store state, drawing center marks/hole callouts, drawing per-view scale
+    (all audited, specced, achievable with current kernels).
+  - **v0.19.0**: version synced across the four manifests (Cargo.lock via
+    cargo update -p scenelab); CHANGELOG entry.
