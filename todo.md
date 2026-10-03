@@ -1193,3 +1193,67 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     oversize validation (F8); sketch mirror / camera bookmarks / CAM
     toolpath viz / drawing center marks (audited, deferred).
   - **v0.21.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-10-03`: Pass #28 — extrude Cut + sketch mirror + hole direction + fillet limits, v0.22.0 (2308 tests / 141 files green; lint/tsc/build/E2E 23/23 OK).
+  - **Extrude Cut (F5, twice deferred)** (Agent M): ExtrudeDialog Join/Cut
+    radio (Cut needs a selected target — hint + disabled otherwise; hasTarget
+    resolves against LIVE bodies so a stale id can't enable a silent no-op —
+    review P1 #2); performExtrude(distance, symmetric, op) dual-path —
+    tree-target → extrude feature params.op='cut' parenting [sketch, target],
+    evaluator consumes the target (consumption only on SUCCESS so a later
+    parametric edit that moves the cutter off-target leaves the part visible
+    — last-good-state, review P1 #1), cutBodyWithCutter = booleanOp difference
+    with an intersect PRE-PROBE (difference can't distinguish a miss) +
+    total-removal detection, both honest failures roll back keeping the
+    sketch session; direct-target → extrudeSketchBody cutter + one undoable
+    direct edit (sketch feature survives); serialization wholesale (join
+    stays op-less, byte-identical); chained cuts repoint the selection to the
+    result; readiness memo covers cut; timeline chip 'cut 10mm'.
+  - **Sketch mirror (three passes deferred)** (Agent K + M's store action):
+    lib/sketch/mirror.ts mirrorSketchEntities — reflection about an arbitrary
+    line; arcs map φ→2θ−φ with SWAPPED start/end angles so the sweep SIGN is
+    preserved (the mirrored image of a CCW arc is genuinely CW — consumers
+    treat copies like originals under three.js's CCW-normalizing EllipseCurve);
+    junction-id sharing (offset #14c convention) + position-key stitching;
+    on-axis endpoint id reuse (half-profiles close against the axis);
+    resolveMirrorAxis toolbar rule; one sketch-undo entry, refusal drops the
+    snapshot.
+  - **Hole direction** (Agent V, contract by M): the placement click
+    transforms hit.face.normal by the inverse-transpose normalMatrix,
+    negates (inward), passes as applyHoleToBody's 5th arg (normalized;
+    zero-vector refused; degenerate transform falls back to omitted = −Y);
+    non-uniformly scaled bodies handled. E2E proves lateral side-face
+    drilling.
+  - **Armed placement owns the click** (Agent V): branch moved to the TOP of
+    the click handler (above sketch/Alt-edge/measure) + a useEffect disarms
+    when sketchActive/measureActive turn true — the dead-pill trap is gone.
+  - **Through-shaft guard** (Agent V): datum-plane branch first ray-tests
+    every visible body's combinedBounds — nearest pierced body wins; plane-
+    pick only when nothing pierced. Known accepted tradeoff: an AABB-grazing
+    ray over an actually-empty gap selects the body instead (documented).
+  - **Fillet/chamfer limits** (Agent R + coordinator wiring): maxFilletRadius/
+    maxChamferDistance derived from the arc's √2·radius in-plane extent /
+    chamfer's exact distance legs → min(adjacentFaceDepth)/2; {max,
+    skippedEdges}; AI tools gate BEFORE routing (both modes); the store's
+    applyFillet/ChamferFeature refuse with the toast.filletOversize {max}
+    toast and no mutation (coordinator per R's spec). Known limitation: a
+    whole-body fillet on a 32-seg cylinder clamps to ~R·sin(π/32) via the
+    vertical seam edges (honest vs the facet geometry; rim scoping is the
+    workaround — recorded).
+  - **Sketch-session stack hygiene** (Agent M): perform*/setWorkspace
+    fresh-create clear sketchUndoStack/sketchRedoStack; the resume branch
+    provably keeps history.
+  - **brep edge-key probing** (Agent R): 27×27 endpoint-pair neighbour probes
+    on miss only (vertex probing refactored shared); goldens unchanged.
+  - **Review verdict**: no P0s; both P1s fixed with regression tests
+    (consumption-before-throw → part vanished on parametric edit; stale
+    selection enabling a silent no-op) — the join-path crash my first fix
+    introduced was caught by the existing interleave test and guarded.
+  - **Remaining open (next pass)**: cut chip 'cut' prefix is English (AI-fed,
+    acceptable); store oversize guard max===null shows 'max 0 mm' (needs a
+    dedicated no-applicable-edges key); hole drill lacks the cut path's miss
+    probe (flipped-normal edge case silently no-ops); AABB-graze false
+    positives in the through-shaft guard; CW arcs preview as CCW complement
+    (pre-existing EllipseCurve quirk); update_feature on fillet/chamfer
+    bypasses the limit gate (store guard covers the apply paths); camera
+    bookmarks / CAM toolpath viz / drawing center marks still queued.
+  - **v0.22.0**: version synced across the four manifests; CHANGELOG entry.
