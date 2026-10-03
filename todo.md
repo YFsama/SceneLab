@@ -1138,3 +1138,58 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     toolpath viz, drawing center marks/callouts, export_file AI tool.
   - **v0.20.0**: version synced across the four manifests; CHANGELOG entry
     (calls out the revolve-axis behavior change).
+- `2026-10-03`: Pass #27 — hole placement + AI file deliverables + P2 correctness sweep, v0.21.0 (2230 tests / 139 files green; lint/tsc/build/E2E 22/22 OK).
+  - **Hole click-to-place (F2, the audit's "impossible from the UI" item)**
+    (Agent U): Feature → Hole ⌀/depth prompts now ARM a one-shot placement
+    (hint pill + crosshair via a pendingHoleRef armed by the
+    'scenelab:arm-hole' window event — refs can't be touched from render-time
+    menu builders); the next left click on the armed body drills at that world
+    point through applyHoleToBody's optional center; Esc (dedicated
+    stable-deps listener, immune to the mid-dispatch re-registration race)
+    cancels; miss stays armed; deleted-body auto-disarm (review fix). Both the
+    context menu AND the palette entry arm (review P1 fixed + test).
+  - **Hole centre editing** (Agent H): HoleEditDialog + ParametersPanel gain
+    centre X/Y/Z rows committing via updateFeature (tree features; direct
+    drilled bodies have no params by design) — reusing the diameter field's
+    expression machinery verbatim.
+  - **AI file deliverables** (Agent E): export_file (stl/obj/3mf/step; all
+    bodies default; sanitized filenames — traversal stripped; binary formats
+    via a proper Blob+anchor download so STL/3MF don't corrupt through the
+    string-only helper; NEVER inlines content) + export_drawing (SVG via a
+    verbatim parity clone of DrawingCanvas's views assembly incl. section
+    suffix/locale titles/details/notes; duplicated 800×600 sheet constants
+    documented). export_body stays as the dry-run validator. PNG/PDF honestly
+    UI-only (canvas rendering).
+  - **Store/geometry P2s** (Agent Q): rollbackFailedSketchFeature takes
+    savedRedo (performExtrude/Revolve/Sweep capture redoStack pre-pushUndo and
+    restore on rollback); HistorySnapshot carries sketchUndoStack/
+    sketchRedoStack (applyUndoSnapshot + undo/redo current snapshots restore
+    them — model-undo into an older sketch no longer mixes sessions);
+    evaluateSweep plane-aware via mapSweepProfileToRing/sweepRingBasisAtStart
+    (ring basis is left-handed like the xz frame → bit-identical passthrough;
+    right-handed xy/yz re-express so profiles don't mirror — review verified
+    the chirality math); evaluateLoft sections via sketchToWorld per parent;
+    performSweep path along the sketch normal; brep lookupVertexIndex probes
+    26 neighbour buckets on quantization miss (goldens unchanged, 200k-fuzz
+    consistent).
+  - **Viewport/palette polish** (Agent U): stale drawStart discarded when the
+    arming tool differs (cross-tool commits impossible) + non-left presses
+    ignored in the draw branch; palette labels locale-follow at read time
+    (labelKey + commandLabel from the ACTIVE store locale; searchCommands
+    searches localized labels — zh works, no re-registration); recents flyout
+    converted; needTwoBodies dedicated toast.
+  - **Review verdict**: no P0s; P1 (palette hole didn't arm — fixed +
+    store-driven test) + 2 nits fixed (stale-body disarm, TextEncoder bytes);
+    sweep chirality, snapshot alias-safety, escape-race immunity, locale
+    completeness, export sanitization all independently verified sound.
+  - **Remaining open (next pass)**: armed placement vs sketch/measure mode
+    precedence (entering a mode while armed leaves the pill live but
+    unfireable until Esc); new sketch sessions inherit the previous
+    session's sketch-undo entries (perform* + setWorkspace bypass
+    setCurrentSketch's stack clearing); hole direction is always world −Y
+    (side-face clicks drill laterally — face-normal direction is the real
+    fix); through-hole shaft click-through starts a sketch; edge-level
+    adjacency keys still unprobed; extrude Cut operation (F5); fillet
+    oversize validation (F8); sketch mirror / camera bookmarks / CAM
+    toolpath viz / drawing center marks (audited, deferred).
+  - **v0.21.0**: version synced across the four manifests; CHANGELOG entry.
