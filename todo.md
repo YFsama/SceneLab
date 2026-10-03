@@ -1057,3 +1057,84 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     (all audited, specced, achievable with current kernels).
   - **v0.19.0**: version synced across the four manifests (Cargo.lock via
     cargo update -p scenelab); CHANGELOG entry.
+- `2026-10-03`: Pass #26 — performance + convenience + AI-takeover round, v0.20.0 (2190 tests / 139 files green; lint/tsc/build/E2E 20/20 OK).
+  - **Method**: three MEASURING audit agents (perf with cold-process timings
+    + Playwright traces; usability with live click-count verification; AI
+    takeover with per-workflow tool-walkthroughs), findings spot-verified by
+    the coordinator, 4 parallel implementers (geometry/perf core, store,
+    viewport/palette, AI tools) with locked cross-agent contracts
+    (replaceBody boolean refusal; performExtrude boolean + sketch-preserving
+    failure), fresh-context independent review (no P0s; 1 P1 + 3 P2s fixed
+    pre-release), coordinator handled the cross-agent hole-E2E regression.
+  - **Perf (measured)**: per-body AABB WeakMap in isPointInsideBody — voxel
+    boolean 1152-face 14.4s→1.1s (~12×), 4608-face 21-55s→4.0s; Map-keyed
+    computeAdjacency/computeCurvature 8k faces 3.5s→92ms (39×) and 360→24ms
+    (15×); PropertiesPanel battery + Advanced useMemo per selectedBody (was
+    253ms/click, recomputed per rename keystroke); fingerprint memo by input
+    refs (Ctrl+Z was 160ms + 68MB string @80k faces); autosave skips
+    unchanged ticks + one-time quota toast; Manifold warmup after first
+    paint + DAG-memo captures engineReady and re-evaluates boolean features
+    on the cold→warm flip (the "permanently blocky hole" bug); measure-hover
+    overlay update-in-place (zero allocation per mousemove after warm-up).
+  - **Plane-aware extrude/revolve (F4, real bug)**: new pure-math
+    src/lib/sketch/frames.ts; evaluators map profiles through the sketch's
+    own plane and extrude along its normal ('xz' bit-identical to legacy;
+    'xy' → +Z; 'yz' → +X); revolve spins about the frame's in-plane axis —
+    DELIBERATE behavior change: stored xz-sketch revolves now spin about
+    world Z instead of Y. Viewport point markers/rubber-band/label go
+    through the frame too (were detached on non-default planes).
+  - **Store hardening**: failed extrude/revolve/sweep rolls back both added
+    features, pops the undo snapshot, KEEPS the sketch open + toasts the
+    evaluator error (was 100% silent + sketch destroyed); HistorySnapshot
+    carries currentSketch (deep-cloned)/sketchActive/workspace/sketchPlaneId
+    — undo after extrude returns to the sketch; replaceBody REFUSES
+    tree-produced bodies (boolean return; was appending overlapping
+    duplicates — the AI-takeover W1 killer) and five pattern/split actions
+    refuse likewise; fingerprint/autosave per above.
+  - **AI takeover**: 11 new tools (undo/redo — routed to the SKETCH history
+    while a sketch is active per the review's P1, with prompt caveat +
+    contract test; remove_feature; set_feature_suppressed; reorder_feature;
+    list_edges capped 200; list_sketch_entities; update_sketch_constraint;
+    set_workspace; set_body_hidden; rename_body); fillet/chamfer/shell/
+    arrays/mirror route tree bodies through the parametric apply*Feature
+    actions (WITH edge/face scoping via setSelectedEdgeIds/FaceIds); array
+    count=TOTAL semantics (original = instance 0, coincident copies deduped);
+    13 other direct-edit tools hardened against refused tree bodies;
+    client maxIterations default 16 (AIPanel 32); export_body returns
+    bytes+preview≤200 only (was inlining whole files into context);
+    load_sample_project dirty-guard (was hanging the loop on a user
+    dialog); system prompt teaches tree workflows/undo discipline/sketch
+    read-back/edge addressing.
+  - **Viewport/palette**: click-click drawing works (mousedown with an armed
+    start commits; stationary release keeps armed — drag still works);
+    SketchToolbar exit preserves the sketch (was silently discarding);
+    exit pill moved below the toolbar row (was occluded); stale Model(M)
+    hints → Shift+M; ShortcutsHelp +5 rows; 26 palette commands for the
+    modeling verbs (extrude/fillet/chamfer/shell/hole/mirror/arrays/
+    move-rotate-scale/pattern/combine/exports/import) with needBody /
+    needsSketch guards — 'extrude' in the palette found nothing before.
+  - **E2E**: click-click line + palette-verb specs added (17→20); the hole
+    spec's fragile assertions fixed — its centre-click landed on the 'yz'
+    datum quad and only passed because the old evaluator flattened every
+    plane to xz (removed ≈105 vs threshold 100.5!); now pins the ground
+    quad (+40px, documented) + ⌀2 hole for the 3×5mm footprint.
+  - **Integration fixes by coordinator**: 15 tsc errors from the parallel
+    work (panel memo nullability aliases, MockInstance typing, mirror
+    normal-axis→plane mapping x→yz); 3 pre-existing tests that encoded the
+    F4 bug (seeds now 'xz'); review P1 (undo sketch routing) + P2s
+    (per-op revolve/sweep failure toasts, palette extrude no-sketch guard,
+    stale revolve comment).
+  - **Remaining open (review P2s + audits, next pass)**: rollback doesn't
+    restore redo history; palette labels resolve at registration (don't
+    follow runtime locale switches); vertex-key quantization can straddle
+    1e-6 buckets (degraded stats on welded imports, not crashes); armed
+    drawStart survives tool switches (cross-tool commit quirk); model-undo
+    into an older sketch doesn't restore the sketch undo stacks; hole-E2E
+    +40px datum click is pixel-pinned (works under the pinned viewport);
+    needTwoBodies reuses the one-body message; list_sketch_entities lacks
+    a truncated flag; hole click-to-place UI + extrude Cut operation +
+    fillet oversize validation (usability audit F2/F5/F8); evaluateSweep/
+    Loft still hardcode the xz frame; sketch mirror, camera bookmarks, CAM
+    toolpath viz, drawing center marks/callouts, export_file AI tool.
+  - **v0.20.0**: version synced across the four manifests; CHANGELOG entry
+    (calls out the revolve-axis behavior change).
