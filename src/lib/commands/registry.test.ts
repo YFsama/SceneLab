@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, recentCommands, initBuiltinCommands, addMidplaneFromSelection } from './registry';
+import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, recentCommands, initBuiltinCommands, addMidplaneFromSelection, commandLabel } from './registry';
 import { useStore } from '../../store/app';
 import { createBox, createCylinder, createTorus } from '../geometry';
 import { createSketch } from '../sketch/engine';
@@ -295,16 +295,82 @@ describe('modeling verbs in the palette (F3)', () => {
     }
   });
 
+  it('labels follow a RUNTIME locale switch without re-registering (labelKey)', () => {
+    // Registered under en — then the store locale flips, as the language
+    // toggle does at runtime. commandLabel and searchCommands resolve from
+    // the ACTIVE locale, so display AND fuzzy search re-localize in place.
+    initBuiltinCommands();
+    expect(commandLabel(getCommand('feature.fillet')!)).toBe(translations.en!['feature.fillet']!);
+    const zhLabel = translations.zh!['feature.fillet']!;
+    // The zh label matches nothing while the active locale is en…
+    expect(searchCommands(zhLabel).map((c) => c.id)).not.toContain('feature.fillet');
+    useStore.setState({ locale: 'zh' });
+    try {
+      expect(commandLabel(getCommand('feature.fillet')!)).toBe(zhLabel);
+      // …and the verb stays findable by the NEW locale's label, no reboot.
+      expect(searchCommands(zhLabel).map((c) => c.id)).toContain('feature.fillet');
+      // Composite labels keep their locale-neutral suffix.
+      expect(commandLabel(getCommand('feature.linearArrayX')!)).toBe(`${translations.zh!['feature.linearArray']!} (X)`);
+      // Key-less commands (dynamic English labels) are untouched.
+      expect(commandLabel(getCommand('create.box')!)).toBe('Add box');
+    } finally {
+      useStore.setState({ locale: 'en' });
+    }
+  });
+
   it('body-scoped verbs refuse with toast.featureNeedsBody and open no prompt when nothing is selected', () => {
     initBuiltinCommands();
-    for (const id of ['feature.fillet', 'feature.shell', 'transform.move', 'pattern.linear', 'combine.union']) {
+    for (const id of ['feature.fillet', 'feature.shell', 'transform.move', 'pattern.linear']) {
       expect(runCommand(id), id).toBe(true);
     }
     expect(useStore.getState().numericPrompt).toBeNull();
     expect(useStore.getState().moveDialogOpen ?? false).toBe(false);
     expect(getToasts().map((x) => x.message)).toEqual(
-      Array.from({ length: 5 }, () => translations.en!['toast.featureNeedsBody']!),
+      Array.from({ length: 4 }, () => translations.en!['toast.featureNeedsBody']!),
     );
+  });
+
+  it('feature.hole arms click-to-place via the scenelab:arm-hole event (same as the menu)', async () => {
+    initBuiltinCommands();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+
+    const armed = new Promise<CustomEvent>((resolve) => {
+      window.addEventListener('scenelab:arm-hole', (e) => resolve(e as CustomEvent), { once: true });
+    });
+    runCommand('feature.hole');
+    // ⌀ prompt → depth prompt → the depth apply must ARM, not drill at the
+    // centroid. Drive the store-driven prompts directly (the dialog UI is
+    // covered by its own suite).
+    const diameterPrompt = useStore.getState().numericPrompt!;
+    useStore.getState().closeNumericPrompt();
+    diameterPrompt.onApply(3);
+    const depthPrompt = useStore.getState().numericPrompt!;
+    useStore.getState().closeNumericPrompt();
+    depthPrompt.onApply(0); // through-all
+
+    const detail = (await armed).detail as { bodyId: string; diameter: number; depth: number | null };
+    expect(detail.bodyId).toBe(box.id);
+    expect(detail.diameter).toBe(3);
+    expect(detail.depth).toBeNull(); // 0 through-all default applied
+    // And nothing was drilled yet — the click does that.
+    expect(useStore.getState().bodies).toHaveLength(1);
+  });
+
+  it('combine verbs refuse with toast.needsTwoBodies when fewer than TWO bodies are selected', () => {
+    initBuiltinCommands();
+    // Nothing selected → also the dedicated two-bodies refusal.
+    runCommand('combine.union');
+    expect(getToasts().map((x) => x.message)).toEqual([translations.en!['toast.needsTwoBodies']!]);
+    // One selected body is still not enough.
+    clearToasts();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    runCommand('combine.subtract');
+    expect(getToasts().map((x) => x.message)).toEqual([translations.en!['toast.needsTwoBodies']!]);
+    expect(getToasts().map((x) => x.message)).not.toContain(translations.en!['toast.featureNeedsBody']!);
   });
 
   it('feature.fillet with a selected body opens the context-menu prompt and applies for real', () => {

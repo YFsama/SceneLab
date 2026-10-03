@@ -483,4 +483,275 @@ describe('ViewportCanvas click-click drawing (rendered)', () => {
       await unmount(m);
     }
   });
+
+  it('a start armed by another tool is discarded and re-armed fresh (P2 #7)', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      // Arm a LINE at the first point (press + stationary release)…
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 25, 50)); });
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 25, 50)); });
+      const armed = useStore.getState().drawStart;
+      expect(armed).not.toBeNull();
+
+      // …then switch tools. setSketchTool does NOT clear drawStart, so the
+      // stale line start survives — the next press must NOT commit a rect
+      // from the OLD point.
+      await act(async () => { useStore.getState().setSketchTool('rect'); });
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 75, 60)); });
+      // The stale start was discarded at the press: nothing committed yet
+      // (the unfixed code would have committed a rect from the line's start).
+      expect([...useStore.getState().currentSketch!.entities.values()].filter((e) => e.type === 'line')).toHaveLength(0);
+      expect(useStore.getState().drawStart).not.toBeNull();
+      // The press re-armed FRESH under the rect tool…
+      expect(useStore.getState().drawStart).not.toEqual(armed);
+      // …so the drag's release commits exactly one rect from the new start.
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 95, 90)); });
+      const entities = [...useStore.getState().currentSketch!.entities.values()];
+      expect(entities.filter((e) => e.type === 'line')).toHaveLength(4); // rect = 4 lines
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('a middle-button press (orbit) does not re-arm the draw start', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      // Arm a line at the first point…
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 25, 50)); });
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 25, 50)); });
+      const armed = useStore.getState().drawStart;
+      expect(armed).not.toBeNull();
+
+      // A middle press (orbit) elsewhere must leave the armed start alone —
+      // the old code re-armed (moved) the start point to the orbit location.
+      await act(async () => {
+        viewport.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 70, clientY: 80, button: 1 }));
+      });
+      expect(useStore.getState().drawStart).toEqual(armed);
+
+      // The next LEFT press still commits from the original start.
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 75, 50)); });
+      expect(linesInState()).toBe(1);
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 75, 50)); });
+      expect(linesInState()).toBe(1);
+    } finally {
+      await unmount(m);
+    }
+  });
 });
+
+// Hole click-to-place (usability audit F2): Feature → Hole asks ⌀/depth and
+// then ARMS — the next left click on that body drills at the clicked world
+// point. The raycast at pick time is intercepted (mockHits) so the applied
+// center is exactly the synthetic intersection point; the menu/arm path is
+// otherwise the real rendered flow.
+describe('ViewportCanvas hole click-to-place (rendered)', () => {
+  type SetFromCamera = (this: THREE.Raycaster, coords: THREE.Vector2, camera: THREE.Camera) => void;
+  type IntersectObjects = (this: THREE.Raycaster, objects: THREE.Object3D[], recursive?: boolean) => unknown[];
+  const raycasterProto = THREE.Raycaster.prototype as unknown as {
+    setFromCamera: SetFromCamera;
+    intersectObjects: IntersectObjects;
+  };
+  const originalSetFromCamera: SetFromCamera = raycasterProto.setFromCamera;
+  const originalIntersectObjects: IntersectObjects = raycasterProto.intersectObjects;
+
+  interface MockHit {
+    point: THREE.Vector3;
+    object: { userData: { bodyId?: string } };
+    faceIndex: number;
+  }
+  let mockHits: MockHit[] | null = null;
+  const hit = (bodyId: string, x: number, y: number, z: number): MockHit => ({
+    point: new THREE.Vector3(x, y, z),
+    object: { userData: { bodyId } },
+    faceIndex: 0,
+  });
+
+  beforeAll(() => {
+    raycasterProto.setFromCamera = function (coords, camera) {
+      camera.updateMatrixWorld();
+      originalSetFromCamera.call(this, coords, camera);
+    };
+    raycasterProto.intersectObjects = function (objects, recursive) {
+      if (mockHits) return mockHits as unknown[];
+      return originalIntersectObjects.call(this, objects, recursive);
+    };
+  });
+  afterAll(() => {
+    raycasterProto.setFromCamera = originalSetFromCamera;
+    raycasterProto.intersectObjects = originalIntersectObjects;
+  });
+
+  beforeEach(() => {
+    mockHits = null;
+    clearToasts();
+    useStore.setState({
+      locale: 'en',
+      workspace: 'model',
+      sketchActive: false,
+      sketchTool: 'select',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      selectedEdgeIds: [],
+      selectedFaceIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'top',
+      projection: 'perspective',
+      measureActive: false,
+      visionSelectActive: false,
+      numericPrompt: null,
+    });
+  });
+
+  function click(x: number, y: number): MouseEvent {
+    return new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 });
+  }
+
+  /** The armed-placement hint pill: the only div[aria-live] in the viewport
+   *  (the drag readout is a span), so it is findable even while hidden. */
+  function hintPill(container: HTMLElement): HTMLDivElement | null {
+    return (container.querySelector('div[aria-live="polite"]') as HTMLDivElement | null) ?? null;
+  }
+
+  /** Drive the real menu flow (⌀ then depth) into the ARMED state. */
+  async function armHoleViaMenu(m: Mounted, diameter: number, depth: number): Promise<void> {
+    await openBodyMenu(m);
+    await act(async () => { menuButton(m.container, translations.en!['menu.feature']!)!.click(); });
+    await act(async () => { menuButton(m.container, translations.en!['feature.hole']!)!.click(); });
+    let prompt = useStore.getState().numericPrompt;
+    expect(prompt!.labelKey).toBe('feature.holeDiameter');
+    await act(async () => { prompt!.onApply(diameter); });
+    prompt = useStore.getState().numericPrompt;
+    expect(prompt!.labelKey).toBe('feature.holeDepth');
+    await act(async () => { prompt!.onApply(depth); });
+  }
+
+  it('arms after the prompts; the next body click drills at the clicked point, then disarms', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 4, 0);
+
+      // ARMED, not applied: the existing holePickHint key shows as a pill.
+      expect(applyHole).not.toHaveBeenCalled();
+      const hint = hintPill(m.container);
+      expect(hint).not.toBeNull();
+      expect(hint!.style.display).not.toBe('none');
+
+      // The next left click's raycast intersection drills there (depth 0 = through-all).
+      mockHits = [hit(box.id, 1, 2, 3)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).toHaveBeenCalledTimes(1);
+      expect(applyHole).toHaveBeenCalledWith(box.id, 4, null, { x: 1, y: 2, z: 3 });
+      expect(toastMessages()).toContain(translations.en!['toast.featureApplied']!);
+
+      // Disarmed: the pill hides and a further click applies nothing more.
+      expect(hint!.style.display).toBe('none');
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).toHaveBeenCalledTimes(1);
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('a positive depth passes through as a finite depth value', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 2, 5);
+      mockHits = [hit(box.id, 0, 4, 0)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).toHaveBeenCalledWith(box.id, 2, 5, { x: 0, y: 4, z: 0 });
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('clicking another body or empty space toasts featureNeedsBody and STAYS armed', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    const other = translateBody(createBox(4, 4, 4), { x: 20, y: 0, z: 0 }, 'Other');
+    // Mount with ONE body (the empty-scene auto-fit then centres on it), and
+    // add the second only after arming — a two-body mount would frame the
+    // PAIR, moving the first body off the screen centre the menu click uses.
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 3, 0);
+      await act(async () => { useStore.setState({ bodies: [box, other] }); });
+
+      // A different body under the click: refused, armed kept.
+      mockHits = [hit(other.id, 20, 4, 0)];
+      await act(async () => { viewport.dispatchEvent(click(80, 50)); });
+      expect(applyHole).not.toHaveBeenCalled();
+      expect(toastMessages()).toContain(translations.en!['toast.featureNeedsBody']!);
+
+      // Empty space: same refusal, still armed.
+      clearToasts();
+      mockHits = [];
+      await act(async () => { viewport.dispatchEvent(click(20, 80)); });
+      expect(applyHole).not.toHaveBeenCalled();
+      expect(toastMessages()).toContain(translations.en!['toast.featureNeedsBody']!);
+      expect(hintPill(m.container)!.style.display).not.toBe('none');
+
+      // The armed body is still clickable afterwards.
+      mockHits = [hit(box.id, 2, 2, 2)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).toHaveBeenCalledWith(box.id, 3, null, { x: 2, y: 2, z: 2 });
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('Escape cancels the armed placement (no hole, hint hidden)', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 4, 0);
+
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+      });
+      expect(hintPill(m.container)!.style.display).toBe('none');
+
+      mockHits = [hit(box.id, 1, 2, 3)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).not.toHaveBeenCalled();
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+});
+

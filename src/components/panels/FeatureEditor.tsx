@@ -341,10 +341,10 @@ function ExtrudeEditDialog({
 }
 
 /**
- * Hole feature editor: diameter, depth (∞ = through-all), and the
- * counterbore/countersink rows when the feature carries them. Same CAD-style
- * expression fields as NumericEditDialog; applies via the updateFeature
- * mutator like every other parametric edit.
+ * Hole feature editor: world centre X/Y/Z, diameter, depth (∞ = through-all),
+ * and the counterbore/countersink rows when the feature carries them. Same
+ * CAD-style expression fields as NumericEditDialog; applies via the
+ * updateFeature mutator like every other parametric edit.
  */
 function HoleEditDialog({ feature, onClose }: { feature: HoleFeature; onClose: () => void }) {
   const { t } = useT();
@@ -356,6 +356,9 @@ function HoleEditDialog({ feature, onClose }: { feature: HoleFeature; onClose: (
   const cs = !cb ? feature.params.countersink : undefined;
 
   const [texts, setTexts] = useState<Record<string, string>>({
+    centerX: String(feature.params.center.x),
+    centerY: String(feature.params.center.y),
+    centerZ: String(feature.params.center.z),
     diameter: String(feature.params.diameter),
     depth: feature.params.depth === null ? '∞' : String(feature.params.depth),
     ...(cb ? { cbDiameter: String(cb.diameter), cbDepth: String(cb.depth) } : {}),
@@ -380,6 +383,12 @@ function HoleEditDialog({ feature, onClose }: { feature: HoleFeature; onClose: (
     min: number;
   }
   const fields: Field[] = [
+    // World-space centre of the hole entry point. Any finite coordinate is
+    // legal (0 and negatives included — this is a position, not a size), so
+    // these carry no minimum; validity is just "evaluates to a number".
+    { key: 'centerX', label: 'X', value: evalDimension(texts.centerX ?? ''), min: -Infinity },
+    { key: 'centerY', label: 'Y', value: evalDimension(texts.centerY ?? ''), min: -Infinity },
+    { key: 'centerZ', label: 'Z', value: evalDimension(texts.centerZ ?? ''), min: -Infinity },
     { key: 'diameter', label: t('feature.holeDiameter'), value: diameterValue, min: 0.1 },
     { key: 'depth', label: t('feature.holeDepthThrough'), value: depthValue === 'through' ? null : depthValue, min: 0 },
   ];
@@ -415,7 +424,19 @@ function HoleEditDialog({ feature, onClose }: { feature: HoleFeature; onClose: (
     const depth = depthValue === 'through' ? null : depthValue;
     updateFeature(feature.id, (f) => {
       if (f.type !== 'hole') return f;
-      const params = { ...f.params, diameter, depth };
+      // Fresh centre object (shallow params merge like every other edit);
+      // `direction` passes through the spread untouched. The ?? fallbacks are
+      // defensive only — Apply is disabled while a centre field is invalid.
+      const params = {
+        ...f.params,
+        diameter,
+        depth,
+        center: {
+          x: evalDimension(texts.centerX ?? '') ?? f.params.center.x,
+          y: evalDimension(texts.centerY ?? '') ?? f.params.center.y,
+          z: evalDimension(texts.centerZ ?? '') ?? f.params.center.z,
+        },
+      };
       if (cb) {
         params.counterbore = {
           diameter: evalDimension(texts.cbDiameter ?? '') ?? cb.diameter,
@@ -454,6 +475,9 @@ function HoleEditDialog({ feature, onClose }: { feature: HoleFeature; onClose: (
               : null;
             return (
               <div key={f.key}>
+                {f.key === 'centerX' && (
+                  <p className="text-xs text-text-muted mt-2 mb-1">{t('feature.holeCenter')}</p>
+                )}
                 <label className="block text-sm text-text-secondary mb-1">{f.label}</label>
                 <div className="flex items-center gap-2">
                   <input

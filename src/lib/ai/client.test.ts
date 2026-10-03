@@ -29,6 +29,8 @@ describe('SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toContain('sweep');
     expect(SYSTEM_PROMPT).toContain('import_mesh'); // interop
     expect(SYSTEM_PROMPT).toContain('export_body');
+    expect(SYSTEM_PROMPT).toContain('export_file'); // real file delivery
+    expect(SYSTEM_PROMPT).toContain('export_drawing'); // drawing sheet SVG delivery
     expect(SYSTEM_PROMPT).toContain('insert_library_part'); // parts library
     expect(SYSTEM_PROMPT).toContain('suggest_feeds_speeds'); // CAM
     expect(SYSTEM_PROMPT).toContain('add_drawing_note'); // drawing sheet

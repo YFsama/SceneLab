@@ -961,3 +961,98 @@ describe('plane-aware extrude/revolve (sketch frames)', () => {
     expect(Math.abs(computeVolume(body))).toBeCloseTo(24 * Math.PI, 0);
   });
 });
+
+describe('plane-aware sweep/loft (sketch frames)', () => {
+  /** Sweep a rectangle sketch on `planeId` along that plane's normal. */
+  function sweepRect(planeId: string, distance: number) {
+    const sketch = createSketch(planeId);
+    addRectangle(sketch, 0, 0, 4, 10);
+    const sf = createSketchFeature(sketch);
+    // World-space path along the plane normal — what performSweep builds.
+    const dir =
+      planeId === 'xy' ? { x: 0, y: 0, z: 1 }
+        : planeId === 'yz' ? { x: 1, y: 0, z: 0 }
+          : { x: 0, y: 1, z: 0 };
+    const tree = new FeatureTree();
+    tree.addFeature(sf);
+    tree.addFeature(createSweepFeature(
+      { path: [{ x: 0, y: 0, z: 0 }, { x: dir.x * distance, y: dir.y * distance, z: dir.z * distance }], twist: 0 },
+      [sf.id],
+    ));
+    tree.recompute();
+    return { tree, body: tree.getLatestBodies()[0]! };
+  }
+
+  it("'xz' ground sketch keeps the legacy sweep mapping bit-for-bit", () => {
+    // The path runs along +Y and the profile passes through in sketch
+    // coordinates: ring point = right·x + up·y with right = −Z, up = +X, so a
+    // rectangle (0,0)–(4,10) sweeps to x[0,10], y[0,2], z[−4,0] exactly as
+    // before the plane-aware change.
+    const { tree, body } = sweepRect('xz', 2);
+    expect(tree.getResult(tree.features[1]!.id)!.error).toBeUndefined();
+    const bb = computeBoundingBox(body);
+    expect(bb.min.x).toBeCloseTo(0, 9);
+    expect(bb.max.x).toBeCloseTo(10, 9);
+    expect(bb.min.y).toBeCloseTo(0, 9);
+    expect(bb.max.y).toBeCloseTo(2, 9);
+    expect(bb.min.z).toBeCloseTo(-4, 9);
+    expect(bb.max.z).toBeCloseTo(0, 9);
+    expect(Math.abs(computeVolume(body))).toBeCloseTo(40 * 2, 6);
+  });
+
+  it("'xy' sketch sweeps along the world +Z normal, unmirrored, where drawn", () => {
+    // Vertical sketch (0,0)–(4,10): the profile lands on the world XY plane
+    // exactly where it was drawn and the sweep extrudes perpendicular to it
+    // (world +Z). An identity profile mapping would mirror x → −x.
+    const { tree, body } = sweepRect('xy', 2);
+    expect(tree.getResult(tree.features[1]!.id)!.error).toBeUndefined();
+    const bb = computeBoundingBox(body);
+    expect(bb.min.x).toBeCloseTo(0, 9);
+    expect(bb.max.x).toBeCloseTo(4, 9);
+    expect(bb.min.y).toBeCloseTo(0, 9);
+    expect(bb.max.y).toBeCloseTo(10, 9);
+    expect(bb.min.z).toBeCloseTo(0, 9);
+    expect(bb.max.z).toBeCloseTo(2, 9);
+    expect(Math.abs(computeVolume(body))).toBeCloseTo(40 * 2, 6);
+  });
+
+  it("'yz' sketch sweeps along the world +X normal, unmirrored, where drawn", () => {
+    const { tree, body } = sweepRect('yz', 2);
+    expect(tree.getResult(tree.features[1]!.id)!.error).toBeUndefined();
+    const bb = computeBoundingBox(body);
+    // yz frame: sketch x→world y, y→world z; the extrude runs along +X.
+    expect(bb.min.x).toBeCloseTo(0, 9);
+    expect(bb.max.x).toBeCloseTo(2, 9);
+    expect(bb.min.y).toBeCloseTo(0, 9);
+    expect(bb.max.y).toBeCloseTo(4, 9);
+    expect(bb.min.z).toBeCloseTo(0, 9);
+    expect(bb.max.z).toBeCloseTo(10, 9);
+    expect(Math.abs(computeVolume(body))).toBeCloseTo(40 * 2, 6);
+  });
+
+  it("'xy' loft section stands in the world XY plane (was flattened to y=0)", () => {
+    // Before the plane-aware mapping both parent sections collapsed onto the
+    // ground plane (the old hardcoded (x, 0, y)) and the loft degenerated.
+    // Now the 'xy' section keeps its vertical extent in world Y while the
+    // 'xz' section lies flat with its extent in world Z.
+    const vertical = createSketch('xy');
+    addRectangle(vertical, 0, 0, 4, 10);
+    const flat = createSketch('xz');
+    addRectangle(flat, 0, 0, 4, 10);
+    const vf = createSketchFeature(vertical);
+    const ff = createSketchFeature(flat);
+    const tree = new FeatureTree();
+    tree.addFeature(vf);
+    tree.addFeature(ff);
+    tree.addFeature(createLoftFeature({}, [vf.id, ff.id]));
+    tree.recompute();
+    const result = tree.getResult(tree.features[2]!.id)!;
+    expect(result.error).toBeUndefined();
+    const body = result.bodies[0]!;
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(0);
+    const bb = computeBoundingBox(body);
+    // Vertical section reaches world y = 10, flat section reaches z = 10.
+    expect(bb.max.y).toBeCloseTo(10, 6);
+    expect(bb.max.z).toBeCloseTo(10, 6);
+  });
+});

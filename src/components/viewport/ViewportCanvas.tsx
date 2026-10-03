@@ -26,7 +26,7 @@ import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcr
 import { faceAreaAndCentroid } from '../../lib/geometry/measure';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
-import { runCommand, recentCommands } from '../../lib/commands/registry';
+import { runCommand, recentCommands, commandLabel } from '../../lib/commands/registry';
 import { Maximize2, Check, Box } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
@@ -287,6 +287,31 @@ export function ViewportCanvas() {
   const selRectStartRef = useRef<{ x: number; y: number; hitBody: boolean } | null>(null);
   const selRectCommittedRef = useRef(false); // true after a box-select completes (suppresses click)
   const visionDragRef = useRef<{ x: number; y: number } | null>(null); // AI vision crop drag origin
+  // One-shot hole placement (usability audit F2): the Feature → Hole flow
+  // asks ⌀/depth, then ARMS instead of drilling at the top-face centroid —
+  // the next left click on that body drills at the clicked world point
+  // (applyHoleToBody's optional center). Ref + direct-DOM hint pill (the
+  // drag-readout pattern): arming never re-renders this component.
+  const pendingHoleRef = useRef<{ bodyId: string; diameter: number; depth: number | null } | null>(null);
+  const holeHintRef = useRef<HTMLDivElement | null>(null);
+  // The sketch tool that armed the current drawStart. setSketchTool does not
+  // clear drawStart (app.ts), so a start armed under 'line' survives a switch
+  // to 'rect' — the commit handlers pair the start with this recorded tool
+  // and discard the stale start instead of committing a mismatched entity.
+  const drawStartToolRef = useRef<string | null>(null);
+  // Show/hide the hole-placement hint pill (ref-driven DOM, like the drag
+  // readout — no state churn for a once-per-hole transition).
+  const setHoleHint = useCallback((text: string | null) => {
+    const el = holeHintRef.current;
+    if (!el) return;
+    el.textContent = text ?? '';
+    el.style.display = text ? 'block' : 'none';
+  }, []);
+  const disarmHolePlacement = useCallback(() => {
+    pendingHoleRef.current = null;
+    setHoleHint(null);
+    if (containerRef.current) containerRef.current.style.cursor = '';
+  }, [setHoleHint]);
   // Active body drag-move: the drag plane height, the grab point, the snapped
   // offset already applied (deltas are cumulative, not per-frame), and whether
   // this drag is a clone-drag (Alt+drag duplicates the selection on first
@@ -902,6 +927,20 @@ export function ViewportCanvas() {
     window.addEventListener('scenelab:fit-view', onFit);
     return () => window.removeEventListener('scenelab:fit-view', onFit);
   }, []);
+
+  // Feature → Hole's prompt chain arms the one-shot placement through this
+  // event (same decoupling as fit-view above): the context-menu item built
+  // during render only dispatches; this listener owns the refs + hint pill.
+  useEffect(() => {
+    const onArmHole = (e: Event) => {
+      const d = (e as CustomEvent).detail as { bodyId: string; diameter: number; depth: number | null };
+      pendingHoleRef.current = { bodyId: d.bodyId, diameter: d.diameter, depth: d.depth };
+      setHoleHint(`${t('feature.holePickHint')} (Esc)`);
+      if (containerRef.current) containerRef.current.style.cursor = 'crosshair';
+    };
+    window.addEventListener('scenelab:arm-hole', onArmHole);
+    return () => window.removeEventListener('scenelab:arm-hole', onArmHole);
+  }, [t, setHoleHint]);
 
   useEffect(() => {
     const camera = cameraRef.current;
@@ -2050,6 +2089,39 @@ export function ViewportCanvas() {
         return;
       }
 
+      // Armed hole placement (Feature → Hole): the next left click drills at
+      // the clicked world point on the armed body. A click anywhere else —
+      // empty space or a different body — toasts and STAYS armed (⌀/depth
+      // are already entered, so a stray click shouldn't discard them);
+      // Escape cancels. While armed, placement owns the click: selection /
+      // box-select / sub-entity picks all wait.
+      if (pendingHoleRef.current && bodiesGroup) {
+        const pending = pendingHoleRef.current;
+        // The armed body was deleted/undone away between arming and the
+        // click — drilling is impossible, so cancel instead of looping on a
+        // misleading "select a body" toast (ids are stable across recomputes;
+        // only deletion reaches here).
+        if (!useStore.getState().bodies.some((b) => b.id === pending.bodyId)) {
+          disarmHolePlacement();
+          showToast(t('toast.featureNeedsBody'), 'warning');
+          return;
+        }
+        const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+        const hitBodyId = hit?.object.userData.bodyId as string | undefined;
+        if (hit && hitBodyId === pending.bodyId) {
+          const ok = useStore.getState().applyHoleToBody(
+            pending.bodyId, pending.diameter, pending.depth,
+            { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+          );
+          showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+          disarmHolePlacement();
+        } else {
+          showToast(t('toast.featureNeedsBody'), 'warning');
+          if (containerRef.current) containerRef.current.style.cursor = 'crosshair';
+        }
+        return;
+      }
+
       // 1) A body under the cursor takes priority — clicking it selects it.
       if (bodiesGroup) {
         const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
@@ -2104,7 +2176,7 @@ export function ViewportCanvas() {
         deselectAll();
       }
     },
-    [sketchActive, sketchTool, currentSketch, gridSize, sketchPlaneId, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds, t],
+    [sketchActive, sketchTool, currentSketch, gridSize, sketchPlaneId, getSketchPoint, measureActive, addMeasurePoint, bodies, selectedIds, selectObject, toggleSelect, setSketchActive, setWorkspace, setCurrentSketch, setSketchPlaneId, deselectAll, hiddenIds, t, disarmHolePlacement],
   );
 
   const handleMouseMove = useCallback(
@@ -2215,8 +2287,9 @@ export function ViewportCanvas() {
         // Hover-highlight the body under the cursor (preselect) + name tooltip.
         const id = (raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0]?.object.userData.bodyId as string | undefined) ?? null;
         setHoveredId(id);
-        // Grab cursor over a draggable body (unless the vision crop owns the cursor).
-        if (!useStore.getState().visionSelectActive) {
+        // Grab cursor over a draggable body (unless the vision crop or an
+        // armed hole placement owns the cursor).
+        if (!useStore.getState().visionSelectActive && !pendingHoleRef.current) {
           container.style.cursor = id ? 'grab' : '';
         }
         if (id !== lastHoverIdRef.current) {
@@ -2470,7 +2543,7 @@ export function ViewportCanvas() {
           ...(recents.length > 0
             ? [{
                 label: t('menu.recent'),
-                submenu: recents.map((c) => ({ label: c.label, onClick: () => runCommand(c.id) })),
+                submenu: recents.map((c) => ({ label: commandLabel(c), onClick: () => runCommand(c.id) })),
               }]
             : []),
           {
@@ -2607,8 +2680,11 @@ export function ViewportCanvas() {
             }) },
             { label: t('feature.hole'), onClick: pre(() => {
               // Two-step entry (Fusion's hole dialog condensed): diameter
-              // first, then depth — 0 drills through-all. The hole starts at
-              // the body's top-face centroid, drilling straight down.
+              // first, then depth — 0 drills through-all. The prompts then
+              // ARM a one-shot placement instead of drilling at the top-face
+              // centroid: the next left click on THIS body drills at the
+              // clicked world point (feature.holePickHint pill + crosshair
+              // cursor); Escape cancels, a miss stays armed.
               useStore.getState().openNumericPrompt({
                 titleKey: 'feature.hole', labelKey: 'feature.holeDiameter',
                 initial: 5, min: 0.1,
@@ -2617,10 +2693,12 @@ export function ViewportCanvas() {
                     titleKey: 'feature.hole', labelKey: 'feature.holeDepth',
                     initial: 0, min: 0,
                     onApply: (h) => {
-                      const ok = useStore.getState().applyHoleToBody(
-                        useStore.getState().selectedIds[0] ?? '', d, h > 0 ? h : null,
-                      );
-                      showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+                      // Arm via the window event (the fit-view decoupling
+                      // pattern): menu items built during render never touch
+                      // refs; the listener below does the actual arming.
+                      window.dispatchEvent(new CustomEvent('scenelab:arm-hole', {
+                        detail: { bodyId, diameter: d, depth: h > 0 ? h : null },
+                      }));
                     },
                   });
                 },
@@ -2841,6 +2919,27 @@ export function ViewportCanvas() {
     prevBodyCountRef.current = bodies.length;
   }, [bodies.length, sketchActive, fitView]);
 
+  // Top-priority Escape for an ARMED hole placement — a DEDICATED listener
+  // (its deps never change) instead of a branch in the main keydown effect
+  // below: that effect re-registers whenever its deps change (a selection
+  // change recreates fitView), and a listener removed mid-dispatch never
+  // fires — the central Esc→deselect re-render would swallow this branch
+  // exactly when a body IS selected. Registered at mount, this listener also
+  // queues ahead of the central shortcut handler, so stopImmediatePropagation
+  // truly owns the key (same intent as the drag-escape branch below).
+  useEffect(() => {
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !pendingHoleRef.current) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      disarmHolePlacement();
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [disarmHolePlacement]);
+
   // Keyboard: F frames the model (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3004,7 +3103,7 @@ export function ViewportCanvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitView, resetView, sketchActive, nudgeSelected, drawStart, dimBuffer]);
+  }, [fitView, resetView, sketchActive, nudgeSelected, drawStart, dimBuffer, disarmHolePlacement]);
 
   // Commit the armed draw as a sketch entity from `start` to `pt`. Shared by
   // the press-drag release path and the click-click second press so both
@@ -3064,22 +3163,29 @@ export function ViewportCanvas() {
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (sketchActive && sketchTool !== 'select') {
+        // Only LEFT presses interact with a draw: a middle/right press is an
+        // orbit/pan gesture and must not re-arm (move) the start point.
+        if (e.button !== 0) return;
         const pt = getSketchPoint(e);
         if (pt) {
           // Click-click drawing (every commercial sketcher's primary flow):
           // when a draw is already armed, the next LEFT press commits the
           // entity at the cursor instead of re-arming the start point.
           // Press-drag keeps working — its release commits first — and a
-          // stationary press stays armed (see handleMouseUp). Non-left
-          // buttons keep the plain re-arm so orbit stays untouched.
+          // stationary press stays armed (see handleMouseUp).
+          // A start armed under a DIFFERENT tool is stale (setSketchTool
+          // doesn't clear drawStart) — discard it and re-arm fresh instead
+          // of committing a mismatched entity.
           const armed = useStore.getState().drawStart;
-          if (e.button === 0 && armed && CLICK_DRAW_TOOLS.includes(sketchTool)) {
+          if (armed && drawStartToolRef.current === sketchTool && CLICK_DRAW_TOOLS.includes(sketchTool)) {
             if (commitSketchEntity(armed, pt)) {
               setDrawStart(null);
+              drawStartToolRef.current = null;
               setDimBuffer('');
             }
           } else {
             setDrawStart(pt);
+            drawStartToolRef.current = sketchTool;
           }
         }
         return;
@@ -3119,7 +3225,7 @@ export function ViewportCanvas() {
         const st0 = useStore.getState();
         if (
           dragBodyId && !measureActive && !st0.visionSelectActive &&
-          !e.ctrlKey && !e.shiftKey && !st0.bodyDragging
+          !e.ctrlKey && !e.shiftKey && !st0.bodyDragging && !pendingHoleRef.current
         ) {
           // Alt is dual-use: Alt+CLICK stays the edge sub-selection pick, but
           // Alt+DRAG on a body duplicates the selection and slides the copies
@@ -3261,8 +3367,22 @@ export function ViewportCanvas() {
       }
 
       if (!sketchActive || !drawStart || sketchTool === 'select') return;
+      // Only LEFT releases commit (mirrors the press guard): an orbit's
+      // middle release must not commit the armed draw either.
+      if (e.button !== 0) return;
       const pt = getSketchPoint(e);
       if (!pt) return;
+
+      // The tool changed after the start was armed (setSketchTool doesn't
+      // clear drawStart): a press under the old tool re-armed fresh in
+      // handleMouseDown, and anything still stale here is discarded rather
+      // than committed as a mismatched entity.
+      if (drawStartToolRef.current !== sketchTool) {
+        setDrawStart(null);
+        drawStartToolRef.current = null;
+        setDimBuffer('');
+        return;
+      }
 
       // A release that moved commits the entity (press-drag drawing). A
       // stationary release — the FIRST click of a click-click pair — keeps
@@ -3270,11 +3390,13 @@ export function ViewportCanvas() {
       // handleMouseDown); type-ahead dimensions stay live while armed.
       if (commitSketchEntity(drawStart, pt)) {
         setDrawStart(null);
+        drawStartToolRef.current = null;
         setDimBuffer('');
       } else if (!CLICK_DRAW_TOOLS.includes(sketchTool)) {
         // Non-gesture tools (trim/extend) only armed drawStart transiently —
         // always clear it so nothing stays spuriously armed.
         setDrawStart(null);
+        drawStartToolRef.current = null;
         setDimBuffer('');
       }
     },
@@ -3317,6 +3439,15 @@ export function ViewportCanvas() {
       <span
         ref={dragReadoutRef}
         className="absolute z-20 bottom-3 left-3 px-2 py-1 rounded bg-panel/90 backdrop-blur-sm border border-accent/60 text-xs text-text-primary pointer-events-none font-mono"
+        style={{ display: 'none' }}
+        aria-live="polite"
+      />
+      {/* One-shot hole placement hint (Feature → Hole armed): the same
+          overlay-pill pattern as the sketch/measure hints, ref-driven so
+          arming/disarming never re-renders the canvas. */}
+      <div
+        ref={holeHintRef}
+        className="absolute z-20 top-3 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded bg-panel/90 backdrop-blur-sm border border-accent/60 text-xs text-text-primary pointer-events-none whitespace-nowrap"
         style={{ display: 'none' }}
         aria-live="polite"
       />

@@ -80,13 +80,18 @@ async function chipLabels(timeline: Locator): Promise<string[]> {
 
 /**
  * Right-click the body at `center` → Feature flyout → Hole, answering the
- * two-step numeric prompt (diameter, then depth; 0 = through-all).
+ * two-step numeric prompt (diameter, then depth; 0 = through-all). Since the
+ * click-to-place rework the prompts ARM a one-shot placement instead of
+ * drilling at the centroid: `beforePlace` (optional) runs first — e.g. to
+ * switch to a top view — then the click at `place` drills at that point.
  */
 async function applyHoleViaMenu(
   page: Page,
   center: { x: number; y: number },
   diameter: string,
   depth: string,
+  place: { x: number; y: number },
+  beforePlace?: () => Promise<void>,
 ) {
   await page.mouse.click(center.x, center.y, { button: 'right' });
   const menu = page.getByRole('menu');
@@ -106,6 +111,10 @@ async function applyHoleViaMenu(
   await input.fill(depth);
   await input.press('Enter');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  // ARMED: the hint pill shows the pick instruction — the click drills.
+  await expect(page.getByText('Click the body where the hole should start')).toBeVisible();
+  if (beforePlace) await beforePlace();
+  await page.mouse.click(place.x, place.y);
 }
 
 test('hole on a parametric body: timeline chip, volume drop, Ctrl+Z removes the chip', async ({ page }) => {
@@ -154,11 +163,19 @@ test('hole on a parametric body: timeline chip, volume drop, Ctrl+Z removes the 
   const before = await selectAndReadVolume(page, center);
   expect(before).toBeGreaterThan(0);
 
-  // Right-click the body → Feature → Hole: ⌀2, depth 0 = through-all.
+  // Right-click the body → Feature → Hole: ⌀2, depth 0 = through-all. The
+  // placement click needs an exact TOP view ('2' + fit) so the centre click
+  // lands dead-centre on the top face — the near-top sketch camera offsets it
+  // toward the footprint edge and would clip the hole.
   // ⌀2 (not ⌀4): the drag produces a ~3×5 mm footprint — a ⌀4 circle would
   // be clipped by the 3 mm sides, making the removed volume depend on the
   // clipping math instead of the clean cylinder formula below.
-  await applyHoleViaMenu(page, center, '2', '0');
+  await applyHoleViaMenu(page, center, '2', '0', center, async () => {
+    await page.keyboard.press('2');
+    await page.waitForTimeout(400); // let the view snap finish
+    await page.keyboard.press('f');
+    await page.waitForTimeout(300);
+  });
 
   // The timeline gained the Hole chip as the third feature.
   await expect(chips(timeline)).toHaveCount(3);
@@ -169,7 +186,12 @@ test('hole on a parametric body: timeline chip, volume drop, Ctrl+Z removes the 
   expect(await countObjects(page)).toBe(1);
 
   // The properties panel volume dropped by ~π·1²·10 (a ⌀2 cylinder through
-  // the 10 mm extrude), the same readout the smoke suite parses.
+  // the 10 mm extrude), the same readout the smoke suite parses. Re-select
+  // from an OBLIQUE view first: in the top view the centre click would shoot
+  // straight down the new through-hole shaft onto the sketch plane below
+  // (starting a sketch instead of selecting the body).
+  await page.keyboard.press('4');
+  await page.waitForTimeout(400);
   const after = await selectAndReadVolume(page, center);
   const removed = before - after;
   const ideal = Math.PI * 1 * 1 * 10;
@@ -219,13 +241,26 @@ test('hole on a context-menu-inserted box edits the direct body in place (undoab
   expect(before).toBeGreaterThan(7000);
 
   // Right-click the body → Feature → Hole: ⌀4 through-all on the direct box.
-  await applyHoleViaMenu(page, center, '4', '0');
+  // The placement click needs the TOP face: from the iso view the centre ray
+  // hits the box's vertical corner, so switch to a top view ('2' + fit)
+  // before the click — the centre then lands on the top face centre and the
+  // full ⌀4 cylinder is removed (what the volume assertion below expects).
+  await applyHoleViaMenu(page, center, '4', '0', center, async () => {
+    await page.keyboard.press('2');
+    await page.waitForTimeout(400); // let the view snap finish
+    await page.keyboard.press('f');
+    await page.waitForTimeout(300);
+  });
 
   // A direct body has no feature history: no timeline chip appears…
   await expect(page.locator('button[draggable]')).toHaveCount(0);
   // …the object count stays at one…
   expect(await countObjects(page)).toBe(1);
   // …and the hole removed ~π·2²·20 (a ⌀4 cylinder through the 20 mm box).
+  // Re-select from an OBLIQUE view first — the top-view centre click would
+  // fall straight down the through-hole shaft (see test 1).
+  await page.keyboard.press('4');
+  await page.waitForTimeout(400);
   const after = await selectAndReadVolume(page, center);
   const ideal = Math.PI * 2 * 2 * 20;
   expect(before - after).toBeGreaterThan(ideal * 0.8);

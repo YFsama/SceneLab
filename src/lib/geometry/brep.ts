@@ -1223,8 +1223,8 @@ export function computeVertexDegrees(body: SolidBody): Map<number, number> {
   const vertexIndex = buildVertexIndex(body);
 
   for (const edge of body.edges) {
-    const startIdx = vertexIndex.get(vertexKey(edge.start)) ?? -1;
-    const endIdx = vertexIndex.get(vertexKey(edge.end)) ?? -1;
+    const startIdx = lookupVertexIndex(vertexIndex, edge.start);
+    const endIdx = lookupVertexIndex(vertexIndex, edge.end);
 
     if (startIdx >= 0) degrees.set(startIdx, (degrees.get(startIdx) ?? 0) + 1);
     if (endIdx >= 0) degrees.set(endIdx, (degrees.get(endIdx) ?? 0) + 1);
@@ -1495,8 +1495,8 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
   // Build vertex-to-edge adjacency
   for (let ei = 0; ei < body.edges.length; ei++) {
     const edge = body.edges[ei]!;
-    const startIdx = vertexIndex.get(vertexKey(edge.start)) ?? -1;
-    const endIdx = vertexIndex.get(vertexKey(edge.end)) ?? -1;
+    const startIdx = lookupVertexIndex(vertexIndex, edge.start);
+    const endIdx = lookupVertexIndex(vertexIndex, edge.end);
 
     if (startIdx >= 0) {
       if (!vertexToEdges.has(startIdx)) vertexToEdges.set(startIdx, []);
@@ -1512,7 +1512,7 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
   for (let fi = 0; fi < body.faces.length; fi++) {
     const face = body.faces[fi]!;
     for (const v of face.vertices) {
-      const idx = vertexIndex.get(vertexKey(v)) ?? -1;
+      const idx = lookupVertexIndex(vertexIndex, v);
       if (idx >= 0) {
         if (!vertexToFaces.has(idx)) vertexToFaces.set(idx, []);
         vertexToFaces.get(idx)!.push(fi);
@@ -1560,9 +1560,45 @@ function buildEdgeIndex(body: SolidBody): Map<string, number> {
   return index;
 }
 
-/** Quantized coordinate key — 6-decimal convention, ~the old 1e-6 tolerance. */
+/** Quantized coordinate key — 6-decimal convention, ~the old 1e-6 tolerance.
+ * Two coordinates within 1e-6 can still quantize into ADJACENT buckets when
+ * the pair straddles a rounding boundary (e.g. x = 2e-7 → "0.000000" but
+ * x = 7e-7 → "0.000001"), so lookups must not trust the exact bucket alone —
+ * see lookupVertexIndex. */
 function vertexKey(v: Vec3): string {
   return `${v.x.toFixed(6)},${v.y.toFixed(6)},${v.z.toFixed(6)}`;
+}
+
+/** Key of an integer 1e-6 bucket, indexable against vertexKey strings. */
+function bucketKey(bx: number, by: number, bz: number): string {
+  return `${(bx / 1e6).toFixed(6)},${(by / 1e6).toFixed(6)},${(bz / 1e6).toFixed(6)}`;
+}
+
+/**
+ * Vertex lookup against a buildVertexIndex map, tolerant of bucket-boundary
+ * straddle. The exact bucket is probed first; on a miss the 26 neighbouring
+ * buckets (±1 on each axis) follow in a fixed order. A coordinate within 1e-6
+ * of a stored vertex can round one bucket away on any axis — the pre-keyed
+ * linear tolerance matched those, and silently skipping the corner (degree,
+ * adjacency, curvature angle) was a behaviour regression. First hit wins,
+ * mirroring the old findIndex semantics; −1 when nothing is within a bucket.
+ */
+function lookupVertexIndex(vertexIndex: Map<string, number>, v: Vec3): number {
+  const direct = vertexIndex.get(vertexKey(v));
+  if (direct !== undefined) return direct;
+  const bx = Math.round(v.x * 1e6);
+  const by = Math.round(v.y * 1e6);
+  const bz = Math.round(v.z * 1e6);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dy === 0 && dz === 0) continue;
+        const idx = vertexIndex.get(bucketKey(bx + dx, by + dy, bz + dz));
+        if (idx !== undefined) return idx;
+      }
+    }
+  }
+  return -1;
 }
 
 /** Order-independent key so edge (a→b) ≡ (b→a), like the old findEdgeIndex. */
@@ -1626,7 +1662,7 @@ export function computeCurvature(body: SolidBody): CurvatureInfo {
       const v1 = verts[i]!;
       const v2 = verts[next]!;
 
-      const idx = vertexIndex.get(vertexKey(v1)) ?? -1;
+      const idx = lookupVertexIndex(vertexIndex, v1);
       if (idx < 0) continue;
 
       // Compute angle at v1

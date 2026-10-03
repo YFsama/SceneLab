@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../store/app';
 import { ParametersPanel, OPEN_PARAMETERS_EVENT } from './ParametersPanel';
-import { createSketchFeature, createExtrudeFeature } from '../../lib/features/tree';
+import { createSketchFeature, createExtrudeFeature, createHoleFeature } from '../../lib/features/tree';
 import { createSketch, addRectangle, addCircle, addConstraint } from '../../lib/sketch/engine';
 import { computeBoundingBox } from '../../lib/geometry';
+import { warmUpBooleanEngine } from '../../lib/geometry/boolean';
 import { getCommand, runCommand, initBuiltinCommands, clearCommands } from '../../lib/commands/registry';
 
 // Real coverage for the Parameters dialog: the tests render the actual
@@ -272,6 +273,88 @@ describe('ParametersPanel (Fusion-style parameters dialog)', () => {
     } finally {
       await unmountPanel(mounted);
       useStore.setState({ locale: 'en' });
+    }
+  });
+});
+
+describe('ParametersPanel hole centre rows', () => {
+  // Exact boolean engine (as in the running app) so the recomputes behind the
+  // centre edits stay fast instead of hitting the slow voxel fallback.
+  beforeAll(() => warmUpBooleanEngine());
+
+  beforeEach(() => {
+    useStore.getState().newProject();
+    useStore.getState().setCurrentSketch(null);
+    useStore.setState({ locale: 'en' });
+  });
+
+  /** Extrude a 20×20×10 box and drill a Ø4×5 hole from its top face. */
+  function seedHoledProject(): void {
+    const ext = createExtrudeFeature(
+      {
+        profile: [
+          { x: -10, y: 0, z: -10 }, { x: 10, y: 0, z: -10 },
+          { x: 10, y: 0, z: 10 }, { x: -10, y: 0, z: 10 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 10,
+        symmetric: false,
+      },
+      [],
+    );
+    const hole = createHoleFeature(
+      { center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: 5 },
+      [ext.id],
+    );
+    useStore.getState().addFeature(ext);
+    useStore.getState().addFeature(hole);
+  }
+
+  it('renders X / Y / Z rows with the hole centre alongside diameter and depth', async () => {
+    seedHoledProject();
+    const mounted = await mountPanel();
+    try {
+      await openDialog();
+      const text = mounted.container.textContent ?? '';
+      // Extrude distance + 3 centre rows + hole diameter + depth.
+      expect(text).toContain('6 parameters');
+      expect(valueButton(mounted.container, 'X').textContent).toContain('0mm');
+      expect(valueButton(mounted.container, 'Y').textContent).toContain('10mm');
+      expect(valueButton(mounted.container, 'Z').textContent).toContain('0mm');
+      expect(valueButton(mounted.container, 'Diameter (mm)').textContent).toContain('4mm');
+      expect(valueButton(mounted.container, 'Depth (mm)').textContent).toContain('5mm');
+    } finally {
+      await unmountPanel(mounted);
+    }
+  });
+
+  it('editing a centre row commits through updateFeature (negatives and 0 legal)', async () => {
+    seedHoledProject();
+    const versionBefore = useStore.getState().featureVersion;
+    const mounted = await mountPanel();
+    try {
+      await openDialog();
+      await clickEl(valueButton(mounted.container, 'X'));
+      let input = mounted.container.querySelector('input') as HTMLInputElement;
+      expect(input.value).toBe('0');
+      await typeInto(input, '3');
+      await pressKey(input, 'Enter');
+
+      await clickEl(valueButton(mounted.container, 'Z'));
+      input = mounted.container.querySelector('input') as HTMLInputElement;
+      await typeInto(input, '-2'); // world coordinates may be negative
+      await pressKey(input, 'Enter');
+
+      const st = useStore.getState();
+      const hole = st.featureTree.features.find((f) => f.type === 'hole');
+      expect(hole && hole.type === 'hole' && hole.params.center)
+        .toEqual({ x: 3, y: 10, z: -2 });
+      // Direction is untouched by a centre-only edit.
+      expect(hole && hole.type === 'hole' && hole.params.direction)
+        .toEqual({ x: 0, y: -1, z: 0 });
+      expect(st.featureVersion).toBeGreaterThan(versionBefore);
+    } finally {
+      await unmountPanel(mounted);
     }
   });
 });

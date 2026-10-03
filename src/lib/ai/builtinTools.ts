@@ -10,9 +10,11 @@ import { booleanOp, hollowBody, mirrorMerge } from '../geometry/boolean';
 import { listFaces, angleBetweenFaces } from '../geometry/query';
 import { listDimensions } from '../sketch/dimensions';
 import { createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, findBoundaryLoops, computeBoundingBox, computeVolume, computeCentroid, computeSurfaceArea, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod } from '../geometry/brep';
-import { importSTLAscii, importOBJ, importSTEP, exportSTLAscii, exportOBJ, export3MF } from '../io';
+import { importSTLAscii, importOBJ, importSTEP, exportSTLAscii, exportOBJ, export3MF, exportSTLBinary, export3MFPackage, downloadFile, exportDrawingSVG, projectBodies } from '../io';
 import { exportSTEP } from '../io/step';
 import { makeNoteId } from '../io/drawingNotes';
+import type { SectionPlane } from '../io/drawing';
+import { translations } from '../i18n';
 import { faceAreaAndCentroid } from '../geometry/measure';
 import { assertNumber, assertBoolean, assertEnum, assertString, assertStringArray, assertVec3 } from './validate';
 import { LIBRARY_PARTS } from '../library/parts';
@@ -60,6 +62,52 @@ function resolveBody(bodyId: unknown): SolidBody {
   if (!first) throw new Error('No body in the scene');
   return first;
 }
+
+/** Canonical file extension per export format. STEP keeps its format-name
+ * extension (.step; the viewport context menu writes .stp — both are standard
+ * and open in every CAD reader). */
+const EXPORT_EXTS = { stl: 'stl', obj: 'obj', '3mf': '3mf', step: 'step' } as const;
+
+/**
+ * Strip every path component and control character from an AI/user-supplied
+ * file name ('../evil' → 'evil', 'a/b\c.stl' → 'c.stl') — a download name must
+ * never carry separators or traversal segments. Returns '' for path-only input.
+ */
+function sanitizeFilename(name: string): string {
+  const base = name.split(/[\\/]/).filter((p) => p.length > 0 && p !== '.' && p !== '..').pop() ?? '';
+  return Array.from(base)
+    .filter((ch) => (ch.codePointAt(0) ?? 64) >= 32) // drop control chars
+    .join('')
+    .trim();
+}
+
+/** Append the canonical extension unless the name already ends with it. */
+function withExtension(base: string, ext: string): string {
+  return base.toLowerCase().endsWith(`.${ext}`) ? base : `${base}.${ext}`;
+}
+
+/**
+ * Browser download for BINARY payloads (binary STL, 3MF zip package).
+ * lib/io's downloadFile takes a string and tags it application/json — routing
+ * bytes through it corrupts the file. This is the exact Blob+anchor path
+ * ProjectMenu and the command palette's export.stl / export.threemf use;
+ * kept local because lib/io is owned by another work stream.
+ */
+function downloadBinaryFile(data: BlobPart, mime: string, filename: string): void {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Drawing sheet size in px — mirrors DrawingCanvas.tsx's unexported
+ * SHEET_W/SHEET_H consts (not editable from here; update both if the sheet
+ * size ever changes). */
+const DRAWING_SHEET_W = 800;
+const DRAWING_SHEET_H = 600;
 
 /** Reason shared by every draw_* / constraint tool that no-op'd without a sketch. */
 const NO_SKETCH_REASON =
@@ -1639,9 +1687,9 @@ export function registerBuiltinTools(): void {
     name: 'export_body',
     description:
       'Validate/count an export of a body as STL (ASCII), OBJ, 3MF, or STEP — returns the byte ' +
-      'count and a short preview, NOT the file content (inlining it would flood the context). ' +
-      'Saving the file happens in the UI export (an export_file tool is a future item). STEP ' +
-      'is a CAD exchange format (AP203 faceted B-rep).',
+      'count and a short preview, NOT the file content (inlining it would flood the context) ' +
+      'and does NOT save anything. To hand the user a real file call export_file instead. ' +
+      'STEP is a CAD exchange format (AP203 faceted B-rep).',
     parameters: {
       type: 'object',
       properties: {
@@ -1660,7 +1708,90 @@ export function registerBuiltinTools(): void {
         bytes: content.length,
         // Keep the context bounded: a shape preview only, never the payload.
         preview: content.slice(0, 200),
-        note: 'content not inlined — use the UI export to save the file',
+        note: 'content not inlined — call export_file to save the file',
+      };
+    },
+  });
+
+  registerTool({
+    name: 'export_file',
+    description:
+      'Save the scene to a real FILE the user receives as a browser download: STL (binary, one ' +
+      'file per body), OBJ (one per body), 3MF (a single package bundling every body) or STEP ' +
+      '(AP203, one per body) — the same exporters the UI export buttons use. Omit bodyId to ' +
+      'export ALL bodies in the scene (the default; per-body formats then download one file ' +
+      'per body). The file content is never inlined in the result — only byte counts. ' +
+      'Viewport PNG and drawing PNG/PDF are canvas renders that stay on the UI export buttons.',
+    parameters: {
+      type: 'object',
+      properties: {
+        format: { type: 'string', enum: ['stl', 'obj', '3mf', 'step'], description: 'Output format' },
+        bodyId: { type: 'string', description: 'Export a single body by id (default: ALL bodies in the scene)' },
+        filename: { type: 'string', description: 'File name for the download (default scenelab.<ext>; path separators are stripped)' },
+      },
+      required: ['format'],
+    },
+    execute: async (args) => {
+      const format = assertEnum(args.format, ['stl', 'obj', '3mf', 'step'] as const, 'format');
+      const st = useStore.getState();
+      // Body assembly matches the palette export commands (ProjectMenu /
+      // registry: framingBodies over the selection, else the whole scene). A
+      // tool cannot rely on UI selection state the model cannot see, so the
+      // default here is the palette's no-selection default: EVERY body.
+      let bodies = st.bodies;
+      if (args.bodyId !== undefined) {
+        const id = assertString(args.bodyId, 'bodyId');
+        const body = st.bodies.find((b) => b.id === id);
+        if (!body) {
+          return { success: false, reason: `Body "${id}" not found — call list_bodies for valid ids` };
+        }
+        bodies = [body];
+      }
+      if (bodies.length === 0) {
+        return { success: false, reason: 'No bodies in the scene — nothing to export' };
+      }
+      const ext = EXPORT_EXTS[format];
+      const requested = args.filename !== undefined ? sanitizeFilename(assertString(args.filename, 'filename')) : '';
+      const files: { filename: string; bytes: number }[] = [];
+      if (format === '3mf') {
+        // One package for the whole set — exactly the palette's export.threemf.
+        const pkg = export3MFPackage(bodies);
+        const filename = withExtension(requested || 'scenelab', ext);
+        downloadBinaryFile(pkg as BlobPart, 'model/3mf', filename);
+        files.push({ filename, bytes: pkg.length });
+      } else {
+        for (const [i, body] of bodies.entries()) {
+          // Default naming follows the palette: per-body files carry the body
+          // name (disambiguated when the caller forced one name onto many
+          // bodies); a single-body export gets the plain default name.
+          const autoBase = sanitizeFilename(body.name) || `body-${i + 1}`;
+          const base = requested
+            ? bodies.length > 1 ? `${requested}-${i + 1}` : requested
+            : bodies.length > 1 ? autoBase : 'scenelab';
+          if (format === 'stl') {
+            // Binary STL per body — the palette's export.stl path verbatim.
+            const buffer = exportSTLBinary(body);
+            const filename = withExtension(base, ext);
+            downloadBinaryFile(buffer, 'application/octet-stream', filename);
+            files.push({ filename, bytes: buffer.byteLength });
+          } else {
+            // Text formats go through the shared string downloader.
+            const content = format === 'obj' ? exportOBJ(body) : exportSTEP(body);
+            const filename = withExtension(base, ext);
+            downloadFile(content, filename);
+            files.push({ filename, bytes: content.length });
+          }
+        }
+      }
+      const bytes = files.reduce((sum, f) => sum + f.bytes, 0);
+      return {
+        success: true,
+        format,
+        bytes,
+        fileCount: files.length,
+        bodyCount: bodies.length,
+        // One file → its name; several → the per-file list. Never the content.
+        ...(files.length === 1 ? { filename: files[0]!.filename } : { files }),
       };
     },
   });
@@ -3414,6 +3545,71 @@ export function registerBuiltinTools(): void {
       const note = { id: makeNoteId(), x, y, text };
       st.addDrawingNote(note);
       return { success: true, noteId: note.id, x: note.x, y: note.y };
+    },
+  });
+
+  registerTool({
+    name: 'export_drawing',
+    description:
+      'Save the DRAWING SHEET of the current scene as an SVG file download — the four standard ' +
+      'views (Front, Top, Right, Iso — the same projections as the Drawing workspace) with ' +
+      'auto-dimensions, the active section view, detail views and text notes. add_drawing_note ' +
+      'adds notes first; the section comes from the drawing workspace control. SVG only: sheet ' +
+      'PNG/PDF and viewport PNG are canvas renders available from the UI export buttons.',
+    parameters: {
+      type: 'object',
+      properties: {
+        format: { type: 'string', enum: ['svg'], description: 'Output format (SVG only)' },
+        filename: { type: 'string', description: 'File name (default drawing.svg; path separators are stripped)' },
+      },
+    },
+    execute: async (args) => {
+      const format = args.format !== undefined ? assertEnum(args.format, ['svg'] as const, 'format') : 'svg';
+      const st = useStore.getState();
+      if (st.bodies.length === 0) {
+        return { success: false, reason: 'No bodies in the scene — the drawing sheet would be empty' };
+      }
+      // Views assembly replicated from DrawingCanvas.tsx (the `views` memo and
+      // handleExportSVG): section cut at the mid-plane of the combined bounds
+      // along the active axis, then the four standard views at the canvas's
+      // projection scale of 50.
+      const sectionAxis = st.drawingSectionAxis;
+      const section: SectionPlane | undefined = (() => {
+        if (sectionAxis === 'off') return undefined;
+        let min = Infinity;
+        let max = -Infinity;
+        for (const b of st.bodies) {
+          for (const v of b.vertices) {
+            const c = sectionAxis === 'x' ? v.x : sectionAxis === 'y' ? v.y : v.z;
+            min = Math.min(min, c);
+            max = Math.max(max, c);
+          }
+        }
+        const normal =
+          sectionAxis === 'x' ? { x: 1, y: 0, z: 0 } : sectionAxis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+        return { normal, offset: (min + max) / 2 };
+      })();
+      // Same localized view-title suffix the canvas shows (store-side lookup —
+      // the toastText pattern; no React hook context inside a tool).
+      const sectionLabel = translations[st.locale]?.['drawing.section'] ?? translations['en']!['drawing.section'];
+      const suffix = sectionAxis === 'off' ? '' : ` — ${sectionLabel} ${sectionAxis.toUpperCase()}`;
+      const views = [
+        projectBodies(st.bodies, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50, `Front${suffix}`, section), // Front
+        projectBodies(st.bodies, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: -1 }, 50, `Top${suffix}`, section), // Top
+        projectBodies(st.bodies, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 50, `Right${suffix}`, section), // Right
+        projectBodies(st.bodies, { x: 0.577, y: 0.577, z: 0.577 }, { x: 0, y: 1, z: 0 }, 50, `Iso${suffix}`, section), // Iso
+      ];
+      // handleExportSVG verbatim: 800×600 sheet + the stored details and notes.
+      const svg = exportDrawingSVG(views, DRAWING_SHEET_W, DRAWING_SHEET_H, {
+        details: st.drawingDetails,
+        notes: st.drawingNotes,
+      });
+      const requested = args.filename !== undefined ? sanitizeFilename(assertString(args.filename, 'filename')) : '';
+      const filename = withExtension(requested || 'drawing', 'svg');
+      downloadFile(svg, filename);
+      // TextEncoder bytes (svg.length counts UTF-16 code units — CJK notes
+      // would understate the real size).
+      return { success: true, format, filename, bytes: new TextEncoder().encode(svg).length, viewCount: views.length };
     },
   });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeSurfaceArea, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder } from './brep';
 import { mergeBodies, scaleBody } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness, computeAdjacency, computeCurvature } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness, computeAdjacency, computeCurvature, computeVertexDegrees } from './brep';
 
 describe('computeSolidity', () => {
   it('reports convex solids as fully solid with no cavities', () => {
@@ -1911,5 +1911,66 @@ describe('computeCurvature (keyed-index rewrite)', () => {
     expect(got.gaussianCurvatureMax).toBeCloseTo(want.max, 12);
     // Angle-defect sanity: a closed sphere's total Gaussian curvature is 4π.
     expect(got.gaussianCurvatureAvg * want.count).toBeCloseTo(4 * Math.PI, 1);
+  });
+});
+
+describe('vertex lookup across quantization-bucket straddle', () => {
+  // Two coordinates within 1e-6 can round into ADJACENT 6-decimal buckets when
+  // the pair straddles a rounding boundary — the old linear tolerance matched
+  // them, the plain keyed lookup missed. The lookups now probe neighbouring
+  // buckets on a miss.
+  /** 2e-7 → "0.000000" but 7e-7 → "0.000001": 5e-7 apart, adjacent buckets. */
+  const A = { x: 2e-7, y: 0, z: 0 };
+  const B = { x: 7e-7, y: 0, z: 0 };
+
+  /** Tetrahedron-ish body whose stored vertex list holds A (not B), with an
+   * edge endpoint and a face corner sitting at B. */
+  function straddleBody(): SolidBody {
+    const far = [
+      { x: 1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 },
+      { x: 0, y: 0, z: 1 },
+    ];
+    return {
+      id: 'straddle',
+      name: 'straddle',
+      vertices: [A, ...far],
+      edges: [
+        { id: 'e0', start: B, end: far[0]! }, // B: the straddling coordinate
+        { id: 'e1', start: far[0]!, end: far[1]! },
+      ],
+      faces: [
+        { id: 'f0', vertices: [B, far[0]!, far[1]!], normal: { x: 0, y: 0, z: 1 } },
+      ],
+    };
+  }
+
+  it('adjacency attributes a straddling edge endpoint to the near vertex', () => {
+    const adj = computeAdjacency(straddleBody());
+    // B rounds into the bucket next to A's — the edge endpoint must resolve to
+    // vertex 0 (A), not be silently dropped.
+    expect(adj.vertexToEdges.get(0)).toEqual([0]);
+    expect(adj.vertexToEdges.has(4)).toBe(false); // no phantom 5th vertex
+  });
+
+  it('adjacency attributes a straddling face corner to the near vertex', () => {
+    const adj = computeAdjacency(straddleBody());
+    expect(adj.vertexToFaces.get(0)).toEqual([0]);
+  });
+
+  it('vertex degrees count a straddling edge endpoint', () => {
+    const degrees = computeVertexDegrees(straddleBody());
+    expect(degrees.get(0)).toBe(1); // the B endpoint resolves to A
+    expect(degrees.get(1)).toBe(2); // far[0] closes both edges
+  });
+
+  it('curvature sums a straddling face corner into the near vertex', () => {
+    const body = straddleBody();
+    const curv = computeCurvature(body);
+    // Corners: at B (≈origin) the right angle between the two unit far legs
+    // (π/2); at each far vertex π/4. Vertex 0's defect is 2π − π/2 = 3π/2 —
+    // with the corner dropped there would be no entry for it at all.
+    expect(curv.gaussianCurvatureMin).toBeCloseTo((3 * Math.PI) / 2, 3);
+    expect(curv.gaussianCurvatureMax).toBeCloseTo((7 * Math.PI) / 4, 3);
   });
 });

@@ -283,8 +283,11 @@ export class FeatureTree {
       const solved = solveSketch(parentSketch.sketch);
       const pts = extractProfileFromSketch(parentSketch.sketch, solved);
       if (pts.length >= 3) {
-        // Same sketch→world mapping as extrude: sketch (x,y) onto world (x,z).
-        profile = pts.map((p) => ({ x: p.x, y: p.y }));
+        // Plane-aware, like evaluateExtrude/evaluateRevolve: the profile is
+        // expressed for the plane it was drawn on. The path stays world-space
+        // BY DESIGN (performSweep builds it from the plane normal) and is
+        // never transformed here.
+        profile = mapSweepProfileToRing(parentSketch.sketch.planeId, pts, feature.params.path);
       }
     }
     if (!profile || profile.length < 3) {
@@ -304,7 +307,11 @@ export class FeatureTree {
       const solved = solveSketch(f.sketch);
       const pts = extractProfileFromSketch(f.sketch, solved);
       if (pts.length >= 3) {
-        sections.push(pts.map((p) => ({ x: p.x, y: 0, z: p.y })));
+        // Plane-aware, like evaluateExtrude: each section maps onto the plane
+        // its own sketch was drawn on (sketchToWorld('xz', …) ≡ the legacy
+        // (x, 0, y) mapping bit-for-bit; a vertical 'xy' section now stands in
+        // the world XY plane instead of lying flat on the ground).
+        sections.push(pts.map((p) => sketchToWorld(f.sketch.planeId, p.x, p.y)));
       }
     }
     if (sections.length < 2 && feature.params.sections && feature.params.sections.length >= 2) {
@@ -426,6 +433,78 @@ export class FeatureTree {
 
 type Pt = { x: number; y: number };
 const ptKey = (p: Pt) => `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
+
+/**
+ * The ring basis sweepBody derives at the first path sample — the same
+ * tangent / gimbal-free reference / Gram-Schmidt sequence as
+ * operations.sweepBody — so the sweep profile mapping below and the sweep
+ * itself share one frame convention. Null for a degenerate path (fewer than
+ * two points or a zero-length first segment); sweepBody reports its own error
+ * for those, so callers fall back to the legacy mapping.
+ */
+function sweepRingBasisAtStart(path: Vec3[]): { right: Vec3; up: Vec3 } | null {
+  if (path.length < 2) return null;
+  const t0 = path[0]!;
+  const t1 = path[1]!;
+  const tx = t1.x - t0.x, ty = t1.y - t0.y, tz = t1.z - t0.z;
+  const tl = Math.hypot(tx, ty, tz);
+  if (tl < 1e-12) return null;
+  const t = { x: tx / tl, y: ty / tl, z: tz / tl };
+  // Reference vector avoiding gimbal lock — the same choice sweepBody makes.
+  const ref = Math.abs(t.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  const dot = ref.x * t.x + ref.y * t.y + ref.z * t.z;
+  const ux = ref.x - dot * t.x, uy = ref.y - dot * t.y, uz = ref.z - dot * t.z;
+  const ul = Math.hypot(ux, uy, uz);
+  if (ul < 1e-12) return null;
+  const up = { x: ux / ul, y: uy / ul, z: uz / ul };
+  const right: Vec3 = {
+    x: t.y * up.z - t.z * up.y,
+    y: t.z * up.x - t.x * up.z,
+    z: t.x * up.y - t.y * up.x,
+  };
+  return { right, up };
+}
+
+/**
+ * Express a parent-sketch sweep profile for the plane it was drawn on
+ * (plane-aware like evaluateExtrude — see the pass #26 sketch-frame work).
+ *
+ * sweepBody consumes a 2D profile and orients it in its own ring basis
+ * (right = tangent × up), which is LEFT-handed relative to the path
+ * direction. The default 'xz' ground frame is left-handed the same way, so
+ * sketch coordinates passed through unchanged keep the profile's orientation
+ * — that legacy mapping is preserved bit-for-bit. The right-handed 'xy'/'yz'
+ * frames would come out MIRRORED by the same identity mapping, so there the
+ * points are mapped through the plane frame into world space and re-expressed
+ * in the ring basis: the swept start ring lands exactly where the viewport
+ * drew the profile.
+ */
+function mapSweepProfileToRing(
+  planeId: string,
+  pts: Pt[],
+  path: Vec3[],
+): { x: number; y: number }[] {
+  const frame = sketchFrame(planeId);
+  // cross(u, v) · normal: −1 for the left-handed 'xz' ground frame (and any
+  // unknown plane id, which falls back to it), +1 for 'xy'/'yz'.
+  const handed =
+    (frame.u.y * frame.v.z - frame.u.z * frame.v.y) * frame.normal.x +
+    (frame.u.z * frame.v.x - frame.u.x * frame.v.z) * frame.normal.y +
+    (frame.u.x * frame.v.y - frame.u.y * frame.v.x) * frame.normal.z;
+  if (handed < 0) {
+    // Legacy mapping for the ground frame — bit-identical to the old code.
+    return pts.map((p) => ({ x: p.x, y: p.y }));
+  }
+  const ring = sweepRingBasisAtStart(path);
+  if (!ring) return pts.map((p) => ({ x: p.x, y: p.y }));
+  return pts.map((p) => {
+    const w = sketchToWorld(planeId, p.x, p.y);
+    return {
+      x: w.x * ring.right.x + w.y * ring.right.y + w.z * ring.right.z,
+      y: w.x * ring.up.x + w.y * ring.up.y + w.z * ring.up.z,
+    };
+  });
+}
 
 /** Order a set of line segments into a connected loop by shared endpoints. */
 function chainLineLoop(segments: [Pt, Pt][]): Pt[] {

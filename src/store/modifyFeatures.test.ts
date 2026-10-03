@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
-import { createBox, computeVolume } from '../lib/geometry/brep';
+import { createBox, computeVolume, computeBoundingBox } from '../lib/geometry/brep';
 import { warmUpBooleanEngine } from '../lib/geometry/boolean';
 import { createSketch, addRectangle, addCircle, addLine } from '../lib/sketch/engine';
 import type { SolidBody } from '../lib/geometry/types';
@@ -277,6 +277,53 @@ describe('applyHoleToBody (hole feature action)', () => {
     const extra = volPlain - volCountersunk;
     expect(extra).toBeGreaterThan(24 * Math.PI * 0.9);
     expect(extra).toBeLessThan(24 * Math.PI * 1.1);
+  });
+
+  it('an explicit center overrides the top-face centroid on a tree body', async () => {
+    await warmUpBooleanEngine();
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    // Off-centre entry point on the top face (y = 10) of the 10×10×10 box.
+    const center = { x: 3, y: 10, z: -2 };
+    expect(useStore.getState().applyHoleToBody(bodyId, 4, null, center)).toBe(true);
+
+    const hole = useStore.getState().featureTree.features.find((f) => f.type === 'hole')!;
+    expect(hole.type === 'hole' && hole.params.center).toEqual(center);
+    expect(hole.type === 'hole' && hole.params.direction).toEqual({ x: 0, y: -1, z: 0 });
+    // The opening sits at the given centre, not at the origin centroid.
+    const bb = computeBoundingBox(useStore.getState().bodies[0]!);
+    expect(bb.max.y).toBeCloseTo(10, 3);
+    expect(bb.min.x).toBeCloseTo(-5, 3); // left face untouched
+  });
+
+  it('an explicit center overrides the top-face centroid on a direct body', async () => {
+    await warmUpBooleanEngine();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    const center = { x: 3, y: 10, z: -2 };
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 5, center)).toBe(true);
+    // The feature tree stayed empty — a direct edit — and the hole removed
+    // roughly the blind cylinder's volume at the off-centre spot.
+    expect(useStore.getState().featureTree.features).toHaveLength(0);
+    const removed = 1000 - Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(removed).toBeGreaterThan(Math.PI * 4 * 5 * 0.9);
+    expect(removed).toBeLessThan(Math.PI * 4 * 5 * 1.1);
+  });
+
+  it('omitting the center keeps the top-face-centroid default', async () => {
+    await warmUpBooleanEngine();
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+    expect(useStore.getState().applyHoleToBody(bodyId, 4, null)).toBe(true);
+    const hole = useStore.getState().featureTree.features.find((f) => f.type === 'hole')!;
+    expect(hole.type === 'hole' && hole.params.center).toEqual({ x: 0, y: 10, z: 0 });
   });
 });
 

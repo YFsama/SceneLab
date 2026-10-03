@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree } from '../lib/features/tree';
-import { createBox } from '../lib/geometry';
+import { createBox, computeBoundingBox } from '../lib/geometry';
 import { createSketch, addLine, addRectangle } from '../lib/sketch/engine';
 import { subscribe, clearToasts } from '../lib/toast';
 
@@ -282,5 +282,163 @@ describe('direct-only mutators never duplicate tree bodies (T6)', () => {
     // No toast for these — skipping tree bodies in a selection is the
     // documented design, not a refusal the user needs to act on.
     expect(messages).toHaveLength(0);
+  });
+});
+
+describe('failed sketch features keep the redo branch (T1)', () => {
+  /** Seed one redo entry: insert a box, then undo it. */
+  const seedRedo = (): number => {
+    useStore.getState().addDirectBody(createBox(5, 5, 5));
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().directBodies).toHaveLength(0);
+    return useStore.getState().redoStack.length;
+  };
+
+  const openSketchSession = () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0); // open profile: every perform* fails
+    useStore.setState({
+      currentSketch: sketch,
+      sketchActive: true,
+      workspace: 'sketch',
+      sketchUndoStack: [],
+      sketchRedoStack: [],
+    });
+    return sketch;
+  };
+
+  it('a failed extrude leaves the redo stack intact and redo() still works', () => {
+    const depth = seedRedo();
+    openSketchSession();
+    expect(useStore.getState().performExtrude(5, false)).toBe(false);
+    // The failed attempt is no trace at all — the redo branch pushUndo cleared
+    // comes back, so the undone box remains redoable.
+    expect(useStore.getState().redoStack).toHaveLength(depth);
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().directBodies).toHaveLength(1);
+    expect(useStore.getState().redoStack).toHaveLength(0);
+  });
+
+  it('a failed revolve leaves the redo stack intact', () => {
+    const depth = seedRedo();
+    openSketchSession();
+    expect(useStore.getState().performRevolve(Math.PI)).toBe(false);
+    expect(useStore.getState().redoStack).toHaveLength(depth);
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().directBodies).toHaveLength(1);
+  });
+
+  it('a failed sweep leaves the redo stack intact', () => {
+    const depth = seedRedo();
+    openSketchSession();
+    expect(useStore.getState().performSweep(8, 45)).toBe(false);
+    expect(useStore.getState().redoStack).toHaveLength(depth);
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().directBodies).toHaveLength(1);
+  });
+
+  it('a SUCCESSFUL extrude still clears the redo branch (new edit invalidates it)', () => {
+    seedRedo();
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 0, 0, 10, 10);
+    useStore.setState({ currentSketch: sketch });
+    expect(useStore.getState().performExtrude(5, false)).toBe(true);
+    expect(useStore.getState().redoStack).toHaveLength(0);
+  });
+});
+
+describe('model-undo into an older sketch restores that session history (T2)', () => {
+  it('in-sketch undo/redo step the restored history, not the newer session', () => {
+    // Session 1: a closed profile (rect + line) extruded successfully. The
+    // rect is drawn directly on the object; the line goes through the store,
+    // so session 1's sketch history has exactly one entry: the rect-only sketch.
+    const st = useStore.getState();
+    st.setSketchPlaneId('xz');
+    const s1 = createSketch('xz');
+    addRectangle(s1, 0, 0, 10, 8);
+    useStore.setState({ currentSketch: s1, sketchActive: true, workspace: 'sketch', sketchUndoStack: [], sketchRedoStack: [] });
+    const rectOnlyCount = useStore.getState().currentSketch!.entities.size; // 8: 4 points + 4 lines
+    useStore.getState().addSketchLine(20, 0, 30, 0); // pushes the rect-only clone, then adds 3 entities
+    const withLineCount = useStore.getState().currentSketch!.entities.size; // 11
+    expect(useStore.getState().performExtrude(5, false)).toBe(true);
+    expect(useStore.getState().currentSketch).toBeNull();
+
+    // Session 2: a different sketch with its own (newer) edit history.
+    const s2 = createSketch('xz');
+    addRectangle(s2, 0, 0, 4, 4);
+    useStore.setState({ currentSketch: s2, sketchActive: true, workspace: 'sketch', sketchUndoStack: [], sketchRedoStack: [] });
+    useStore.getState().addSketchCircle(1, 1, 2);
+    const s2Count = useStore.getState().currentSketch!.entities.size;
+    expect(useStore.getState().sketchUndoStack).toHaveLength(1); // the newer session's entry
+    expect(useStore.getState().sketchUndoStack[0]!.entities.size).toBe(s2Count - 2); // rect-only clone of S2
+
+    // Model-undo lands back INSIDE session 1's sketch (F15) — with ITS
+    // history, not session 2's.
+    expect(useStore.getState().undo()).toBe(true);
+    const back = useStore.getState();
+    expect(back.currentSketch).not.toBeNull();
+    expect(back.currentSketch!.entities.size).toBe(withLineCount);
+    expect(back.sketchActive).toBe(true);
+    // The restored stack holds session 1's rect-only entry, not session 2's
+    // (same length, different content — the counts distinguish them).
+    expect(back.sketchUndoStack).toHaveLength(1);
+    expect(back.sketchUndoStack[0]!.entities.size).toBe(rectOnlyCount);
+    expect(back.sketchRedoStack).toHaveLength(0);
+
+    // In-sketch Ctrl+Z steps the RESTORED history back to session 1's
+    // rect-only sketch. With the stale stacks it jumped to session 2's sketch
+    // (8 entities as well but belonging to the wrong session — so also assert
+    // the content: the restored rect is 10×8, session 2's was 4×4).
+    expect(useStore.getState().sketchUndo()).toBe(true);
+    const undone = useStore.getState().currentSketch!;
+    expect(undone.entities.size).toBe(rectOnlyCount);
+    const xs = [...undone.entities.values()].filter((e) => e.type === 'point').map((p) => (p as { x: number }).x);
+    expect(Math.max(...xs)).toBe(10); // session 1's rect, not session 2's (max x = 4)
+    // And the sketch redo round-trips back to the with-line sketch.
+    expect(useStore.getState().sketchRedo()).toBe(true);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(withLineCount);
+
+    // Model redo returns to the state the undo came from: the extruded body
+    // AND session 2's live sketch with ITS history (the round-trip restores
+    // the stacks in both directions).
+    expect(useStore.getState().redo()).toBe(true);
+    const fwd = useStore.getState();
+    expect(fwd.bodies).toHaveLength(1);
+    expect(fwd.currentSketch).not.toBeNull();
+    expect(fwd.currentSketch!.entities.size).toBe(s2Count);
+    expect(fwd.sketchActive).toBe(true);
+    expect(fwd.sketchUndoStack).toHaveLength(1);
+    expect(fwd.sketchUndoStack[0]!.entities.size).toBe(s2Count - 2);
+  });
+});
+
+describe('performSweep extrudes perpendicular to the drawn plane (T3)', () => {
+  it('an xy sketch sweeps along world +Z with the profile where it was drawn', () => {
+    useStore.getState().setSketchPlaneId('xy');
+    useStore.getState().setWorkspace('sketch'); // starts the session on xy
+    useStore.getState().addSketchRect(0, 0, 4, 10);
+    expect(useStore.getState().performSweep(2, 0)).toBe(true);
+    const bb = computeBoundingBox(useStore.getState().bodies[0]!);
+    expect(bb.min.x).toBeCloseTo(0, 9);
+    expect(bb.max.x).toBeCloseTo(4, 9);
+    expect(bb.min.y).toBeCloseTo(0, 9);
+    expect(bb.max.y).toBeCloseTo(10, 9);
+    expect(bb.min.z).toBeCloseTo(0, 9);
+    expect(bb.max.z).toBeCloseTo(2, 9); // out of the drawn plane
+  });
+
+  it('an xz (default ground) sketch keeps the legacy +Y sweep', () => {
+    useStore.getState().setSketchPlaneId('xz');
+    useStore.getState().setWorkspace('sketch');
+    useStore.getState().addSketchRect(0, 0, 4, 10);
+    expect(useStore.getState().performSweep(2, 0)).toBe(true);
+    const bb = computeBoundingBox(useStore.getState().bodies[0]!);
+    // Legacy ring placement: sketch (x,y) → world (y, ·, −x).
+    expect(bb.min.x).toBeCloseTo(0, 9);
+    expect(bb.max.x).toBeCloseTo(10, 9);
+    expect(bb.min.y).toBeCloseTo(0, 9);
+    expect(bb.max.y).toBeCloseTo(2, 9);
+    expect(bb.min.z).toBeCloseTo(-4, 9);
+    expect(bb.max.z).toBeCloseTo(0, 9);
   });
 });

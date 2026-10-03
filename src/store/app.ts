@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, offsetEntity, createSketch, solveSketch, type DetectedRectangle } from '../lib/sketch/engine';
 import { offsetSketchProfile } from '../lib/sketch/offset';
+import { planeNormal as sketchPlaneNormal } from '../lib/sketch/frames';
 import { trimSketchEntityAt, extendSketchEntityTo } from '../lib/sketch/trim';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createHoleFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature, drillHoleInBody, topFaceHolePlacement } from '../lib/features/tree';
@@ -78,6 +79,14 @@ interface HistorySnapshot {
   /** Deep clone — sketch entities are mutated in place while sketching, so a
    * bare reference would not freeze the snapshot's state. */
   currentSketch: Sketch | null;
+  /** Sketch-session history captured at snapshot time. Entries are clones
+   * (pushSketchUndo clones before pushing and stacks are only ever replaced,
+   * never mutated in place), so reference-capturing the arrays is safe.
+   * Restored with the sketch — otherwise a model-undo into an older sketch
+   * keeps the NEWER session's stacks and Ctrl+Z inside the restored sketch
+   * would "undo" forward to entities that no longer belong to it. */
+  sketchUndoStack: Sketch[];
+  sketchRedoStack: Sketch[];
   sketchActive: boolean;
   workspace: WorkspaceMode;
   sketchPlaneId: SketchPlaneId;
@@ -681,6 +690,8 @@ export const useStore = create<AppState>((set, get) => {
         drawingDetails: s.drawingDetails,
         drawingNotes: s.drawingNotes,
         currentSketch: s.currentSketch ? cloneSketch(s.currentSketch) : null,
+        sketchUndoStack: s.sketchUndoStack,
+        sketchRedoStack: s.sketchRedoStack,
         sketchActive: s.sketchActive,
         workspace: s.workspace,
         sketchPlaneId: s.sketchPlaneId,
@@ -689,7 +700,8 @@ export const useStore = create<AppState>((set, get) => {
     }));
   };
   /** Restore a snapshot: direct bodies, visibility, feature list, drawing sheet
-   * and the sketch session (F15 — undo after an extrude lands back in it). */
+   * and the sketch session (F15 — undo after an extrude lands back in it),
+   * including that moment's sketch-session history (see HistorySnapshot). */
   const applyUndoSnapshot = (snap: HistorySnapshot) => {
     const tree = get().featureTree;
     tree.features.length = 0;
@@ -703,6 +715,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingDetails: snap.drawingDetails,
       drawingNotes: snap.drawingNotes,
       currentSketch: snap.currentSketch,
+      sketchUndoStack: snap.sketchUndoStack,
+      sketchRedoStack: snap.sketchRedoStack,
       sketchActive: snap.sketchActive,
       workspace: snap.workspace,
       sketchPlaneId: snap.sketchPlaneId,
@@ -879,15 +893,18 @@ export const useStore = create<AppState>((set, get) => {
    * an evaluator error into FeatureResult.error, so roll the attempt back
    * ATOMICALLY — remove BOTH added features (keeping the sketch feature would
    * leave a duplicate sketch node on retry), drop the just-pushed undo
-   * snapshot, keep the sketch session (workspace/dialog state untouched) and
-   * tell the user why.
+   * snapshot, restore the redo history pushUndo cleared (the attempt leaves
+   * NO trace — an undone edit made just before the failed feature stays
+   * redoable), keep the sketch session (workspace/dialog state untouched) and
+   * tell the user why. `savedRedo` is the redoStack captured before pushUndo
+   * (stacks are replaced, never mutated in place, so the reference is intact).
    */
-  const rollbackFailedSketchFeature = (sketchFeatId: string, opFeatId: string, msg: string, toastKey: string): void => {
+  const rollbackFailedSketchFeature = (sketchFeatId: string, opFeatId: string, msg: string, toastKey: string, savedRedo: HistorySnapshot[]): void => {
     const tree = get().featureTree;
     tree.removeFeature(sketchFeatId);
     tree.removeFeature(opFeatId);
     tree.recompute();
-    set((s) => ({ undoStack: s.undoStack.slice(0, -1), featureVersion: s.featureVersion + 1 }));
+    set((s) => ({ undoStack: s.undoStack.slice(0, -1), redoStack: savedRedo, featureVersion: s.featureVersion + 1 }));
     recombine();
     showToast(toastText(toastKey, { msg }), 'warning');
   };
@@ -2071,7 +2088,7 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchActive, workspace, sketchPlaneId } = get();
+    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
     // Capture the current state BEFORE restoring — applyUndoSnapshot clears
@@ -2084,6 +2101,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingDetails,
       drawingNotes,
       currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
+      sketchUndoStack,
+      sketchRedoStack,
       sketchActive,
       workspace,
       sketchPlaneId,
@@ -2104,7 +2123,7 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchActive, workspace, sketchPlaneId } = get();
+    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
     const current: HistorySnapshot = {
@@ -2115,6 +2134,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingDetails,
       drawingNotes,
       currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
+      sketchUndoStack,
+      sketchRedoStack,
       sketchActive,
       workspace,
       sketchPlaneId,
@@ -2504,6 +2525,8 @@ export const useStore = create<AppState>((set, get) => {
     // The dialog clamps to ≥0.1 mm; enforce the same floor for AI/programmatic
     // callers so a degenerate distance can't enter the tree as a failing feature.
     if (!(distance > 0)) return false;
+    // pushUndo clears the redo branch; a FAILED attempt restores it below.
+    const savedRedo = get().redoStack;
     pushUndo();
 
     // Create features
@@ -2524,7 +2547,7 @@ export const useStore = create<AppState>((set, get) => {
     // session: roll the features + undo entry back and explain.
     const result = tree.getResult(extrudeFeat.id);
     if (!result || result.error || result.bodies.length === 0) {
-      rollbackFailedSketchFeature(sketchFeat.id, extrudeFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.extrudeFailed');
+      rollbackFailedSketchFeature(sketchFeat.id, extrudeFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.extrudeFailed', savedRedo);
       return false;
     }
 
@@ -2543,6 +2566,8 @@ export const useStore = create<AppState>((set, get) => {
   performRevolve: (angle) => {
     const sketch = get().currentSketch;
     if (!sketch) return false;
+    // pushUndo clears the redo branch; a FAILED attempt restores it below.
+    const savedRedo = get().redoStack;
     pushUndo();
 
     const sketchFeat = createSketchFeature(sketch);
@@ -2555,7 +2580,7 @@ export const useStore = create<AppState>((set, get) => {
 
     const result = tree.getResult(revolveFeat.id);
     if (!result || result.error || result.bodies.length === 0) {
-      rollbackFailedSketchFeature(sketchFeat.id, revolveFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.revolveFailed');
+      rollbackFailedSketchFeature(sketchFeat.id, revolveFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.revolveFailed', savedRedo);
       return false;
     }
 
@@ -2574,17 +2599,24 @@ export const useStore = create<AppState>((set, get) => {
   performSweep: (distance, twistDegrees) => {
     const sketch = get().currentSketch;
     if (!sketch || !(distance > 0)) return false;
+    // pushUndo clears the redo branch; a FAILED attempt restores it below.
+    const savedRedo = get().redoStack;
     pushUndo();
 
     // Subdivide the straight path so the twist is applied gradually. One big
     // step per end can map a symmetric profile's corner set onto itself,
     // collapsing the side quads (degenerate faces, wrong signed volume).
+    // The path is world-space BY DESIGN (the evaluator never transforms it):
+    // it runs along the sketch plane's normal, so the sweep extrudes
+    // perpendicular to the drawn plane — the 'xz' ground default keeps the
+    // legacy +Y direction bit-for-bit (planeNormal('xz') = {0,1,0}).
     const twist = (twistDegrees * Math.PI) / 180;
     const steps = Math.max(2, Math.ceil(Math.abs(twist) / (Math.PI / 8)));
+    const dir = sketchPlaneNormal(sketch.planeId);
     const path = Array.from({ length: steps + 1 }, (_, i) => ({
-      x: 0,
-      y: (distance * i) / steps,
-      z: 0,
+      x: dir.x * ((distance * i) / steps),
+      y: dir.y * ((distance * i) / steps),
+      z: dir.z * ((distance * i) / steps),
     }));
 
     const sketchFeat = createSketchFeature(sketch);
@@ -2597,7 +2629,7 @@ export const useStore = create<AppState>((set, get) => {
 
     const result = tree.getResult(sweepFeat.id);
     if (!result || result.error || result.bodies.length === 0) {
-      rollbackFailedSketchFeature(sketchFeat.id, sweepFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.sweepFailed');
+      rollbackFailedSketchFeature(sketchFeat.id, sweepFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.sweepFailed', savedRedo);
       return false;
     }
 

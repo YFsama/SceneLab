@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../store/app';
 import { CommandPalette } from './CommandPalette';
 import { clearCommands, initBuiltinCommands } from '../../lib/commands/registry';
+import { translations } from '../../lib/i18n';
 
 // Real coverage for the Ctrl+K command palette: the tests render the actual
 // component (jsdom + createRoot + act, the project's mount-harness style —
@@ -183,6 +184,36 @@ describe('CommandPalette', () => {
       expect(onFit).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('scenelab:fit-view', onFit);
+      await unmountPalette(mounted);
+    }
+  });
+
+  it('results re-localize after a runtime locale switch (no re-registration)', async () => {
+    // Registered once under en; flipping the STORE locale (what the language
+    // toggle does) must re-render translated labels AND make the active
+    // locale's label searchable — the palette resolves labels at read time.
+    const mounted = await mountPalette();
+    try {
+      const input = await openPalette(mounted);
+      await typeInto(input, 'hole');
+      const buttons = resultButtons(mounted.container);
+      // Fuzzy subsequence hits add neighbours ("Show all bodies"), but the
+      // label substring ranks the real Hole verb first.
+      expect(buttons.length).toBeGreaterThan(0);
+      expect(buttons[0]!.textContent).toContain(translations.en!['feature.hole']!);
+
+      // Switch to zh with the registry untouched: the Hole row now renders
+      // the zh label (still findable under the old query via its id)…
+      await act(async () => { useStore.setState({ locale: 'zh' }); });
+      const switched = resultButtons(mounted.container);
+      expect(switched.some((b) => (b.textContent ?? '').includes(translations.zh!['feature.hole']!))).toBe(true);
+      // …and the zh verb alone finds it via the ACTIVE locale's label.
+      await typeInto(input, translations.zh!['feature.hole']!);
+      const zhButtons = resultButtons(mounted.container);
+      expect(zhButtons.length).toBeGreaterThan(0);
+      expect(zhButtons[0]!.textContent).toContain(translations.zh!['feature.hole']!);
+    } finally {
+      useStore.setState({ locale: 'en' });
       await unmountPalette(mounted);
     }
   });

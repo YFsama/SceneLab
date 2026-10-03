@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import { registerBuiltinTools } from './builtinTools';
 import { getTool, getAllTools, clearTools } from './toolRegistry';
 import { useStore } from '../../store/app';
 import { createBox, computeVolume } from '../geometry';
 import { warmUpBooleanEngine } from '../geometry/boolean';
+import * as io from '../io';
 import type { Vec3 } from '../geometry/types';
 import { createSketch, addRectangle, addLine } from '../sketch/engine';
 
@@ -29,7 +30,7 @@ describe('registerBuiltinTools registration', () => {
       'move_body', 'rotate_body', 'scale_body', 'resize_to_target', 'arrange_on_plate', 'delete_body',
       'clear_scene', 'describe_scene', 'measure_distance', 'get_dimensions', 'list_bodies',
       // mesh io / repair
-      'import_mesh', 'export_body', 'repair_mesh', 'find_holes',
+      'import_mesh', 'export_body', 'export_file', 'export_drawing', 'repair_mesh', 'find_holes',
       // print analysis / optimization
       'estimate_mass', 'analyze_stability', 'analyze_printability', 'check_print_readiness',
       'estimate_print_cost', 'estimate_print_job', 'estimate_hollow_savings', 'recommend_orientation',
@@ -853,6 +854,193 @@ describe('add_drawing_note tool', () => {
     await getTool('add_drawing_note')!.execute({ text: 'undo me' });
     useStore.getState().undo();
     expect(useStore.getState().drawingNotes).toEqual([]);
+  });
+});
+
+describe('AI file export tools (export_file / export_drawing)', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.getState().newProject();
+  });
+
+  /** jsdom implements neither URL.createObjectURL nor the anchor download —
+   * stub both so the binary Blob+anchor path (binary STL / 3MF, mirroring the
+   * palette export buttons) is observable. Returns the clicked file names. */
+  function observeBinaryDownloads(): { downloads: string[]; restore: () => void } {
+    const downloads: string[] = [];
+    const urlRef = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+    const prevCreate = urlRef.createObjectURL;
+    const prevRevoke = urlRef.revokeObjectURL;
+    URL.createObjectURL = () => 'blob:scenelab-test';
+    URL.revokeObjectURL = () => undefined;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download);
+    });
+    return {
+      downloads,
+      restore: () => {
+        clickSpy.mockRestore();
+        if (prevCreate !== undefined) URL.createObjectURL = prevCreate as typeof URL.createObjectURL;
+        else delete (URL as { createObjectURL?: unknown }).createObjectURL;
+        if (prevRevoke !== undefined) URL.revokeObjectURL = prevRevoke as typeof URL.revokeObjectURL;
+        else delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+      },
+    };
+  }
+
+  it('export_file stl downloads a binary STL per body without inlining content', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const { downloads, restore } = observeBinaryDownloads();
+    try {
+      const result = (await getTool('export_file')!.execute({ format: 'stl' })) as {
+        success: boolean; bytes: number; filename: string; fileCount: number; content?: string;
+      };
+      expect(result.success).toBe(true);
+      expect(result.bytes).toBeGreaterThan(0);
+      expect(result.filename).toBe('scenelab.stl');
+      expect(result.fileCount).toBe(1);
+      expect(result.content).toBeUndefined(); // never inline the payload
+      // The browser download was actually triggered (anchor with the name).
+      expect(downloads).toEqual(['scenelab.stl']);
+    } finally {
+      restore();
+    }
+  });
+
+  it('export_file with several bodies and no filename names files after the bodies (palette parity)', async () => {
+    const a = createBox(10, 10, 10);
+    const b = createBox(5, 5, 5);
+    b.name = 'Plate'; // distinct names prove the per-body naming
+    useStore.setState({ bodies: [a, b], directBodies: [a, b] });
+    const { downloads, restore } = observeBinaryDownloads();
+    try {
+      const result = (await getTool('export_file')!.execute({ format: 'stl' })) as {
+        success: boolean; bytes: number; fileCount: number; files?: { filename: string }[];
+      };
+      expect(result.fileCount).toBe(2);
+      expect(downloads).toEqual([`${a.name}.stl`, `${b.name}.stl`]);
+      expect(result.files?.map((f) => f.filename)).toEqual([`${a.name}.stl`, `${b.name}.stl`]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('export_file 3mf bundles every body into one binary package', async () => {
+    const a = createBox(10, 10, 10);
+    const b = createBox(5, 5, 5);
+    useStore.setState({ bodies: [a, b], directBodies: [a, b] });
+    const { downloads, restore } = observeBinaryDownloads();
+    try {
+      const result = (await getTool('export_file')!.execute({ format: '3mf' })) as {
+        success: boolean; bytes: number; filename: string; fileCount: number; bodyCount: number;
+      };
+      expect(result.success).toBe(true);
+      expect(result.fileCount).toBe(1); // one package for the whole set
+      expect(result.bodyCount).toBe(2);
+      expect(result.filename).toBe('scenelab.3mf');
+      expect(result.bytes).toBeGreaterThan(0);
+      expect(downloads).toEqual(['scenelab.3mf']);
+    } finally {
+      restore();
+    }
+  });
+
+  it('export_file obj/step route text formats through downloadFile', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const captured: { content: string; filename: string }[] = [];
+    const dlSpy = vi.spyOn(io, 'downloadFile').mockImplementation((content, filename) => {
+      captured.push({ content, filename });
+    });
+    try {
+      const obj = (await getTool('export_file')!.execute({ format: 'obj' })) as {
+        success: boolean; bytes: number; filename: string; content?: string;
+      };
+      expect(obj.filename).toBe('scenelab.obj');
+      expect(obj.bytes).toBe(captured[0]!.content.length);
+      expect(obj.content).toBeUndefined();
+      expect(captured[0]!.content).toContain('v '); // real OBJ text reached the downloader
+
+      const step = (await getTool('export_file')!.execute({ format: 'step' })) as { filename: string };
+      expect(step.filename).toBe('scenelab.step');
+      expect(captured[1]!.content).toContain('ISO-10303-21');
+    } finally {
+      dlSpy.mockRestore();
+    }
+  });
+
+  it('export_file sanitizes the filename (strips path traversal)', async () => {
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const captured: { filename: string }[] = [];
+    const dlSpy = vi.spyOn(io, 'downloadFile').mockImplementation((_content, filename) => {
+      captured.push({ filename });
+    });
+    try {
+      const result = (await getTool('export_file')!.execute({ format: 'obj', filename: '../evil' })) as {
+        filename: string;
+      };
+      expect(result.filename).toBe('evil.obj'); // '../' stripped, canonical ext kept
+      expect(captured[0]!.filename).toBe('evil.obj');
+    } finally {
+      dlSpy.mockRestore();
+    }
+  });
+
+  it('export_file rejects an unknown format and refuses unknown bodyId / empty scenes', async () => {
+    await expect(getTool('export_file')!.execute({ format: 'ply' })).rejects.toThrow(/format/i);
+
+    const box = createBox(10, 10, 10);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    const missing = (await getTool('export_file')!.execute({ format: 'stl', bodyId: 'nope' })) as {
+      success: boolean; reason?: string;
+    };
+    expect(missing.success).toBe(false);
+    expect(missing.reason).toMatch(/not found/i);
+
+    useStore.setState({ bodies: [], directBodies: [] });
+    const empty = (await getTool('export_file')!.execute({ format: 'stl' })) as { success: boolean };
+    expect(empty.success).toBe(false);
+  });
+
+  it('export_drawing downloads the sheet SVG with all four views and the stored notes', async () => {
+    const box = createBox(20, 10, 30);
+    useStore.setState({ bodies: [box], directBodies: [box] });
+    useStore.getState().addDrawingNote({ id: 'n1', x: 40, y: 560, text: 'Tolerances: ISO 2768' });
+    const captured: { content: string; filename: string }[] = [];
+    const dlSpy = vi.spyOn(io, 'downloadFile').mockImplementation((content, filename) => {
+      captured.push({ content, filename });
+    });
+    try {
+      const result = (await getTool('export_drawing')!.execute({})) as {
+        success: boolean; bytes: number; filename: string; viewCount: number;
+      };
+      expect(result.success).toBe(true);
+      expect(result.filename).toBe('drawing.svg');
+      expect(result.viewCount).toBe(4); // Front, Top, Right, Iso
+      expect(result.bytes).toBe(captured[0]!.content.length);
+      expect(result.bytes).toBeGreaterThan(0);
+      const svg = captured[0]!.content;
+      expect(svg).toContain('<svg');
+      expect(svg).toContain('Front');
+      expect(svg).toContain('Iso');
+      expect(svg).toContain('Tolerances: ISO 2768'); // the note is on the sheet
+    } finally {
+      dlSpy.mockRestore();
+    }
+  });
+
+  it('export_drawing refuses an empty scene and non-SVG formats', async () => {
+    const empty = (await getTool('export_drawing')!.execute({})) as { success: boolean; reason?: string };
+    expect(empty.success).toBe(false);
+    expect(empty.reason).toMatch(/no bodies/i);
+
+    useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] });
+    // PNG/PDF go through canvas rendering in the UI — the tool refuses them.
+    await expect(getTool('export_drawing')!.execute({ format: 'pdf' })).rejects.toThrow(/format/i);
   });
 });
 

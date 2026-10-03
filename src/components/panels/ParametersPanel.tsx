@@ -104,12 +104,31 @@ function featureParamRows(
             fe.type === 'scale' ? { ...fe, params: { ...fe.params, target: v } } : fe);
         })];
     case 'hole': {
-      const rows = [row('diameter', t('params.holeDiameter'), f.params.diameter, 'mm',
-        (v) => {
-          if (!(v > 0.01)) return;
-          updateFeature(f.id, (fe) =>
-            fe.type === 'hole' ? { ...fe, params: { ...fe.params, diameter: v } } : fe);
-        })];
+      // World centre rows first (position before size, matching the hole edit
+      // dialog). Any finite coordinate is legal — 0 and negatives included —
+      // so unlike the size rows there is no positive-magnitude guard. Direct
+      // bodies drilled without a feature never appear here: this table only
+      // iterates featureTree.features (pass #23 behaviour).
+      const centerRow = (axis: 'x' | 'y' | 'z'): ParamRow =>
+        row(`center.${axis}`, axis.toUpperCase(), f.params.center[axis], 'mm',
+          (v) => {
+            updateFeature(f.id, (fe) => {
+              if (fe.type !== 'hole') return fe;
+              const center = { ...fe.params.center };
+              center[axis] = v;
+              return { ...fe, params: { ...fe.params, center } };
+            });
+          });
+      const rows = [
+        centerRow('x'),
+        centerRow('y'),
+        centerRow('z'),
+        row('diameter', t('params.holeDiameter'), f.params.diameter, 'mm',
+          (v) => {
+            if (!(v > 0.01)) return;
+            updateFeature(f.id, (fe) =>
+              fe.type === 'hole' ? { ...fe, params: { ...fe.params, diameter: v } } : fe);
+          })];
       if (f.params.depth !== null) {
         rows.push(row('depth', t('params.holeDepth'), f.params.depth, 'mm',
           (v) => {

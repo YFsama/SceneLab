@@ -243,12 +243,16 @@ describe('HoleEditDialog (rendered dialog)', () => {
     );
     try {
       const inputs = mounted.container.querySelectorAll('input');
-      expect(inputs).toHaveLength(2); // diameter + depth (no cb/cs rows)
-      expect((inputs[0] as HTMLInputElement).value).toBe('4');
-      expect((inputs[1] as HTMLInputElement).value).toBe('5');
+      expect(inputs).toHaveLength(5); // centre X/Y/Z + diameter + depth (no cb/cs rows)
+      // The centre fields initialize from params.center (0, 10, 0).
+      expect((inputs[0] as HTMLInputElement).value).toBe('0');
+      expect((inputs[1] as HTMLInputElement).value).toBe('10');
+      expect((inputs[2] as HTMLInputElement).value).toBe('0');
+      expect((inputs[3] as HTMLInputElement).value).toBe('4');
+      expect((inputs[4] as HTMLInputElement).value).toBe('5');
 
-      await typeInto(inputs[0] as HTMLInputElement, '6/3'); // expression → 2
-      await typeInto(inputs[1] as HTMLInputElement, '∞');
+      await typeInto(inputs[3] as HTMLInputElement, '6/3'); // expression → 2
+      await typeInto(inputs[4] as HTMLInputElement, '∞');
       expect(mounted.container.textContent).toContain('= 2');
       expect(applyButton(mounted.container).disabled).toBe(false);
 
@@ -257,6 +261,67 @@ describe('HoleEditDialog (rendered dialog)', () => {
         .find((f) => f.type === 'hole');
       expect(updated && updated.type === 'hole' && updated.params.diameter).toBe(2);
       expect(updated && updated.type === 'hole' && updated.params.depth).toBeNull();
+      // The untouched centre passes through the edit unchanged.
+      expect(updated && updated.type === 'hole' && updated.params.center)
+        .toEqual({ x: 0, y: 10, z: 0 });
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+
+  it('edits the hole centre (world X / Y / Z); the tree recomputes the body', async () => {
+    const hole = holedTree({ diameter: 4, depth: 5 });
+    const versionBefore = useStore.getState().featureVersion;
+    // holedTree recomputed once — the tree's current body is the pre-edit one.
+    const treeBodyBefore = useStore.getState().featureTree.getLatestBodies()[0];
+    const mounted = await mountDialog(
+      createElement(FeatureEditDialog, { feature: hole, onClose: () => {} }),
+    );
+    try {
+      const inputs = mounted.container.querySelectorAll('input');
+      expect(mounted.container.textContent).toContain('Hole centre (world X / Y / Z)');
+
+      await typeInto(inputs[0] as HTMLInputElement, '4/2'); // expression → 2
+      await typeInto(inputs[2] as HTMLInputElement, '2+2'); // → 4
+      expect(mounted.container.textContent).toContain('= 2');
+      expect(applyButton(mounted.container).disabled).toBe(false);
+
+      await act(async () => { applyButton(mounted.container).click(); });
+      const st = useStore.getState();
+      const updated = st.featureTree.features.find((f) => f.type === 'hole');
+      expect(updated && updated.type === 'hole' && updated.params.center)
+        .toEqual({ x: 2, y: 10, z: 4 });
+      // Drilling direction is preserved as-is by the edit.
+      expect(updated && updated.type === 'hole' && updated.params.direction)
+        .toEqual({ x: 0, y: -1, z: 0 });
+      // The tree recomputed: featureVersion bumped and a fresh body object.
+      expect(st.featureVersion).toBeGreaterThan(versionBefore);
+      expect(st.featureTree.getLatestBodies()[0]).not.toBe(treeBodyBefore);
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+
+  it('an invalid centre field is refused inline and disables Apply', async () => {
+    const hole = holedTree({ diameter: 4, depth: 5 });
+    const mounted = await mountDialog(
+      createElement(FeatureEditDialog, { feature: hole, onClose: () => {} }),
+    );
+    try {
+      const inputs = mounted.container.querySelectorAll('input');
+      await typeInto(inputs[1] as HTMLInputElement, 'abc'); // centre Y
+      expect((inputs[1] as HTMLInputElement).getAttribute('aria-invalid')).toBe('true');
+      expect(applyButton(mounted.container).disabled).toBe(true);
+
+      await act(async () => { applyButton(mounted.container).click(); }); // refused
+      const updated = useStore.getState().featureTree.features
+        .find((f) => f.type === 'hole');
+      expect(updated && updated.type === 'hole' && updated.params.center)
+        .toEqual({ x: 0, y: 10, z: 0 });
+
+      // Empty is equally invalid (a centre must be a number, unlike depth's ∞).
+      await typeInto(inputs[1] as HTMLInputElement, '');
+      expect(applyButton(mounted.container).disabled).toBe(true);
     } finally {
       await unmountDialog(mounted);
     }
@@ -272,12 +337,12 @@ describe('HoleEditDialog (rendered dialog)', () => {
     );
     try {
       const inputs = mounted.container.querySelectorAll('input');
-      expect(inputs).toHaveLength(4); // diameter, depth, cb ⌀, cb depth
-      expect((inputs[2] as HTMLInputElement).value).toBe('8');
-      expect((inputs[3] as HTMLInputElement).value).toBe('2');
+      expect(inputs).toHaveLength(7); // centre X/Y/Z, diameter, depth, cb ⌀, cb depth
+      expect((inputs[5] as HTMLInputElement).value).toBe('8');
+      expect((inputs[6] as HTMLInputElement).value).toBe('2');
 
-      await typeInto(inputs[2] as HTMLInputElement, '10');
-      await typeInto(inputs[3] as HTMLInputElement, '3');
+      await typeInto(inputs[5] as HTMLInputElement, '10');
+      await typeInto(inputs[6] as HTMLInputElement, '3');
       await act(async () => { applyButton(mounted.container).click(); });
       const updated = useStore.getState().featureTree.features
         .find((f) => f.type === 'hole');
@@ -298,15 +363,15 @@ describe('HoleEditDialog (rendered dialog)', () => {
     );
     try {
       const inputs = mounted.container.querySelectorAll('input');
-      expect(inputs).toHaveLength(4); // diameter, depth, cs ⌀, cs angle
-      expect((inputs[3] as HTMLInputElement).value).toBe('90');
+      expect(inputs).toHaveLength(7); // centre X/Y/Z, diameter, depth, cs ⌀, cs angle
+      expect((inputs[6] as HTMLInputElement).value).toBe('90');
 
       // A countersink not wider than the hole is invalid — Apply refuses.
-      await typeInto(inputs[2] as HTMLInputElement, '4');
+      await typeInto(inputs[5] as HTMLInputElement, '4');
       expect(applyButton(mounted.container).disabled).toBe(true);
 
-      await typeInto(inputs[2] as HTMLInputElement, '12');
-      await typeInto(inputs[3] as HTMLInputElement, '82');
+      await typeInto(inputs[5] as HTMLInputElement, '12');
+      await typeInto(inputs[6] as HTMLInputElement, '82');
       expect(applyButton(mounted.container).disabled).toBe(false);
       await act(async () => { applyButton(mounted.container).click(); });
       const updated = useStore.getState().featureTree.features

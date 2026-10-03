@@ -40,7 +40,15 @@ export function addMidplaneFromSelection(): string | null {
 
 export interface Command {
   id: string;
+  /** Registration-time label; used as-is unless a labelKey is present. */
   label: string;
+  /** i18n key whose ACTIVE-locale text is the effective label. Commands
+   *  registered with one re-localize at read time (commandLabel +
+   *  searchCommands) so a runtime locale switch takes effect without
+   *  re-registering; `label` stays the fallback for missing keys. */
+  labelKey?: string;
+  /** Locale-neutral suffix appended to the labelKey text (e.g. " (X)"). */
+  labelSuffix?: string;
   category?: string;
   /** Optional keyboard hint shown in the palette (display only). */
   shortcut?: string;
@@ -162,7 +170,7 @@ export function searchCommands(query: string): Command[] {
   if (tokens.length === 0) return allCommands();
   const scored: { cmd: Command; score: number }[] = [];
   for (const cmd of commands.values()) {
-    const label = toSearchField(cmd.label);
+    const label = toSearchField(commandLabel(cmd));
     const id = toSearchField(cmd.id);
     const category = toSearchField(cmd.category ?? '');
     let total = 0;
@@ -205,6 +213,15 @@ const tr = (key: string): string => {
   return (translations[locale] ?? translations.en!)?.[key] ?? translations.en![key] ?? key;
 };
 
+/** The command's effective label, resolved from the ACTIVE locale when a
+ *  labelKey is registered (falling back to the registration-time label).
+ *  Every label consumer — the palette, the recents flyout, searchCommands —
+ *  goes through this, so a runtime locale switch re-localizes display AND
+ *  fuzzy search without re-registering anything. */
+export function commandLabel(cmd: Command): string {
+  return cmd.labelKey ? tr(cmd.labelKey) + (cmd.labelSuffix ?? '') : cmd.label;
+}
+
 /** The id of a selected body, or null. Palette commands have no cursor
  * context (unlike the context menu, which pre-selects the right-clicked
  * body), so body-scoped verbs require an existing selection. */
@@ -224,12 +241,13 @@ const needBody = (fn: () => void): (() => void) => () => {
 };
 
 /** Combine verbs additionally need a SECOND selected body (the context menu
- * hides the flyout until one exists); the palette refuses with the toast. */
+ * hides the flyout until one exists); the palette refuses with the dedicated
+ * two-bodies toast. */
 const needTwoBodies = (fn: () => void): (() => void) => () => {
   const st = useStore.getState();
   const n = st.selectedIds.filter((id) => st.bodies.some((b) => b.id === id)).length;
   if (n < 2) {
-    showToast(tr('toast.featureNeedsBody'), 'warning');
+    showToast(tr('toast.needsTwoBodies'), 'warning');
     return;
   }
   fn();
@@ -359,6 +377,10 @@ export function initBuiltinCommands(): void {
   registerCommand({
     id: 'params.open',
     label: s().locale === 'zh' ? '参数…' : 'Parameters…',
+    // The existing params.command key keeps this label following runtime
+    // locale switches via commandLabel (ParametersPanel's manual cmd.label
+    // sync becomes a harmless no-op).
+    labelKey: 'params.command',
     category: 'Edit',
     run: () => { window.dispatchEvent(new CustomEvent('scenelab:open-parameters')); },
   });
@@ -371,6 +393,7 @@ export function initBuiltinCommands(): void {
   registerCommand({
     id: 'feature.extrude',
     label: tr('feature.extrude'),
+    labelKey: 'feature.extrude',
     category: 'Modify',
     shortcut: 'E',
     // The dialog is meaningless without a sketch (same guard as the E key):
@@ -383,12 +406,13 @@ export function initBuiltinCommands(): void {
       s().setShowExtrudeDialog(true);
     },
   });
-  registerCommand({ id: 'feature.fillet', label: tr('feature.fillet'), category: 'Modify', run: needBody(promptFeature('feature.fillet', 'feature.filletPrompt', 2, 0.01, (v) => s().applyFilletFeature(v))) });
-  registerCommand({ id: 'feature.chamfer', label: tr('feature.chamfer'), category: 'Modify', run: needBody(promptFeature('feature.chamfer', 'feature.chamferPrompt', 2, 0.01, (v) => s().applyChamferFeature(v))) });
-  registerCommand({ id: 'feature.shell', label: tr('feature.shell'), category: 'Modify', run: needBody(promptFeature('feature.shell', 'feature.shellPrompt', 1.5, 0.01, (v) => s().applyShellFeature(v))) });
+  registerCommand({ id: 'feature.fillet', label: tr('feature.fillet'), labelKey: 'feature.fillet', category: 'Modify', run: needBody(promptFeature('feature.fillet', 'feature.filletPrompt', 2, 0.01, (v) => s().applyFilletFeature(v))) });
+  registerCommand({ id: 'feature.chamfer', label: tr('feature.chamfer'), labelKey: 'feature.chamfer', category: 'Modify', run: needBody(promptFeature('feature.chamfer', 'feature.chamferPrompt', 2, 0.01, (v) => s().applyChamferFeature(v))) });
+  registerCommand({ id: 'feature.shell', label: tr('feature.shell'), labelKey: 'feature.shell', category: 'Modify', run: needBody(promptFeature('feature.shell', 'feature.shellPrompt', 1.5, 0.01, (v) => s().applyShellFeature(v))) });
   registerCommand({
     id: 'feature.hole',
     label: tr('feature.hole'),
+    labelKey: 'feature.hole',
     category: 'Modify',
     // Two-step entry like the context menu: diameter, then depth (0 = through).
     run: needBody(() => {
@@ -400,7 +424,12 @@ export function initBuiltinCommands(): void {
             titleKey: 'feature.hole', labelKey: 'feature.holeDepth',
             initial: 0, min: 0,
             onApply: (h) => {
-              featureToast(useStore.getState().applyHoleToBody(selectedBodyId() ?? '', d, h > 0 ? h : null));
+              // Same click-to-place arming as the context-menu flow: the
+              // viewport listener picks up the event, shows the hint pill,
+              // and drills at the next click on the body.
+              window.dispatchEvent(new CustomEvent('scenelab:arm-hole', {
+                detail: { bodyId: selectedBodyId()!, diameter: d, depth: h > 0 ? h : null },
+              }));
             },
           });
         },
@@ -411,6 +440,7 @@ export function initBuiltinCommands(): void {
     registerCommand({
       id: `feature.mirror${plane.toUpperCase()}`,
       label: tr(`feature.mirror${plane.toUpperCase()}`),
+      labelKey: `feature.mirror${plane.toUpperCase()}`,
       category: 'Modify',
       run: needBody(() => featureToast(s().applyMirrorFeature(plane, true))),
     });
@@ -419,6 +449,8 @@ export function initBuiltinCommands(): void {
     registerCommand({
       id: `feature.linearArray${axis.toUpperCase()}`,
       label: `${tr('feature.linearArray')} (${axis.toUpperCase()})`,
+      labelKey: 'feature.linearArray',
+      labelSuffix: ` (${axis.toUpperCase()})`,
       category: 'Modify',
       run: needBody(() => {
         useStore.getState().openNumericPrompt({
@@ -435,10 +467,10 @@ export function initBuiltinCommands(): void {
       }),
     });
   }
-  registerCommand({ id: 'feature.circularArray', label: tr('feature.circularArray'), category: 'Modify', run: needBody(promptFeature('feature.circularArray', 'pattern.count', 6, 1, (v) => s().applyCircularArrayFeature(Math.round(v)))) });
-  registerCommand({ id: 'transform.move', label: tr('menu.move'), category: 'Modify', run: needBody(() => s().setMoveDialogOpen(true)) });
-  registerCommand({ id: 'transform.rotate', label: tr('menu.rotateDlg'), category: 'Modify', run: needBody(() => s().setRotateDialogOpen(true)) });
-  registerCommand({ id: 'transform.scale', label: tr('menu.scaleDlg'), category: 'Modify', run: needBody(() => s().setScaleDialogOpen(true)) });
+  registerCommand({ id: 'feature.circularArray', label: tr('feature.circularArray'), labelKey: 'feature.circularArray', category: 'Modify', run: needBody(promptFeature('feature.circularArray', 'pattern.count', 6, 1, (v) => s().applyCircularArrayFeature(Math.round(v)))) });
+  registerCommand({ id: 'transform.move', label: tr('menu.move'), labelKey: 'menu.move', category: 'Modify', run: needBody(() => s().setMoveDialogOpen(true)) });
+  registerCommand({ id: 'transform.rotate', label: tr('menu.rotateDlg'), labelKey: 'menu.rotateDlg', category: 'Modify', run: needBody(() => s().setRotateDialogOpen(true)) });
+  registerCommand({ id: 'transform.scale', label: tr('menu.scaleDlg'), labelKey: 'menu.scaleDlg', category: 'Modify', run: needBody(() => s().setScaleDialogOpen(true)) });
   const patternCommands: [string, 'linear' | 'circular' | 'grid', string][] = [
     ['pattern.linear', 'linear', 'menu.linearPattern'],
     ['pattern.circular', 'circular', 'menu.circularPattern'],
@@ -448,6 +480,7 @@ export function initBuiltinCommands(): void {
     registerCommand({
       id,
       label: tr(key),
+      labelKey: key,
       category: 'Modify',
       run: needBody(() => s().setPendingPattern({ bodyId: selectedBodyId()!, mode })),
     });
@@ -462,13 +495,14 @@ export function initBuiltinCommands(): void {
       showToast(tr('toast.combineFailed'), 'warning');
     }
   });
-  registerCommand({ id: 'combine.union', label: tr('menu.union'), category: 'Modify', run: combineToasted('union') });
-  registerCommand({ id: 'combine.subtract', label: tr('menu.subtract'), category: 'Modify', run: combineToasted('difference') });
-  registerCommand({ id: 'combine.intersect', label: tr('menu.intersect'), category: 'Modify', run: combineToasted('intersect') });
+  registerCommand({ id: 'combine.union', label: tr('menu.union'), labelKey: 'menu.union', category: 'Modify', run: combineToasted('union') });
+  registerCommand({ id: 'combine.subtract', label: tr('menu.subtract'), labelKey: 'menu.subtract', category: 'Modify', run: combineToasted('difference') });
+  registerCommand({ id: 'combine.intersect', label: tr('menu.intersect'), labelKey: 'menu.intersect', category: 'Modify', run: combineToasted('intersect') });
   // Exports — ProjectMenu's handlers verbatim (selection, else whole scene).
   registerCommand({
     id: 'export.stl',
     label: tr('export.stl'),
+    labelKey: 'export.stl',
     category: 'Export',
     run: () => {
       const targets = exportTargetsBodies();
@@ -493,6 +527,7 @@ export function initBuiltinCommands(): void {
   registerCommand({
     id: 'export.obj',
     label: tr('export.obj'),
+    labelKey: 'export.obj',
     category: 'Export',
     run: () => {
       const targets = exportTargetsBodies();
@@ -508,6 +543,7 @@ export function initBuiltinCommands(): void {
   registerCommand({
     id: 'export.threemf',
     label: tr('export.threemf'),
+    labelKey: 'export.threemf',
     category: 'Export',
     run: () => {
       const targets = exportTargetsBodies();
@@ -530,6 +566,7 @@ export function initBuiltinCommands(): void {
   registerCommand({
     id: 'export.png',
     label: tr('export.png'),
+    labelKey: 'export.png',
     category: 'Export',
     run: () => {
       // Lazy import keeps the capture service (renderer dependency) out of
@@ -553,6 +590,7 @@ export function initBuiltinCommands(): void {
   registerCommand({
     id: 'project.importMesh',
     label: tr('project.import'),
+    labelKey: 'project.import',
     category: 'Project',
     // ProjectMenu's hidden input, recreated on demand: opens the OS file
     // picker for STL/OBJ/3MF/STEP and imports through the same loader.

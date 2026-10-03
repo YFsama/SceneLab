@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../store/app';
-import { searchCommands, runCommand } from '../../lib/commands/registry';
+import { searchCommands, runCommand, commandLabel } from '../../lib/commands/registry';
 import { useT } from '../../lib/i18n';
 
 /**
@@ -16,13 +16,18 @@ export function CommandPalette() {
 }
 
 function Palette({ onClose }: { onClose: () => void }) {
+  // useT subscribes to the store locale, so a runtime language switch
+  // re-renders here — and the results below re-resolve with it.
   const { t } = useT();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
-  const results = useMemo(() => searchCommands(query).slice(0, 50), [query]);
+  // Resolved directly (not memoized on the query alone): command labels —
+  // and therefore the fuzzy hits — are read from the ACTIVE locale via
+  // commandLabel, so the same registry re-localizes per render.
+  const results = searchCommands(query).slice(0, 50);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -78,7 +83,7 @@ function Palette({ onClose }: { onClose: () => void }) {
                 >
                   <span className="truncate">
                     {cmd.category && <span className="text-text-muted">{cmd.category} · </span>}
-                    {cmd.label}
+                    {commandLabel(cmd)}
                   </span>
                   {cmd.shortcut && <span className="text-[10px] font-mono text-text-muted shrink-0">{cmd.shortcut}</span>}
                 </button>
