@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import * as THREE from 'three';
 import { useStore } from '../../store/app';
 import { createSketch, addLine } from '../../lib/sketch/engine';
 import { createBox, translateBody, type SolidBody } from '../../lib/geometry';
@@ -364,6 +365,120 @@ describe('ViewportCanvas combine menu (rendered)', () => {
       await act(async () => { menuButton(m.container, translations.en!['menu.intersect']!)!.click(); });
       expect(combine).toHaveBeenCalledWith('intersect');
       expect(toastMessages()).toEqual([]);
+    } finally {
+      await unmount(m);
+    }
+  });
+});
+
+// Click-click drawing (F7): every commercial sketcher's primary interaction.
+// The real render loop keeps the camera's matrixWorld fresh before pointer
+// events fire; the fake renderer never calls updateMatrixWorld, so refresh it
+// inside setFromCamera for these gesture tests (afterwards the raycast is the
+// same pure math production uses).
+describe('ViewportCanvas click-click drawing (rendered)', () => {
+  type SetFromCamera = (this: THREE.Raycaster, coords: THREE.Vector2, camera: THREE.Camera) => void;
+  const raycasterProto = THREE.Raycaster.prototype as unknown as { setFromCamera: SetFromCamera };
+  const originalSetFromCamera: SetFromCamera = raycasterProto.setFromCamera;
+
+  beforeAll(() => {
+    raycasterProto.setFromCamera = function (coords, camera) {
+      camera.updateMatrixWorld();
+      originalSetFromCamera.call(this, coords, camera);
+    };
+  });
+  afterAll(() => {
+    raycasterProto.setFromCamera = originalSetFromCamera;
+  });
+
+  beforeEach(() => {
+    clearToasts();
+    useStore.setState({
+      locale: 'en',
+      workspace: 'sketch',
+      sketchActive: true,
+      sketchTool: 'line',
+      sketchPlaneId: 'xy',
+      currentSketch: createSketch('xy'),
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      drawStart: null,
+      polylineLast: null,
+    });
+  });
+
+  function mouse(type: 'mousedown' | 'mouseup', x: number, y: number): MouseEvent {
+    return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 });
+  }
+
+  function linesInState(): number {
+    const sketch = useStore.getState().currentSketch!;
+    return [...sketch.entities.values()].filter((e) => e.type === 'line').length;
+  }
+
+  it('first press arms, its own release keeps the draw armed, second press commits', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      // Click 1: press arms the start point…
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 25, 50)); });
+      const armed = useStore.getState().drawStart;
+      expect(armed).not.toBeNull();
+      // …and its own (motionless) release KEEPS it armed — clearing it here is
+      // exactly what used to make click-click silently do nothing.
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 25, 50)); });
+      expect(useStore.getState().drawStart).toEqual(armed);
+      expect(linesInState()).toBe(0);
+
+      // Click 2 at a different point: the press itself commits the line.
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 75, 50)); });
+      expect(linesInState()).toBe(1);
+      expect(useStore.getState().drawStart).toBeNull();
+      // The trailing release must not commit anything more.
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 75, 50)); });
+      expect(linesInState()).toBe(1);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('press-drag-release still commits exactly one entity and re-arms fresh', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 25, 50)); });
+      expect(useStore.getState().drawStart).not.toBeNull();
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 75, 50)); });
+      expect(linesInState()).toBe(1);
+      expect(useStore.getState().drawStart).toBeNull();
+
+      // A second drag draws a second line from the new start.
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 75, 90)); });
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 25, 90)); });
+      expect(linesInState()).toBe(2);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('a zero-size second press commits nothing and stays armed (no junk entities)', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 25, 50)); });
+      await act(async () => { viewport.dispatchEvent(mouse('mouseup', 25, 50)); });
+      // Second press at the SAME point: refused, draw still armed.
+      await act(async () => { viewport.dispatchEvent(mouse('mousedown', 25, 50)); });
+      expect(linesInState()).toBe(0);
+      expect(useStore.getState().drawStart).not.toBeNull();
     } finally {
       await unmount(m);
     }

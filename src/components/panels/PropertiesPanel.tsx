@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
 import type { SolidBody } from '../../lib/geometry/types';
@@ -17,16 +17,21 @@ const materials = MATERIALS;
 /**
  * Mass / inertia readout with its own material selector. Split out so changing
  * the material only re-renders this section, not the panel's ~50 mesh analyses.
+ * `volume` is the panel's memoized computation — passing it in keeps this
+ * section from recomputing it (the battery runs once per selected body).
  */
-function MassProperties({ body, t }: { body: SolidBody; t: (k: string) => string }) {
+function MassProperties({ body, volume, t }: { body: SolidBody; volume: number; t: (k: string) => string }) {
   // Material is stored on the body so each part keeps its own (and it persists).
   const material = body.material ?? 'steel';
-  const volume = computeVolume(body);
   const density = materials[material]?.density ?? 7.85;
   const mass = (volume / 1000) * density; // mm³ to cm³, then * density
   // Principal moments of inertia about the CoM (g·mm²); density converted
-  // g/cm³ → g/mm³ so the units come out as g·mm².
-  const pm = computePrincipalMoments(body, density / 1000);
+  // g/cm³ → g/mm³ so the units come out as g·mm². Memoized per body — the
+  // inertia tensor is the second-most expensive call in the battery.
+  const pm = useMemo(
+    () => computePrincipalMoments(body, density / 1000),
+    [body, density],
+  );
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-1 text-xs text-text-muted">
@@ -77,6 +82,57 @@ export function PropertiesPanel() {
   const selectedBody = selectedIds.length === 1
     ? bodies.find((b) => b.id === selectedIds[0])
     : undefined;
+
+  // The measurement battery (volume, area, print analysis, mesh stats, …) is
+  // pure over the selected body. It used to run inline in JSX on EVERY render
+  // (~250 ms per click, ~470 ms at 80k faces — renames, material picks, any
+  // store tick). Memoized per body reference: a replaced body object (an edit)
+  // recomputes it; a rename keystroke or unrelated store update reuses it.
+  // Keyed on nothing else — materials live on the body, locale drives labels
+  // only, not values.
+  const battery = useMemo(() => {
+    if (!selectedBody) return null;
+    const oh = analyzeOverhangs(selectedBody);
+    return {
+      diag: computeBoundingBoxDiagonal(selectedBody).toFixed(2),
+      center: computeBoundingBoxCenter(selectedBody),
+      centroid: computeCentroid(selectedBody),
+      volume: computeVolume(selectedBody),
+      surfaceArea: computeSurfaceArea(selectedBody),
+      edgeLength: computeTotalEdgeLength(selectedBody),
+      print: {
+        oh,
+        st: analyzeStability(selectedBody),
+        orient: recommendOrientation(selectedBody),
+        job: estimatePrintJob(selectedBody, { material: 'PLA' }),
+        support: estimateSupportVolume(selectedBody),
+        bed: analyzeBedContact(selectedBody),
+        supportFaces: oh.faces.filter((f) => f.needsSupport).length,
+      },
+      stats: {
+        mesh: computeMeshStatistics(selectedBody),
+        avgDegree: computeAverageVertexDegree(selectedBody),
+        largestFace: computeLargestFace(selectedBody),
+      },
+    };
+  }, [selectedBody]);
+
+  // The heavyweight topology analyses (adjacency was minutes pre-fix on huge
+  // meshes) run only while the Advanced section is expanded, and are memoized
+  // per body so expanding + renaming doesn't recompute them either.
+  const advanced = useMemo(() => {
+    if (!selectedBody || !showAdvanced) return null;
+    return {
+      manifold: checkManifold(selectedBody),
+      adjacency: computeAdjacency(selectedBody),
+      curvature: computeCurvature(selectedBody),
+    };
+  }, [selectedBody, showAdvanced]);
+
+  // Both batteries are null exactly when no body is selected; every use below
+  // sits inside the render's selectedBody branch, so the aliases hold there.
+  const bat = battery!;
+  const adv = advanced!;
 
   return (
     <aside
@@ -173,9 +229,9 @@ export function PropertiesPanel() {
                 <span>{t('panel.dimensions')}</span>
               </div>
               {(() => {
-                const diag = computeBoundingBoxDiagonal(selectedBody).toFixed(2);
-                const center = computeBoundingBoxCenter(selectedBody);
-                const centroid = computeCentroid(selectedBody);
+                const diag = bat.diag;
+                const center = bat.center;
+                const centroid = bat.centroid;
                 return (
                   <div className="pl-4 text-xs text-text-secondary space-y-0.5">
                     <DimensionEditor
@@ -209,7 +265,7 @@ export function PropertiesPanel() {
               <div className="pl-4">
                 <PositionEditor
                   key={selectedBody.id}
-                  center={computeBoundingBoxCenter(selectedBody)}
+                  center={bat.center}
                   onMove={(target) => { selectObject(selectedBody.id); useStore.getState().moveSelectionTo(target); }}
                 />
               </div>
@@ -221,7 +277,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.volume')}</span>
               </div>
               <div className="pl-4 text-xs text-text-secondary">
-                <p>{computeVolume(selectedBody).toFixed(2)} mm³</p>
+                <p>{bat.volume.toFixed(2)} mm³</p>
               </div>
             </div>
 
@@ -231,7 +287,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.surfaceArea')}</span>
               </div>
               <div className="pl-4 text-xs text-text-secondary">
-                <p>{computeSurfaceArea(selectedBody).toFixed(2)} mm²</p>
+                <p>{bat.surfaceArea.toFixed(2)} mm²</p>
               </div>
             </div>
 
@@ -241,11 +297,11 @@ export function PropertiesPanel() {
                 <span>{t('panel.totalEdgeLength')}</span>
               </div>
               <div className="pl-4 text-xs text-text-secondary">
-                <p>{computeTotalEdgeLength(selectedBody).toFixed(2)} mm</p>
+                <p>{bat.edgeLength.toFixed(2)} mm</p>
               </div>
             </div>
 
-            <MassProperties body={selectedBody} t={t} />
+            <MassProperties body={selectedBody} volume={bat.volume} t={t} />
 
             <div className="space-y-1">
               <div className="flex items-center gap-1 text-xs text-text-muted">
@@ -253,13 +309,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.printAnalysis')}</span>
               </div>
               {(() => {
-                const oh = analyzeOverhangs(selectedBody);
-                const st = analyzeStability(selectedBody);
-                const orient = recommendOrientation(selectedBody);
-                const job = estimatePrintJob(selectedBody, { material: 'PLA' });
-                const support = estimateSupportVolume(selectedBody);
-                const bed = analyzeBedContact(selectedBody);
-                const supportFaces = oh.faces.filter((f) => f.needsSupport).length;
+                const { oh, st, orient, job, support, bed, supportFaces } = bat.print;
                 return (
                   <div className="pl-4 text-xs text-text-secondary space-y-0.5">
                     <p className="flex items-center gap-1">
@@ -295,9 +345,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.stats')}</span>
               </div>
               {(() => {
-                const stats = computeMeshStatistics(selectedBody);
-                const avgDegree = computeAverageVertexDegree(selectedBody);
-                const largestFace = computeLargestFace(selectedBody);
+                const { mesh: stats, avgDegree, largestFace } = bat.stats;
                 return (
                   <div className="pl-4 text-xs text-text-secondary space-y-0.5">
                     <p>{t('panel.vertices')}: {stats.vertexCount}</p>
@@ -334,7 +382,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.manifold')}</span>
               </div>
               {(() => {
-                const manifold = checkManifold(selectedBody);
+                const manifold = adv.manifold;
                 return (
                   <div className="pl-4 text-xs text-text-secondary space-y-0.5">
                     <p className={manifold.isManifold ? 'text-success' : 'text-warning'}>
@@ -456,7 +504,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.adjacency')}</span>
               </div>
               {(() => {
-                const adj = computeAdjacency(selectedBody);
+                const adj = adv.adjacency;
                 const avgVertexEdges = adj.vertexToEdges.size > 0
                   ? Array.from(adj.vertexToEdges.values()).reduce((s, a) => s + a.length, 0) / adj.vertexToEdges.size
                   : 0;
@@ -596,7 +644,7 @@ export function PropertiesPanel() {
                 <span>{t('panel.curvature')}</span>
               </div>
               {(() => {
-                const curv = computeCurvature(selectedBody);
+                const curv = adv.curvature;
                 return (
                   <div className="pl-4 text-xs text-text-secondary space-y-0.5">
                     <p>{t('panel.gaussianCurvature')}: {curv.gaussianCurvatureAvg.toFixed(4)}</p>

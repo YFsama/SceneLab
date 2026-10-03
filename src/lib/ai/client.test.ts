@@ -39,6 +39,29 @@ describe('SYSTEM_PROMPT', () => {
     // bodyId defaults to the FIRST body — the model must name the target.
     expect(SYSTEM_PROMPT).toMatch(/FIRST body/);
   });
+
+  it('teaches the takeover capabilities by workflow (tree control, undo, sketch read-back, edges)', () => {
+    // Feature-tree control + tree-aware modify routing.
+    expect(SYSTEM_PROMPT).toContain('remove_feature');
+    expect(SYSTEM_PROMPT).toContain('set_feature_suppressed');
+    expect(SYSTEM_PROMPT).toContain('reorder_feature');
+    expect(SYSTEM_PROMPT).toMatch(/prefer feature\s+edits for tree bodies/i);
+    // Undo as the recovery move.
+    expect(SYSTEM_PROMPT).toMatch(/call\s+undo immediately/i);
+    // Sketch read-back + driving dimensions.
+    expect(SYSTEM_PROMPT).toContain('list_sketch_entities');
+    expect(SYSTEM_PROMPT).toContain('update_sketch_constraint');
+    // Edge addressing for fillet/chamfer.
+    expect(SYSTEM_PROMPT).toContain('list_edges');
+    expect(SYSTEM_PROMPT).toContain('edgeIds');
+    // Workspace switching and body management.
+    expect(SYSTEM_PROMPT).toContain('set_workspace');
+    expect(SYSTEM_PROMPT).toContain('set_body_hidden');
+    expect(SYSTEM_PROMPT).toContain('rename_body');
+    // Honesty about export (no file saved by the tool) and feature-mode fillets.
+    expect(SYSTEM_PROMPT).toMatch(/export_body\s+validates\/counts/i);
+    expect(SYSTEM_PROMPT).toMatch(/ALL edges/i);
+  });
 });
 
 describe('sendMessageWithTools', () => {
@@ -176,5 +199,27 @@ describe('sendMessageWithTools', () => {
     expect(bodies).toHaveLength(3);
     // The closing call must omit tools so the model has to answer in text.
     expect((bodies[2] as { tools?: unknown }).tools).toBeUndefined();
+  });
+
+  it('defaults to 16 iterations — enough for a full part (was 5)', async () => {
+    const bodies: unknown[] = [];
+    const toolTurn = {
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 'list_bodies', input: {} }],
+    };
+    const fetchFn = mockFetch([toolTurn], bodies); // every call wants a tool
+    let calls = 0;
+    const executeTool = async (c: AIToolCall): Promise<AIToolResult> => {
+      calls += 1;
+      return { name: c.name, result: { count: 0 } };
+    };
+
+    await sendMessageWithTools('key', [userMsg('build it all')], executeTool, { fetchFn });
+
+    // The default budget ran to exhaustion: 16 tool iterations + 1 closing
+    // tool-free summary call.
+    expect(calls).toBe(16);
+    expect(bodies).toHaveLength(17);
+    expect((bodies[16] as { tools?: unknown }).tools).toBeUndefined();
   });
 });

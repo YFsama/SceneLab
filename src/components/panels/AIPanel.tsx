@@ -116,11 +116,14 @@ export function AIPanel() {
       }
 
       // Run the full tool-use loop so the model sees each tool's result.
+      // maxIterations 32: a full part (sketch → extrude → fillets → holes →
+      // analysis → export check) needs 10-15+ tool calls; the client default
+      // (16) covers short turns, this panel raises it for real builds.
       const { text, toolResults } = await sendMessageWithTools(
         apiKey,
         currentMessages,
         executeToolCall,
-        { screenshot },
+        { screenshot, maxIterations: 32 },
       );
 
       let assistantContent = text;

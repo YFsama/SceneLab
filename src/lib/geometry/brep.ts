@@ -1217,18 +1217,14 @@ export function computeMeshStatistics(body: SolidBody): MeshStatistics {
 
 export function computeVertexDegrees(body: SolidBody): Map<number, number> {
   const degrees = new Map<number, number>();
+  // Coordinate-keyed index (see computeAdjacency) — the old per-edge linear
+  // scans made this O(E×V); this feeds the always-on stats battery in the
+  // properties panel, so it needs the same constant-factor fix.
+  const vertexIndex = buildVertexIndex(body);
 
   for (const edge of body.edges) {
-    const startIdx = body.vertices.findIndex((v) =>
-      Math.abs(v.x - edge.start.x) < 1e-6 &&
-      Math.abs(v.y - edge.start.y) < 1e-6 &&
-      Math.abs(v.z - edge.start.z) < 1e-6,
-    );
-    const endIdx = body.vertices.findIndex((v) =>
-      Math.abs(v.x - edge.end.x) < 1e-6 &&
-      Math.abs(v.y - edge.end.y) < 1e-6 &&
-      Math.abs(v.z - edge.end.z) < 1e-6,
-    );
+    const startIdx = vertexIndex.get(vertexKey(edge.start)) ?? -1;
+    const endIdx = vertexIndex.get(vertexKey(edge.end)) ?? -1;
 
     if (startIdx >= 0) degrees.set(startIdx, (degrees.get(startIdx) ?? 0) + 1);
     if (endIdx >= 0) degrees.set(endIdx, (degrees.get(endIdx) ?? 0) + 1);
@@ -1488,11 +1484,19 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
   const edgeToFaces = new Map<number, number[]>();
   const faceToEdges = new Map<number, number[]>();
 
+  // Coordinate-keyed lookup tables built once per call: the previous per-lookup
+  // linear scans (findVertexIndex / findEdgeIndex) made the loops below
+  // O(E×V) / O(F×E) — minutes at 80k faces. Keys quantize coordinates to 6
+  // decimals (the same convention as the sketch chainLineLoop ptKey) and first
+  // occurrence wins, mirroring the old findIndex semantics.
+  const vertexIndex = buildVertexIndex(body);
+  const edgeIndex = buildEdgeIndex(body);
+
   // Build vertex-to-edge adjacency
   for (let ei = 0; ei < body.edges.length; ei++) {
     const edge = body.edges[ei]!;
-    const startIdx = findVertexIndex(body, edge.start);
-    const endIdx = findVertexIndex(body, edge.end);
+    const startIdx = vertexIndex.get(vertexKey(edge.start)) ?? -1;
+    const endIdx = vertexIndex.get(vertexKey(edge.end)) ?? -1;
 
     if (startIdx >= 0) {
       if (!vertexToEdges.has(startIdx)) vertexToEdges.set(startIdx, []);
@@ -1508,7 +1512,7 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
   for (let fi = 0; fi < body.faces.length; fi++) {
     const face = body.faces[fi]!;
     for (const v of face.vertices) {
-      const idx = findVertexIndex(body, v);
+      const idx = vertexIndex.get(vertexKey(v)) ?? -1;
       if (idx >= 0) {
         if (!vertexToFaces.has(idx)) vertexToFaces.set(idx, []);
         vertexToFaces.get(idx)!.push(fi);
@@ -1522,7 +1526,7 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
     const verts = face.vertices;
     for (let i = 0; i < verts.length; i++) {
       const next = (i + 1) % verts.length;
-      const edgeIdx = findEdgeIndex(body, verts[i]!, verts[next]!);
+      const edgeIdx = edgeIndex.get(undirectedEdgeKey(verts[i]!, verts[next]!)) ?? -1;
       if (edgeIdx >= 0) {
         if (!edgeToFaces.has(edgeIdx)) edgeToFaces.set(edgeIdx, []);
         edgeToFaces.get(edgeIdx)!.push(fi);
@@ -1536,20 +1540,36 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
   return { vertexToEdges, vertexToFaces, edgeToFaces, faceToEdges };
 }
 
-function findVertexIndex(body: SolidBody, v: Vec3): number {
-  return body.vertices.findIndex(
-    (nv) => Math.abs(nv.x - v.x) < 1e-6 && Math.abs(nv.y - v.y) < 1e-6 && Math.abs(nv.z - v.z) < 1e-6,
-  );
+/** Coordinate → vertex-index map (first occurrence wins, like the old findIndex). */
+function buildVertexIndex(body: SolidBody): Map<string, number> {
+  const index = new Map<string, number>();
+  body.vertices.forEach((v, i) => {
+    const k = vertexKey(v);
+    if (!index.has(k)) index.set(k, i);
+  });
+  return index;
 }
 
-function findEdgeIndex(body: SolidBody, v1: Vec3, v2: Vec3): number {
-  return body.edges.findIndex(
-    (e) =>
-      (Math.abs(e.start.x - v1.x) < 1e-6 && Math.abs(e.start.y - v1.y) < 1e-6 && Math.abs(e.start.z - v1.z) < 1e-6 &&
-       Math.abs(e.end.x - v2.x) < 1e-6 && Math.abs(e.end.y - v2.y) < 1e-6 && Math.abs(e.end.z - v2.z) < 1e-6) ||
-      (Math.abs(e.start.x - v2.x) < 1e-6 && Math.abs(e.start.y - v2.y) < 1e-6 && Math.abs(e.start.z - v2.z) < 1e-6 &&
-       Math.abs(e.end.x - v1.x) < 1e-6 && Math.abs(e.end.y - v1.y) < 1e-6 && Math.abs(e.end.z - v1.z) < 1e-6),
-  );
+/** Undirected start/end coordinate pair → edge-index map (first wins). */
+function buildEdgeIndex(body: SolidBody): Map<string, number> {
+  const index = new Map<string, number>();
+  body.edges.forEach((e, i) => {
+    const k = undirectedEdgeKey(e.start, e.end);
+    if (!index.has(k)) index.set(k, i);
+  });
+  return index;
+}
+
+/** Quantized coordinate key — 6-decimal convention, ~the old 1e-6 tolerance. */
+function vertexKey(v: Vec3): string {
+  return `${v.x.toFixed(6)},${v.y.toFixed(6)},${v.z.toFixed(6)}`;
+}
+
+/** Order-independent key so edge (a→b) ≡ (b→a), like the old findEdgeIndex. */
+function undirectedEdgeKey(a: Vec3, b: Vec3): string {
+  const ka = vertexKey(a);
+  const kb = vertexKey(b);
+  return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
 }
 
 export interface ValenceDistribution {
@@ -1593,6 +1613,9 @@ export function computeCurvature(body: SolidBody): CurvatureInfo {
   // Approximate Gaussian curvature using angle defect method
   // K(v) = 2π - Σ θ_i (sum of angles around vertex)
   const vertexAngles = new Map<number, number>();
+  // Same rationale as computeAdjacency: a per-call coordinate-keyed vertex
+  // index replaces an O(V) findIndex per face corner (O(F×V) overall).
+  const vertexIndex = buildVertexIndex(body);
 
   for (const face of body.faces) {
     const verts = face.vertices;
@@ -1603,9 +1626,7 @@ export function computeCurvature(body: SolidBody): CurvatureInfo {
       const v1 = verts[i]!;
       const v2 = verts[next]!;
 
-      const idx = body.vertices.findIndex(
-        (v) => Math.abs(v.x - v1.x) < 1e-6 && Math.abs(v.y - v1.y) < 1e-6 && Math.abs(v.z - v1.z) < 1e-6,
-      );
+      const idx = vertexIndex.get(vertexKey(v1)) ?? -1;
       if (idx < 0) continue;
 
       // Compute angle at v1

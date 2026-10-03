@@ -18,7 +18,6 @@ import type {
 } from './types';
 import type { SolidBody, Vec3 } from '../geometry/types';
 import { createExtrude, createRevolve, createLoftSections, createCylinder, createCone, computeBoundingBox, computeBoundingBoxDiagonal } from '../geometry/brep';
-import { booleanOp } from '../geometry/boolean';
 import {
   applyFillet,
   applyChamfer,
@@ -32,11 +31,25 @@ import {
   translateBody,
 } from '../geometry/operations';
 import { solveSketch } from '../sketch/engine';
+import { sketchFrame, sketchToWorld, planeNormal } from '../sketch/frames';
 import type { Sketch } from '../sketch/types';
+import { booleanOp, isManifoldEngineReady } from '../geometry/boolean';
 
 let nextId = 1;
 function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
+}
+
+/**
+ * Whether the feature's evaluator consults the boolean engine, making its
+ * result depend on engine readiness. Only the hole family does today —
+ * evaluateHole → drillHoleInBody (and its counterbore/countersink cutters)
+ * route through booleanOp, which is exact when the Manifold WASM engine is
+ * warm and a blocky voxel approximation when it is not. Every other evaluator
+ * is pure brep math, so their memo entries never need readiness invalidation.
+ */
+function featureTouchesBooleanEngine(feature: Feature): boolean {
+  return feature.type === 'hole';
 }
 
 export class FeatureTree {
@@ -46,12 +59,19 @@ export class FeatureTree {
   // …) and should therefore not appear on its own in the final output.
   private consumed = new Set<string>();
   // Incremental DAG memo: per feature OBJECT, its last result, the parent
-  // results it was computed from, and which parent features that evaluation
-  // consumed (fillet/shell/array replace their parent's output). `updateFeature`
+  // results it was computed from, which parent features that evaluation
+  // consumed (fillet/shell/array replace their parent's output), and whether
+  // the exact boolean engine was warm when it was evaluated. `updateFeature`
   // replaces the feature object, so an unchanged object with unchanged parent
   // results is reusable as-is — the downstream viewport diff keeps reusing
   // those body meshes instead of rebuilding every body on every recompute.
-  private memo = new Map<Feature, { result: FeatureResult; parents: FeatureResult[]; consumedParents: string[] }>();
+  // The readiness flag exists because a hole evaluated while the engine was
+  // cold produces a blocky voxel approximation; without the check that result
+  // would be pinned FOREVER, long after Manifold warmed up (see recompute).
+  private memo = new Map<
+    Feature,
+    { result: FeatureResult; parents: FeatureResult[]; consumedParents: string[]; engineReady: boolean }
+  >();
 
   addFeature(feature: Feature): void {
     this.features.push(feature);
@@ -114,11 +134,17 @@ export class FeatureTree {
   recompute(): void {
     this.consumed.clear();
     const prevMemo = this.memo;
-    const nextMemo = new Map<Feature, { result: FeatureResult; parents: FeatureResult[]; consumedParents: string[] }>();
+    const nextMemo = new Map<
+      Feature,
+      { result: FeatureResult; parents: FeatureResult[]; consumedParents: string[]; engineReady: boolean }
+    >();
     // Evaluators (firstParentBody, sketch lookups) read this.results while the
     // walk is in progress, so the fresh map must be live during the loop.
     const currentResults = new Map<string, FeatureResult>();
     this.results = currentResults;
+    // Read once per walk: readiness only flips asynchronously (warmup), never
+    // mid-loop, and reading it 80k times would be its own tax.
+    const engineReady = isManifoldEngineReady();
 
     for (const feature of this.features) {
       if (feature.suppressed) continue;
@@ -127,15 +153,19 @@ export class FeatureTree {
         .map((id) => currentResults.get(id))
         .filter((r): r is FeatureResult => r !== undefined);
 
-      // Reuse the cached result when this exact feature object is unchanged
-      // and every parent result is the same object it was computed from.
+      // Reuse the cached result when this exact feature object is unchanged,
+      // every parent result is the same object it was computed from, and —
+      // for features that consult the boolean engine — the engine's readiness
+      // hasn't flipped since evaluation (a cold voxel result must not stay
+      // pinned once the exact engine is live, and vice versa).
       const cached = prevMemo.get(feature);
       let result: FeatureResult;
       let consumedParents: string[];
       if (
         cached &&
         cached.parents.length === parents.length &&
-        cached.parents.every((p, i) => p === parents[i])
+        cached.parents.every((p, i) => p === parents[i]) &&
+        (!featureTouchesBooleanEngine(feature) || cached.engineReady === engineReady)
       ) {
         result = cached.result;
         consumedParents = cached.consumedParents;
@@ -155,7 +185,7 @@ export class FeatureTree {
         consumedParents = [...this.consumed].filter((id) => !consumedBefore.has(id));
       }
 
-      nextMemo.set(feature, { result, parents, consumedParents });
+      nextMemo.set(feature, { result, parents, consumedParents, engineReady });
       currentResults.set(feature.id, result);
     }
 
@@ -230,9 +260,14 @@ export class FeatureTree {
       throw new Error('Sketch profile has fewer than 3 points');
     }
 
+    // Plane-aware: the profile goes exactly where the viewport drew it, and
+    // the axis of revolution is the frame's in-plane vertical (where the
+    // sketch's +y points) — the same relationship the classic +Y-axis rule
+    // had for a front-plane (xy) sketch.
+    const planeId = parentSketch.sketch.planeId;
     const body = createRevolve({
-      profile: profilePoints.map((p) => ({ x: p.x, y: p.y, z: 0 })),
-      axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } },
+      profile: profilePoints.map((p) => sketchToWorld(planeId, p.x, p.y)),
+      axis: { origin: { x: 0, y: 0, z: 0 }, direction: sketchFrame(planeId).v },
       angle: feature.params.angle,
     });
     return { bodies: [body] };
@@ -374,9 +409,15 @@ export class FeatureTree {
       throw new Error('Sketch profile has fewer than 3 points');
     }
 
+    // Plane-aware: map the profile onto the plane the user drew it on and
+    // extrude along that plane's normal. For the default 'xz' ground plane
+    // this is bit-identical to the old hardcoded mapping (x, 0, y) + +Y; a
+    // vertical ('xy') sketch now extrudes along world Z instead of lying flat.
+    const planeId = parentSketch.sketch.planeId;
     const body = createExtrude({
       ...feature.params,
-      profile: profilePoints.map((p) => ({ x: p.x, y: 0, z: p.y })),
+      profile: profilePoints.map((p) => sketchToWorld(planeId, p.x, p.y)),
+      direction: planeNormal(planeId),
     });
 
     return { bodies: [body] };

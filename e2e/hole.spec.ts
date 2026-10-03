@@ -112,12 +112,18 @@ test('hole on a parametric body: timeline chip, volume drop, Ctrl+Z removes the 
   await page.goto('/');
   await awaitCanvas(page);
 
-  // Sketch entry via the datum-plane centre click (the sketch/timeline suites'
+  // Sketch entry via the datum-plane click (the sketch/timeline suites'
   // path — an inserted box would be a direct body with no feature history),
   // then a centred rectangle drag (R tool) and the extrude dialog's Extrude
   // button (default 10 mm).
+  // The click lands 40 px BELOW the screen centre: all three 3×3 datum quads
+  // meet at the origin, and from the iso camera the dead centre hits the
+  // vertical 'yz' diamond. Since extrude became plane-aware (it follows the
+  // sketch plane's true normal), this test needs the GROUND plane so the hole
+  // drills down the 10 mm extrude axis — the ground diamond starts just under
+  // the origin on screen.
   const box = (await page.locator('#viewport-canvas').boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2 + 40);
   await expect.poll(() => countEntities(page), { timeout: 5_000 }).toBe(0);
   await page.waitForTimeout(300); // let the camera finish snapping normal-to
 
@@ -148,8 +154,11 @@ test('hole on a parametric body: timeline chip, volume drop, Ctrl+Z removes the 
   const before = await selectAndReadVolume(page, center);
   expect(before).toBeGreaterThan(0);
 
-  // Right-click the body → Feature → Hole: ⌀4, depth 0 = through-all.
-  await applyHoleViaMenu(page, center, '4', '0');
+  // Right-click the body → Feature → Hole: ⌀2, depth 0 = through-all.
+  // ⌀2 (not ⌀4): the drag produces a ~3×5 mm footprint — a ⌀4 circle would
+  // be clipped by the 3 mm sides, making the removed volume depend on the
+  // clipping math instead of the clean cylinder formula below.
+  await applyHoleViaMenu(page, center, '2', '0');
 
   // The timeline gained the Hole chip as the third feature.
   await expect(chips(timeline)).toHaveCount(3);
@@ -159,11 +168,11 @@ test('hole on a parametric body: timeline chip, volume drop, Ctrl+Z removes the 
   // The hole consumed its parent — still exactly one object.
   expect(await countObjects(page)).toBe(1);
 
-  // The properties panel volume dropped by ~π·2²·10 (a ⌀4 cylinder through
+  // The properties panel volume dropped by ~π·1²·10 (a ⌀2 cylinder through
   // the 10 mm extrude), the same readout the smoke suite parses.
   const after = await selectAndReadVolume(page, center);
   const removed = before - after;
-  const ideal = Math.PI * 2 * 2 * 10;
+  const ideal = Math.PI * 1 * 1 * 10;
   expect(removed).toBeGreaterThan(ideal * 0.8);
   expect(removed).toBeLessThan(ideal * 1.2);
 

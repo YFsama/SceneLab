@@ -4,6 +4,11 @@ import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '.
 import { LIBRARY_PARTS } from '../library/parts';
 import { SAMPLE_PROJECTS } from '../library/samples';
 import { loadSampleProject } from '../library/loadSample';
+import { translations } from '../i18n';
+import { showToast } from '../toast';
+import { framingBodies } from '../render/fitView';
+import { downloadFile, exportOBJ, exportSTLBinary, export3MFPackage } from '../io';
+import { importMeshFile } from '../io/importFiles';
 
 /**
  * Build a midplane on the selected body (or the first body) from its two
@@ -189,6 +194,72 @@ export function clearCommands(): void {
 
 const PRIMITIVES: PrimitiveKind[] = ['box', 'cylinder', 'sphere', 'cone', 'torus', 'wedge', 'prism', 'tube', 'coil'];
 
+/**
+ * Locale-aware label for palette commands, resolved from the shared i18n
+ * tables (the registry runs outside React, so no hook — same approach as the
+ * params.open command below reads the locale). Reuses EXISTING keys only:
+ * feature.*, menu.*, pattern.*, export.*, project.import.
+ */
+const tr = (key: string): string => {
+  const locale = useStore.getState().locale;
+  return (translations[locale] ?? translations.en!)?.[key] ?? translations.en![key] ?? key;
+};
+
+/** The id of a selected body, or null. Palette commands have no cursor
+ * context (unlike the context menu, which pre-selects the right-clicked
+ * body), so body-scoped verbs require an existing selection. */
+function selectedBodyId(): string | null {
+  const st = useStore.getState();
+  return st.selectedIds.find((id) => st.bodies.some((b) => b.id === id)) ?? null;
+}
+
+/** Body-scoped palette verb wrapper: refuses with the same needs-body toast
+ * the context-menu path shows when its store action finds no body. */
+const needBody = (fn: () => void): (() => void) => () => {
+  if (!selectedBodyId()) {
+    showToast(tr('toast.featureNeedsBody'), 'warning');
+    return;
+  }
+  fn();
+};
+
+/** Combine verbs additionally need a SECOND selected body (the context menu
+ * hides the flyout until one exists); the palette refuses with the toast. */
+const needTwoBodies = (fn: () => void): (() => void) => () => {
+  const st = useStore.getState();
+  const n = st.selectedIds.filter((id) => st.bodies.some((b) => b.id === id)).length;
+  if (n < 2) {
+    showToast(tr('toast.featureNeedsBody'), 'warning');
+    return;
+  }
+  fn();
+};
+
+/** Success/needs-body toast shared by every feature command (identical to
+ * the context-menu handlers' onApply feedback). */
+const featureToast = (ok: boolean): void => {
+  showToast(tr(ok ? 'toast.featureApplied' : 'toast.featureNeedsBody'), ok ? 'success' : 'warning');
+};
+
+/** Numeric-prompt feature entry: identical prompt parameters + apply/toast
+ * behaviour as the corresponding context-menu item. */
+const promptFeature = (
+  titleKey: string, labelKey: string, initial: number, min: number,
+  apply: (v: number) => boolean,
+): (() => void) => () => {
+  useStore.getState().openNumericPrompt({
+    titleKey, labelKey, initial, min,
+    onApply: (v) => featureToast(apply(v)),
+  });
+};
+
+/** Export the selection (or the whole scene) — the exact handler body of
+ * ProjectMenu's export buttons, from the same lib calls. */
+function exportTargetsBodies() {
+  const st = useStore.getState();
+  return framingBodies(st.bodies, st.selectedIds, true);
+}
+
 /** Register the built-in commands (idempotent). */
 export function initBuiltinCommands(): void {
   const s = () => useStore.getState();
@@ -233,7 +304,7 @@ export function initBuiltinCommands(): void {
   // Workspace switching — mirrors the S/M/D/C shortcuts. Entering Sketch also
   // activates the sketch (matching the 'S' hotkey).
   registerCommand({ id: 'workspace.sketch', label: 'Workspace: Sketch', category: 'View', shortcut: 'S', run: () => { if (!s().sketchActive) { s().setWorkspace('sketch'); s().setSketchActive(true); } } });
-  registerCommand({ id: 'workspace.model', label: 'Workspace: Model', category: 'View', shortcut: 'M', run: () => s().setWorkspace('model') });
+  registerCommand({ id: 'workspace.model', label: 'Workspace: Model', category: 'View', shortcut: 'Shift+M', run: () => s().setWorkspace('model') });
   registerCommand({ id: 'workspace.drawing', label: 'Workspace: Drawing', category: 'View', shortcut: 'D', run: () => s().setWorkspace('drawing') });
   registerCommand({ id: 'workspace.cam', label: 'Workspace: CAM', category: 'View', shortcut: 'C', run: () => s().setWorkspace('cam') });
   for (const kind of PRIMITIVES) {
@@ -290,5 +361,216 @@ export function initBuiltinCommands(): void {
     label: s().locale === 'zh' ? '参数…' : 'Parameters…',
     category: 'Edit',
     run: () => { window.dispatchEvent(new CustomEvent('scenelab:open-parameters')); },
+  });
+  // --- Modeling verbs: the context menu's Feature / Transform / Pattern /
+  // Combine flyouts, ProjectMenu's exports and the mesh import — all
+  // reachable from the palette. Every run action performs the SAME store
+  // call / prompt chain the context-menu item or ProjectMenu button makes
+  // (labels reuse existing i18n keys); body-scoped verbs refuse with the
+  // needs-body toast when the selection is empty.
+  registerCommand({
+    id: 'feature.extrude',
+    label: tr('feature.extrude'),
+    category: 'Modify',
+    shortcut: 'E',
+    // The dialog is meaningless without a sketch (same guard as the E key):
+    // opening it would only end in the "no closed profile" failure toast.
+    run: () => {
+      if (!s().currentSketch) {
+        showToast(tr('toast.needsSketch'), 'warning');
+        return;
+      }
+      s().setShowExtrudeDialog(true);
+    },
+  });
+  registerCommand({ id: 'feature.fillet', label: tr('feature.fillet'), category: 'Modify', run: needBody(promptFeature('feature.fillet', 'feature.filletPrompt', 2, 0.01, (v) => s().applyFilletFeature(v))) });
+  registerCommand({ id: 'feature.chamfer', label: tr('feature.chamfer'), category: 'Modify', run: needBody(promptFeature('feature.chamfer', 'feature.chamferPrompt', 2, 0.01, (v) => s().applyChamferFeature(v))) });
+  registerCommand({ id: 'feature.shell', label: tr('feature.shell'), category: 'Modify', run: needBody(promptFeature('feature.shell', 'feature.shellPrompt', 1.5, 0.01, (v) => s().applyShellFeature(v))) });
+  registerCommand({
+    id: 'feature.hole',
+    label: tr('feature.hole'),
+    category: 'Modify',
+    // Two-step entry like the context menu: diameter, then depth (0 = through).
+    run: needBody(() => {
+      useStore.getState().openNumericPrompt({
+        titleKey: 'feature.hole', labelKey: 'feature.holeDiameter',
+        initial: 5, min: 0.1,
+        onApply: (d) => {
+          useStore.getState().openNumericPrompt({
+            titleKey: 'feature.hole', labelKey: 'feature.holeDepth',
+            initial: 0, min: 0,
+            onApply: (h) => {
+              featureToast(useStore.getState().applyHoleToBody(selectedBodyId() ?? '', d, h > 0 ? h : null));
+            },
+          });
+        },
+      });
+    }),
+  });
+  for (const plane of ['xy', 'xz', 'yz'] as const) {
+    registerCommand({
+      id: `feature.mirror${plane.toUpperCase()}`,
+      label: tr(`feature.mirror${plane.toUpperCase()}`),
+      category: 'Modify',
+      run: needBody(() => featureToast(s().applyMirrorFeature(plane, true))),
+    });
+  }
+  for (const axis of ['x', 'y', 'z'] as const) {
+    registerCommand({
+      id: `feature.linearArray${axis.toUpperCase()}`,
+      label: `${tr('feature.linearArray')} (${axis.toUpperCase()})`,
+      category: 'Modify',
+      run: needBody(() => {
+        useStore.getState().openNumericPrompt({
+          titleKey: 'feature.linearArray', labelKey: 'pattern.count',
+          initial: 3, min: 1,
+          onApply: (count) => {
+            useStore.getState().openNumericPrompt({
+              titleKey: 'feature.linearArray', labelKey: 'pattern.spacing',
+              initial: 10, min: 0.01,
+              onApply: (spacing) => featureToast(useStore.getState().applyLinearArrayFeature(count, spacing, axis)),
+            });
+          },
+        });
+      }),
+    });
+  }
+  registerCommand({ id: 'feature.circularArray', label: tr('feature.circularArray'), category: 'Modify', run: needBody(promptFeature('feature.circularArray', 'pattern.count', 6, 1, (v) => s().applyCircularArrayFeature(Math.round(v)))) });
+  registerCommand({ id: 'transform.move', label: tr('menu.move'), category: 'Modify', run: needBody(() => s().setMoveDialogOpen(true)) });
+  registerCommand({ id: 'transform.rotate', label: tr('menu.rotateDlg'), category: 'Modify', run: needBody(() => s().setRotateDialogOpen(true)) });
+  registerCommand({ id: 'transform.scale', label: tr('menu.scaleDlg'), category: 'Modify', run: needBody(() => s().setScaleDialogOpen(true)) });
+  const patternCommands: [string, 'linear' | 'circular' | 'grid', string][] = [
+    ['pattern.linear', 'linear', 'menu.linearPattern'],
+    ['pattern.circular', 'circular', 'menu.circularPattern'],
+    ['pattern.grid', 'grid', 'menu.gridPattern'],
+  ];
+  for (const [id, mode, key] of patternCommands) {
+    registerCommand({
+      id,
+      label: tr(key),
+      category: 'Modify',
+      run: needBody(() => s().setPendingPattern({ bodyId: selectedBodyId()!, mode })),
+    });
+  }
+  // Combine resolves to the new body id, or null when the boolean produced
+  // nothing — failures surface as the same combineFailed toast as the menu.
+  const combineToasted = (op: 'union' | 'difference' | 'intersect') => needTwoBodies(async () => {
+    try {
+      const id = await useStore.getState().combineSelected(op);
+      if (id == null) showToast(tr('toast.combineFailed'), 'warning');
+    } catch {
+      showToast(tr('toast.combineFailed'), 'warning');
+    }
+  });
+  registerCommand({ id: 'combine.union', label: tr('menu.union'), category: 'Modify', run: combineToasted('union') });
+  registerCommand({ id: 'combine.subtract', label: tr('menu.subtract'), category: 'Modify', run: combineToasted('difference') });
+  registerCommand({ id: 'combine.intersect', label: tr('menu.intersect'), category: 'Modify', run: combineToasted('intersect') });
+  // Exports — ProjectMenu's handlers verbatim (selection, else whole scene).
+  registerCommand({
+    id: 'export.stl',
+    label: tr('export.stl'),
+    category: 'Export',
+    run: () => {
+      const targets = exportTargetsBodies();
+      if (targets.length === 0) { showToast(tr('toast.noBodies'), 'warning'); return; }
+      try {
+        for (const body of targets) {
+          const buffer = exportSTLBinary(body);
+          const blob = new Blob([buffer], { type: 'application/octet-stream' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${body.name}.stl`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+        showToast(tr('toast.stlExported'), 'success');
+      } catch (e) {
+        showToast(`${tr('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      }
+    },
+  });
+  registerCommand({
+    id: 'export.obj',
+    label: tr('export.obj'),
+    category: 'Export',
+    run: () => {
+      const targets = exportTargetsBodies();
+      if (targets.length === 0) { showToast(tr('toast.noBodies'), 'warning'); return; }
+      try {
+        for (const body of targets) downloadFile(exportOBJ(body), `${body.name}.obj`);
+        showToast(tr('toast.objExported'), 'success');
+      } catch (e) {
+        showToast(`${tr('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      }
+    },
+  });
+  registerCommand({
+    id: 'export.threemf',
+    label: tr('export.threemf'),
+    category: 'Export',
+    run: () => {
+      const targets = exportTargetsBodies();
+      if (targets.length === 0) { showToast(tr('toast.noBodies'), 'warning'); return; }
+      try {
+        const pkg = export3MFPackage(targets);
+        const blob = new Blob([pkg as BlobPart], { type: 'model/3mf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${useStore.getState().projectName}.3mf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(tr('toast.threemfExported'), 'success');
+      } catch (e) {
+        showToast(`${tr('toast.exportFailed')}: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      }
+    },
+  });
+  registerCommand({
+    id: 'export.png',
+    label: tr('export.png'),
+    category: 'Export',
+    run: () => {
+      // Lazy import keeps the capture service (renderer dependency) out of
+      // the registry's module graph for every command run.
+      void import('../render/capture').then(({ captureFreshCanvas }) => {
+        const canvas = captureFreshCanvas();
+        if (!canvas) { showToast(tr('toast.noViewport'), 'warning'); return; }
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${useStore.getState().projectName}.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+          showToast(tr('toast.pngExported'), 'success');
+        }, 'image/png');
+      });
+    },
+  });
+  registerCommand({
+    id: 'project.importMesh',
+    label: tr('project.import'),
+    category: 'Project',
+    // ProjectMenu's hidden input, recreated on demand: opens the OS file
+    // picker for STL/OBJ/3MF/STEP and imports through the same loader.
+    run: () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.stl,.obj,.3mf,.step,.stp';
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+          const r = await importMeshFile(file);
+          showToast(`${tr('toast.loaded')} "${file.name}"${r.bodyCount > 1 ? ` (${r.bodyCount})` : ''}`, 'success');
+        } catch (err) {
+          showToast(`${tr('toast.loadFailed')}: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        }
+      };
+      input.click();
+    },
   });
 }

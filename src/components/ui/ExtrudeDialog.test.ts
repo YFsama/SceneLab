@@ -26,8 +26,10 @@ describe('performExtrude (what the dialog submits to)', () => {
     });
   });
 
+  // 'xz' (the ground plane): the extrude follows the sketch plane's normal,
+  // and this suite's axis assertions measure the extrude along world Y.
   const rectangleSketch = () => {
-    const sketch = createSketch('xy');
+    const sketch = createSketch('xz');
     addRectangle(sketch, 0, 0, 10, 5);
     return sketch;
   };

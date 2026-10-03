@@ -14,6 +14,8 @@ import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, appl
 import { computeBoundingBoxCenter } from '../lib/geometry/brep';
 import { findLibraryPart } from '../lib/library/parts';
 import { isTauri, callNative } from '../lib/runtime';
+import { translations } from '../lib/i18n';
+import { showToast } from '../lib/toast';
 import type { DrawingDetail, DrawingNote, DrawingSectionAxis } from '../lib/io/drawingNotes';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
@@ -63,7 +65,9 @@ export type ViewDirection = 'top' | 'front' | 'right' | 'iso' | 'back' | 'bottom
 export type ProjectionMode = 'perspective' | 'orthographic';
 export type SketchPlaneId = 'xy' | 'xz' | 'yz';
 
-/** One undo/redo history entry: scene, feature tree AND drawing sheet. */
+/** One undo/redo history entry: scene, feature tree, drawing sheet AND the
+ * sketch session (F15: undo after an extrude returns to the sketch, exactly as
+ * it was — entities, plane and workspace). */
 interface HistorySnapshot {
   directBodies: SolidBody[];
   hiddenIds: string[];
@@ -71,6 +75,12 @@ interface HistorySnapshot {
   drawingSectionAxis: DrawingSectionAxis;
   drawingDetails: DrawingDetail[];
   drawingNotes: DrawingNote[];
+  /** Deep clone — sketch entities are mutated in place while sketching, so a
+   * bare reference would not freeze the snapshot's state. */
+  currentSketch: Sketch | null;
+  sketchActive: boolean;
+  workspace: WorkspaceMode;
+  sketchPlaneId: SketchPlaneId;
 }
 
 interface AppState {
@@ -206,7 +216,10 @@ interface AppState {
   addDirectBodies: (bodies: SolidBody[]) => void;
   /** Create a default-sized primitive of `kind`, add it, and return its id. */
   addPrimitive: (kind: PrimitiveKind) => string;
-  replaceBody: (oldId: string, newBody: SolidBody) => void;
+  /** Replace a direct body in place (undoable). Returns false — with no
+   * mutation and no undo entry — when the id belongs to a feature-tree body
+   * (edit its feature instead) or doesn't exist. */
+  replaceBody: (oldId: string, newBody: SolidBody) => boolean;
   /** Resize a body to exact X/Y/Z extents (mm), keeping it selected; false if missing or invalid. */
   resizeBodyTo: (bodyId: string, target: Vec3) => boolean;
   /** Rename a (direct) body; returns false if the id isn't a direct body or the name is blank. */
@@ -502,14 +515,21 @@ interface AppState {
   measureFacePick: MeasureFacePick | null;
   /** Set (or clear with null) the face measured in area mode. */
   setMeasureFacePick: (pick: MeasureFacePick | null) => void;
-  performExtrude: (distance: number, symmetric: boolean) => void;
-  performRevolve: (angle: number) => void;
+  /** Extrude the current sketch into a parametric feature. Returns false —
+   * leaving the sketch session, tree and history untouched — when there is no
+   * sketch, the distance is invalid, or the profile can't produce a solid
+   * (a toast explains why). */
+  performExtrude: (distance: number, symmetric: boolean) => boolean;
+  /** Revolve the current sketch into a parametric feature. Same failure
+   * semantics as performExtrude. */
+  performRevolve: (angle: number) => boolean;
   /**
    * Sweep the current sketch along a straight path (its extrude direction) with
    * an accumulated twist, producing a parametric sweep feature — a twisted
-   * column that a plain extrude can't make.
+   * column that a plain extrude can't make. Same failure semantics as
+   * performExtrude.
    */
-  performSweep: (distance: number, twistDegrees: number) => void;
+  performSweep: (distance: number, twistDegrees: number) => boolean;
 
   // Modify features (Fusion-style: parametric on tree bodies, direct edit with
   // undo on AI/imported bodies). Each returns false when nothing is selected.
@@ -660,11 +680,16 @@ export const useStore = create<AppState>((set, get) => {
         drawingSectionAxis: s.drawingSectionAxis,
         drawingDetails: s.drawingDetails,
         drawingNotes: s.drawingNotes,
+        currentSketch: s.currentSketch ? cloneSketch(s.currentSketch) : null,
+        sketchActive: s.sketchActive,
+        workspace: s.workspace,
+        sketchPlaneId: s.sketchPlaneId,
       }].slice(-50),
       redoStack: [],
     }));
   };
-  /** Restore a snapshot: direct bodies, visibility, feature list, drawing sheet. */
+  /** Restore a snapshot: direct bodies, visibility, feature list, drawing sheet
+   * and the sketch session (F15 — undo after an extrude lands back in it). */
   const applyUndoSnapshot = (snap: HistorySnapshot) => {
     const tree = get().featureTree;
     tree.features.length = 0;
@@ -677,6 +702,10 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: snap.drawingSectionAxis,
       drawingDetails: snap.drawingDetails,
       drawingNotes: snap.drawingNotes,
+      currentSketch: snap.currentSketch,
+      sketchActive: snap.sketchActive,
+      workspace: snap.workspace,
+      sketchPlaneId: snap.sketchPlaneId,
       // The tree mutates in place — the version bump is what makes undo/redo
       // repaint the timeline and the feature lists.
       featureVersion: get().featureVersion + 1,
@@ -689,15 +718,104 @@ export const useStore = create<AppState>((set, get) => {
     if (s) set((st) => ({ sketchUndoStack: [...st.sketchUndoStack, cloneSketch(s)].slice(-50), sketchRedoStack: [] }));
   };
 
+  /** Store-side translation lookup (the same keys useT() resolves in React).
+   * The store layer has no hook context, so read the locale from state — the
+   * established non-React pattern (lib/projectActions, lib/io/importFiles). */
+  const toastText = (key: string, vars?: Record<string, string | number>): string => {
+    const locale = get().locale;
+    let text = translations[locale]?.[key] ?? translations.en?.[key] ?? key;
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) text = text.replace(`{${k}}`, String(v));
+    }
+    return text;
+  };
+
+  // --- projectFingerprint memo -------------------------------------------------
+  // serializeProject on a large scene costs ~100 ms and builds a huge string,
+  // and undo/redo + autosave ask for the fingerprint far more often than the
+  // project actually changes (snapshots share body references by design). The
+  // memo recomputes only when one of serializeProject's inputs changes
+  // identity. The feature tree's `features` array is mutated IN PLACE (same
+  // reference for the tree's whole life), so the reference alone is not
+  // enough: length + the last feature object + featureVersion (bumped by every
+  // tree-mutating action and by applyUndoSnapshot) together cover every
+  // in-place content change — including performExtrude/Revolve/Sweep, which
+  // add features without a version bump but always change the length.
+  type FingerprintKeys = {
+    projectName: string;
+    directBodies: SolidBody[];
+    featuresRef: Feature[];
+    featureCount: number;
+    lastFeature: Feature | undefined;
+    featureVersion: number;
+    planes: PlaneDefinition[];
+    axes: AxisDefinition[];
+    points: PointDefinition[];
+    coordSystems: CoordinateSystemDefinition[];
+    annotations: AnnotationDefinition[];
+    drawingSectionAxis: DrawingSectionAxis;
+    drawingDetails: DrawingDetail[];
+    drawingNotes: DrawingNote[];
+  };
+  let fingerprintMemo: { keys: FingerprintKeys; value: string } | null = null;
+
+  // Autosave bookkeeping (non-reactive — never rendered): the fingerprint of
+  // the last SUCCESSFUL localStorage write, and whether the quota toast has
+  // already been raised this session (failures repeat every tick; the warning
+  // must not).
+  let lastAutosaveFingerprint: string | null = null;
+  let autosaveQuotaWarned = false;
+
   /** Stable fingerprint of the CURRENT project state (everything the file
    * format carries, timestamps excluded) — the baseline undo/redo compare
-   * against for the dirty dot. */
+   * against for the dirty dot. Memoized on serializeProject's input
+   * identities; see the memo block above for why the feature keys are more
+   * than the array reference. */
   const projectFingerprint = (): string => {
     const s = get();
-    const p = serializeProject(s.projectName, s.featureTree.features, [], s.directBodies, {
+    const features = s.featureTree.features;
+    const keys: FingerprintKeys = {
+      projectName: s.projectName,
+      directBodies: s.directBodies,
+      featuresRef: features,
+      featureCount: features.length,
+      lastFeature: features.length > 0 ? features[features.length - 1] : undefined,
+      featureVersion: s.featureVersion,
+      planes: s.planes,
+      axes: s.axes,
+      points: s.points,
+      coordSystems: s.coordSystems,
+      annotations: s.annotations,
+      drawingSectionAxis: s.drawingSectionAxis,
+      drawingDetails: s.drawingDetails,
+      drawingNotes: s.drawingNotes,
+    };
+    const prev = fingerprintMemo;
+    if (
+      prev &&
+      prev.keys.projectName === keys.projectName &&
+      prev.keys.directBodies === keys.directBodies &&
+      prev.keys.featuresRef === keys.featuresRef &&
+      prev.keys.featureCount === keys.featureCount &&
+      prev.keys.lastFeature === keys.lastFeature &&
+      prev.keys.featureVersion === keys.featureVersion &&
+      prev.keys.planes === keys.planes &&
+      prev.keys.axes === keys.axes &&
+      prev.keys.points === keys.points &&
+      prev.keys.coordSystems === keys.coordSystems &&
+      prev.keys.annotations === keys.annotations &&
+      prev.keys.drawingSectionAxis === keys.drawingSectionAxis &&
+      prev.keys.drawingDetails === keys.drawingDetails &&
+      prev.keys.drawingNotes === keys.drawingNotes
+    ) {
+      return prev.value;
+    }
+    const p = serializeProject(s.projectName, features, [], s.directBodies, {
       planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
     }, { sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes });
-    return JSON.stringify({ ...p, metadata: undefined });
+    const value = JSON.stringify({ ...p, metadata: undefined });
+    fingerprintMemo = { keys, value };
+    return value;
   };
 
   /** The first selected body, or undefined. */
@@ -740,6 +858,40 @@ export const useStore = create<AppState>((set, get) => {
     axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
   const planeNormal = (plane: 'xy' | 'xz' | 'yz'): Vec3 =>
     plane === 'xy' ? { x: 0, y: 0, z: 1 } : plane === 'xz' ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  /**
+   * Direct-only mutation guard (W1/T6): a tree-produced body cannot be edited
+   * as a direct body — the tree regenerates it on every recompute, so the old
+   * code path (keep the edit as a new direct body) left an overlapping
+   * duplicate in the scene. True (with a refusal toast) when `bodyId` resolves
+   * to a tree body; false for direct bodies and unknown ids (callers handle
+   * missing ids with their own silent failure path).
+   */
+  const refusedTreeBody = (bodyId: string): boolean => {
+    const s = get();
+    if (s.directBodies.some((b) => b.id === bodyId)) return false;
+    if (!s.bodies.some((b) => b.id === bodyId)) return false;
+    showToast(toastText('toast.treeBodyRefused'), 'warning');
+    return true;
+  };
+
+  /**
+   * Shared failure path for performExtrude/Revolve/Sweep: recompute swallowed
+   * an evaluator error into FeatureResult.error, so roll the attempt back
+   * ATOMICALLY — remove BOTH added features (keeping the sketch feature would
+   * leave a duplicate sketch node on retry), drop the just-pushed undo
+   * snapshot, keep the sketch session (workspace/dialog state untouched) and
+   * tell the user why.
+   */
+  const rollbackFailedSketchFeature = (sketchFeatId: string, opFeatId: string, msg: string, toastKey: string): void => {
+    const tree = get().featureTree;
+    tree.removeFeature(sketchFeatId);
+    tree.removeFeature(opFeatId);
+    tree.recompute();
+    set((s) => ({ undoStack: s.undoStack.slice(0, -1), featureVersion: s.featureVersion + 1 }));
+    recombine();
+    showToast(toastText(toastKey, { msg }), 'warning');
+  };
+
   /**
    * Run a modify feature on the current selection: parametric (a child feature
    * the tree replays on recompute) when the body came from the tree, otherwise
@@ -1250,18 +1402,22 @@ export const useStore = create<AppState>((set, get) => {
     get().markOnboardingStep('insert');
   },
   replaceBody: (oldId, newBody) => {
-    pushUndo();
     const { directBodies } = get();
-    if (directBodies.some((b) => b.id === oldId)) {
-      // Stable case: editing a direct body replaces it in place.
-      set({ directBodies: directBodies.map((b) => (b.id === oldId ? newBody : b)), projectDirty: true });
-    } else {
-      // Editing a (transient) feature-tree body: keep the edit as a direct body.
-      // A recompute regenerates tree bodies with fresh ids, so we cannot stably
-      // hide the original here — the proper path for tree bodies is a feature.
-      set({ directBodies: [...directBodies, newBody], projectDirty: true });
+    if (!directBodies.some((b) => b.id === oldId)) {
+      // Fusion semantics: a tree-produced body cannot be replaced by a direct
+      // edit — the tree would regenerate the original and the edit would sit
+      // on top of it as an overlapping duplicate. Refuse (no mutation, no undo
+      // entry); the proper path for tree bodies is editing their feature.
+      // Unknown ids are refused silently (callers treat false as failure).
+      if (get().bodies.some((b) => b.id === oldId)) {
+        showToast(toastText('toast.treeBodyRefused'), 'warning');
+      }
+      return false;
     }
+    pushUndo();
+    set({ directBodies: directBodies.map((b) => (b.id === oldId ? newBody : b)), projectDirty: true });
     recombine();
+    return true;
   },
   resizeBodyTo: (bodyId, target) => {
     const body = get().bodies.find((b) => b.id === bodyId);
@@ -1272,7 +1428,9 @@ export const useStore = create<AppState>((set, get) => {
     } catch {
       return false;
     }
-    get().replaceBody(bodyId, resized);
+    // A tree body is refused by replaceBody (with its own toast) — report the
+    // failure instead of pretending the resize happened.
+    if (!get().replaceBody(bodyId, resized)) return false;
     // Keep the selection on the resized body so the properties panel follows it.
     set((s) => ({ selectedIds: s.selectedIds.map((sid) => (sid === bodyId ? resized.id : sid)) }));
     return true;
@@ -1742,13 +1900,18 @@ export const useStore = create<AppState>((set, get) => {
     }
     if (!result) return null;
     result.color = body.color;
-    get().replaceBody(bodyId, result);
+    // Tree bodies are refused by replaceBody (with its own toast) — report the
+    // failure so the hollow dialog can show its own notice.
+    if (!get().replaceBody(bodyId, result)) return null;
     set((s) => ({ selectedIds: s.selectedIds.map((sid) => (sid === bodyId ? result!.id : sid)) }));
     return result.id;
   },
   linearPatternBody: (bodyId, axis, count, spacing) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(count >= 1) || !(spacing > 0)) return [];
+    // Tree bodies refuse (toast): keeping the tree original + adding the copies
+    // would duplicate the body in the scene — pattern it via a feature instead.
+    if (refusedTreeBody(bodyId)) return [];
     const dir: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
     const copies = applyLinearArray(body, dir, Math.floor(count), spacing).map((c) => ({ ...c, color: body.color }));
     if (copies.length === 0) return [];
@@ -1764,6 +1927,7 @@ export const useStore = create<AppState>((set, get) => {
   circularPatternBody: (bodyId, axis, count) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(count >= 1)) return [];
+    if (refusedTreeBody(bodyId)) return []; // tree bodies: see linearPatternBody
     const dir: Vec3 = axis === 'x' ? { x: 1, y: 0, z: 0 } : axis === 'y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
     const copies = applyCircularArray(body, { origin: { x: 0, y: 0, z: 0 }, direction: dir }, Math.floor(count)).map((c) => ({ ...c, color: body.color }));
     if (copies.length === 0) return [];
@@ -1779,6 +1943,7 @@ export const useStore = create<AppState>((set, get) => {
   gridPatternBody: (bodyId, countX, spacingX, countZ, spacingZ) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     if (!body || !(countX >= 1) || !(countZ >= 1) || !(spacingX > 0) || !(spacingZ > 0)) return [];
+    if (refusedTreeBody(bodyId)) return []; // tree bodies: see linearPatternBody
     const copies = applyGridArray(
       body,
       { x: 1, y: 0, z: 0 }, Math.floor(countX), spacingX,
@@ -1906,7 +2071,7 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes } = get();
+    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchActive, workspace, sketchPlaneId } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
     // Capture the current state BEFORE restoring — applyUndoSnapshot clears
@@ -1918,6 +2083,10 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis,
       drawingDetails,
       drawingNotes,
+      currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
+      sketchActive,
+      workspace,
+      sketchPlaneId,
     };
     applyUndoSnapshot(prev);
     // Returning to EXACTLY the saved state clears the dirty dot (the
@@ -1935,7 +2104,7 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes } = get();
+    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchActive, workspace, sketchPlaneId } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
     const current: HistorySnapshot = {
@@ -1945,6 +2114,10 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis,
       drawingDetails,
       drawingNotes,
+      currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
+      sketchActive,
+      workspace,
+      sketchPlaneId,
     };
     applyUndoSnapshot(next);
     const saved = get().savedFingerprint;
@@ -2108,6 +2281,7 @@ export const useStore = create<AppState>((set, get) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     const axis = get().axes.find((a) => a.id === axisId);
     if (!body || !axis || !(count > 0)) return [];
+    if (refusedTreeBody(bodyId)) return []; // tree bodies: see linearPatternBody
     const copies = applyCircularArray(body, { origin: axis.origin, direction: axis.direction }, Math.floor(count));
     if (copies.length === 0) return [];
     pushUndo();
@@ -2191,7 +2365,8 @@ export const useStore = create<AppState>((set, get) => {
     const cs = get().coordSystems.find((c) => c.id === csId);
     if (!body || !cs) return null;
     const placed = placeBodyInFrame(body, cs);
-    get().replaceBody(bodyId, placed);
+    // Tree bodies are refused by replaceBody (with its own toast).
+    if (!get().replaceBody(bodyId, placed)) return null;
     return placed.id;
   },
 
@@ -2247,6 +2422,7 @@ export const useStore = create<AppState>((set, get) => {
     const body = get().bodies.find((b) => b.id === bodyId);
     const plane = get().planes.find((p) => p.id === planeId);
     if (!body || !plane) return [];
+    if (refusedTreeBody(bodyId)) return []; // tree bodies: see linearPatternBody
     const { positive, negative } = splitByPlane(body, plane);
     const halves = [positive, negative].filter((h): h is NonNullable<typeof h> => h !== null);
     if (halves.length === 0) return [];
@@ -2324,10 +2500,10 @@ export const useStore = create<AppState>((set, get) => {
 
   performExtrude: (distance, symmetric) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
+    if (!sketch) return false;
     // The dialog clamps to ≥0.1 mm; enforce the same floor for AI/programmatic
     // callers so a degenerate distance can't enter the tree as a failing feature.
-    if (!(distance > 0)) return;
+    if (!(distance > 0)) return false;
     pushUndo();
 
     // Create features
@@ -2343,6 +2519,15 @@ export const useStore = create<AppState>((set, get) => {
     tree.addFeature(extrudeFeat);
     tree.recompute();
 
+    // An unusable profile (open lines, empty sketch, …) surfaces as an
+    // evaluator error with zero bodies — fail WITHOUT destroying the sketch
+    // session: roll the features + undo entry back and explain.
+    const result = tree.getResult(extrudeFeat.id);
+    if (!result || result.error || result.bodies.length === 0) {
+      rollbackFailedSketchFeature(sketchFeat.id, extrudeFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.extrudeFailed');
+      return false;
+    }
+
     set({
       featureTree: tree,
       sketchActive: false,
@@ -2352,11 +2537,12 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: true,
     });
     recombine();
+    return true;
   },
 
   performRevolve: (angle) => {
     const sketch = get().currentSketch;
-    if (!sketch) return;
+    if (!sketch) return false;
     pushUndo();
 
     const sketchFeat = createSketchFeature(sketch);
@@ -2367,6 +2553,12 @@ export const useStore = create<AppState>((set, get) => {
     tree.addFeature(revolveFeat);
     tree.recompute();
 
+    const result = tree.getResult(revolveFeat.id);
+    if (!result || result.error || result.bodies.length === 0) {
+      rollbackFailedSketchFeature(sketchFeat.id, revolveFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.revolveFailed');
+      return false;
+    }
+
     set({
       featureTree: tree,
       sketchActive: false,
@@ -2376,11 +2568,12 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: true,
     });
     recombine();
+    return true;
   },
 
   performSweep: (distance, twistDegrees) => {
     const sketch = get().currentSketch;
-    if (!sketch || !(distance > 0)) return;
+    if (!sketch || !(distance > 0)) return false;
     pushUndo();
 
     // Subdivide the straight path so the twist is applied gradually. One big
@@ -2402,6 +2595,12 @@ export const useStore = create<AppState>((set, get) => {
     tree.addFeature(sweepFeat);
     tree.recompute();
 
+    const result = tree.getResult(sweepFeat.id);
+    if (!result || result.error || result.bodies.length === 0) {
+      rollbackFailedSketchFeature(sketchFeat.id, sweepFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.sweepFailed');
+      return false;
+    }
+
     set({
       featureTree: tree,
       sketchActive: false,
@@ -2410,6 +2609,7 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: true,
     });
     recombine();
+    return true;
   },
 
   // Modify features: when the selected body was produced by a feature, add a
@@ -2648,8 +2848,14 @@ export const useStore = create<AppState>((set, get) => {
 
   autosave: () => {
     if (typeof localStorage === 'undefined') return false;
-    const { projectDirty, projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes } = get();
-    if (!projectDirty) return false;
+    if (!get().projectDirty) return false;
+    // projectDirty stays true after an autosave by design (only an explicit
+    // save/load clears it), so it alone can't gate the tick — compare the
+    // memoized fingerprint against the last SUCCESSFUL write and skip the
+    // serialize+zip entirely when nothing changed.
+    const fingerprint = projectFingerprint();
+    if (lastAutosaveFingerprint !== null && fingerprint === lastAutosaveFingerprint) return false;
+    const { projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes } = get();
     try {
       const project = serializeProject(
         projectName,
@@ -2667,8 +2873,18 @@ export const useStore = create<AppState>((set, get) => {
       if (isTauri()) {
         void callNative('autosave_snapshot', { data: json }).catch(() => undefined);
       }
+      // Only a successful write advances the baseline — a failed one retries
+      // on the next tick.
+      lastAutosaveFingerprint = fingerprint;
       return true;
     } catch {
+      // A quota/storage failure (typically QuotaExceededError from setItem on
+      // large scenes) would otherwise silently kill crash recovery. Surface it
+      // ONCE per session — the tick retries every 30 s and must not spam.
+      if (!autosaveQuotaWarned) {
+        autosaveQuotaWarned = true;
+        showToast(toastText('toast.autosaveQuota'), 'warning');
+      }
       return false;
     }
   },

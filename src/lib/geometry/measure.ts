@@ -108,45 +108,109 @@ function rayHitsTriangle(orig: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3): bool
 }
 
 /**
+ * Per-body acceleration for isPointInsideBody: the bounding box of every face,
+ * packed as 6 floats per face (minX, minY, minZ, maxX, maxY, maxZ), plus the
+ * whole-body AABB. Bodies are immutable in this codebase (every operation
+ * returns a fresh SolidBody), so a WeakMap keyed on the body reference is
+ * invalidated naturally when a body is replaced — and needs no size cap,
+ * because the cache dies with the body. The voxel engines cast millions of
+ * rays against the same few bodies; rebuilding each face's AABB (and a closure
+ * per face) per query dominated those loops entirely.
+ */
+interface InsideTestCache {
+  faceBoxes: Float32Array;
+  bodyMin: Vec3;
+  bodyMax: Vec3;
+}
+
+const insideTestCache = new WeakMap<SolidBody, InsideTestCache>();
+
+function getInsideTestCache(body: SolidBody): InsideTestCache {
+  let cache = insideTestCache.get(body);
+  if (!cache) {
+    const faceBoxes = new Float32Array(body.faces.length * 6);
+    const bodyMin = { x: Infinity, y: Infinity, z: Infinity };
+    const bodyMax = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (let i = 0; i < body.faces.length; i++) {
+      const vs = body.faces[i]!.vertices;
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const v of vs) {
+        if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+        if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+        if (v.z < minZ) minZ = v.z; if (v.z > maxZ) maxZ = v.z;
+      }
+      const o = i * 6;
+      faceBoxes[o] = minX; faceBoxes[o + 1] = minY; faceBoxes[o + 2] = minZ;
+      faceBoxes[o + 3] = maxX; faceBoxes[o + 4] = maxY; faceBoxes[o + 5] = maxZ;
+      if (minX < bodyMin.x) bodyMin.x = minX;
+      if (minY < bodyMin.y) bodyMin.y = minY;
+      if (minZ < bodyMin.z) bodyMin.z = minZ;
+      if (maxX > bodyMax.x) bodyMax.x = maxX;
+      if (maxY > bodyMax.y) bodyMax.y = maxY;
+      if (maxZ > bodyMax.z) bodyMax.z = maxZ;
+    }
+    cache = { faceBoxes, bodyMin, bodyMax };
+    insideTestCache.set(body, cache);
+  }
+  return cache;
+}
+
+/**
+ * Pre-build the per-body face-AABB cache used by isPointInsideBody. Calling
+ * this before a batch of inside tests (the voxel kernels sample 100k+ points
+ * against the same bodies) keeps even the first query off the cache-building
+ * path; one-off callers can simply call isPointInsideBody directly.
+ */
+export function prepareBodyForInsideTests(body: SolidBody): void {
+  getInsideTestCache(body);
+}
+
+/**
  * Whether a point lies inside a closed mesh, by ray-casting parity: cast a ray
  * and count surface crossings — odd means inside. Uses a slightly off-axis
- * direction to avoid grazing axis-aligned faces.
+ * direction to avoid grazing axis-aligned faces. Faces are rejected by a cheap
+ * ray-vs-face-AABB slab test (AABBs cached per body — see above) before the
+ * triangle math runs.
  */
 export function isPointInsideBody(body: SolidBody, p: Vec3): boolean {
+  const { faceBoxes, bodyMin, bodyMax } = getInsideTestCache(body);
+  // Whole-body reject: a ray starting outside the mesh's AABB enters and exits
+  // the closed surface an even number of times, so parity is "outside" without
+  // touching a single triangle.
+  if (
+    p.x < bodyMin.x || p.x > bodyMax.x ||
+    p.y < bodyMin.y || p.y > bodyMax.y ||
+    p.z < bodyMin.z || p.z > bodyMax.z
+  ) {
+    return false;
+  }
+  // Off-axis ray direction; every component is positive and far from zero, so
+  // the slab intervals never need swapping and no parallel-ray branch exists.
   const dir = { x: 0.5773, y: 0.5774, z: 0.5775 };
   let crossings = 0;
-  for (const f of body.faces) {
-    const vs = f.vertices;
-    // Cheap ray-vs-face-AABB slab test first: the voxel engines cast millions
-    // of these rays, and the conservative reject skips the triangle math for
-    // the vast majority of faces at any given query point.
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-    for (const v of vs) {
-      if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
-      if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
-      if (v.z < minZ) minZ = v.z; if (v.z > maxZ) maxZ = v.z;
-    }
+  const faces = body.faces;
+  for (let f = 0; f < faces.length; f++) {
+    const o = f * 6;
+    // Ray-vs-face-AABB slab test, unrolled per axis (allocation-free — the
+    // old per-face closure cost more than the test itself at voxel scale).
     let t0 = 0;
     let t1 = Infinity;
-    let hit = true;
-    const slab = (o: number, d: number, lo: number, hi: number): boolean => {
-      if (d > 1e-12 || d < -1e-12) {
-        let ta = (lo - o) / d;
-        let tb = (hi - o) / d;
-        if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
-        if (ta > t0) t0 = ta;
-        if (tb < t1) t1 = tb;
-        if (t0 > t1) return false;
-      } else if (o < lo || o > hi) {
-        return false;
-      }
-      return true;
-    };
-    if (!slab(p.x, dir.x, minX, maxX) || !slab(p.y, dir.y, minY, maxY) || !slab(p.z, dir.z, minZ, maxZ)) {
-      hit = false;
-    }
-    if (!hit) continue;
+    let ta = (faceBoxes[o]! - p.x) / dir.x;
+    let tb = (faceBoxes[o + 3]! - p.x) / dir.x;
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    ta = (faceBoxes[o + 1]! - p.y) / dir.y;
+    tb = (faceBoxes[o + 4]! - p.y) / dir.y;
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) continue;
+    ta = (faceBoxes[o + 2]! - p.z) / dir.z;
+    tb = (faceBoxes[o + 5]! - p.z) / dir.z;
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) continue;
+    const vs = faces[f]!.vertices;
     for (let i = 1; i < vs.length - 1; i++) {
       if (rayHitsTriangle(p, dir, vs[0]!, vs[i]!, vs[i + 1]!)) crossings++;
     }

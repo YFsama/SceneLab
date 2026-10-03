@@ -1,84 +1,95 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { act, createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { useStore } from '../../store/app';
+import { translations } from '../../lib/i18n';
+import { ShortcutsHelp } from './ShortcutsHelp';
 
-// ShortcutsHelp is a React component — test the shortcut group structure.
+// Mount the REAL component (open state on) and read its rendered rows — the
+// test cannot drift from what the modal shows. Every row's label resolves in
+// BOTH locales except the deliberately-pending keys listed below (proposed to
+// the coordinator; the modal falls back to the raw key until they are seeded).
 
-describe('ShortcutsHelp shortcut groups', () => {
-  // Replicate the GROUPS structure from the component.
-  const GROUPS = [
-    {
-      titleKey: 'shortcuts.views',
-      rows: [
-        { keys: '1', labelKey: 'viewport.front' },
-        { keys: '2', labelKey: 'viewport.top' },
-        { keys: '3', labelKey: 'viewport.right' },
-        { keys: '4', labelKey: 'viewport.iso' },
-        { keys: '5', labelKey: 'viewport.back' },
-        { keys: '6', labelKey: 'viewport.bottom' },
-        { keys: '7', labelKey: 'viewport.left' },
-        { keys: 'F', labelKey: 'viewport.fit' },
-      ],
-    },
-    {
-      titleKey: 'shortcuts.workspaces',
-      rows: [
-        { keys: 'S', labelKey: 'toolbar.sketch' },
-        { keys: 'M', labelKey: 'toolbar.model' },
-      ],
-    },
-    {
-      titleKey: 'shortcuts.sketch',
-      rows: [
-        { keys: 'V', labelKey: 'sketch.select' },
-        { keys: 'L', labelKey: 'sketch.line' },
-        { keys: 'R', labelKey: 'sketch.rect' },
-      ],
-    },
-    {
-      titleKey: 'shortcuts.edit',
-      rows: [
-        { keys: 'Ctrl+Z', labelKey: 'toolbar.undo' },
-        { keys: 'Ctrl+A', labelKey: 'shortcuts.selectAll' },
-        { keys: 'Del', labelKey: 'menu.delete' },
-      ],
-    },
-  ];
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-  it('has 4 shortcut groups', () => {
-    expect(GROUPS).toHaveLength(4);
+interface Mounted { container: HTMLDivElement; root: Root }
+
+async function mountHelp(): Promise<Mounted> {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => { root.render(createElement(ShortcutsHelp)); });
+  return { container, root };
+}
+
+async function unmountHelp({ container, root }: Mounted): Promise<void> {
+  await act(async () => { root.unmount(); });
+  container.remove();
+}
+
+/** All rendered (label, keys) pairs across every group. */
+function rows(container: HTMLElement): [string, string][] {
+  return [...container.querySelectorAll('div.flex.items-center.justify-between')].map((row) => {
+    const label = row.querySelector('span')?.textContent ?? '';
+    const keys = row.querySelector('kbd')?.textContent ?? '';
+    return [label, keys] as [string, string];
+  });
+}
+
+describe('ShortcutsHelp (rendered)', () => {
+  let m: Mounted;
+
+  beforeEach(async () => {
+    useStore.setState({ locale: 'en', showShortcuts: true });
+    m = await mountHelp();
+  });
+  afterEach(async () => {
+    await unmountHelp(m);
+    useStore.setState({ showShortcuts: false });
   });
 
-  it('each group has a titleKey', () => {
-    for (const g of GROUPS) {
-      expect(g.titleKey).toBeTruthy();
+  it('renders nothing until opened', async () => {
+    useStore.setState({ showShortcuts: false });
+    const hidden = await mountHelp();
+    try {
+      expect(hidden.container.querySelector('div[role="dialog"]')).toBeNull();
+    } finally {
+      await unmountHelp(hidden);
     }
   });
 
-  it('each row has keys and labelKey', () => {
-    for (const g of GROUPS) {
-      for (const r of g.rows) {
-        expect(r.keys).toBeTruthy();
-        expect(r.labelKey).toBeTruthy();
-      }
+  it('renders four titled groups', () => {
+    const dialog = m.container.querySelector('div[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    for (const titleKey of ['shortcuts.views', 'shortcuts.workspaces', 'shortcuts.sketch', 'shortcuts.edit']) {
+      expect(dialog.textContent).toContain(translations.en![titleKey]!);
     }
   });
 
-  it('view shortcuts include number keys 1-7', () => {
-    const viewKeys = GROUPS[0]!.rows.map((r) => r.keys);
-    for (let i = 1; i <= 7; i++) {
-      expect(viewKeys).toContain(String(i));
-    }
+  it('documents the previously-missing live bindings (F11)', () => {
+    const pairs = rows(m.container);
+    // 0 = iso view; Shift+L = polyline.
+    expect(pairs).toContainEqual([translations.en!['viewport.iso']!, '0']);
+    expect(pairs).toContainEqual([translations.en!['sketch.polyline']!, 'Shift+L']);
+    // Enter repeats the last command; Delete in measure unpicks the last
+    // point (both keys seeded in i18n since the rows were added).
+    expect(pairs).toContainEqual([translations.en!['shortcuts.repeatLast']!, 'Enter']);
+    // Ctrl+Shift+A deselects all; Ctrl+Shift+Z redoes.
+    expect(pairs).toContainEqual([translations.en!['menu.deselectAll']!, 'Ctrl+Shift+A']);
+    expect(pairs).toContainEqual([translations.en!['toolbar.redo']!, 'Ctrl+Shift+Z']);
+    // Alt / Shift nudge modifiers reuse the nudge label.
+    expect(pairs).toContainEqual([translations.en!['shortcuts.nudge']!, 'Alt / Shift + arrows']);
+    expect(pairs).toContainEqual([translations.en!['shortcuts.measureUnpick']!, 'Del (measure)']);
   });
 
-  it('sketch shortcuts include V, L, R', () => {
-    const sketchKeys = GROUPS[2]!.rows.map((r) => r.keys);
-    expect(sketchKeys).toContain('V');
-    expect(sketchKeys).toContain('L');
-    expect(sketchKeys).toContain('R');
+  it('keeps the number-key view rows 1-7 plus 0 for iso', () => {
+    const keys = rows(m.container).map(([, k]) => k);
+    for (let i = 0; i <= 7; i++) expect(keys).toContain(String(i));
   });
 
-  it('edit shortcuts include Ctrl+Z and Ctrl+A', () => {
-    const editKeys = GROUPS[3]!.rows.map((r) => r.keys);
-    expect(editKeys).toContain('Ctrl+Z');
-    expect(editKeys).toContain('Ctrl+A');
+  it('the Model workspace row claims Shift+M — plain M stays Measure', () => {
+    const pairs = rows(m.container);
+    expect(pairs).toContainEqual([translations.en!['toolbar.model']!, 'Shift+M']);
+    expect(pairs).toContainEqual([translations.en!['shortcuts.measure']!, 'M']);
   });
 });

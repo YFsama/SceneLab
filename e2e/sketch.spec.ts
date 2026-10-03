@@ -141,3 +141,31 @@ test('extrude dialog evaluates a numeric expression (20/2 → 10 mm feature)', a
       return panels.some((t) => t.includes('BBox Center:'));
     }), { timeout: 10_000 }).toBe(true);
 });
+
+test('line tool draws via click-click (no drag): click, move, click commits', async ({ page }) => {
+  await page.goto('/');
+  await awaitCanvas(page);
+  const { cx, cy } = await enterSketchAtCentre(page);
+
+  // Click-click drawing (F7): the first click ARMS the start (its own
+  // motionless release must keep the draw armed — it used to clear it, which
+  // made click-click silently do nothing); the second click's PRESS commits
+  // the line at the cursor. Grid/endpoint snapping lands both points on the
+  // y=0 row for a clean horizontal line.
+  await page.keyboard.press('l');
+  await page.mouse.click(cx - 200, cy);
+  // Cursor visibly moves between the two clicks (the rubber-band preview
+  // follows) — no drag threshold is ever crossed.
+  await page.mouse.move(cx + 200, cy, { steps: 5 });
+  await page.mouse.click(cx + 200, cy);
+
+  // 2 endpoints + 1 line = 3 entities, same as the press-drag path above.
+  await expect.poll(() => countEntities(page)).toBe(3);
+
+  // Click-click keeps working consecutively: a second pair draws another line
+  // (independent arm→commit cycle).
+  await page.mouse.click(cx + 200, cy);
+  await page.mouse.move(cx + 200, cy + 150, { steps: 5 });
+  await page.mouse.click(cx + 200, cy + 150);
+  await expect.poll(() => countEntities(page)).toBe(6);
+});

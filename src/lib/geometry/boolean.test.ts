@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { booleanOp, hollowBody, splitByPlane, mirrorMerge } from './boolean';
-import { createBox, createCylinder, checkManifold, computeVolume } from './brep';
+import { booleanOpVoxel } from './booleanVoxel';
+import { createBox, createCylinder, createSphere, checkManifold, computeVolume } from './brep';
 import { translateBody } from './operations';
 import { makePlane } from './referenceGeometry';
 
@@ -351,5 +352,28 @@ describe('booleanOp resolution edge cases', () => {
       expect(r).not.toBeNull();
       expect(Math.abs(computeVolume(r!))).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('voxel boolean performance', () => {
+  // Timing regression (companion of the "100 exact cuts" bound in
+  // booleanManifold.test.ts): the voxel path is the fallback of last resort,
+  // but it must stay usable. isPointInsideBody used to rebuild every face's
+  // AABB (and a closure) per grid query, which made this difference of
+  // 1152-face spheres cost ~14 s; with the per-body AABB cache it is ~1 s.
+  // Bound generously so CI stays stable across slower machines.
+  it('1152-face voxel difference at res 48 finishes well under 8 s', () => {
+    // createSphere emits lon·lat faces (lat = segments/2), so 48 → 1152 faces.
+    const a = createSphere(10, 48);
+    expect(a.faces.length).toBe(1152);
+    const b = translateBody(createSphere(10, 48), { x: 5, y: 0, z: 0 });
+
+    const t0 = performance.now();
+    const r = booleanOpVoxel(a, b, 'difference', 48);
+    const ms = performance.now() - t0;
+
+    expect(r).not.toBeNull();
+    expect(Math.abs(computeVolume(r!))).toBeGreaterThan(1000); // sphere − ~half overlap
+    expect(ms).toBeLessThan(8000);
   });
 });

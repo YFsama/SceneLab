@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, recentCommands, initBuiltinCommands, addMidplaneFromSelection } from './registry';
 import { useStore } from '../../store/app';
 import { createBox, createCylinder, createTorus } from '../geometry';
+import { createSketch } from '../sketch/engine';
+import { translations } from '../i18n';
+import { clearToasts, getToasts } from '../toast';
 
 describe('command registry', () => {
   beforeEach(() => clearCommands());
@@ -237,5 +240,135 @@ describe('recent command history (Fusion-style right-click recents)', () => {
     expect(recentCommands()).toHaveLength(1);
     clearCommands();
     expect(recentCommands()).toHaveLength(0);
+  });
+});
+
+describe('modeling verbs in the palette (F3)', () => {
+  beforeEach(() => {
+    clearCommands();
+    clearToasts();
+    useStore.setState({
+      bodies: [], directBodies: [], selectedIds: [], numericPrompt: null,
+      moveDialogOpen: false, rotateDialogOpen: false, scaleDialogOpen: false,
+      pendingPattern: null, showExtrudeDialog: false,
+    });
+  });
+
+  const VERB_IDS = [
+    'feature.extrude', 'feature.fillet', 'feature.chamfer', 'feature.shell', 'feature.hole',
+    'feature.mirrorXY', 'feature.mirrorXZ', 'feature.mirrorYZ',
+    'feature.linearArrayX', 'feature.linearArrayY', 'feature.linearArrayZ', 'feature.circularArray',
+    'transform.move', 'transform.rotate', 'transform.scale',
+    'pattern.linear', 'pattern.circular', 'pattern.grid',
+    'combine.union', 'combine.subtract', 'combine.intersect',
+    'export.stl', 'export.obj', 'export.threemf', 'export.png', 'project.importMesh',
+  ];
+
+  it('registers every modeling / transform / pattern / combine / export verb', () => {
+    initBuiltinCommands();
+    for (const id of VERB_IDS) expect(getCommand(id), id).toBeDefined();
+    expect(allCommands().length).toBeGreaterThan(VERB_IDS.length);
+  });
+
+  it("the audit's dead searches now hit: extrude, fillet, shell, pattern, move, export stl", () => {
+    initBuiltinCommands();
+    expect(searchCommands('extrude')[0]?.id).toBe('feature.extrude');
+    expect(searchCommands('fillet')[0]?.id).toBe('feature.fillet');
+    expect(searchCommands('shell').map((c) => c.id)).toContain('feature.shell');
+    expect(searchCommands('pattern').map((c) => c.id)).toContain('pattern.linear');
+    expect(searchCommands('move').map((c) => c.id)).toContain('transform.move');
+    expect(searchCommands('export stl')[0]?.id).toBe('export.stl');
+  });
+
+  it('labels come from the shared i18n tables and follow the locale', () => {
+    initBuiltinCommands();
+    expect(getCommand('feature.fillet')?.label).toBe(translations.en!['feature.fillet']!);
+    expect(getCommand('transform.move')?.label).toBe(translations.en!['menu.move']!);
+    expect(getCommand('export.stl')?.label).toBe(translations.en!['export.stl']!);
+    useStore.setState({ locale: 'zh' });
+    try {
+      clearCommands();
+      initBuiltinCommands();
+      expect(getCommand('feature.fillet')?.label).toBe(translations.zh!['feature.fillet']!);
+    } finally {
+      useStore.setState({ locale: 'en' });
+    }
+  });
+
+  it('body-scoped verbs refuse with toast.featureNeedsBody and open no prompt when nothing is selected', () => {
+    initBuiltinCommands();
+    for (const id of ['feature.fillet', 'feature.shell', 'transform.move', 'pattern.linear', 'combine.union']) {
+      expect(runCommand(id), id).toBe(true);
+    }
+    expect(useStore.getState().numericPrompt).toBeNull();
+    expect(useStore.getState().moveDialogOpen ?? false).toBe(false);
+    expect(getToasts().map((x) => x.message)).toEqual(
+      Array.from({ length: 5 }, () => translations.en!['toast.featureNeedsBody']!),
+    );
+  });
+
+  it('feature.fillet with a selected body opens the context-menu prompt and applies for real', () => {
+    initBuiltinCommands();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+
+    runCommand('feature.fillet');
+    const prompt = useStore.getState().numericPrompt;
+    expect(prompt).not.toBeNull();
+    expect(prompt!.titleKey).toBe('feature.fillet');
+    expect(prompt!.labelKey).toBe('feature.filletPrompt');
+    expect(prompt!.initial).toBe(2);
+    expect(prompt!.min).toBe(0.01);
+
+    prompt!.onApply(1);
+    expect(getToasts().map((x) => x.message)).toContain(translations.en!['toast.featureApplied']!);
+    expect(getToasts().map((x) => x.message)).not.toContain(translations.en!['toast.featureNeedsBody']!);
+  });
+
+  it('feature.extrude opens the same dialog the E shortcut opens (with a sketch)', () => {
+    initBuiltinCommands();
+    // Without a sketch the command refuses (same guard as the E key)…
+    runCommand('feature.extrude');
+    expect(useStore.getState().showExtrudeDialog).toBe(false);
+    // …with one, it opens the dialog.
+    useStore.setState({ currentSketch: createSketch('xz') });
+    runCommand('feature.extrude');
+    expect(useStore.getState().showExtrudeDialog).toBe(true);
+  });
+
+  it('transform.move / transform.rotate / transform.scale open their dialogs with a selected body', () => {
+    initBuiltinCommands();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+
+    runCommand('transform.move');
+    expect(useStore.getState().moveDialogOpen).toBe(true);
+    runCommand('transform.rotate');
+    expect(useStore.getState().rotateDialogOpen).toBe(true);
+    runCommand('transform.scale');
+    expect(useStore.getState().scaleDialogOpen).toBe(true);
+  });
+
+  it('pattern.linear seeds pendingPattern for the selected body', () => {
+    initBuiltinCommands();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+
+    runCommand('pattern.linear');
+    expect(useStore.getState().pendingPattern).toEqual({ bodyId: box.id, mode: 'linear' });
+  });
+});
+
+describe('workspace shortcut hints (F10)', () => {
+  beforeEach(() => clearCommands());
+
+  it('Model workspace is Shift+M; plain M stays Measure', () => {
+    initBuiltinCommands();
+    // Mirrors initShortcuts: plain M toggles measure, Shift+M jumps to model.
+    expect(getCommand('workspace.model')?.shortcut).toBe('Shift+M');
+    expect(getCommand('view.measure')?.shortcut).toBe('M');
   });
 });

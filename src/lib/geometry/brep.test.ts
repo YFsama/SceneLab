@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeSurfaceArea, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder } from './brep';
 import { mergeBodies, scaleBody } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness, computeAdjacency, computeCurvature } from './brep';
 
 describe('computeSolidity', () => {
   it('reports convex solids as fully solid with no cavities', () => {
@@ -1780,5 +1780,136 @@ describe('computeMeshStatistics edge cases', () => {
     const box = createBox(10, 10, 10);
     const s = computeMeshStatistics(box);
     expect(s.faceCount % 2).toBe(0);
+  });
+});
+
+/** Golden adjacency of a box: every edge shared by exactly two faces. */
+describe('computeAdjacency (keyed-index rewrite)', () => {
+  // The keyed-index rewrite must be behaviour-identical to the original
+  // per-lookup linear scans — this reference reimplements the OLD algorithm
+  // directly and deep-compares all four maps.
+  function naiveAdjacency(body: ReturnType<typeof createBox>) {
+    const findVertex = (v: { x: number; y: number; z: number }) =>
+      body.vertices.findIndex(
+        (nv) => Math.abs(nv.x - v.x) < 1e-6 && Math.abs(nv.y - v.y) < 1e-6 && Math.abs(nv.z - v.z) < 1e-6,
+      );
+    const findEdge = (v1: { x: number; y: number; z: number }, v2: { x: number; y: number; z: number }) =>
+      body.edges.findIndex(
+        (e) =>
+          (Math.abs(e.start.x - v1.x) < 1e-6 && Math.abs(e.start.y - v1.y) < 1e-6 && Math.abs(e.start.z - v1.z) < 1e-6 &&
+            Math.abs(e.end.x - v2.x) < 1e-6 && Math.abs(e.end.y - v2.y) < 1e-6 && Math.abs(e.end.z - v2.z) < 1e-6) ||
+          (Math.abs(e.start.x - v2.x) < 1e-6 && Math.abs(e.start.y - v2.y) < 1e-6 && Math.abs(e.start.z - v2.z) < 1e-6 &&
+            Math.abs(e.end.x - v1.x) < 1e-6 && Math.abs(e.end.y - v1.y) < 1e-6 && Math.abs(e.end.z - v1.z) < 1e-6),
+      );
+    const vertexToEdges = new Map<number, number[]>();
+    const vertexToFaces = new Map<number, number[]>();
+    const edgeToFaces = new Map<number, number[]>();
+    const faceToEdges = new Map<number, number[]>();
+    body.edges.forEach((edge, ei) => {
+      for (const idx of [findVertex(edge.start), findVertex(edge.end)]) {
+        if (idx >= 0) vertexToEdges.set(idx, [...(vertexToEdges.get(idx) ?? []), ei]);
+      }
+    });
+    body.faces.forEach((face, fi) => {
+      for (const v of face.vertices) {
+        const idx = findVertex(v);
+        if (idx >= 0) vertexToFaces.set(idx, [...(vertexToFaces.get(idx) ?? []), fi]);
+      }
+    });
+    body.faces.forEach((face, fi) => {
+      const vs = face.vertices;
+      for (let i = 0; i < vs.length; i++) {
+        const edgeIdx = findEdge(vs[i]!, vs[(i + 1) % vs.length]!);
+        if (edgeIdx >= 0) {
+          edgeToFaces.set(edgeIdx, [...(edgeToFaces.get(edgeIdx) ?? []), fi]);
+          faceToEdges.set(fi, [...(faceToEdges.get(fi) ?? []), edgeIdx]);
+        }
+      }
+    });
+    return { vertexToEdges, vertexToFaces, edgeToFaces, faceToEdges };
+  }
+
+  it('matches the original linear-scan algorithm on small bodies', () => {
+    for (const body of [createBox(10, 10, 10), createSphere(5, 12), createCylinder(5, 10, 12)]) {
+      const got = computeAdjacency(body);
+      const want = naiveAdjacency(body);
+      expect([...got.vertexToEdges.entries()]).toEqual([...want.vertexToEdges.entries()]);
+      expect([...got.vertexToFaces.entries()]).toEqual([...want.vertexToFaces.entries()]);
+      expect([...got.edgeToFaces.entries()]).toEqual([...want.edgeToFaces.entries()]);
+      expect([...got.faceToEdges.entries()]).toEqual([...want.faceToEdges.entries()]);
+    }
+  });
+
+  it('subdivided sphere: every edge shared by exactly two faces, all vertices covered', () => {
+    const sphere = createSphere(10, 32);
+    const adj = computeAdjacency(sphere);
+    expect(sphere.faces.length).toBe(512);
+    for (const faces of adj.edgeToFaces.values()) expect(faces).toHaveLength(2);
+    expect(adj.vertexToFaces.size).toBe(sphere.vertices.length);
+    expect(adj.faceToEdges.size).toBe(sphere.faces.length);
+  });
+
+  it('adjacency and curvature of an 8k-face sphere stay fast (was O(E×V))', () => {
+    const sphere = createSphere(10, 128);
+    expect(sphere.faces.length).toBe(8192);
+    const t0 = performance.now();
+    const adj = computeAdjacency(sphere);
+    const curv = computeCurvature(sphere);
+    const ms = performance.now() - t0;
+    expect(adj.vertexToEdges.size).toBe(sphere.vertices.length);
+    // Measured ~100 ms after the keyed-index fix (was ~3.9 s); generous bound.
+    expect(ms).toBeLessThan(5000);
+    expect(Number.isFinite(curv.gaussianCurvatureAvg)).toBe(true);
+  });
+});
+
+describe('computeCurvature (keyed-index rewrite)', () => {
+  it('matches the original per-corner linear scan on a sphere', () => {
+    // Reference: the exact angle-defect loop the function used before the
+    // keyed vertex index, with the linear findIndex restored.
+    function naiveCurvature(body: ReturnType<typeof createSphere>) {
+      const vertexAngles = new Map<number, number>();
+      for (const face of body.faces) {
+        const verts = face.vertices;
+        for (let i = 0; i < verts.length; i++) {
+          const prev = (i - 1 + verts.length) % verts.length;
+          const next = (i + 1) % verts.length;
+          const v0 = verts[prev]!;
+          const v1 = verts[i]!;
+          const v2 = verts[next]!;
+          const idx = body.vertices.findIndex(
+            (v) => Math.abs(v.x - v1.x) < 1e-6 && Math.abs(v.y - v1.y) < 1e-6 && Math.abs(v.z - v1.z) < 1e-6,
+          );
+          if (idx < 0) continue;
+          const a = { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
+          const b = { x: v2.x - v1.x, y: v2.y - v1.y, z: v2.z - v1.z };
+          const lenA = Math.hypot(a.x, a.y, a.z);
+          const lenB = Math.hypot(b.x, b.y, b.z);
+          if (lenA < 1e-10 || lenB < 1e-10) continue;
+          const cos = Math.max(-1, Math.min(1, (a.x * b.x + a.y * b.y + a.z * b.z) / (lenA * lenB)));
+          vertexAngles.set(idx, (vertexAngles.get(idx) ?? 0) + Math.acos(cos));
+        }
+      }
+      let total = 0;
+      let min = Infinity;
+      let max = -Infinity;
+      let count = 0;
+      for (const sum of vertexAngles.values()) {
+        const g = 2 * Math.PI - sum;
+        total += g;
+        min = Math.min(min, g);
+        max = Math.max(max, g);
+        count++;
+      }
+      return { total, min, max, count };
+    }
+    const sphere = createSphere(5, 16);
+    const got = computeCurvature(sphere);
+    const want = naiveCurvature(sphere);
+    expect(got.gaussianCurvatureAvg).toBeCloseTo(want.total / want.count, 12);
+    expect(got.gaussianCurvatureMin).toBeCloseTo(want.min, 12);
+    expect(got.gaussianCurvatureMax).toBeCloseTo(want.max, 12);
+    // Angle-defect sanity: a closed sphere's total Gaussian curvature is 4π.
+    expect(got.gaussianCurvatureAvg * want.count).toBeCloseTo(4 * Math.PI, 1);
   });
 });

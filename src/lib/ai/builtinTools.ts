@@ -65,6 +65,94 @@ function resolveBody(bodyId: unknown): SolidBody {
 const NO_SKETCH_REASON =
   'No active sketch — call create_sketch (or create_sketch_on_plane) first';
 
+/** Feature id whose recompute result produced this body, or null for direct bodies. */
+function treeFeatureOf(bodyId: string): string | null {
+  return useStore.getState().featureTree.findFeatureIdForBody(bodyId) ?? null;
+}
+
+/** Shared refusal reason: the store's replaceBody refuses feature-tree bodies (contract 1). */
+const TREE_BODY_REFUSED = (id: string) =>
+  `Body "${id}" is produced by the feature tree — direct edits are refused; ` +
+  'edit its feature instead (list_features / update_feature)';
+
+const r3 = (n: number) => Number(n.toFixed(3));
+
+/** Bounding-box center of a body (where the parametric mirror/array features anchor). */
+function bboxCenterOf(body: SolidBody): Vec3 {
+  const bb = computeBoundingBox(body);
+  return { x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2, z: (bb.min.z + bb.max.z) / 2 };
+}
+
+/** The world axis a unit-ish vector is aligned with (either sign), or null. */
+function axisKeyOf(v: Vec3): 'x' | 'y' | 'z' | null {
+  const l = Math.hypot(v.x, v.y, v.z);
+  if (l < 1e-9) return null;
+  const n = { x: v.x / l, y: v.y / l, z: v.z / l };
+  const eps = 1e-6;
+  if (Math.abs(Math.abs(n.x) - 1) < eps) return 'x';
+  if (Math.abs(Math.abs(n.y) - 1) < eps) return 'y';
+  if (Math.abs(Math.abs(n.z) - 1) < eps) return 'z';
+  return null;
+}
+
+/** True only for the POSITIVE world axis (arrays flip sides on the negative one). */
+function isPositiveAxis(v: Vec3, axis: 'x' | 'y' | 'z'): boolean {
+  const l = Math.hypot(v.x, v.y, v.z);
+  if (l < 1e-9) return false;
+  const key = axis === 'x' ? 'x' : axis === 'y' ? 'y' : 'z';
+  const unit = { x: v.x / l, y: v.y / l, z: v.z / l };
+  return unit[key] > 1 - 1e-6;
+}
+
+function samePoint(a: Vec3, b: Vec3, eps = 1e-6): boolean {
+  return Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps && Math.abs(a.z - b.z) < eps;
+}
+
+/**
+ * Tool-level array semantics (takeover B5): the geometry array builders return
+ * `count` copies INCLUDING an i=0 copy coincident with the original, and the
+ * original body is kept — naively adding them leaves count+1 bodies with a
+ * coincident duplicate. Normalize here (lib/geometry is owned by another
+ * agent): the ORIGINAL stays as instance 0, copies coincident with it (or with
+ * an earlier copy — e.g. a symmetric body spun onto itself) are dropped, and
+ * the result is capped so the scene ends with AT MOST `total` DISTINCT
+ * instances — matching the parametric array features (count = TOTAL).
+ */
+function distinctArrayCopies(original: SolidBody, copies: SolidBody[], total: number): SolidBody[] {
+  const eps = 1e-6;
+  const samePlace = (a: Vec3, b: Vec3) =>
+    Math.abs(a.x - b.x) < eps && Math.abs(a.y - b.y) < eps && Math.abs(a.z - b.z) < eps;
+  const seen: Vec3[] = [computeCentroid(original)];
+  const out: SolidBody[] = [];
+  for (const copy of copies) {
+    if (out.length >= total - 1) break;
+    const c = computeCentroid(copy);
+    if (seen.some((s) => samePlace(s, c))) continue;
+    seen.push(c);
+    out.push(copy);
+  }
+  return out;
+}
+
+/**
+ * Shared modify-routing result: after a parametric store action ran, report the
+ * (possibly new) body id and the feature that was appended to the timeline.
+ */
+function featureApplySummary(idsBefore: Set<string>, previousBodyId: string): {
+  mode: 'feature';
+  featureId: string | undefined;
+  bodyId: string;
+} {
+  const st = useStore.getState();
+  const newId = st.bodies.find((b) => !idsBefore.has(b.id))?.id;
+  return {
+    mode: 'feature' as const,
+    featureId: st.featureTree.features[st.featureTree.features.length - 1]?.id,
+    // Fillet/chamfer/shell keep the parent body id; arrays regenerate ids.
+    bodyId: newId ?? st.bodies.find((b) => b.id === previousBodyId)?.id ?? previousBodyId,
+  };
+}
+
 export function registerBuiltinTools(): void {
   // Sketch tools
   registerTool({
@@ -745,13 +833,249 @@ export function registerBuiltinTools(): void {
   });
 
   registerTool({
+    name: 'undo',
+    description:
+      'Undo the last change (bodies, feature tree, visibility, drawing sheet, or — while a ' +
+      'sketch is active — the last sketch edit). Call it right after a mistake, then continue ' +
+      'with a corrected call instead of working around the bad state.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const st = useStore.getState();
+      // While a sketch is open, undo means the SKETCH history — mirroring
+      // the keyboard shortcut. The model-level undo would otherwise restore
+      // a pre-sketch snapshot (currentSketch: null) and wipe the session.
+      if (st.sketchActive && st.currentSketch) {
+        if (st.sketchUndoStack.length === 0) {
+          return {
+            success: false,
+            reason: 'Nothing to undo in the sketch — the sketch history is empty',
+            canUndo: st.undoStack.length > 0,
+            canRedo: st.redoStack.length > 0,
+          };
+        }
+        const ok = st.sketchUndo();
+        return {
+          success: ok,
+          ...(ok ? {} : { reason: 'Sketch undo was refused' }),
+          scope: 'sketch',
+          canUndo: useStore.getState().sketchUndoStack.length > 0,
+          canRedo: useStore.getState().sketchRedoStack.length > 0,
+        };
+      }
+      if (st.undoStack.length === 0) {
+        return {
+          success: false,
+          reason: 'Nothing to undo — the history is empty',
+          canUndo: false,
+          canRedo: st.redoStack.length > 0,
+        };
+      }
+      const ok = st.undo();
+      if (!ok) return { success: false, reason: 'Undo was refused', canUndo: false };
+      // HistorySnapshot carries no label — summarize the restored state instead.
+      const after = useStore.getState();
+      return {
+        success: true,
+        canUndo: after.undoStack.length > 0,
+        canRedo: after.redoStack.length > 0,
+        restored: { bodyCount: after.bodies.length, featureCount: after.featureTree.features.length },
+      };
+    },
+  });
+
+  registerTool({
+    name: 'redo',
+    description:
+      'Re-apply the last undone change (the counterpart of undo — the sketch history while a sketch is active). No-op when the redo history is empty.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const st = useStore.getState();
+      // Same routing as undo: inside a sketch, redo steps the sketch history.
+      if (st.sketchActive && st.currentSketch) {
+        if (st.sketchRedoStack.length === 0) {
+          return {
+            success: false,
+            reason: 'Nothing to redo in the sketch — no sketch change was undone',
+            canUndo: st.sketchUndoStack.length > 0,
+            canRedo: false,
+          };
+        }
+        const ok = st.sketchRedo();
+        return {
+          success: ok,
+          ...(ok ? {} : { reason: 'Sketch redo was refused' }),
+          scope: 'sketch',
+          canUndo: useStore.getState().sketchUndoStack.length > 0,
+          canRedo: useStore.getState().sketchRedoStack.length > 0,
+        };
+      }
+      if (st.redoStack.length === 0) {
+        return {
+          success: false,
+          reason: 'Nothing to redo — no change was undone',
+          canUndo: st.undoStack.length > 0,
+          canRedo: false,
+        };
+      }
+      const ok = st.redo();
+      if (!ok) return { success: false, reason: 'Redo was refused', canRedo: false };
+      const after = useStore.getState();
+      return {
+        success: true,
+        canUndo: after.undoStack.length > 0,
+        canRedo: after.redoStack.length > 0,
+        restored: { bodyCount: after.bodies.length, featureCount: after.featureTree.features.length },
+      };
+    },
+  });
+
+  registerTool({
+    name: 'remove_feature',
+    description:
+      'Remove a feature from the parametric timeline; the model recomputes without it ' +
+      '(its body and everything downstream disappears). Use list_features for ids. ' +
+      'Undoable via undo.',
+    parameters: {
+      type: 'object',
+      properties: { featureId: { type: 'string', description: 'Feature id from list_features' } },
+      required: ['featureId'],
+    },
+    execute: async (args) => {
+      const featureId = assertString(args.featureId, 'featureId');
+      const st = useStore.getState();
+      if (!st.featureTree.getFeature(featureId)) {
+        return { success: false, reason: `Feature "${featureId}" not found — call list_features for valid ids` };
+      }
+      st.removeFeature(featureId);
+      return {
+        success: true,
+        featureId,
+        remainingFeatures: useStore.getState().featureTree.features.length,
+        bodyCount: useStore.getState().bodies.length,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'set_feature_suppressed',
+    description:
+      'Suppress (hide/skip) or unsuppress a timeline feature without deleting it — the model ' +
+      'recomputes as if the feature were gone; unsuppressing brings it back. ' +
+      'Use list_features for ids.',
+    parameters: {
+      type: 'object',
+      properties: {
+        featureId: { type: 'string', description: 'Feature id from list_features' },
+        suppressed: { type: 'boolean', description: 'true = suppress the feature, false = re-enable it' },
+      },
+      required: ['featureId', 'suppressed'],
+    },
+    execute: async (args) => {
+      const featureId = assertString(args.featureId, 'featureId');
+      const suppressed = assertBoolean(args.suppressed, 'suppressed');
+      const st = useStore.getState();
+      const existing = st.featureTree.getFeature(featureId);
+      if (!existing) {
+        return { success: false, reason: `Feature "${featureId}" not found — call list_features for valid ids` };
+      }
+      // Same pattern the timeline context menu uses (TimelineBar.tsx).
+      st.updateFeature(featureId, (x) => ({ ...x, suppressed }) as Feature);
+      return { success: true, featureId, suppressed, type: existing.type };
+    },
+  });
+
+  registerTool({
+    name: 'reorder_feature',
+    description:
+      'Move a feature to a new position in the timeline (0 = first). Dependency order is ' +
+      'enforced: the feature must stay after its parents and before its dependents — ' +
+      'illegal moves are refused without changing anything. Use list_features for ids.',
+    parameters: {
+      type: 'object',
+      properties: {
+        featureId: { type: 'string', description: 'Feature id from list_features' },
+        toIndex: { type: 'number', description: 'Target timeline index (0-based)' },
+      },
+      required: ['featureId', 'toIndex'],
+    },
+    execute: async (args) => {
+      const featureId = assertString(args.featureId, 'featureId');
+      const toIndex = assertNumber(args.toIndex, 'toIndex');
+      const st = useStore.getState();
+      if (!st.featureTree.getFeature(featureId)) {
+        return { success: false, reason: `Feature "${featureId}" not found — call list_features for valid ids` };
+      }
+      if (!Number.isInteger(toIndex) || toIndex < 0 || toIndex >= st.featureTree.features.length) {
+        return {
+          success: false,
+          reason: `toIndex must be an integer in [0, ${st.featureTree.features.length - 1}] (got ${toIndex})`,
+        };
+      }
+      const moved = st.moveFeature(featureId, toIndex);
+      if (!moved) {
+        return {
+          success: false,
+          reason:
+            'Illegal move — a feature must stay AFTER every feature it depends on and BEFORE ' +
+            'every feature that depends on it (or the target index is where it already is)',
+        };
+      }
+      const after = useStore.getState();
+      return {
+        success: true,
+        featureId,
+        toIndex: after.featureTree.features.findIndex((f) => f.id === featureId),
+        order: after.featureTree.features.map((f) => f.type),
+      };
+    },
+  });
+
+  registerTool({
+    name: 'list_edges',
+    description:
+      "List a body's edges with id, endpoints (x,y,z) and length (mm) — use the ids as " +
+      'fillet/chamfer edgeIds. Capped at the first 200 edges (truncated=true plus the total ' +
+      'count) so a large imported mesh cannot flood the context; narrow with edgeIds from ' +
+      'the first page or use list_faces for face-level addressing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID (defaults to the first body)' },
+        limit: { type: 'number', description: 'Max edges to return (default 200, hard cap 200)' },
+      },
+    },
+    execute: async (args) => {
+      const body = resolveBody(args.bodyId);
+      const CAP = 200;
+      const limit = Math.min(CAP, args.limit !== undefined ? assertNumber(args.limit, 'limit') : CAP);
+      const edges = body.edges.slice(0, limit).map((e) => ({
+        id: e.id,
+        start: { x: r3(e.start.x), y: r3(e.start.y), z: r3(e.start.z) },
+        end: { x: r3(e.end.x), y: r3(e.end.y), z: r3(e.end.z) },
+        length: r3(Math.hypot(e.end.x - e.start.x, e.end.y - e.start.y, e.end.z - e.start.z)),
+      }));
+      return {
+        bodyId: body.id,
+        edgeCount: body.edges.length,
+        returned: edges.length,
+        truncated: body.edges.length > edges.length,
+        edges,
+      };
+    },
+  });
+
+  registerTool({
     name: 'fillet',
-    description: 'Apply fillet (rounded edges) to selected edges of a body',
+    description:
+      'Round edges of a body. Tree-produced bodies get a parametric FILLET FEATURE on the ' +
+      'timeline (mode:"feature" — edit it later with update_feature); direct bodies are ' +
+      'edited in place (mode:"direct"). Feature-mode fillets scope to the given edgeIds, or ' +
+      'ALL edges when none are passed. Use list_edges for edge ids.',
     parameters: {
       type: 'object',
       properties: {
         bodyId: { type: 'string', description: 'ID of the body to fillet' },
-        edgeIds: { type: 'array', items: { type: 'string' }, description: 'Edge IDs to fillet' },
+        edgeIds: { type: 'array', items: { type: 'string' }, description: 'Edge IDs to fillet (from list_edges; omit for all edges)' },
         radius: { type: 'number', description: 'Fillet radius in mm' },
       },
       required: ['bodyId', 'radius'],
@@ -771,20 +1095,38 @@ export function registerBuiltinTools(): void {
       if (unknown.length > 0) {
         return { success: false, reason: `Unknown edge ids on this body: ${unknown.join(', ')}` };
       }
+      // Tree-produced body: route to the PARAMETRIC fillet feature (the store
+      // handles undo/dirty/featureVersion and scopes to the edge selection).
+      if (treeFeatureOf(body.id)) {
+        store.selectObject(body.id);
+        useStore.getState().setSelectedEdgeIds(edgeIds);
+        const idsBefore = new Set(store.bodies.map((b) => b.id));
+        const ok = useStore.getState().applyFilletFeature(radius);
+        if (!ok) return { success: false, reason: 'Fillet feature was rejected — check that the body is still selected' };
+        return { success: true, ...featureApplySummary(idsBefore, body.id), radius, edgeCount: edgeIds.length };
+      }
       const result = applyFillet(body, edgeIds, radius);
-      store.replaceBody(body.id, result);
-      return { success: true, bodyId: result.id };
+      // Contract 1: replaceBody returns false (no mutation, no undo entry) for
+      // feature-tree bodies — never claim success for the refused direct edit.
+      if (!store.replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
+      return { success: true, mode: 'direct' as const, bodyId: result.id, radius, edgeCount: edgeIds.length };
     },
   });
 
   registerTool({
     name: 'chamfer',
-    description: 'Apply chamfer (beveled edges) to selected edges of a body',
+    description:
+      'Bevel edges of a body. Tree-produced bodies get a parametric CHAMFER FEATURE on the ' +
+      'timeline (mode:"feature" — edit it later with update_feature); direct bodies are ' +
+      'edited in place (mode:"direct"). Feature-mode chamfers scope to the given edgeIds, or ' +
+      'ALL edges when none are passed. Use list_edges for edge ids.',
     parameters: {
       type: 'object',
       properties: {
         bodyId: { type: 'string', description: 'ID of the body' },
-        edgeIds: { type: 'array', items: { type: 'string' }, description: 'Edge IDs to chamfer' },
+        edgeIds: { type: 'array', items: { type: 'string' }, description: 'Edge IDs to chamfer (from list_edges; omit for all edges)' },
         distance: { type: 'number', description: 'Chamfer distance in mm' },
       },
       required: ['bodyId', 'distance'],
@@ -802,20 +1144,34 @@ export function registerBuiltinTools(): void {
       if (unknown.length > 0) {
         return { success: false, reason: `Unknown edge ids on this body: ${unknown.join(', ')}` };
       }
+      if (treeFeatureOf(body.id)) {
+        store.selectObject(body.id);
+        useStore.getState().setSelectedEdgeIds(edgeIds);
+        const idsBefore = new Set(store.bodies.map((b) => b.id));
+        const ok = useStore.getState().applyChamferFeature(distance);
+        if (!ok) return { success: false, reason: 'Chamfer feature was rejected — check that the body is still selected' };
+        return { success: true, ...featureApplySummary(idsBefore, body.id), distance, edgeCount: edgeIds.length };
+      }
       const result = applyChamfer(body, edgeIds, distance);
-      store.replaceBody(body.id, result);
-      return { success: true, bodyId: result.id };
+      if (!store.replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
+      return { success: true, mode: 'direct' as const, bodyId: result.id, distance, edgeCount: edgeIds.length };
     },
   });
 
   registerTool({
     name: 'shell',
-    description: 'Hollow out a body by removing faces and offsetting inward',
+    description:
+      'Hollow out a body by removing open faces and offsetting the rest inward. Tree-produced ' +
+      'bodies get a parametric SHELL FEATURE on the timeline (mode:"feature"); direct bodies ' +
+      'are edited in place (mode:"direct"). Use list_faces for face ids; omitting faceIds ' +
+      'removes the first face (feature mode scopes to the given faceIds the same way).',
     parameters: {
       type: 'object',
       properties: {
         bodyId: { type: 'string', description: 'ID of the body' },
-        faceIds: { type: 'array', items: { type: 'string' }, description: 'Face IDs to remove (open faces)' },
+        faceIds: { type: 'array', items: { type: 'string' }, description: 'Face IDs to remove (open faces; from list_faces)' },
         thickness: { type: 'number', description: 'Wall thickness in mm' },
       },
       required: ['bodyId', 'thickness'],
@@ -833,9 +1189,19 @@ export function registerBuiltinTools(): void {
       if (unknown.length > 0) {
         return { success: false, reason: `Unknown face ids on this body: ${unknown.join(', ')}` };
       }
+      if (treeFeatureOf(body.id)) {
+        store.selectObject(body.id);
+        useStore.getState().setSelectedFaceIds(faceIds);
+        const idsBefore = new Set(store.bodies.map((b) => b.id));
+        const ok = useStore.getState().applyShellFeature(thickness);
+        if (!ok) return { success: false, reason: 'Shell feature was rejected — check that the body is still selected' };
+        return { success: true, ...featureApplySummary(idsBefore, body.id), thickness, openFaces: faceIds.length };
+      }
       const result = applyShell(body, faceIds, thickness);
-      store.replaceBody(body.id, result);
-      return { success: true, bodyId: result.id };
+      if (!store.replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
+      return { success: true, mode: 'direct' as const, bodyId: result.id, thickness, openFaces: faceIds.length };
     },
   });
 
@@ -951,7 +1317,11 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'linear_array',
-    description: 'Create a linear array (pattern) of a body',
+    description:
+      'Linear pattern of a body: ends with EXACTLY `count` total instances (the original is ' +
+      'instance 0 — it is not duplicated). Tree-produced bodies get a parametric LINEAR ARRAY ' +
+      'FEATURE (mode:"feature"), which only runs along +x/+y/+z — other directions are ' +
+      'refused on tree bodies; direct bodies (mode:"direct") pattern along any direction.',
     parameters: {
       type: 'object',
       properties: {
@@ -961,7 +1331,7 @@ export function registerBuiltinTools(): void {
           properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
           description: 'Array direction vector',
         },
-        count: { type: 'number', description: 'Number of instances' },
+        count: { type: 'number', description: 'TOTAL number of instances (including the original)' },
         spacing: { type: 'number', description: 'Spacing between instances in mm' },
       },
       required: ['bodyId', 'direction', 'count', 'spacing'],
@@ -970,9 +1340,43 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
-      const results = applyLinearArray(body, assertVec3(args.direction, 'direction'), assertNumber(args.count, 'count'), assertNumber(args.spacing, 'spacing'));
-      store.addDirectBodies(results);
-      return { success: true, count: results.length };
+      const direction = assertVec3(args.direction, 'direction');
+      const count = assertNumber(args.count, 'count');
+      const spacing = assertNumber(args.spacing, 'spacing');
+      if (!Number.isInteger(count) || count < 1) {
+        return { success: false, reason: `count must be a whole number of TOTAL instances >= 1 (got ${count})` };
+      }
+      if (!(spacing > 0)) {
+        return { success: false, reason: `spacing must be positive (got ${spacing})` };
+      }
+      // Tree-produced body → parametric array feature (count = TOTAL instances,
+      // matching the fix below). The store action only supports world axes.
+      if (treeFeatureOf(body.id)) {
+        const axis = axisKeyOf(direction);
+        if (!axis || !isPositiveAxis(direction, axis)) {
+          return {
+            success: false,
+            reason:
+              `Body "${body.id}" is produced by the feature tree — its linear array feature only ` +
+              'runs along +x, +y or +z. Pass one of those directions (or edit the sketch/feature)',
+          };
+        }
+        store.selectObject(body.id);
+        const idsBefore = new Set(store.bodies.map((b) => b.id));
+        const ok = useStore.getState().applyLinearArrayFeature(count, spacing, axis);
+        if (!ok) return { success: false, reason: 'Array feature was rejected — check that the body is still selected' };
+        return { success: true, ...featureApplySummary(idsBefore, body.id), count, spacing, axis };
+      }
+      // Direct body: geometry returns `count` copies INCLUDING one coincident
+      // with the original (i=0) — drop it and cap so the scene ends with
+      // EXACTLY `count` bodies (the original + count-1 distinct copies).
+      const copies = distinctArrayCopies(
+        body,
+        applyLinearArray(body, direction, count, spacing),
+        count,
+      );
+      store.addDirectBodies(copies);
+      return { success: true, mode: 'direct' as const, count, added: copies.length, bodyId: body.id };
     },
   });
 
@@ -993,7 +1397,9 @@ export function registerBuiltinTools(): void {
       const resolution = args.resolution !== undefined ? assertNumber(args.resolution, 'resolution') : 48;
       const result = hollowBody(body, assertNumber(args.wallThickness, 'wallThickness'), resolution);
       if (!result) return { success: false, reason: 'Wall thickness consumes the whole part' };
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id, faces: result.faces.length };
     },
   });
@@ -1027,16 +1433,19 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'grid_array',
-    description: 'Create a 2-direction grid pattern (SolidWorks linear pattern with a second direction) of a body.',
+    description:
+      '2-direction grid pattern (SolidWorks linear pattern with a second direction): ends with ' +
+      'EXACTLY count1 × count2 total instances (the original is one of them — not duplicated). ' +
+      'Copies are added as direct bodies.',
     parameters: {
       type: 'object',
       properties: {
         bodyId: { type: 'string', description: 'ID of the body to pattern' },
         direction1: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, description: 'First direction' },
-        count1: { type: 'number', description: 'Instances along direction 1' },
+        count1: { type: 'number', description: 'Instances along direction 1 (including the original)' },
         spacing1: { type: 'number', description: 'Spacing along direction 1 (mm)' },
         direction2: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, description: 'Second direction' },
-        count2: { type: 'number', description: 'Instances along direction 2' },
+        count2: { type: 'number', description: 'Instances along direction 2 (including the original)' },
         spacing2: { type: 'number', description: 'Spacing along direction 2 (mm)' },
       },
       required: ['bodyId', 'direction1', 'count1', 'spacing1', 'direction2', 'count2', 'spacing2'],
@@ -1045,23 +1454,37 @@ export function registerBuiltinTools(): void {
       const store = useStore.getState();
       const body = store.bodies.find((b) => b.id === args.bodyId);
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
+      const count1 = assertNumber(args.count1, 'count1');
+      const count2 = assertNumber(args.count2, 'count2');
+      const total = count1 * count2;
+      if (!Number.isInteger(total) || total < 1) {
+        return { success: false, reason: `count1/count2 must be whole numbers >= 1 (got ${count1} × ${count2})` };
+      }
       const results = applyGridArray(
         body,
         assertVec3(args.direction1, 'direction1'),
-        assertNumber(args.count1, 'count1'),
+        count1,
         assertNumber(args.spacing1, 'spacing1'),
         assertVec3(args.direction2, 'direction2'),
-        assertNumber(args.count2, 'count2'),
+        count2,
         assertNumber(args.spacing2, 'spacing2'),
       );
-      store.addDirectBodies(results);
-      return { success: true, count: results.length };
+      // Same instance-counting fix as linear_array: drop the copy coincident
+      // with the original and cap at EXACTLY count1 × count2 total bodies.
+      const copies = distinctArrayCopies(body, results, total);
+      store.addDirectBodies(copies);
+      return { success: true, mode: 'direct' as const, count: total, added: copies.length, bodyId: body.id };
     },
   });
 
   registerTool({
     name: 'circular_array',
-    description: 'Create a circular array (pattern) of a body around an axis',
+    description:
+      'Circular pattern of a body around an axis: ends with EXACTLY `count` total instances ' +
+      '(the original is one of them). Tree-produced bodies get a parametric CIRCULAR ARRAY ' +
+      'FEATURE (mode:"feature"), which only spins about +Z through the body\'s own bounding-box ' +
+      'centre — other axes are refused on tree bodies; direct bodies (mode:"direct") pattern ' +
+      'about any axis.',
     parameters: {
       type: 'object',
       properties: {
@@ -1074,7 +1497,7 @@ export function registerBuiltinTools(): void {
           },
           description: 'Rotation axis',
         },
-        count: { type: 'number', description: 'Number of instances' },
+        count: { type: 'number', description: 'TOTAL number of instances (including the original)' },
       },
       required: ['bodyId', 'axis', 'count'],
     },
@@ -1084,9 +1507,33 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const axisArg = (args.axis ?? {}) as { origin?: unknown; direction?: unknown };
       const axis = { origin: assertVec3(axisArg.origin, 'axis.origin'), direction: assertVec3(axisArg.direction, 'axis.direction') };
-      const results = applyCircularArray(body, axis, assertNumber(args.count, 'count'));
-      store.addDirectBodies(results);
-      return { success: true, count: results.length };
+      const count = assertNumber(args.count, 'count');
+      if (!Number.isInteger(count) || count < 1) {
+        return { success: false, reason: `count must be a whole number of TOTAL instances >= 1 (got ${count})` };
+      }
+      if (treeFeatureOf(body.id)) {
+        // The feature spins about world Z through the body's bbox centre — only
+        // route when the request asks for exactly that (no silent re-anchoring).
+        const axisAligned = axisKeyOf(axis.direction) === 'z';
+        const anchored = samePoint(axis.origin, bboxCenterOf(body), 1e-3);
+        if (!axisAligned || !anchored) {
+          return {
+            success: false,
+            reason:
+              `Body "${body.id}" is produced by the feature tree — its circular array feature only ` +
+              'spins about +Z through the body\'s own bounding-box centre. Use that axis (or edit ' +
+              'the feature/sketch)',
+          };
+        }
+        store.selectObject(body.id);
+        const idsBefore = new Set(store.bodies.map((b) => b.id));
+        const ok = useStore.getState().applyCircularArrayFeature(count);
+        if (!ok) return { success: false, reason: 'Array feature was rejected — check that the body is still selected' };
+        return { success: true, ...featureApplySummary(idsBefore, body.id), count };
+      }
+      const copies = distinctArrayCopies(body, applyCircularArray(body, axis, count), count);
+      store.addDirectBodies(copies);
+      return { success: true, mode: 'direct' as const, count, added: copies.length, bodyId: body.id };
     },
   });
 
@@ -1112,7 +1559,10 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'mirror',
-    description: 'Mirror a body across a plane',
+    description:
+      'Mirror a body across a plane, keeping the original. Tree-produced bodies whose plane is ' +
+      'a world plane (xy/xz/yz) through the body\'s own centre get a parametric MIRROR FEATURE ' +
+      '(mode:"feature"); everything else adds the reflection as a direct body (mode:"direct").',
     parameters: {
       type: 'object',
       properties: {
@@ -1134,9 +1584,25 @@ export function registerBuiltinTools(): void {
       if (!body) throw new Error(`Body "${args.bodyId}" not found`);
       const planeArg = (args.plane ?? {}) as { origin?: unknown; normal?: unknown };
       const plane = { origin: assertVec3(planeArg.origin, 'plane.origin'), normal: assertVec3(planeArg.normal, 'plane.normal') };
+      // Tree-produced body → parametric mirror feature when the request matches
+      // what the feature does (world plane through the body's bbox centre);
+      // otherwise fall through to the direct copy, which never touches the tree.
+      const normalAxis = axisKeyOf(plane.normal);
+      if (treeFeatureOf(body.id) && normalAxis && samePoint(plane.origin, bboxCenterOf(body), 1e-3)) {
+        store.selectObject(body.id);
+        const idsBefore = new Set(store.bodies.map((b) => b.id));
+        // This tool keeps the original + adds the reflection → keepOriginal.
+        // The feature API names the mirror by its PLANE, the tool by the
+        // plane's normal axis: normal +X ↔ the yz plane, etc.
+        const featurePlane = normalAxis === 'x' ? 'yz' : normalAxis === 'y' ? 'xz' : 'xy';
+        const ok = useStore.getState().applyMirrorFeature(featurePlane, true);
+        if (ok) {
+          return { success: true, ...featureApplySummary(idsBefore, body.id), keepOriginal: true };
+        }
+      }
       const result = applyMirror(body, plane);
       store.addDirectBody(result);
-      return { success: true, bodyId: result.id };
+      return { success: true, mode: 'direct' as const, bodyId: result.id, keepOriginal: true };
     },
   });
 
@@ -1171,7 +1637,11 @@ export function registerBuiltinTools(): void {
 
   registerTool({
     name: 'export_body',
-    description: 'Export a body as STL (ASCII), OBJ, 3MF, or STEP text. STEP is a CAD exchange format (AP203 faceted B-rep).',
+    description:
+      'Validate/count an export of a body as STL (ASCII), OBJ, 3MF, or STEP — returns the byte ' +
+      'count and a short preview, NOT the file content (inlining it would flood the context). ' +
+      'Saving the file happens in the UI export (an export_file tool is a future item). STEP ' +
+      'is a CAD exchange format (AP203 faceted B-rep).',
     parameters: {
       type: 'object',
       properties: {
@@ -1183,7 +1653,15 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const format = args.format !== undefined ? assertEnum(args.format, ['stl', 'obj', '3mf', 'step'] as const, 'format') : 'stl';
       const content = format === 'obj' ? exportOBJ(body) : format === '3mf' ? export3MF([body]) : format === 'step' ? exportSTEP(body) : exportSTLAscii(body);
-      return { bodyId: body.id, format, bytes: content.length, content };
+      return {
+        success: true,
+        bodyId: body.id,
+        format,
+        bytes: content.length,
+        // Keep the context bounded: a shape preview only, never the payload.
+        preview: content.slice(0, 200),
+        note: 'content not inlined — use the UI export to save the file',
+      };
     },
   });
 
@@ -1254,6 +1732,113 @@ export function registerBuiltinTools(): void {
         count: dims.length,
         dimensions: dims.map((d) => ({ kind: d.kind, value: Number(d.value.toFixed(3)), entityIds: d.entityIds, label: d.label })),
       };
+    },
+  });
+
+  registerTool({
+    name: 'list_sketch_entities',
+    description:
+      'Read back the ACTIVE sketch: entities (id, type, key parameters — line endpoints, ' +
+      'circle/arc centre + radius + sweep, rectangle corners, construction flag) and its ' +
+      'constraints (id, type, entities, value). Call it before editing a sketch you did not ' +
+      'just draw — the ids drive trim/extend/offset and constraint updates.',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const sketch = useStore.getState().currentSketch;
+      if (!sketch) throw new Error('No active sketch');
+      const point = (id: string): { x: number; y: number } | null => {
+        const e = sketch.entities.get(id);
+        return e?.type === 'point' ? { x: r3(e.x), y: r3(e.y) } : null;
+      };
+      const entities = Array.from(sketch.entities.values())
+        .filter((e) => e.type !== 'point') // points are reported via their owners
+        .slice(0, 200)
+        .map((e) => {
+          const base = { id: e.id, type: e.type, construction: e.construction === true };
+          switch (e.type) {
+            case 'line':
+              return { ...base, p1: point(e.p1Id), p2: point(e.p2Id) };
+            case 'circle':
+              return { ...base, center: point(e.centerId), radius: r3(e.radius) };
+            case 'arc': {
+              const deg = 180 / Math.PI;
+              return {
+                ...base,
+                center: point(e.centerId),
+                radius: r3(e.radius),
+                startAngleDeg: r3(e.startAngle * deg),
+                endAngleDeg: r3(e.endAngle * deg),
+              };
+            }
+            case 'rectangle':
+              return {
+                ...base,
+                corners: [e.p1Id, e.p2Id, e.p3Id, e.p4Id].map(point),
+              };
+            default:
+              return base;
+          }
+        });
+      const constraints = Array.from(sketch.constraints.values())
+        .slice(0, 200)
+        .map((c) => ({
+          id: c.id,
+          type: c.type,
+          entityIds: c.entityIds,
+          ...(typeof c.value === 'number' ? { value: r3(c.value) } : {}),
+          // Only distance/radius constraints are driving dimensions.
+          editable: (c.type === 'distance' || c.type === 'radius') && typeof c.value === 'number',
+        }));
+      return {
+        sketchId: sketch.id,
+        planeId: sketch.planeId,
+        entityCount: sketch.entities.size,
+        entities,
+        constraintCount: sketch.constraints.size,
+        constraints,
+      };
+    },
+  });
+
+  registerTool({
+    name: 'update_sketch_constraint',
+    description:
+      "Change a DRIVING dimension of the active sketch (a 'distance' or 'radius' constraint " +
+      'with a value) and re-solve it so the geometry follows — e.g. resize a circle to R8 ' +
+      'without redrawing. Use list_sketch_entities for constraint ids and current values.',
+    parameters: {
+      type: 'object',
+      properties: {
+        constraintId: { type: 'string', description: 'Constraint id from list_sketch_entities' },
+        value: { type: 'number', description: 'New value in mm (> 0.01)' },
+      },
+      required: ['constraintId', 'value'],
+    },
+    execute: async (args) => {
+      const constraintId = assertString(args.constraintId, 'constraintId');
+      const value = assertNumber(args.value, 'value');
+      const st = useStore.getState();
+      if (!st.currentSketch) {
+        return { success: false, reason: NO_SKETCH_REASON };
+      }
+      const c = st.currentSketch.constraints.get(constraintId);
+      if (!c) {
+        return { success: false, reason: `Constraint "${constraintId}" not found — call list_sketch_entities for valid ids` };
+      }
+      if ((c.type !== 'distance' && c.type !== 'radius') || typeof c.value !== 'number') {
+        return {
+          success: false,
+          reason: `Constraint "${constraintId}" is a "${c.type}" — only distance/radius constraints carry an editable value`,
+        };
+      }
+      if (!(value > 0.01)) {
+        return { success: false, reason: `Value must be positive (got ${value})` };
+      }
+      // The store mutates the constraint in place — capture the old value first.
+      const previousValue = c.value;
+      const ok = st.updateSketchConstraintValue(constraintId, value);
+      if (!ok) return { success: false, reason: 'The solver rejected the new value' };
+      return { success: true, constraintId, type: c.type, value, previousValue };
     },
   });
 
@@ -1588,7 +2173,9 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const result = translateBody(body, assertVec3(args.offset, 'offset'));
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1619,7 +2206,9 @@ export function registerBuiltinTools(): void {
       };
       const angle = (assertNumber(args.angleDeg, 'angleDeg') * Math.PI) / 180;
       const result = rotateBody(body, { origin, direction: assertVec3(args.axis, 'axis') }, angle);
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1645,7 +2234,9 @@ export function registerBuiltinTools(): void {
         z: (bb.min.z + bb.max.z) / 2,
       };
       const result = scaleBody(body, factor, center);
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1666,7 +2257,9 @@ export function registerBuiltinTools(): void {
       const body = resolveBody(args.bodyId);
       const axis = assertEnum(args.axis, ['x', 'y', 'z'] as const, 'axis');
       const result = scaleBodyToTarget(body, axis, assertNumber(args.target, 'target'));
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1691,7 +2284,9 @@ export function registerBuiltinTools(): void {
         y: assertNumber(args.y, 'y'),
         z: assertNumber(args.z, 'z'),
       });
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1713,7 +2308,9 @@ export function registerBuiltinTools(): void {
       const holesBefore = findBoundaryLoops(body).holeCount;
       const result = weldVertices(body, tol);
       const holesAfter = findBoundaryLoops(result).holeCount;
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       // Report watertightness so the caller knows whether repair actually closed
       // the gaps (welding only merges coincident vertices — it can't fill a real
       // hole).
@@ -1749,7 +2346,9 @@ export function registerBuiltinTools(): void {
       const build = assertVec3(args.buildVolume, 'buildVolume');
       const margin = args.margin !== undefined ? assertNumber(args.margin, 'margin') : 0;
       const result = scaleToFit(body, build, margin);
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1766,7 +2365,9 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const result = orientForPrint(body);
-      useStore.getState().replaceBody(body.id, result.body);
+      if (!useStore.getState().replaceBody(body.id, result.body)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.body.id, orientation: result.orientation, rotated: result.rotated };
     },
   });
@@ -1783,7 +2384,9 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const result = layFlat(body);
-      useStore.getState().replaceBody(body.id, result);
+      if (!useStore.getState().replaceBody(body.id, result)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: result.id };
     },
   });
@@ -1800,7 +2403,9 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const seated = seatOnBed(body);
-      useStore.getState().replaceBody(body.id, seated);
+      if (!useStore.getState().replaceBody(body.id, seated)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: seated.id };
     },
   });
@@ -1817,7 +2422,9 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const hull = convexHullBody(body);
-      useStore.getState().replaceBody(body.id, hull);
+      if (!useStore.getState().replaceBody(body.id, hull)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: hull.id, faces: hull.faces.length };
     },
   });
@@ -1834,7 +2441,9 @@ export function registerBuiltinTools(): void {
     execute: async (args) => {
       const body = resolveBody(args.bodyId);
       const centered = centerBody(body);
-      useStore.getState().replaceBody(body.id, centered);
+      if (!useStore.getState().replaceBody(body.id, centered)) {
+        return { success: false, reason: TREE_BODY_REFUSED(body.id) };
+      }
       return { success: true, bodyId: centered.id };
     },
   });
@@ -2667,6 +3276,90 @@ export function registerBuiltinTools(): void {
     },
   });
 
+  registerTool({
+    name: 'set_workspace',
+    description:
+      "Switch the active workspace: 'model' (3D scene), 'sketch' (2D sketch editing — what " +
+      "draw_* tools need), 'drawing' (drawing sheet), 'cam' (machining). Sketch tools draw " +
+      "into the current sketch regardless, but switching shows the user the right view.",
+    parameters: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['model', 'sketch', 'drawing', 'cam'], description: 'Workspace to activate' },
+      },
+      required: ['mode'],
+    },
+    execute: async (args) => {
+      const mode = assertEnum(args.mode, ['model', 'sketch', 'drawing', 'cam'] as const, 'mode');
+      useStore.getState().setWorkspace(mode);
+      return { success: true, workspace: useStore.getState().workspace };
+    },
+  });
+
+  registerTool({
+    name: 'set_body_hidden',
+    description:
+      'Hide or show a body in the viewport (it stays in the scene and the tree — undoable). ' +
+      'Use it to get a body out of the way instead of deleting it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID' },
+        hidden: { type: 'boolean', description: 'true = hide, false = show' },
+      },
+      required: ['bodyId', 'hidden'],
+    },
+    execute: async (args) => {
+      const bodyId = assertString(args.bodyId, 'bodyId');
+      const hidden = assertBoolean(args.hidden, 'hidden');
+      const st = useStore.getState();
+      if (!st.bodies.some((b) => b.id === bodyId)) {
+        return { success: false, reason: `Body "${bodyId}" not found` };
+      }
+      const isHidden = st.hiddenIds.includes(bodyId);
+      if (isHidden === hidden) {
+        // Already in the desired state — no toggle, no junk undo entry.
+        return { success: true, bodyId, hidden, changed: false };
+      }
+      // The store only exposes a toggle (toggleBodyVisibility) — call it exactly once.
+      useStore.getState().toggleBodyVisibility(bodyId);
+      return { success: true, bodyId, hidden, changed: true };
+    },
+  });
+
+  registerTool({
+    name: 'rename_body',
+    description:
+      'Rename a body (direct bodies only — feature-tree bodies take their name from their ' +
+      'feature). Use meaningful names before list_bodies/measure calls in multi-body scenes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        bodyId: { type: 'string', description: 'Body ID' },
+        name: { type: 'string', description: 'New name (non-empty)' },
+      },
+      required: ['bodyId', 'name'],
+    },
+    execute: async (args) => {
+      const bodyId = assertString(args.bodyId, 'bodyId');
+      const name = assertString(args.name, 'name').trim();
+      const st = useStore.getState();
+      const body = st.bodies.find((b) => b.id === bodyId);
+      if (!body) return { success: false, reason: `Body "${bodyId}" not found` };
+      if (!name) return { success: false, reason: 'Name must not be empty' };
+      if (body.name === name) return { success: true, bodyId, name, changed: false };
+      // renameBody only touches DIRECT bodies (false for tree-produced ones).
+      const ok = st.renameBody(bodyId, name);
+      if (!ok) {
+        return {
+          success: false,
+          reason: `Body "${bodyId}" is produced by the feature tree — rename its feature instead (or convert it)`,
+        };
+      }
+      return { success: true, bodyId, name, changed: true };
+    },
+  });
+
   // CAM tools
   registerTool({
     name: 'suggest_feeds_speeds',
@@ -2966,8 +3659,17 @@ export function registerBuiltinTools(): void {
     },
     execute: async (args) => {
       const id = assertString(args.sample_id, 'sample_id');
+      // loadSampleProject awaits a USER confirm dialog when the project is
+      // dirty — inside the tool loop that hangs the whole agent turn. Guard:
+      // refuse up front instead of popping the dialog.
+      if (useStore.getState().projectDirty) {
+        return {
+          success: false,
+          reason: 'project has unsaved changes — save or discard first (the sample load would need a user confirmation)',
+        };
+      }
       const ok = await loadSampleProject(id);
-      if (!ok) throw new Error(`Unknown sample id "${id}" or the user cancelled the discard prompt`);
+      if (!ok) throw new Error(`Unknown sample id "${id}"`);
       return { success: true, sampleId: id };
     },
   });

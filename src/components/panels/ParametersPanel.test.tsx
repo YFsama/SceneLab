@@ -82,7 +82,9 @@ function valueButton(container: HTMLElement, paramLabel: string): HTMLButtonElem
  */
 function seedProject(): void {
   useStore.getState().newProject();
-  const sketch = createSketch('xy');
+  // 'xz' (ground): this suite asserts the extrude along world Y — the plane's
+  // normal since extrude became plane-aware.
+  const sketch = createSketch('xz');
   addRectangle(sketch, -5, -5, 5, 5);
   const circle = addCircle(sketch, 0, 0, 5);
   addConstraint(sketch, 'radius', [circle.id], 5);

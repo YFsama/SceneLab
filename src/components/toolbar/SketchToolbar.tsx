@@ -22,9 +22,10 @@ export function SketchToolbar() {
   const { t } = useT();
   const current = useStore((s) => s.sketchTool);
   const setTool = useStore((s) => s.setSketchTool);
-  const setSketchActive = useStore((s) => s.setSketchActive);
-  const setCurrentSketch = useStore((s) => s.setCurrentSketch);
-  const setWorkspace = useStore((s) => s.setWorkspace);
+  // store.exitSketch — the SAME path as Esc and the floating pill: it leaves
+  // the sketch mode but PRESERVES currentSketch (and its undo stacks), so the
+  // toolbar button can no longer silently discard drawn entities.
+  const exitSketch = useStore((s) => s.exitSketch);
   const setShowExtrudeDialog = useStore((s) => s.setShowExtrudeDialog);
   const setShowRevolveDialog = useStore((s) => s.setShowRevolveDialog);
   const selectedSketchId = useStore((s) => s.selectedSketchId);
@@ -37,12 +38,6 @@ export function SketchToolbar() {
     // that; here we just need an entity of an offsetable kind selected.
     return !!e && (e.type === 'line' || e.type === 'circle' || e.type === 'arc' || e.type === 'rectangle');
   })();
-
-  const exitSketch = () => {
-    setSketchActive(false);
-    setCurrentSketch(null);
-    setWorkspace('model');
-  };
 
   return (
     <div

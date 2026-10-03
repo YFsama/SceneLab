@@ -14,8 +14,10 @@ describe('Toolbar workspace table', () => {
     expect(WORKSPACES.map((w) => w.mode)).not.toContain('assembly');
   });
 
-  it('keeps the S/M/D/C shortcuts', () => {
-    expect(WORKSPACES.map((w) => w.shortcut)).toEqual(['S', 'M', 'D', 'C']);
+  it('keeps the S/Shift+M/D/C shortcuts (M is Measure since pass #17)', () => {
+    // Must mirror initShortcuts: plain M toggles the measure tool, so the
+    // Model workspace's tooltip/badge hint is Shift+M.
+    expect(WORKSPACES.map((w) => w.shortcut)).toEqual(['S', 'Shift+M', 'D', 'C']);
   });
 
   it('every workspace has a label in both locales', () => {

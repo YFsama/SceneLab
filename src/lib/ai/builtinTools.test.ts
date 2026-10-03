@@ -43,6 +43,10 @@ describe('registerBuiltinTools registration', () => {
       // sketch editing (Fusion 2D suite)
       'trim_sketch_entity', 'extend_sketch_entity', 'offset_sketch_entity',
       'measure_face_area',
+      // takeover: history, feature control, addressing, sketch read-back, workspace
+      'undo', 'redo', 'remove_feature', 'set_feature_suppressed', 'reorder_feature',
+      'list_edges', 'list_sketch_entities', 'update_sketch_constraint',
+      'set_workspace', 'set_body_hidden', 'rename_body',
     ]) {
       expect(names).toContain(n);
     }
@@ -469,22 +473,23 @@ describe('builtin analysis tools', () => {
     expect(result.holesAfter).toBe(0);
   });
 
-  it('export_body emits STL by default and OBJ on request', async () => {
+  it('export_body validates STL by default and OBJ on request without inlining content', async () => {
     useStore.setState({ bodies: [createBox(10, 10, 10)], directBodies: [] });
     const tool = getTool('export_body')!;
-    const stl = (await tool.execute({})) as { format: string; content: string; bytes: number };
+    const stl = (await tool.execute({})) as { format: string; preview: string; bytes: number; content?: string };
     expect(stl.format).toBe('stl');
-    expect(stl.content).toMatch(/^solid /);
+    expect(stl.preview).toMatch(/^solid /);
     expect(stl.bytes).toBeGreaterThan(0);
+    expect(stl.content).toBeUndefined(); // content must never be inlined
 
-    const obj = (await tool.execute({ format: 'obj' })) as { content: string };
-    expect(obj.content).toContain('v ');
-    expect(obj.content).toMatch(/^f /m);
+    const obj = (await tool.execute({ format: 'obj' })) as { preview: string; content?: string };
+    expect(obj.preview).toContain('v ');
+    expect(obj.content).toBeUndefined();
 
-    const tmf = (await tool.execute({ format: '3mf' })) as { format: string; content: string };
+    const tmf = (await tool.execute({ format: '3mf' })) as { format: string; preview: string; content?: string };
     expect(tmf.format).toBe('3mf');
-    expect(tmf.content).toContain('<model');
-    expect(tmf.content).toContain('<triangle ');
+    expect(tmf.preview).toContain('<model');
+    expect(tmf.content).toBeUndefined();
   });
 
   it('import_mesh loads an OBJ string into the scene', async () => {
@@ -612,8 +617,9 @@ describe('builtin analysis tools', () => {
     await getTool('orient_for_print')!.execute({});
     expect(useStore.getState().bodies).toHaveLength(1);
 
-    const exported = (await getTool('export_body')!.execute({ format: 'stl' })) as { content: string };
-    expect(exported.content).toMatch(/^solid /);
+    const exported = (await getTool('export_body')!.execute({ format: 'stl' })) as { preview: string; content?: string };
+    expect(exported.preview).toMatch(/^solid /);
+    expect(exported.content).toBeUndefined();
   });
 
   it('throws a clear error when the body is missing', async () => {
@@ -663,9 +669,10 @@ describe('new AI tools', () => {
   it('export_body supports step format', async () => {
     useStore.getState().addDirectBodies([{ id: 'test_exp', name: 'Test', vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }], faces: [{ id: 'f1', vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }], normal: { x: 0, y: 0, z: 1 } }], edges: [] }]);
     const tool = getTool('export_body')!;
-    const result = (await tool.execute({ bodyId: 'test_exp', format: 'step' })) as { format: string; content: string };
+    const result = (await tool.execute({ bodyId: 'test_exp', format: 'step' })) as { format: string; preview: string; content?: string };
     expect(result.format).toBe('step');
-    expect(result.content).toContain('ISO-10303-21');
+    expect(result.preview).toContain('ISO-10303-21');
+    expect(result.content).toBeUndefined();
     useStore.getState().clearScene();
   });
 });
@@ -1136,9 +1143,11 @@ describe('feature tree tools (list_features / update_feature)', () => {
     useStore.getState().setCurrentSketch(null);
   });
 
-  /** Sketch a 10×10 rectangle, extrude it `distance` mm, return the extrude feature id. */
+  /** Sketch a 10×10 rectangle, extrude it `distance` mm, return the extrude feature id.
+   * 'xz' = the ground plane: its extrude runs along world +Y (plane-aware
+   * extrude sends an 'xy' sketch along world Z instead). */
   async function buildExtrudedBox(distance: number): Promise<string> {
-    const sketch = createSketch('xy');
+    const sketch = createSketch('xz');
     addRectangle(sketch, 0, 0, 10, 10);
     useStore.getState().setCurrentSketch(sketch);
     const r = (await getTool('extrude')!.execute({ distance })) as { success: boolean };

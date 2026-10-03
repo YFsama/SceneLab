@@ -5,7 +5,7 @@
  * what boolean.ts dispatches to as its fallback.
  */
 import type { SolidBody, Vec3, Face, PlaneDefinition } from './types';
-import { isPointInsideBody } from './measure';
+import { isPointInsideBody, prepareBodyForInsideTests } from './measure';
 import { buildEdgesFromFaces } from './brep';
 import { signedDistanceToPlane } from './referenceGeometry';
 import { applyMirror } from './operations';
@@ -57,6 +57,10 @@ export function booleanOpVoxel(a: SolidBody, b: SolidBody, op: BooleanOp, resolu
   });
 
   let any = false;
+  // The sampling loop below casts n³ rays per body; build the per-body face
+  // AABB cache once instead of inside the first query.
+  prepareBodyForInsideTests(a);
+  prepareBodyForInsideTests(b);
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= n; j++) {
       for (let k = 1; k <= n; k++) {
@@ -134,6 +138,7 @@ export function splitByPlaneVoxel(
   const neg = new Uint8Array(N * N * N);
   let anyPos = false;
   let anyNeg = false;
+  prepareBodyForInsideTests(body);
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= n; j++) {
       for (let k = 1; k <= n; k++) {
@@ -164,6 +169,7 @@ export function hollowBodyVoxel(body: SolidBody, wallThickness: number, resoluti
   const idx = (i: number, j: number, k: number) => (i * N + j) * N + k;
 
   const inside = new Uint8Array(N * N * N);
+  prepareBodyForInsideTests(body);
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= n; j++) {
       for (let k = 1; k <= n; k++) {

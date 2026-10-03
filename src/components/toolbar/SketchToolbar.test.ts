@@ -7,7 +7,6 @@ import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { SketchToolbar } from './SketchToolbar';
 import { SKETCH_TOOLS } from './sketchTools';
-
 // The toolbar is data-driven — test the real exported table so the component
 // cannot drift from it (previously this block re-declared the tool array and
 // even asserted a 'polyline' button that the component never had).
@@ -249,6 +248,58 @@ describe('SketchToolbar trim/extend buttons (rendered)', () => {
     } finally {
       await unmountToolbar(m);
       useStore.getState().setSketchTool('select');
+    }
+  });
+});
+
+// --- Rendered coverage: the Exit Sketch button (F6) ----------------------------
+// The button must take the store.exitSketch path (like Esc and the floating
+// pill), which leaves sketch mode but PRESERVES currentSketch — the old
+// setCurrentSketch(null) call silently discarded every drawn entity.
+
+describe('SketchToolbar exit button (rendered)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      locale: 'en',
+      workspace: 'sketch',
+      sketchActive: true,
+      sketchTool: 'line',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      numericPrompt: null,
+      drawStart: null,
+      polylineLast: null,
+    });
+  });
+
+  it('exits via store.exitSketch and PRESERVES the sketch entities', async () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0);
+    useStore.getState().setCurrentSketch(sketch);
+
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = m.container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${translations.en!['sketch.exit']!}"]`,
+      );
+      expect(btn).not.toBeNull();
+
+      await act(async () => {
+        btn!.click();
+      });
+      const st = useStore.getState();
+      expect(st.sketchActive).toBe(false);
+      expect(st.workspace).toBe('model');
+      // The drawn entities survive the toolbar exit — non-destructive, the
+      // same behaviour as Esc and the floating pill.
+      expect(st.currentSketch).not.toBeNull();
+      const lines = [...st.currentSketch!.entities.values()].filter((e) => e.type === 'line');
+      expect(lines).toHaveLength(1);
+    } finally {
+      await unmountToolbar(m);
+      useStore.getState().exitSketch();
+      useStore.setState({ currentSketch: null });
     }
   });
 });

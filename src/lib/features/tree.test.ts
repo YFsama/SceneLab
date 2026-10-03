@@ -16,8 +16,9 @@ import {
   canReorderFeatures,
 } from './tree';
 import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
-import { computeVolume } from '../geometry/brep';
-import { warmUpBooleanEngine } from '../geometry/boolean';
+import { computeVolume, computeBoundingBox } from '../geometry/brep';
+import { warmUpBooleanEngine, isManifoldEngineReady } from '../geometry/boolean';
+import { __resetManifoldEngineForTests } from '../geometry/booleanManifold';
 import type { SweepFeature, LoftFeature, HoleFeature } from './types';
 import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from '../io/studio3d';
 
@@ -451,7 +452,8 @@ describe('createRevolveFeature', () => {
   it('should evaluate a revolve from a circle sketch', () => {
     const tree = new FeatureTree();
     const sketch = createSketch('xz');
-    // Draw a circle offset from the Y-axis (will revolve around Y).
+    // Draw a circle offset from the world Z-axis (the xz plane's revolve axis
+    // since revolve became plane-aware).
     addCircle(sketch, 5, 5, 2);
     const sketchFeat = createSketchFeature(sketch);
     tree.addFeature(sketchFeat);
@@ -806,5 +808,156 @@ describe('hole counterbore/countersink evaluator', () => {
     ));
     tree.recompute();
     expect(tree.getResult(tree.features[1]!.id)?.error).toContain('Countersink');
+  });
+});
+
+describe('boolean-engine readiness flip (cold voxel results are not pinned)', () => {
+  // The DAG memo used to reuse a hole's result forever once computed —
+  // including the blocky voxel approximation produced while the exact
+  // Manifold engine was still cold. The memo now records engine readiness and
+  // re-evaluates boolean-touching features when it flips.
+  it('a hole evaluated cold is re-evaluated after warmUpBooleanEngine', async () => {
+    __resetManifoldEngineForTests();
+    expect(isManifoldEngineReady()).toBe(false);
+
+    const tree = new FeatureTree();
+    const ext = boxExtrude(); // 10×10×10, top face at y = 10
+    // Standalone extrude + a parented hole (the real-world shape).
+    tree.addFeature(ext);
+    tree.addFeature(createHoleFeature(
+      { center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: null },
+      [ext.id],
+    ));
+    tree.recompute();
+
+    const coldBody = tree.getResult(tree.features[1]!.id)!.bodies[0]!;
+    expect(coldBody).toBeDefined();
+    // The cold path is the voxel kernel: every face normal is axis-aligned.
+    const isAxis = (n: { x: number; y: number; z: number }) =>
+      Math.abs(n.x) > 0.999 || Math.abs(n.y) > 0.999 || Math.abs(n.z) > 0.999;
+    expect(coldBody.faces.every((f) => isAxis(f.normal))).toBe(true);
+    expect(Math.abs(computeVolume(coldBody))).toBeLessThan(1000);
+
+    // Engine warms up (blocky-forever bug: nothing ever re-ran before).
+    await warmUpBooleanEngine();
+    expect(isManifoldEngineReady()).toBe(true);
+    tree.recompute();
+
+    const warmBody = tree.getResult(tree.features[1]!.id)!.bodies[0]!;
+    expect(warmBody).not.toBe(coldBody);
+    // The exact result contains the curved cylinder wall (off-axis normals)
+    // and a different, finer tessellation than the voxel grid.
+    expect(warmBody.faces.some((f) => !isAxis(f.normal))).toBe(true);
+    expect(warmBody.faces.length).not.toBe(coldBody.faces.length);
+    // Both approximate the same truth: box minus a ⌀4 through-cylinder.
+    expect(Math.abs(Math.abs(computeVolume(warmBody)) - Math.abs(computeVolume(coldBody)))).toBeLessThan(150);
+  });
+
+  it('memo reuse still works while readiness is unchanged (no needless churn)', async () => {
+    await warmUpBooleanEngine(); // warm and staying warm
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.addFeature(createHoleFeature(
+      { center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: null },
+      [ext.id],
+    ));
+    tree.recompute();
+    const body1 = tree.getResult(tree.features[1]!.id)!.bodies[0]!;
+    tree.recompute();
+    const body2 = tree.getResult(tree.features[1]!.id)!.bodies[0]!;
+    // Same feature objects, same readiness → same body object (mesh reuse).
+    expect(body2).toBe(body1);
+  });
+});
+
+describe('plane-aware extrude/revolve (sketch frames)', () => {
+  /** Extrude a rectangle sketch on `planeId`; returns the resulting body. */
+  function extrudeRect(planeId: string, x1: number, y1: number, x2: number, y2: number, distance: number) {
+    const sketch = createSketch(planeId);
+    addRectangle(sketch, x1, y1, x2, y2);
+    const sf = createSketchFeature(sketch);
+    const ef = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance },
+      [sf.id],
+    );
+    const tree = new FeatureTree();
+    tree.addFeature(sf);
+    tree.addFeature(ef);
+    tree.recompute();
+    return tree.getLatestBodies()[0]!;
+  }
+
+  const extents = (body: ReturnType<typeof extrudeRect>) => {
+    const bb = computeBoundingBox(body);
+    return {
+      x: [bb.min.x, bb.max.x] as const,
+      y: [bb.min.y, bb.max.y] as const,
+      z: [bb.min.z, bb.max.z] as const,
+    };
+  };
+
+  it("default 'xz' ground sketch keeps the legacy mapping: extrude rises along +Y", () => {
+    // Rectangle (0,0)–(4,10): sketch x→world x, sketch y→world z, extrude→y.
+    const e = extents(extrudeRect('xz', 0, 0, 4, 10, 2));
+    expect(e.x).toEqual([0, 4]);
+    expect(e.y).toEqual([0, 2]); // the extrude
+    expect(e.z).toEqual([0, 10]);
+  });
+
+  it("'xy' (vertical) sketch extrudes along the frame normal (world +Z)", () => {
+    // The usability-audit F4 bug: a vertical sketch used to extrude along +Y,
+    // flattening it onto the ground. Now the profile stays on its plane.
+    const e = extents(extrudeRect('xy', 0, 0, 4, 10, 2));
+    expect(e.x).toEqual([0, 4]);
+    expect(e.y).toEqual([0, 10]); // sketch vertical stays vertical
+    expect(e.z).toEqual([0, 2]); // extrude along the +Z normal
+  });
+
+  it("'yz' side sketch extrudes along world +X", () => {
+    // yz frame: u = +Y, v = +Z, normal = +X. Sketch x→world y, y→world z.
+    const e = extents(extrudeRect('yz', 0, 0, 4, 10, 2));
+    expect(e.x).toEqual([0, 2]); // the extrude
+    expect(e.y).toEqual([0, 4]);
+    expect(e.z).toEqual([0, 10]);
+  });
+
+  it("'xy' revolve spins about world Y — the frame's in-plane vertical", () => {
+    const sketch = createSketch('xy');
+    addRectangle(sketch, 2, 0, 4, 2); // section offset from the local Y axis
+    const sf = createSketchFeature(sketch);
+    const tree = new FeatureTree();
+    tree.addFeature(sf);
+    tree.addFeature(createRevolveFeature(Math.PI * 2, [sf.id]));
+    tree.recompute();
+    const body = tree.getLatestBodies()[0]!;
+    const bb = computeBoundingBox(body);
+    // Swept around world Y: radius 2–4 in x/z, sketch y extent kept in y.
+    expect(bb.min.x).toBeCloseTo(-4, 5);
+    expect(bb.max.x).toBeCloseTo(4, 5);
+    expect(bb.min.y).toBeCloseTo(0, 5);
+    expect(bb.max.y).toBeCloseTo(2, 5);
+    expect(bb.min.z).toBeCloseTo(-4, 5);
+    expect(bb.max.z).toBeCloseTo(4, 5);
+    // Pappus: section area 4 × travel 2π·3 = 24π.
+    expect(Math.abs(computeVolume(body))).toBeCloseTo(24 * Math.PI, 0);
+  });
+
+  it("'xz' ground sketch revolves about world Z (its in-plane vertical)", () => {
+    const sketch = createSketch('xz');
+    addRectangle(sketch, 2, 0, 4, 2);
+    const sf = createSketchFeature(sketch);
+    const tree = new FeatureTree();
+    tree.addFeature(sf);
+    tree.addFeature(createRevolveFeature(Math.PI * 2, [sf.id]));
+    tree.recompute();
+    const body = tree.getLatestBodies()[0]!;
+    const bb = computeBoundingBox(body);
+    // Sketch (x,y) → world (x,z): the swept disc lies in x/y, thickness in z.
+    expect(bb.min.z).toBeCloseTo(0, 5);
+    expect(bb.max.z).toBeCloseTo(2, 5);
+    expect(bb.min.x).toBeCloseTo(-4, 5);
+    expect(bb.max.x).toBeCloseTo(4, 5);
+    expect(Math.abs(computeVolume(body))).toBeCloseTo(24 * Math.PI, 0);
   });
 });

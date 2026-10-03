@@ -58,6 +58,18 @@ export function isManifoldEngineReady(): boolean {
   return ready !== null;
 }
 
+/**
+ * Test seam: drop the warmed engine back to cold (the sync boolean entry
+ * points take the voxel fallback again) and forget the in-flight warmup so a
+ * later warmUpBooleanEngine() runs from scratch. Mirrors the
+ * `__setExactStepLoaderForTests` precedent — lets tests evaluate features on
+ * the cold path, then flip warm and verify the results change.
+ */
+export function __resetManifoldEngineForTests(): void {
+  ready = null;
+  modulePromise = null;
+}
+
 let nextId = 1;
 
 /**

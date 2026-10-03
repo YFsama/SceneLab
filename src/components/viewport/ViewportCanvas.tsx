@@ -60,6 +60,14 @@ const PLANE_COLORS: Record<SketchPlaneId, number> = {
 };
 
 /**
+ * Sketch tools drawn in one arm→commit gesture (line, rect, circle, arc,
+ * polygon). They support BOTH press-drag (release commits) and click-click
+ * (a stationary press arms, the next press commits) — the polyline tool
+ * chains its own clicks and trim/extend act on click, so they are excluded.
+ */
+const CLICK_DRAW_TOOLS: readonly string[] = ['line', 'rect', 'circle', 'arc', 'polygon'];
+
+/**
  * Hit-test a click against the sketch's dimension labels (Fusion-style
  * click-to-edit). The anchors are the exact positions the label sprites render
  * at — line midpoints and circle/arc centres — projected to screen space; a hit
@@ -1065,8 +1073,11 @@ export function ViewportCanvas() {
       const isConstruction = entity.construction;
       switch (entity.type) {
         case 'point': {
+          // Through s2w like every other entity: on non-default planes the
+          // sketch's 2D (x, y) are plane-local, NOT world (x, z).
+          const p = s2w(entity.x, entity.y);
           const geo = new THREE.BufferGeometry();
-          geo.setAttribute('position', new THREE.Float32BufferAttribute([entity.x, 0, entity.y], 3));
+          geo.setAttribute('position', new THREE.Float32BufferAttribute([p.x, p.y, p.z], 3));
           sketchGroup.add(new THREE.Points(geo, isConstruction ? constructionPtMat : pointMat));
           break;
         }
@@ -1162,13 +1173,17 @@ export function ViewportCanvas() {
       const s = drawStart;
       // A marker dot at a sketch point, drawn on top (depthTest off) so it's
       // always visible regardless of the geometry behind it. The material is
-      // cached per dot size; its colour is (re)set per use.
+      // cached per dot size; its colour is (re)set per use. The position goes
+      // through the SAME plane-frame transform as the preview geometry (plus
+      // the small normal offset v() adds), so dots sit on the entity on any
+      // sketch plane — not just the default one.
       const marker = (x: number, y: number, color: number, size: number) => {
         const mat = assets.markers.get(size)
           ?? assets.markers.set(size, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false })).get(size)!;
         mat.color.setHex(color);
+        const p = v(x, y);
         const g = new THREE.BufferGeometry();
-        g.setAttribute('position', new THREE.Float32BufferAttribute([x, 0.01, y], 3));
+        g.setAttribute('position', new THREE.Float32BufferAttribute([p.x, p.y, p.z], 3));
         return new THREE.Points(g, mat);
       };
       // Current cursor — turns green (and larger) when snapped onto an existing
@@ -1231,7 +1246,10 @@ export function ViewportCanvas() {
         const labelEnd = sketchTool === 'line' ? inferLineEnd(s, m).point : m;
         const label = previewDimensionLabel(sketchTool, s, labelEnd, polygonSides);
         assets.label.set(label ?? '', 0xf9e2af, 0.35);
-        assets.label.sprite.position.set(m.x + 0.5, 0.06, m.y + 0.5);
+        // Plane-frame position next to the cursor (v() = s2w + normal offset;
+        // the extra 0.05 lifts it clear of the preview line, matching the old
+        // fixed y offset on the default plane).
+        assets.label.sprite.position.copy(v(m.x + 0.5, m.y + 0.5)).addScaledVector(pvFrame.normal, 0.05);
         previewGroup.add(assets.label.sprite);
       }
       // Polyline preview: show a line from the last committed point to the cursor.
@@ -1733,38 +1751,98 @@ export function ViewportCanvas() {
     dirtyRef.current = true;
   }, [groundShadows]);
 
-  // Render measure points and the segment between them.
+  // Measure overlay assets: created ONCE, updated in place afterwards. The
+  // hover marker follows the cursor on every mousemove, so the old full-group
+  // teardown rebuilt a BufferGeometry + PointsMaterial per point/line per
+  // move; now positions/colours update on persistent objects and the hover
+  // marker's material is cached per dot size (the same convention as the
+  // sketch preview's assets.markers map). measurePts holds at most 3 picks
+  // (distance/angle); 8 slots are preallocated for headroom.
+  const measureVizRef = useRef<{
+    pts: THREE.Points;
+    line: THREE.Line;
+    hover: THREE.Points;
+    hoverMats: Map<number, THREE.PointsMaterial>;
+  } | null>(null);
+  const measureViz = () => (measureVizRef.current ??= (() => {
+    const ptsGeo = new THREE.BufferGeometry();
+    ptsGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * 8), 3));
+    const pts = new THREE.Points(ptsGeo, new THREE.PointsMaterial({ color: 0xf38ba8, size: 10, sizeAttenuation: false }));
+    pts.frustumCulled = false; // drawRange-chopped buffer would cull wrongly
+    pts.visible = false;
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * 8), 3));
+    const line = new THREE.Line(lineGeo, new THREE.LineDashedMaterial({ color: 0xf38ba8, dashSize: 0.5, gapSize: 0.25 }));
+    line.frustumCulled = false;
+    line.visible = false;
+    const hoverGeo = new THREE.BufferGeometry();
+    hoverGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    const hover = new THREE.Points(hoverGeo, new THREE.PointsMaterial({ color: 0x89b4fa, size: 8, sizeAttenuation: false, depthTest: false }));
+    hover.frustumCulled = false;
+    hover.visible = false;
+    return { pts, line, hover, hoverMats: new Map<number, THREE.PointsMaterial>() };
+  })());
+  // Dispose the persistent measure objects on unmount (the per-run effects
+  // below never dispose anything — they only update in place).
+  useEffect(() => () => {
+    const v = measureVizRef.current;
+    if (!v) return;
+    v.pts.geometry.dispose();
+    (v.pts.material as THREE.Material).dispose();
+    v.line.geometry.dispose();
+    (v.line.material as THREE.Material).dispose();
+    v.hover.geometry.dispose();
+    (v.hover.material as THREE.Material).dispose();
+    for (const m of v.hoverMats.values()) m.dispose();
+    measureVizRef.current = null;
+  }, []);
+
+  // Render measure points and the segment between them (updates in place;
+  // only the picked points can change here — hover lives in the next effect).
   useEffect(() => {
     const measureGroup = measureGroupRef.current;
     if (!measureGroup) return;
-    while (measureGroup.children.length > 0) {
-      const child = measureGroup.children[0]!;
-      measureGroup.remove(child);
-      if (child instanceof THREE.Points || child instanceof THREE.Line) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
-      }
+    const viz = measureViz();
+    if (!viz.pts.parent) measureGroup.add(viz.pts, viz.line);
+    const pos = viz.pts.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < measurePts.length; i++) {
+      pos.setXYZ(i, measurePts[i]!.x, measurePts[i]!.y, measurePts[i]!.z);
     }
-    for (const pt of measurePts) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute([pt.x, pt.y, pt.z], 3));
-      measureGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xf38ba8, size: 10, sizeAttenuation: false })));
+    pos.needsUpdate = true;
+    viz.pts.geometry.setDrawRange(0, measurePts.length);
+    viz.pts.visible = measurePts.length > 0;
+    const lpos = viz.line.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < measurePts.length; i++) {
+      lpos.setXYZ(i, measurePts[i]!.x, measurePts[i]!.y, measurePts[i]!.z);
     }
-    if (measurePts.length >= 2) {
-      // Polyline through the picks (1→2→3) — a segment for distance, two for angle.
-      const g = new THREE.BufferGeometry().setFromPoints(measurePts.map((p) => new THREE.Vector3(p.x, p.y, p.z)));
-      const line = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xf38ba8, dashSize: 0.5, gapSize: 0.25 }));
-      line.computeLineDistances();
-      measureGroup.add(line);
-    }
-    // Live snap-preview marker under the cursor (green when snapped to a feature).
-    if (measureActive && measureHover) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute([measureHover.x, measureHover.y, measureHover.z], 3));
-      measureGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ color: measureHover.snapped ? 0xa6e3a1 : 0x89b4fa, size: measureHover.snapped ? 12 : 8, sizeAttenuation: false, depthTest: false })));
+    lpos.needsUpdate = true;
+    // Polyline through the picks (1→2→3) — a segment for distance, two for angle.
+    viz.line.geometry.setDrawRange(0, measurePts.length);
+    viz.line.visible = measurePts.length >= 2;
+    if (measurePts.length >= 2) viz.line.computeLineDistances();
+    dirtyRef.current = true;
+  }, [measurePts]);
+
+  // Live snap-preview marker under the cursor (green when snapped to a
+  // feature). Runs per mousemove — strictly in-place updates, no allocation
+  // once the two cached materials exist.
+  useEffect(() => {
+    const measureGroup = measureGroupRef.current;
+    if (!measureGroup) return;
+    const viz = measureViz();
+    if (!viz.hover.parent) measureGroup.add(viz.hover);
+    viz.hover.visible = measureActive && !!measureHover;
+    if (measureHover) {
+      const size = measureHover.snapped ? 12 : 8;
+      const mat = viz.hoverMats.get(size)
+        ?? viz.hoverMats.set(size, new THREE.PointsMaterial({ color: measureHover.snapped ? 0xa6e3a1 : 0x89b4fa, size, sizeAttenuation: false, depthTest: false })).get(size)!;
+      viz.hover.material = mat;
+      const pos = viz.hover.geometry.getAttribute('position') as THREE.BufferAttribute;
+      pos.setXYZ(0, measureHover.x, measureHover.y, measureHover.z);
+      pos.needsUpdate = true;
     }
     dirtyRef.current = true;
-  }, [measurePts, measureActive, measureHover]);
+  }, [measureActive, measureHover]);
 
   // Render persistent annotations (saved measurements that survive project save/load).
   useEffect(() => {
@@ -2928,11 +3006,82 @@ export function ViewportCanvas() {
     return () => window.removeEventListener('keydown', onKey);
   }, [fitView, resetView, sketchActive, nudgeSelected, drawStart, dimBuffer]);
 
+  // Commit the armed draw as a sketch entity from `start` to `pt`. Shared by
+  // the press-drag release path and the click-click second press so both
+  // gesture styles produce identical entities (H/V inference included).
+  // Zero-size shapes are refused (they would litter the sketch with junk);
+  // returns whether an entity was created.
+  const commitSketchEntity = useCallback(
+    (start: { x: number; y: number }, pt: { x: number; y: number }): boolean => {
+      const EPS = 1e-6;
+      switch (sketchTool) {
+        case 'line': {
+          const end = inferLineEnd(start, pt).point; // commit with H/V inference
+          if (Math.hypot(end.x - start.x, end.y - start.y) > EPS) {
+            addSketchLine(start.x, start.y, end.x, end.y);
+            return true;
+          }
+          return false;
+        }
+        case 'rect':
+          if (Math.abs(pt.x - start.x) > EPS && Math.abs(pt.y - start.y) > EPS) {
+            addSketchRect(start.x, start.y, pt.x, pt.y);
+            return true;
+          }
+          return false;
+        case 'circle': {
+          const r = Math.hypot(pt.x - start.x, pt.y - start.y);
+          if (r > EPS) {
+            addSketchCircle(start.x, start.y, r);
+            return true;
+          }
+          return false;
+        }
+        case 'arc': {
+          const dx = pt.x - start.x;
+          const dy = pt.y - start.y;
+          const radius = Math.sqrt(dx * dx + dy * dy);
+          if (radius > EPS) {
+            addSketchArc(start.x, start.y, radius, 0, Math.atan2(dy, dx));
+            return true;
+          }
+          return false;
+        }
+        case 'polygon': {
+          const r = Math.hypot(pt.x - start.x, pt.y - start.y);
+          if (r > EPS) {
+            addSketchPolygon(start.x, start.y, r, polygonSides);
+            return true;
+          }
+          return false;
+        }
+      }
+      return false;
+    },
+    [sketchTool, polygonSides, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon],
+  );
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (sketchActive && sketchTool !== 'select') {
         const pt = getSketchPoint(e);
-        if (pt) setDrawStart(pt);
+        if (pt) {
+          // Click-click drawing (every commercial sketcher's primary flow):
+          // when a draw is already armed, the next LEFT press commits the
+          // entity at the cursor instead of re-arming the start point.
+          // Press-drag keeps working — its release commits first — and a
+          // stationary press stays armed (see handleMouseUp). Non-left
+          // buttons keep the plain re-arm so orbit stays untouched.
+          const armed = useStore.getState().drawStart;
+          if (e.button === 0 && armed && CLICK_DRAW_TOOLS.includes(sketchTool)) {
+            if (commitSketchEntity(armed, pt)) {
+              setDrawStart(null);
+              setDimBuffer('');
+            }
+          } else {
+            setDrawStart(pt);
+          }
+        }
         return;
       }
       // AI vision region capture: the next left-drag defines the crop sent with
@@ -2993,7 +3142,7 @@ export function ViewportCanvas() {
         }
       }
     },
-    [sketchActive, sketchTool, getSketchPoint, setDrawStart, measureActive],
+    [sketchActive, sketchTool, getSketchPoint, setDrawStart, measureActive, commitSketchEntity],
   );
 
   const handleMouseUp = useCallback(
@@ -3115,45 +3264,21 @@ export function ViewportCanvas() {
       const pt = getSketchPoint(e);
       if (!pt) return;
 
-      // Ignore a click-without-drag (or a drag that snaps back to the start):
-      // committing a zero-size shape just litters the sketch with junk.
-      const EPS = 1e-6;
-      switch (sketchTool) {
-        case 'line': {
-          const end = inferLineEnd(drawStart, pt).point; // commit with H/V inference
-          if (Math.hypot(end.x - drawStart.x, end.y - drawStart.y) > EPS) {
-            addSketchLine(drawStart.x, drawStart.y, end.x, end.y);
-          }
-          break;
-        }
-        case 'rect':
-          if (Math.abs(pt.x - drawStart.x) > EPS && Math.abs(pt.y - drawStart.y) > EPS) {
-            addSketchRect(drawStart.x, drawStart.y, pt.x, pt.y);
-          }
-          break;
-        case 'circle': {
-          const r = Math.hypot(pt.x - drawStart.x, pt.y - drawStart.y);
-          if (r > EPS) addSketchCircle(drawStart.x, drawStart.y, r);
-          break;
-        }
-        case 'arc': {
-          const dx = pt.x - drawStart.x;
-          const dy = pt.y - drawStart.y;
-          const radius = Math.sqrt(dx * dx + dy * dy);
-          if (radius > EPS) addSketchArc(drawStart.x, drawStart.y, radius, 0, Math.atan2(dy, dx));
-          break;
-        }
-        case 'polygon': {
-          const r = Math.hypot(pt.x - drawStart.x, pt.y - drawStart.y);
-          if (r > EPS) addSketchPolygon(drawStart.x, drawStart.y, r, polygonSides);
-          break;
-        }
+      // A release that moved commits the entity (press-drag drawing). A
+      // stationary release — the FIRST click of a click-click pair — keeps
+      // the draw armed so the next press commits at the cursor (see
+      // handleMouseDown); type-ahead dimensions stay live while armed.
+      if (commitSketchEntity(drawStart, pt)) {
+        setDrawStart(null);
+        setDimBuffer('');
+      } else if (!CLICK_DRAW_TOOLS.includes(sketchTool)) {
+        // Non-gesture tools (trim/extend) only armed drawStart transiently —
+        // always clear it so nothing stays spuriously armed.
+        setDrawStart(null);
+        setDimBuffer('');
       }
-
-      setDrawStart(null);
-      setDimBuffer('');
     },
-    [sketchActive, drawStart, sketchTool, polygonSides, getSketchPoint, addSketchLine, addSketchRect, addSketchCircle, addSketchArc, addSketchPolygon, setDrawStart, bodies, hiddenIds, setPolylineLast, t],
+    [sketchActive, drawStart, sketchTool, getSketchPoint, addSketchLine, setDrawStart, bodies, hiddenIds, setPolylineLast, t, commitSketchEntity],
   );
 
   return (
@@ -3239,7 +3364,9 @@ export function ViewportCanvas() {
         </button>
       </div>
       {sketchActive && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1">
+        // top-14: sits BELOW the SketchToolbar row (top-3, ~44px tall) —
+        // top-2 overlapped the toolbar buttons and swallowed their clicks.
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1">
           <button
             onClick={exitSketch}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-surface text-xs font-medium shadow-lg hover:bg-accent-hover transition-colors"

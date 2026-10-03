@@ -18,6 +18,10 @@ import { booleanOpManifold, splitByPlaneManifold, warmUpBooleanEngine, isManifol
 import { runGeometryOp } from '../workers/geometryWorkerClient';
 
 export type { BooleanOp } from './booleanVoxel';
+// NOTE: __resetManifoldEngineForTests (booleanManifold.ts) is intentionally NOT
+// re-exported here — the vite ssr transform drops `__`-prefixed names from
+// value re-exports, so tests import it directly from './booleanManifold',
+// matching the __setExactStepLoaderForTests precedent.
 export { warmUpBooleanEngine, isManifoldEngineReady };
 
 /**
