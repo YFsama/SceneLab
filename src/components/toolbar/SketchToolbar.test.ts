@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SketchTool } from '../../store/app';
 import { useStore } from '../../store/app';
 import { createSketch, addCircle, addLine } from '../../lib/sketch/engine';
+import { resolveMirrorAxis } from '../../lib/sketch/mirror';
 import { translations } from '../../lib/i18n';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -301,5 +302,215 @@ describe('SketchToolbar exit button (rendered)', () => {
       useStore.getState().exitSketch();
       useStore.setState({ currentSketch: null });
     }
+  });
+});
+
+// --- Rendered coverage: the Mirror button --------------------------------------
+// The axis rule (resolveMirrorAxis): the selection's single line is the axis;
+// with no line selected, the sketch's ONLY line is used automatically;
+// otherwise the button disables with the "mirror about line" hint. Clicking
+// runs store.mirrorSelectedSketch(resolvedLineId) — the real store action
+// lands with the store sibling, so it is spied via a state-object seam here
+// (the click handler reads the action through useStore.getState(), so no
+// re-render or setState is needed).
+
+interface MirrorSeam {
+  mirrorSelectedSketch?: (lineId: string) => boolean;
+}
+
+describe('SketchToolbar mirror button (rendered)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      locale: 'en',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      numericPrompt: null,
+    });
+  });
+
+  function mirrorButton(container: HTMLElement): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>(
+      `button[aria-label="${translations.en!['sketch.mirror']!}"]`,
+    );
+  }
+
+  it('renders and is disabled without a selection, hinting the axis in the title', async () => {
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = mirrorButton(m.container);
+      expect(btn).not.toBeNull();
+      expect(btn!.disabled).toBe(true);
+      expect(btn!.getAttribute('aria-disabled')).toBe('true');
+      expect(btn!.title).toContain(translations.en!['sketch.mirrorPrompt']!);
+    } finally {
+      await unmountToolbar(m);
+    }
+  });
+
+  it('case 1: a multi-selection including exactly one line uses that line as the axis', async () => {
+    const sketch = createSketch('xy');
+    const axis = addLine(sketch, 0, 0, 0, 10);
+    const circle = addCircle(sketch, -5, 0, 2);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [circle.id, axis.id] });
+
+    const seam = useStore.getState() as unknown as MirrorSeam;
+    const original = seam.mirrorSelectedSketch;
+    const spy = vi.fn(() => true);
+    seam.mirrorSelectedSketch = spy;
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = mirrorButton(m.container);
+      expect(btn).not.toBeNull();
+      expect(btn!.disabled).toBe(false);
+      expect(btn!.title).toBe(translations.en!['sketch.mirror']!);
+
+      await act(async () => {
+        btn!.click();
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(axis.id);
+    } finally {
+      await unmountToolbar(m);
+      seam.mirrorSelectedSketch = original;
+    }
+  });
+
+  it('case 2: no line in the selection but exactly one line in the sketch → auto axis', async () => {
+    const sketch = createSketch('xy');
+    const theOnlyLine = addLine(sketch, 1, 1, 1, 8);
+    const circle = addCircle(sketch, -5, 0, 2);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [circle.id] });
+
+    const seam = useStore.getState() as unknown as MirrorSeam;
+    const original = seam.mirrorSelectedSketch;
+    const spy = vi.fn(() => true);
+    seam.mirrorSelectedSketch = spy;
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = mirrorButton(m.container);
+      expect(btn!.disabled).toBe(false);
+      await act(async () => {
+        btn!.click();
+      });
+      expect(spy).toHaveBeenCalledWith(theOnlyLine.id);
+    } finally {
+      await unmountToolbar(m);
+      seam.mirrorSelectedSketch = original;
+    }
+  });
+
+  it('case 3: no line selected and two lines in the sketch → disabled with the hint', async () => {
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 0, 10);
+    addLine(sketch, 5, 0, 5, 10);
+    const circle = addCircle(sketch, -5, 0, 2);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [circle.id] });
+
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = mirrorButton(m.container);
+      expect(btn!.disabled).toBe(true);
+      expect(btn!.getAttribute('aria-disabled')).toBe('true');
+      expect(btn!.title).toContain(translations.en!['sketch.mirrorPrompt']!);
+    } finally {
+      await unmountToolbar(m);
+    }
+  });
+
+  it('two lines in the selection are ambiguous → disabled', async () => {
+    const sketch = createSketch('xy');
+    const l1 = addLine(sketch, 0, 0, 0, 10);
+    const l2 = addLine(sketch, 5, 0, 5, 10);
+    const circle = addCircle(sketch, -5, 0, 2);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [circle.id, l1.id, l2.id] });
+
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      expect(mirrorButton(m.container)!.disabled).toBe(true);
+    } finally {
+      await unmountToolbar(m);
+    }
+  });
+
+  it('a selection of just the axis line still resolves it (engine refuses empty targets later)', async () => {
+    const sketch = createSketch('xy');
+    const axis = addLine(sketch, 0, 0, 0, 10);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [axis.id] });
+
+    const seam = useStore.getState() as unknown as MirrorSeam;
+    const original = seam.mirrorSelectedSketch;
+    const spy = vi.fn(() => false);
+    seam.mirrorSelectedSketch = spy;
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = mirrorButton(m.container);
+      expect(btn!.disabled).toBe(false);
+      await act(async () => {
+        btn!.click();
+      });
+      expect(spy).toHaveBeenCalledWith(axis.id);
+    } finally {
+      await unmountToolbar(m);
+      seam.mirrorSelectedSketch = original;
+    }
+  });
+
+  it('renders with the Chinese label in the zh locale', async () => {
+    const sketch = createSketch('xy');
+    const axis = addLine(sketch, 0, 0, 0, 10);
+    const circle = addCircle(sketch, -5, 0, 2);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [circle.id, axis.id] });
+    useStore.getState().setLocale('zh');
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      const btn = m.container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${translations.zh!['sketch.mirror']!}"]`,
+      );
+      expect(btn).not.toBeNull();
+      expect(btn!.disabled).toBe(false);
+    } finally {
+      await unmountToolbar(m);
+      useStore.getState().setLocale('en');
+    }
+  });
+
+  it('end-to-end: clicking mirrors through the real store action and selects the copies', async () => {
+    const sketch = createSketch('xy');
+    const axis = addLine(sketch, 0, 0, 0, 10);
+    const circle = addCircle(sketch, -5, 0, 2);
+    useStore.setState({ currentSketch: sketch, selectedSketchIds: [circle.id, axis.id] });
+    const before = sketch.entities.size;
+
+    const m = await mountToolbar(createElement(SketchToolbar));
+    try {
+      await act(async () => {
+        mirrorButton(m.container)!.click();
+      });
+      const st = useStore.getState();
+      const circles = [...st.currentSketch!.entities.values()].filter((e) => e.type === 'circle');
+      expect(circles).toHaveLength(2); // original + mirrored copy
+      expect(st.currentSketch!.entities.size).toBe(before + 2); // copy centre + copy circle
+      // The axis was not duplicated, and the copy is the new selection.
+      expect([...st.currentSketch!.entities.values()].filter((e) => e.type === 'line')).toHaveLength(1);
+      expect(st.selectedSketchIds).toHaveLength(1);
+      expect(st.selectedSketchIds[0]).not.toBe(circle.id);
+      expect(st.projectDirty).toBe(true);
+    } finally {
+      await unmountToolbar(m);
+    }
+  });
+});
+
+describe('resolveMirrorAxis (pure rule)', () => {
+  it('ignores stale ids and requires a resolvable axis', () => {
+    const sketch = createSketch('xy');
+    const line = addLine(sketch, 0, 0, 0, 10);
+    const circle = addCircle(sketch, 2, 2, 1);
+    // stale id filtered, single line in sketch resolves even with no line selected
+    expect(resolveMirrorAxis(sketch, ['pt_stale', circle.id])).toBe(line.id);
+    expect(resolveMirrorAxis(sketch, [])).toBeNull();
+    expect(resolveMirrorAxis(null, [line.id])).toBeNull();
+    expect(resolveMirrorAxis(sketch, ['pt_stale'])).toBeNull();
   });
 });

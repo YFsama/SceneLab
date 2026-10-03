@@ -563,13 +563,33 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
 
   interface MockHit {
     point: THREE.Vector3;
-    object: { userData: { bodyId?: string } };
+    object: { userData: { bodyId?: string; planeId?: string }; matrixWorld?: THREE.Matrix4 };
     faceIndex: number;
+    /** Local-space face normal (what three.js reports on hit.face). */
+    face?: { normal: THREE.Vector3 };
   }
   let mockHits: MockHit[] | null = null;
+  /** When set, raycasts against the datum-plane group return these instead. */
+  let mockPlaneHits: MockHit[] | null = null;
   const hit = (bodyId: string, x: number, y: number, z: number): MockHit => ({
     point: new THREE.Vector3(x, y, z),
     object: { userData: { bodyId } },
+    faceIndex: 0,
+  });
+  /** A hit carrying a face normal + a mesh world matrix (side-face click). */
+  const faceHit = (
+    bodyId: string, x: number, y: number, z: number,
+    normal: THREE.Vector3, matrixWorld = new THREE.Matrix4(),
+  ): MockHit => ({
+    point: new THREE.Vector3(x, y, z),
+    object: { userData: { bodyId }, matrixWorld },
+    faceIndex: 0,
+    face: { normal },
+  });
+  /** A datum-plane quad hit (object carries userData.planeId instead). */
+  const planeHit = (planeId: string): MockHit => ({
+    point: new THREE.Vector3(0, 0, 0),
+    object: { userData: { planeId } },
     faceIndex: 0,
   });
 
@@ -579,7 +599,15 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
       originalSetFromCamera.call(this, coords, camera);
     };
     raycasterProto.intersectObjects = function (objects, recursive) {
-      if (mockHits) return mockHits as unknown[];
+      // Route by the query's target group: datum-plane quads carry
+      // userData.planeId, body meshes userData.bodyId — so a test can mock
+      // "the shaft misses the body but the ray reaches the plane" separately
+      // from body-mesh hits.
+      if (objects.some((o) => o.userData != null && 'planeId' in o.userData)) {
+        if (mockPlaneHits) return mockPlaneHits as unknown[];
+      } else if (mockHits) {
+        return mockHits as unknown[];
+      }
       return originalIntersectObjects.call(this, objects, recursive);
     };
   });
@@ -590,6 +618,7 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
 
   beforeEach(() => {
     mockHits = null;
+    mockPlaneHits = null;
     clearToasts();
     useStore.setState({
       locale: 'en',
@@ -637,7 +666,10 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
   }
 
   it('arms after the prompts; the next body click drills at the clicked point, then disarms', async () => {
-    const applyHole = vi.fn(() => true);
+    // Typed so mock.calls carries the full 5-arg shape (id, ⌀, depth, center?, direction?).
+    const applyHole = vi.fn(
+      (_id: string, _d: number, _h: number | null, _c?: { x: number; y: number; z: number }, _dir?: { x: number; y: number; z: number }) => true,
+    );
     const box = createBox(4, 4, 4);
     useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
 
@@ -750,6 +782,257 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
       expect(applyHole).not.toHaveBeenCalled();
     } finally {
       mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  // ---- pass-27 review #1: drill along the clicked face's INWARD normal ----
+
+  it('drills along the clicked face’s inward world normal (side face → lateral direction)', async () => {
+    // Typed so mock.calls carries the full 5-arg shape (id, ⌀, depth, center?, direction?).
+    const applyHole = vi.fn(
+      (_id: string, _d: number, _h: number | null, _c?: { x: number; y: number; z: number }, _dir?: { x: number; y: number; z: number }) => true,
+    );
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 4, 0);
+
+      // Mesh rotated 90° about Y: the local +X face normal maps to world −Z,
+      // so the drill direction (inward, into the body) is world +Z — NOT the
+      // world −Y default that gouges a side-face click.
+      mockHits = [faceHit(
+        box.id, 10, 0, 0,
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Matrix4().makeRotationY(Math.PI / 2),
+      )];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+
+      expect(applyHole).toHaveBeenCalledTimes(1);
+      const args = applyHole.mock.calls[0]!;
+      expect(args[0]).toBe(box.id);
+      expect(args[3]).toEqual({ x: 10, y: 0, z: 0 });
+      expect(args).toHaveLength(5);
+      const dir = args[4] as { x: number; y: number; z: number };
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.y).toBeCloseTo(0, 5);
+      expect(dir.z).toBeCloseTo(1, 5);
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('omits the direction when the normal transform is degenerate (world −Y fallback)', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 4, 0);
+
+      // A singular world matrix collapses the transformed normal to the zero
+      // vector → the direction argument is OMITTED (not null), preserving
+      // applyHoleToBody's locked "omitted = world −Y" contract.
+      mockHits = [faceHit(box.id, 1, 2, 3, new THREE.Vector3(1, 0, 0), new THREE.Matrix4().makeScale(0, 0, 0))];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+
+      expect(applyHole).toHaveBeenCalledTimes(1);
+      expect(applyHole.mock.calls[0]!).toHaveLength(4);
+      expect(applyHole).toHaveBeenCalledWith(box.id, 4, null, { x: 1, y: 2, z: 3 });
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  // ---- pass-27 review #2: while armed, placement owns the click over every mode ----
+
+  it('armed + Alt+click drills; the edge sub-selection never toggles', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 4, 0);
+
+      mockHits = [hit(box.id, 0, 2, 0)];
+      await act(async () => {
+        viewport.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true, clientX: 50, clientY: 50, button: 0, altKey: true,
+        }));
+      });
+      expect(applyHole).toHaveBeenCalledTimes(1);
+      expect(useStore.getState().selectedEdgeIds).toEqual([]);
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('armed + sketch-mode click drills; the sketch tool never sees the click', async () => {
+    // The mode is active FIRST and the placement is armed through the
+    // component's real arming event (the disarm effect only fires on mode
+    // TRANSITIONS, so this constructs the worst case: armed while a mode is
+    // already active) — the branch order must still route the click to the
+    // placement, never to the sketch select tool.
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    const sketch = createSketch('xy');
+    addLine(sketch, -5, -5, 5, 5); // a line under the cursor for the select tool to grab
+    useStore.setState({
+      bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole,
+      sketchActive: true, workspace: 'sketch', currentSketch: sketch,
+    });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('scenelab:arm-hole', {
+          detail: { bodyId: box.id, diameter: 4, depth: null },
+        }));
+      });
+      expect(hintPill(m.container)!.style.display).not.toBe('none');
+
+      mockHits = [hit(box.id, 0, 2, 0)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).toHaveBeenCalledTimes(1);
+      // The sketch select branch (which runs next in the handler) would have
+      // picked the line under the cursor — it must never run.
+      expect(useStore.getState().selectedSketchId).toBeNull();
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('armed + measure-mode click drills; no measure point is dropped', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({
+      bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole,
+      measureActive: true, measurePts: [],
+    });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('scenelab:arm-hole', {
+          detail: { bodyId: box.id, diameter: 4, depth: null },
+        }));
+      });
+
+      mockHits = [hit(box.id, 0, 2, 0)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).toHaveBeenCalledTimes(1);
+      expect(useStore.getState().measurePts).toEqual([]);
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('entering sketch or measure mode disarms a live placement (no dead pill)', async () => {
+    const applyHole = vi.fn(() => true);
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await armHoleViaMenu(m, 4, 0);
+      expect(hintPill(m.container)!.style.display).not.toBe('none');
+
+      // Entering sketch mode clears the pill…
+      await act(async () => { useStore.setState({ sketchActive: true }); });
+      expect(hintPill(m.container)!.style.display).toBe('none');
+      // …and a click after the disarm is an ordinary sketch click: no hole.
+      mockHits = [hit(box.id, 0, 2, 0)];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(applyHole).not.toHaveBeenCalled();
+
+      // Same for measure mode: arm again, enter, pill gone.
+      await act(async () => { useStore.setState({ sketchActive: false }); });
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('scenelab:arm-hole', {
+          detail: { bodyId: box.id, diameter: 4, depth: null },
+        }));
+      });
+      expect(hintPill(m.container)!.style.display).not.toBe('none');
+      await act(async () => { useStore.setState({ measureActive: true }); });
+      expect(hintPill(m.container)!.style.display).toBe('none');
+    } finally {
+      mockHits = null;
+      await unmount(m);
+    }
+  });
+
+  // ---- pass-27 review #4: a click through a through-hole shaft never starts a sketch ----
+
+  it('a ray that pierces a body’s bounds selects the body — the datum plane never starts a sketch', async () => {
+    const box = createBox(4, 4, 4);
+    useStore.setState({ bodies: [box], selectedIds: [] });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      // Floor: a body MESH hit anywhere along the ray (even a far face)
+      // already wins over a nearer plane hit — the plane is never consulted.
+      mockHits = [hit(box.id, 0, -2, 0)];
+      mockPlaneHits = [planeHit('xy')];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(useStore.getState().selectedIds).toContain(box.id);
+      expect(useStore.getState().sketchActive).toBe(false);
+
+      // The shaft case: after a through-all hole, the ray dives down the
+      // empty shaft, misses every triangle, and reaches the plane behind —
+      // but the body's bounding volume still blocks the plane pick.
+      await act(async () => { useStore.setState({ selectedIds: [] }); });
+      mockHits = [];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(useStore.getState().selectedIds).toContain(box.id); // body preferred
+      expect(useStore.getState().sketchActive).toBe(false);      // no sketch started
+      expect(useStore.getState().currentSketch).toBeNull();
+    } finally {
+      mockHits = null;
+      mockPlaneHits = null;
+      await unmount(m);
+    }
+  });
+
+  it('still starts a sketch on a plane when no body is in the line of sight', async () => {
+    useStore.setState({ bodies: [], selectedIds: [] });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+
+      mockHits = [];
+      mockPlaneHits = [planeHit('xy')];
+      await act(async () => { viewport.dispatchEvent(click(50, 50)); });
+      expect(useStore.getState().sketchActive).toBe(true);
+      expect(useStore.getState().currentSketch).not.toBeNull();
+    } finally {
+      mockHits = null;
+      mockPlaneHits = null;
       await unmount(m);
     }
   });

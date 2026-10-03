@@ -170,6 +170,119 @@ export function applyChamfer(body: SolidBody, edgeIds: string[], distance: numbe
   return { id: body.id, name: body.name, vertices: newVertices, faces: newFaces, edges: newEdges };
 }
 
+/** Result of a fillet/chamfer size-limit query (maxFilletRadius / maxChamferDistance). */
+export interface EdgeFeatureLimit {
+  /**
+   * Largest radius/distance (mm) that keeps every fillet arc / chamfer face
+   * inside the selected edges' adjacent faces' extents — the min over every
+   * applicable edge. Null when EVERY selected edge would be skipped by
+   * applyFillet/applyChamfer (nothing can be applied at any size).
+   */
+  max: number | null;
+  /** Selected edges that applyFillet/applyChamfer silently skip (fewer than
+   * two adjacent faces, or a degenerate fillet tangent). They contribute no
+   * limit but are surfaced here instead of vanishing. */
+  skippedEdges: number;
+}
+
+/**
+ * Largest fillet radius that keeps every fillet arc inside the adjacent faces'
+ * extents, derived from how applyFillet builds its geometry.
+ *
+ * The arc cross-section at a point E on the edge is the half-ellipse
+ *   p(a) = E + bisector·(radius/sin(halfAngle))·cos(a) + tangent·(radius)·sin(a),
+ * whose component along each face's in-plane edge-perpendicular direction is
+ *   radius·(±cos(a) + sin(a))  —  the (radius/sinHalf)·sinHalf cancellation is
+ * exact — so the arc reaches at most √2·radius into EITHER adjacent face's
+ * plane, independent of the dihedral. Constraining radius to half the face's
+ * in-plane depth from the edge therefore guarantees the arc's √2 bulge stays
+ * inside the face (√2/2 ≈ 0.707 of the depth) while also leaving the far half
+ * of the face for opposite-edge treatments.
+ *
+ * `edgeIds` follows applyFillet semantics: an empty list means EVERY edge;
+ * ids that do not exist on the body match nothing (and are ignored), exactly
+ * like the applier. Pure function — no mutation.
+ */
+export function maxFilletRadius(body: SolidBody, edgeIds: string[]): EdgeFeatureLimit {
+  return edgeFeatureLimit(body, edgeIds, 'fillet');
+}
+
+/**
+ * Largest chamfer distance that keeps the chamfer face inside the adjacent
+ * faces' extents, derived from how applyChamfer builds its geometry.
+ *
+ * applyChamfer offsets each edge endpoint by exactly `distance` along both
+ * adjacent face normals, so every generated point departs at most `distance`
+ * from the edge (the true chamfer leg). Capping `distance` at half of each
+ * adjacent face's in-plane depth from the edge keeps the chamfer inside the
+ * near half of the face — it can never reach past the face's medial line or
+ * poke out of the opposite side.
+ *
+ * Same `edgeIds` semantics as applyChamfer (empty = every edge). Pure.
+ */
+export function maxChamferDistance(body: SolidBody, edgeIds: string[]): EdgeFeatureLimit {
+  return edgeFeatureLimit(body, edgeIds, 'chamfer');
+}
+
+function edgeFeatureLimit(
+  body: SolidBody,
+  edgeIds: string[],
+  kind: 'fillet' | 'chamfer',
+): EdgeFeatureLimit {
+  const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
+  let max: number | null = null;
+  let skipped = 0;
+
+  for (const edge of body.edges) {
+    if (!edgeSet.has(edge.id)) continue;
+
+    // Mirror applyFillet/applyChamfer's skip conditions exactly: fewer than
+    // two adjacent faces, and (fillet only) a degenerate in-plane tangent.
+    const adjacent = body.faces.filter((f) => faceContainsEdge(f, edge));
+    const [face1, face2] = adjacent;
+    if (adjacent.length < 2 || !face1 || !face2) { skipped++; continue; }
+
+    if (kind === 'fillet') {
+      const edgeDir = normalize({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
+      const tangent = cross(normalize(face1.normal), edgeDir);
+      if (vecLen(tangent) < 1e-9) { skipped++; continue; }
+    }
+
+    const bound = Math.min(
+      faceDepthFromEdge(face1, edge),
+      faceDepthFromEdge(face2, edge),
+    ) / 2;
+    max = max === null ? bound : Math.min(max, bound);
+  }
+
+  return { max, skippedEdges: skipped };
+}
+
+/**
+ * How deep a face extends from an edge lying on its boundary, measured
+ * in-plane: the largest perpendicular distance from the edge's line to any of
+ * the face's vertices. For the planar faces the appliers build, this is the
+ * width of face material available on the far side of the edge.
+ */
+function faceDepthFromEdge(face: Face, edge: Edge): number {
+  const dx = edge.end.x - edge.start.x;
+  const dy = edge.end.y - edge.start.y;
+  const dz = edge.end.z - edge.start.z;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (len < 1e-10) return 0;
+  const ux = dx / len, uy = dy / len, uz = dz / len;
+  let depth = 0;
+  for (const v of face.vertices) {
+    const rx = v.x - edge.start.x;
+    const ry = v.y - edge.start.y;
+    const rz = v.z - edge.start.z;
+    const along = rx * ux + ry * uy + rz * uz;
+    const px = rx - ux * along, py = ry - uy * along, pz = rz - uz * along;
+    depth = Math.max(depth, Math.sqrt(px * px + py * py + pz * pz));
+  }
+  return depth;
+}
+
 /** Shell: hollow out a body by removing faces and offsetting inward */
 export function applyShell(body: SolidBody, faceIds: string[], thickness: number): SolidBody {
   if (thickness <= 0) return body;

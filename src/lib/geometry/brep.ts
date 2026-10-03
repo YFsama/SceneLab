@@ -1526,7 +1526,7 @@ export function computeAdjacency(body: SolidBody): AdjacencyInfo {
     const verts = face.vertices;
     for (let i = 0; i < verts.length; i++) {
       const next = (i + 1) % verts.length;
-      const edgeIdx = edgeIndex.get(undirectedEdgeKey(verts[i]!, verts[next]!)) ?? -1;
+      const edgeIdx = lookupEdgeIndex(edgeIndex, verts[i]!, verts[next]!);
       if (edgeIdx >= 0) {
         if (!edgeToFaces.has(edgeIdx)) edgeToFaces.set(edgeIdx, []);
         edgeToFaces.get(edgeIdx)!.push(fi);
@@ -1586,19 +1586,29 @@ function bucketKey(bx: number, by: number, bz: number): string {
 function lookupVertexIndex(vertexIndex: Map<string, number>, v: Vec3): number {
   const direct = vertexIndex.get(vertexKey(v));
   if (direct !== undefined) return direct;
+  for (const k of neighbourBucketKeys(v)) {
+    const idx = vertexIndex.get(k);
+    if (idx !== undefined) return idx;
+  }
+  return -1;
+}
+
+/** The 26 bucket keys adjacent to v's bucket (±1 on each axis, exact bucket
+ * excluded), in a fixed order — the shared probe set for vertex/edge lookups. */
+function neighbourBucketKeys(v: Vec3): string[] {
   const bx = Math.round(v.x * 1e6);
   const by = Math.round(v.y * 1e6);
   const bz = Math.round(v.z * 1e6);
+  const keys: string[] = [];
   for (let dx = -1; dx <= 1; dx++) {
     for (let dy = -1; dy <= 1; dy++) {
       for (let dz = -1; dz <= 1; dz++) {
         if (dx === 0 && dy === 0 && dz === 0) continue;
-        const idx = vertexIndex.get(bucketKey(bx + dx, by + dy, bz + dz));
-        if (idx !== undefined) return idx;
+        keys.push(bucketKey(bx + dx, by + dy, bz + dz));
       }
     }
   }
-  return -1;
+  return keys;
 }
 
 /** Order-independent key so edge (a→b) ≡ (b→a), like the old findEdgeIndex. */
@@ -1606,6 +1616,31 @@ function undirectedEdgeKey(a: Vec3, b: Vec3): string {
   const ka = vertexKey(a);
   const kb = vertexKey(b);
   return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+}
+
+/**
+ * Edge lookup against a buildEdgeIndex map, tolerant of bucket-boundary
+ * straddle on EITHER endpoint — the edge-level twin of lookupVertexIndex.
+ * The exact quantized pair is probed first (the hot path); on a miss, each
+ * endpoint's 26 neighbouring buckets are combined into candidate pairs
+ * (27×27 worst case, miss-only) and probed in a fixed order. Soundness: a
+ * stored endpoint within 1e-6 of the queried one rounds into the queried
+ * endpoint's own or an adjacent bucket on every axis, so it is always among
+ * the candidates. First hit wins; −1 when no candidate pair is indexed.
+ */
+function lookupEdgeIndex(edgeIndex: Map<string, number>, a: Vec3, b: Vec3): number {
+  const direct = edgeIndex.get(undirectedEdgeKey(a, b));
+  if (direct !== undefined) return direct;
+  const aKeys = [vertexKey(a), ...neighbourBucketKeys(a)];
+  const bKeys = [vertexKey(b), ...neighbourBucketKeys(b)];
+  for (const ka of aKeys) {
+    for (const kb of bKeys) {
+      if (ka === kb) continue; // degenerate zero-length candidate
+      const idx = edgeIndex.get(ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+      if (idx !== undefined) return idx;
+    }
+  }
+  return -1;
 }
 
 export interface ValenceDistribution {

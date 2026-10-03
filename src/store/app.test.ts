@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore, uniqueBodyName } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, computeBoundingBox } from '../lib/geometry';
+import { warmUpBooleanEngine } from '../lib/geometry/boolean';
 import { computeMeasureReadout } from '../lib/geometry/measure';
 import { createSketch, addRectangle, addLine, addCircle, addConstraint, addPoint, closestPointPair } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing } from '../lib/io';
@@ -2875,5 +2876,263 @@ describe('arrangeScene (undoable arrange-on-plate)', () => {
     expect(u.directBodies.map((b) => b.name)).toEqual(['Box']);
     // Project state (name) survives both the arrange and the undo.
     expect(u.projectName).toBe('Untitled');
+  });
+});
+
+describe('performExtrude cut operation (F5)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
+      sketchUndoStack: [],
+      sketchRedoStack: [],
+      showExtrudeDialog: false,
+      workspace: 'model',
+    });
+  });
+
+  /** A 10x10x10 TREE body (x/z -5..5, y 0..10) via a join extrude. */
+  const treeBox = () => {
+    const sketch = createSketch('xz');
+    addRectangle(sketch, -5, -5, 5, 5);
+    useStore.getState().setCurrentSketch(sketch);
+    expect(useStore.getState().performExtrude(10, false)).toBe(true);
+    return useStore.getState().bodies[0]!;
+  };
+
+  /** A pocket sketch fully inside the box footprint: 4x4 in x/z. */
+  const pocketSketch = () => {
+    const sketch = createSketch('xz');
+    addRectangle(sketch, -2, -2, 2, 2);
+    useStore.getState().setCurrentSketch(sketch);
+    return sketch;
+  };
+
+  it('cuts a selected TREE target parametrically: cut feature + one body, undo restores', async () => {
+    await warmUpBooleanEngine();
+    const target = treeBox();
+    expect(Math.abs(computeVolume(target))).toBeCloseTo(1000, 0);
+    const pocket = pocketSketch();
+    useStore.getState().selectObject(target.id);
+
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(true);
+
+    const s = useStore.getState();
+    // sketch+extrude (target), sketch+extrude-cut — the target is consumed.
+    expect(s.featureTree.features.map((f) => f.type)).toEqual(['sketch', 'extrude', 'sketch', 'extrude']);
+    const cut = s.featureTree.features[3]!;
+    expect(cut.type === 'extrude' && cut.params.op).toBe('cut');
+    expect(cut.type === 'extrude' && cut.parentIds).toEqual([
+      s.featureTree.features[2]!.id, // the pocket sketch
+      s.featureTree.features[1]!.id, // the target's extrude
+    ]);
+    expect(s.bodies).toHaveLength(1);
+    // 1000 - 4*4*10 = 840 (3% covers the voxel fallback).
+    const vol = Math.abs(computeVolume(s.bodies[0]!));
+    expect(vol).toBeGreaterThan(840 * 0.97);
+    expect(vol).toBeLessThan(840 * 1.03);
+    expect(s.showExtrudeDialog).toBe(false);
+
+    // One undo restores the un-cut target AND the pocket sketch session
+    // (the snapshot stores a clone, so compare content, not identity).
+    useStore.getState().undo();
+    const u = useStore.getState();
+    expect(u.featureTree.features).toHaveLength(2);
+    expect(u.bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(u.bodies[0]!))).toBeCloseTo(1000, 0);
+    expect(u.currentSketch).not.toBeNull();
+    expect(u.currentSketch!.entities.size).toBe(pocket.entities.size); // F15: back in the sketch
+  });
+
+  it('chained cuts: the selection repoints to the result, a second cut resolves a live body', async () => {
+    await warmUpBooleanEngine();
+    const target = treeBox();
+    useStore.getState().selectObject(target.id);
+    pocketSketch();
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(true);
+    const firstResult = useStore.getState().bodies[0]!;
+    // The selection follows the replacement body (review P1 #2: a dead id
+    // enabled the dialog while the store silently no-opped).
+    expect(useStore.getState().selectedIds).toContain(firstResult.id);
+    // Second pocket on the CUT body — OFFSET from the first (the identical
+    // region is already gone, an overlapping cut on fresh material is the
+    // realistic chained case). Still one body, more material gone.
+    const second = createSketch('xz');
+    addRectangle(second, 1, 1, 5, 5);
+    useStore.getState().setCurrentSketch(second);
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(true);
+    const s = useStore.getState();
+    expect(s.bodies).toHaveLength(1);
+    const vol = Math.abs(computeVolume(s.bodies[0]!));
+    expect(vol).toBeGreaterThan((1000 - 2 * 160) * 0.94);
+    expect(vol).toBeLessThan(1000 - 160);
+  });
+
+  it('a cut whose cutter no longer hits the target keeps the part visible (last-good-state)', async () => {
+    await warmUpBooleanEngine();
+    const target = treeBox();
+    useStore.getState().selectObject(target.id);
+    pocketSketch();
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(true);
+
+    // Edit the pocket sketch feature so the cutter sits OFF the target —
+    // the recompute must leave the un-cut target visible (consumption only
+    // on success), not consume the part into zero bodies (review P1 #1).
+    const tree = useStore.getState().featureTree;
+    const pocketSketchFeat = tree.features.filter((f) => f.type === 'sketch').pop()!;
+    const moved = createSketch('xz');
+    addRectangle(moved, 50, 50, 60, 60); // far outside the ±5 box
+    useStore.getState().updateFeature(pocketSketchFeat.id, (f) =>
+      f.type === 'sketch' ? { ...f, sketch: moved } : f,
+    );
+    const after = useStore.getState();
+    expect(after.bodies.length).toBeGreaterThan(0); // the part is still there
+    expect(Math.abs(computeVolume(after.bodies[0]!))).toBeGreaterThan(500);
+  });
+
+  it('cuts a selected DIRECT target as one undoable direct edit (no cut feature)', async () => {
+    await warmUpBooleanEngine();
+    const box = createBox(10, 10, 10); // x/z -5..5, y 0..10
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    pocketSketch();
+    const undoDepth = useStore.getState().undoStack.length;
+
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(true);
+
+    const s = useStore.getState();
+    // applyModifyFeature dual-path philosophy: the tree cannot consume a
+    // direct body, so only the SKETCH feature landed (the cutter's profile);
+    // the cut itself replaced the direct body in place.
+    expect(s.featureTree.features.map((f) => f.type)).toEqual(['sketch']);
+    expect(s.directBodies).toHaveLength(1);
+    expect(s.bodies).toHaveLength(1);
+    const vol = Math.abs(computeVolume(s.bodies[0]!));
+    expect(vol).toBeGreaterThan(840 * 0.97);
+    expect(vol).toBeLessThan(840 * 1.03);
+    expect(s.undoStack.length).toBe(undoDepth + 1); // exactly one entry
+
+    useStore.getState().undo();
+    const u = useStore.getState();
+    expect(u.featureTree.features).toHaveLength(0); // the sketch rolled back too
+    expect(u.directBodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(u.bodies[0]!))).toBeCloseTo(1000, 0);
+    expect(u.currentSketch).not.toBeNull(); // the session came back
+  });
+
+  it('refuses a cut with nothing selected — the dialog hint case, nothing changes', () => {
+    pocketSketch();
+    const undoDepth = useStore.getState().undoStack.length;
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(false);
+    expect(useStore.getState().featureTree.features).toHaveLength(0);
+    expect(useStore.getState().bodies).toHaveLength(0);
+    expect(useStore.getState().currentSketch!.entities.size).toBeGreaterThan(0); // session kept
+    expect(useStore.getState().undoStack.length).toBe(undoDepth); // no history entry
+  });
+
+  it('rolls a MISSED cut back atomically: sketch session kept, redo branch preserved', async () => {
+    await warmUpBooleanEngine();
+    const target = treeBox();
+
+    // Seed a redo entry to prove the failed attempt restores the redo branch.
+    useStore.getState().addDirectBody(createBox(4, 4, 4));
+    useStore.getState().undo();
+    expect(useStore.getState().redoStack).toHaveLength(1);
+
+    // A cutter sketched far outside the target footprint.
+    const missed = createSketch('xz');
+    addRectangle(missed, 20, 20, 24, 24);
+    useStore.getState().setCurrentSketch(missed);
+    useStore.getState().selectObject(target.id);
+    const undoDepth = useStore.getState().undoStack.length;
+    const redoDepth = useStore.getState().redoStack.length;
+
+    expect(useStore.getState().performExtrude(10, false, 'cut')).toBe(false);
+
+    const s = useStore.getState();
+    expect(s.featureTree.features.map((f) => f.type)).toEqual(['sketch', 'extrude']); // target only
+    expect(s.bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(s.bodies[0]!))).toBeCloseTo(1000, 0);
+    expect(s.currentSketch).toBe(missed); // the session survived for editing
+    expect(s.undoStack.length).toBe(undoDepth); // the attempt left no trace
+    expect(s.redoStack.length).toBe(redoDepth); // ...and kept the redo branch
+  });
+
+  it('a join extrude still passes no op (byte-identical legacy features)', () => {
+    treeBox();
+    const extrude = useStore.getState().featureTree.features.find((f) => f.type === 'extrude')!;
+    expect(extrude.type === 'extrude' && extrude.params.op).toBeUndefined();
+  });
+});
+
+describe('sketch-session undo stacks (fresh sessions start clean)', () => {
+  beforeEach(() => {
+    useStore.getState().clearScene();
+    useStore.getState().newProject();
+  });
+
+  it('extrude then S (fresh sketch): in-sketch Ctrl+Z does nothing, entities stay 0', () => {
+    useStore.getState().setWorkspace('sketch');
+    useStore.getState().addSketchRect(0, 0, 10, 5);
+    expect(useStore.getState().sketchUndoStack.length).toBeGreaterThan(0); // the session has history
+    expect(useStore.getState().performExtrude(8, false)).toBe(true);
+    expect(useStore.getState().currentSketch).toBeNull();
+
+    // Press S: a FRESH sketch session begins.
+    useStore.getState().setWorkspace('sketch');
+    expect(useStore.getState().currentSketch).not.toBeNull();
+    // Previously the fresh session inherited the extruded sketch undo
+    // entries — Ctrl+Z resurrected its entities. The stacks start empty now.
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+    expect(useStore.getState().sketchRedoStack).toHaveLength(0);
+    expect(useStore.getState().sketchUndo()).toBe(false);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0);
+  });
+
+  it('setWorkspace clears STALE stacks whenever it must create a new sketch', () => {
+    // The pre-fix residue shape: undo entries from a previous session with no
+    // current sketch (e.g. left by an older code path).
+    const stale = createSketch('xy');
+    addRectangle(stale, 0, 0, 4, 4);
+    useStore.setState({ currentSketch: null, sketchActive: false, sketchUndoStack: [stale], sketchRedoStack: [] });
+
+    useStore.getState().setWorkspace('sketch');
+
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+    expect(useStore.getState().sketchUndo()).toBe(false);
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0); // nothing resurrected
+  });
+
+  it('RESUMING the same sketch keeps its undo history (S after exit, not after extrude)', () => {
+    useStore.getState().setWorkspace('sketch');
+    useStore.getState().addSketchRect(0, 0, 4, 4);
+    expect(useStore.getState().sketchUndoStack.length).toBeGreaterThan(0);
+
+    useStore.getState().exitSketch(); // leaves the sketch itself intact
+    useStore.getState().setWorkspace('sketch'); // resume, not restart
+
+    expect(useStore.getState().sketchUndoStack.length).toBeGreaterThan(0); // history kept
+    useStore.getState().sketchUndo();
+    expect(useStore.getState().currentSketch!.entities.size).toBe(0); // and still works
+  });
+
+  it('revolve and sweep success paths clear the session stacks too', () => {
+    useStore.getState().setWorkspace('sketch');
+    useStore.getState().addSketchRect(0, 0, 4, 4);
+    expect(useStore.getState().performRevolve(Math.PI * 2)).toBe(true);
+    expect(useStore.getState().currentSketch).toBeNull();
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+
+    useStore.getState().setWorkspace('sketch');
+    useStore.getState().addSketchRect(2, 0, 4, 2);
+    expect(useStore.getState().performSweep(10, 90)).toBe(true);
+    expect(useStore.getState().currentSketch).toBeNull();
+    expect(useStore.getState().sketchUndoStack).toHaveLength(0);
+    expect(useStore.getState().sketchRedoStack).toHaveLength(0);
   });
 });

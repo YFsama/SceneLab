@@ -1296,6 +1296,86 @@ describe('honest failure reporting (tools never claim success on a no-op)', () =
   });
 });
 
+describe('fillet/chamfer oversize guards (limits checked before applying)', () => {
+  beforeEach(() => {
+    clearTools();
+    registerBuiltinTools();
+    useStore.getState().clearScene();
+    useStore.setState({ projectDirty: false });
+  });
+
+  // Edge runs along Y (vertical) vs lies in an X/Z plane (rim).
+  const isVerticalEdge = (e: { start: Vec3; end: Vec3 }) =>
+    Math.abs(e.start.x - e.end.x) < 1e-9 && Math.abs(e.start.z - e.end.z) < 1e-9 && Math.abs(e.start.y - e.end.y) > 1e-9;
+
+  it('an oversize fillet on a 20mm box is refused with the max in the reason; body and undo untouched', async () => {
+    const box = createBox(20, 20, 20);
+    useStore.setState({ bodies: [box], directBodies: [box], undoStack: [] });
+    // The F8 finding: a 50mm fillet sailed through, mangled the body and
+    // claimed success. It must now be refused before anything is applied.
+    const r = (await getTool('fillet')!.execute({ bodyId: box.id, radius: 50 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/too large/i);
+    expect(r.reason).toMatch(/max 10(\.0+)? mm/);
+    const now = useStore.getState().bodies[0]!;
+    expect(now.id).toBe(box.id);
+    expect(now.faces).toHaveLength(box.faces.length); // not mangled
+    expect(now.edges).toHaveLength(box.edges.length);
+    expect(useStore.getState().undoStack).toHaveLength(0); // no undo leak
+    expect(useStore.getState().projectDirty).toBe(false);
+  });
+
+  it('the limit follows the edge subset: rim edges (max 5) refuse 8, vertical edges (max 20) accept it', async () => {
+    const box = createBox(40, 10, 40);
+    useStore.setState({ bodies: [box], directBodies: [box], undoStack: [] });
+    const rimId = box.edges.find((e) => !isVerticalEdge(e))!.id;
+    const verticalId = box.edges.find(isVerticalEdge)!.id;
+
+    const refused = (await getTool('fillet')!.execute({ bodyId: box.id, edgeIds: [rimId], radius: 8 })) as { success: boolean; reason?: string };
+    expect(refused.success).toBe(false);
+    expect(refused.reason).toMatch(/max 5(\.0+)? mm/);
+    expect(useStore.getState().bodies[0]!.edges).toHaveLength(box.edges.length); // untouched
+
+    const ok = (await getTool('fillet')!.execute({ bodyId: box.id, edgeIds: [verticalId], radius: 8 })) as { success: boolean; mode?: string };
+    expect(ok.success).toBe(true);
+    expect(ok.mode).toBe('direct');
+    expect(useStore.getState().bodies[0]!.edges.length).toBeGreaterThan(box.edges.length); // really applied
+  });
+
+  it('chamfer is guarded the same way: oversize distance refused with the max in the reason', async () => {
+    const box = createBox(20, 20, 20);
+    useStore.setState({ bodies: [box], directBodies: [box], undoStack: [] });
+    const r = (await getTool('chamfer')!.execute({ bodyId: box.id, distance: 15 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/too large/i);
+    expect(r.reason).toMatch(/max 10(\.0+)? mm/);
+    expect(useStore.getState().bodies[0]!.edges).toHaveLength(box.edges.length);
+    expect(useStore.getState().undoStack).toHaveLength(0);
+    // Within the limit it still applies.
+    const ok = (await getTool('chamfer')!.execute({ bodyId: box.id, distance: 4 })) as { success: boolean };
+    expect(ok.success).toBe(true);
+    expect(useStore.getState().bodies[0]!.edges.length).toBeGreaterThan(box.edges.length);
+  });
+
+  it('a selection where every edge is skipped (no two adjacent faces) is refused with the skip reason', async () => {
+    const edgeOnly = {
+      id: 'edge-only', name: 'EdgeOnly',
+      vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }],
+      faces: [],
+      edges: [{ id: 'e0', start: { x: 0, y: 0, z: 0 }, end: { x: 1, y: 0, z: 0 } }],
+    };
+    useStore.setState({ bodies: [edgeOnly], directBodies: [edgeOnly], undoStack: [] });
+    const f = (await getTool('fillet')!.execute({ bodyId: 'edge-only', radius: 1 })) as { success: boolean; reason?: string };
+    expect(f.success).toBe(false);
+    expect(f.reason).toMatch(/two adjacent faces/);
+    const c = (await getTool('chamfer')!.execute({ bodyId: 'edge-only', distance: 1 })) as { success: boolean; reason?: string };
+    expect(c.success).toBe(false);
+    expect(c.reason).toMatch(/two adjacent faces/);
+    expect(useStore.getState().bodies[0]!.edges).toHaveLength(1);
+    expect(useStore.getState().undoStack).toHaveLength(0);
+  });
+});
+
 describe('AI sketch offset keeps the toolbar loop semantics', () => {
   beforeEach(() => {
     clearTools();

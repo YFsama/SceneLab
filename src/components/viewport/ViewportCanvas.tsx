@@ -22,7 +22,7 @@ import { pickEdge } from '../../lib/render/pick';
 import { MATERIALS } from '../../lib/materials';
 import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
-import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis } from '../../lib/geometry';
+import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis, type Vec3 } from '../../lib/geometry';
 import { faceAreaAndCentroid } from '../../lib/geometry/measure';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
@@ -941,6 +941,17 @@ export function ViewportCanvas() {
     window.addEventListener('scenelab:arm-hole', onArmHole);
     return () => window.removeEventListener('scenelab:arm-hole', onArmHole);
   }, [t, setHoleHint]);
+
+  // Entering sketch or measure mode disarms a pending hole placement
+  // (pass-27 review #2): those modes own their clicks (plane picks, entity
+  // picks, measure points), so an armed pill that survived the transition
+  // would either swallow their clicks or sit dead until Escape. The click
+  // handler also checks the armed placement BEFORE those mode branches, so
+  // even the render-window before this effect runs cannot let a mode consume
+  // the placement's click.
+  useEffect(() => {
+    if ((sketchActive || measureActive) && pendingHoleRef.current) disarmHolePlacement();
+  }, [sketchActive, measureActive, disarmHolePlacement]);
 
   useEffect(() => {
     const camera = cameraRef.current;
@@ -1981,6 +1992,70 @@ export function ViewportCanvas() {
       const scene = sceneRef.current;
       if (!container || !camera || !scene) return;
 
+      const rect = container.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycasterRef.current.setFromCamera(mouseRef.current, camera);
+      const bodiesGroup = bodiesGroupRef.current;
+
+      // Armed hole placement (Feature → Hole): the next left click drills at
+      // the clicked world point on the armed body. This branch sits ABOVE the
+      // sketch / Alt+edge-pick / measure branches on purpose (pass-27 review
+      // #2): while armed, placement owns the click — pressing S or M must not
+      // leave a live pill whose every click is eaten by that mode (the store
+      // subscription below also disarms on entering those modes). A click
+      // anywhere else — empty space or a different body — toasts and STAYS
+      // armed (⌀/depth are already entered, so a stray click shouldn't
+      // discard them); Escape cancels.
+      if (pendingHoleRef.current && bodiesGroup) {
+        const pending = pendingHoleRef.current;
+        // The armed body was deleted/undone away between arming and the
+        // click — drilling is impossible, so cancel instead of looping on a
+        // misleading "select a body" toast (ids are stable across recomputes;
+        // only deletion reaches here).
+        if (!useStore.getState().bodies.some((b) => b.id === pending.bodyId)) {
+          disarmHolePlacement();
+          showToast(t('toast.featureNeedsBody'), 'warning');
+          return;
+        }
+        const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
+        const hitBodyId = hit?.object.userData.bodyId as string | undefined;
+        if (hit && hitBodyId === pending.bodyId) {
+          // Drill along the clicked face's INWARD normal (pass-27 review #1):
+          // a click on a SIDE face must bore laterally, not gouge along the
+          // world −Y default. hit.face.normal is in the mesh's LOCAL space,
+          // so push it through the world normal matrix (NOT matrixWorld —
+          // normals need the inverse-transpose) before negating into the
+          // body. A degenerate transform or missing face data falls back to
+          // applyHoleToBody's world −Y default (the arg is omitted, not null).
+          let direction: Vec3 | undefined;
+          const faceNormal = hit.face?.normal;
+          const hitObject = hit.object as THREE.Object3D;
+          if (faceNormal && hitObject.matrixWorld) {
+            const worldNormal = faceNormal.clone()
+              .applyMatrix3(new THREE.Matrix3().getNormalMatrix(hitObject.matrixWorld))
+              .normalize();
+            if (
+              worldNormal.lengthSq() > 1e-8 &&
+              Number.isFinite(worldNormal.x) && Number.isFinite(worldNormal.y) && Number.isFinite(worldNormal.z)
+            ) {
+              direction = { x: -worldNormal.x, y: -worldNormal.y, z: -worldNormal.z };
+            }
+          }
+          const ok = useStore.getState().applyHoleToBody(
+            pending.bodyId, pending.diameter, pending.depth,
+            { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+            ...(direction ? [direction] : []),
+          );
+          showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
+          disarmHolePlacement();
+        } else {
+          showToast(t('toast.featureNeedsBody'), 'warning');
+          if (containerRef.current) containerRef.current.style.cursor = 'crosshair';
+        }
+        return;
+      }
+
       if (sketchActive) {
         // Trim / Extend are click-then-act tools (Fusion): the click both
         // picks the target entity and drives the cut/extension; the tool
@@ -2028,13 +2103,6 @@ export function ViewportCanvas() {
         }
         return;
       }
-
-      const rect = container.getBoundingClientRect();
-      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      raycasterRef.current.setFromCamera(mouseRef.current, camera);
-
-      const bodiesGroup = bodiesGroupRef.current;
 
       // Alt+click picks the edge under the cursor (sub-entity selection, like
       // Ctrl+click for faces). Selected edges scope fillet/chamfer features.
@@ -2089,39 +2157,6 @@ export function ViewportCanvas() {
         return;
       }
 
-      // Armed hole placement (Feature → Hole): the next left click drills at
-      // the clicked world point on the armed body. A click anywhere else —
-      // empty space or a different body — toasts and STAYS armed (⌀/depth
-      // are already entered, so a stray click shouldn't discard them);
-      // Escape cancels. While armed, placement owns the click: selection /
-      // box-select / sub-entity picks all wait.
-      if (pendingHoleRef.current && bodiesGroup) {
-        const pending = pendingHoleRef.current;
-        // The armed body was deleted/undone away between arming and the
-        // click — drilling is impossible, so cancel instead of looping on a
-        // misleading "select a body" toast (ids are stable across recomputes;
-        // only deletion reaches here).
-        if (!useStore.getState().bodies.some((b) => b.id === pending.bodyId)) {
-          disarmHolePlacement();
-          showToast(t('toast.featureNeedsBody'), 'warning');
-          return;
-        }
-        const hit = raycasterRef.current.intersectObjects(bodiesGroup.children, true)[0];
-        const hitBodyId = hit?.object.userData.bodyId as string | undefined;
-        if (hit && hitBodyId === pending.bodyId) {
-          const ok = useStore.getState().applyHoleToBody(
-            pending.bodyId, pending.diameter, pending.depth,
-            { x: hit.point.x, y: hit.point.y, z: hit.point.z },
-          );
-          showToast(ok ? t('toast.featureApplied') : t('toast.featureNeedsBody'), ok ? 'success' : 'warning');
-          disarmHolePlacement();
-        } else {
-          showToast(t('toast.featureNeedsBody'), 'warning');
-          if (containerRef.current) containerRef.current.style.cursor = 'crosshair';
-        }
-        return;
-      }
-
       // 1) A body under the cursor takes priority — clicking it selects it.
       if (bodiesGroup) {
         const bodyHits = raycasterRef.current.intersectObjects(bodiesGroup.children, true);
@@ -2160,12 +2195,40 @@ export function ViewportCanvas() {
         }
       }
 
-      // 2) Otherwise a datum sketch plane starts a sketch.
+      // 2) Otherwise a datum sketch plane starts a sketch — UNLESS the ray
+      // first passes through a body's bounding volume (pass-27 review #4):
+      // after a through-all hole, clicking the hole's screen position dives
+      // down the empty shaft, MISSES the mesh entirely, and would silently
+      // start a sketch on the datum plane behind it. Any visible body whose
+      // bounds the ray pierces wins the click instead; a plane only starts a
+      // sketch when no body occupies that line of sight (empty scenes keep
+      // the classic click-to-sketch behaviour).
       const planesGroup = planesGroupRef.current;
       if (!planesGroup) return;
 
       const intersects = raycasterRef.current.intersectObjects(planesGroup.children);
       if (intersects.length > 0) {
+        const ray = raycasterRef.current.ray;
+        const entry = new THREE.Vector3();
+        let blockedBy: { id: string; dist: number } | null = null;
+        for (const b of bodies) {
+          if (hiddenIds.includes(b.id)) continue;
+          const bb = combinedBounds([b]);
+          if (!bb) continue;
+          const box = new THREE.Box3(
+            new THREE.Vector3(bb.min.x, bb.min.y, bb.min.z),
+            new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z),
+          );
+          // Only the entry distance orders candidates; the point itself is unused.
+          if (ray.intersectBox(box, entry)) {
+            const dist = ray.origin.distanceTo(entry);
+            if (!blockedBy || dist < blockedBy.dist) blockedBy = { id: b.id, dist };
+          }
+        }
+        if (blockedBy) {
+          selectObject(blockedBy.id);
+          return;
+        }
         const planeId = intersects[0]!.object.userData.planeId as SketchPlaneId;
         setSketchPlaneId(planeId);
         setSketchActive(true);

@@ -4,7 +4,7 @@ import { createSketch } from '../sketch/engine';
 import { topFaceHolePlacement, createHoleFeature, drillHoleInBody } from '../features/tree';
 import { featureSummary } from '../features/summary';
 import type { Feature } from '../features/types';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody } from '../geometry/operations';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, weldVertices, translateBody, rotateBody, scaleBody, scaleBodyToTarget, resizeBody, centerBody, convexHullBody, maxFilletRadius, maxChamferDistance } from '../geometry/operations';
 import { minDistanceBetweenBodies, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from '../geometry/measure';
 import { booleanOp, hollowBody, mirrorMerge } from '../geometry/boolean';
 import { listFaces, angleBetweenFaces } from '../geometry/query';
@@ -1143,6 +1143,19 @@ export function registerBuiltinTools(): void {
       if (unknown.length > 0) {
         return { success: false, reason: `Unknown edge ids on this body: ${unknown.join(', ')}` };
       }
+      // Oversize guard: an arc wider than the adjacent faces' extents mangles
+      // the body while the old code toasted success. Check BEFORE any
+      // selection or apply (feature and direct paths share this gate).
+      const limit = maxFilletRadius(body, edgeIds);
+      if (limit.max === null) {
+        return {
+          success: false,
+          reason: `Fillet would do nothing — none of the ${edgeIds.length} selected edges have two adjacent faces (applyFillet skips them)`,
+        };
+      }
+      if (radius > limit.max) {
+        return { success: false, reason: `Radius too large — max ${r3(limit.max)} mm for these edges` };
+      }
       // Tree-produced body: route to the PARAMETRIC fillet feature (the store
       // handles undo/dirty/featureVersion and scopes to the edge selection).
       if (treeFeatureOf(body.id)) {
@@ -1191,6 +1204,18 @@ export function registerBuiltinTools(): void {
       const unknown = edgeIds.filter((id) => !body.edges.some((e) => e.id === id));
       if (unknown.length > 0) {
         return { success: false, reason: `Unknown edge ids on this body: ${unknown.join(', ')}` };
+      }
+      // Oversize guard (mirrors the fillet gate): refuse before any selection
+      // or apply so neither the direct edit nor the feature path runs.
+      const limit = maxChamferDistance(body, edgeIds);
+      if (limit.max === null) {
+        return {
+          success: false,
+          reason: `Chamfer would do nothing — none of the ${edgeIds.length} selected edges have two adjacent faces (applyChamfer skips them)`,
+        };
+      }
+      if (distance > limit.max) {
+        return { success: false, reason: `Distance too large — max ${r3(limit.max)} mm for these edges` };
       }
       if (treeFeatureOf(body.id)) {
         store.selectObject(body.id);

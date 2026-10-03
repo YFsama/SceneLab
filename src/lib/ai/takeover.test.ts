@@ -417,6 +417,30 @@ describe('tree-aware modify routing (fillet/chamfer/shell/arrays/mirror)', () =>
     expect(r.keepOriginal).toBe(true);
     expect(useStore.getState().bodies).toHaveLength(2); // original + reflection
   });
+
+  it('oversize fillet on a TREE body is refused before the feature is applied', async () => {
+    const bodyId = await buildTreeBox(); // 10×10×5 prism → all-edges fillet max 2.5
+    const featuresBefore = useStore.getState().featureTree.features.length;
+    const bodiesBefore = useStore.getState().bodies.map((b) => b.id);
+    const undoBefore = useStore.getState().undoStack.length;
+
+    const r = (await getTool('fillet')!.execute({ bodyId, radius: 4 })) as { success: boolean; reason?: string };
+    expect(r.success).toBe(false);
+    expect(r.reason).toMatch(/too large/i);
+    expect(r.reason).toMatch(/max 2\.5 mm/);
+    // The guard runs BEFORE routing: no feature appended, no body change, no
+    // selection side effects and no undo entry.
+    expect(useStore.getState().featureTree.features).toHaveLength(featuresBefore);
+    expect(useStore.getState().bodies.map((b) => b.id)).toEqual(bodiesBefore);
+    expect(useStore.getState().selectedEdgeIds).toHaveLength(0);
+    expect(useStore.getState().undoStack).toHaveLength(undoBefore);
+
+    // A chamfer over the same limit is likewise refused on the tree path.
+    const c = (await getTool('chamfer')!.execute({ bodyId, distance: 3 })) as { success: boolean; reason?: string };
+    expect(c.success).toBe(false);
+    expect(c.reason).toMatch(/max 2\.5 mm/);
+    expect(useStore.getState().featureTree.features).toHaveLength(featuresBefore);
+  });
 });
 
 describe('array count semantics (direct bodies)', () => {

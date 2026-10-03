@@ -5,6 +5,7 @@ import { useStore } from '../../store/app';
 import { FeatureTree } from '../../lib/features/tree';
 import { createSketch, addRectangle } from '../../lib/sketch/engine';
 import { computeVolume, findBoundaryLoops } from '../../lib/geometry/brep';
+import { warmUpBooleanEngine } from '../../lib/geometry/boolean';
 import { ExtrudeDialog } from './ExtrudeDialog';
 
 // Real coverage for the flows the ExtrudeDialog drives: the dialog collects a
@@ -209,6 +210,96 @@ describe('ExtrudeDialog distance field (rendered dialog)', () => {
       const extrude = useStore.getState().featureTree.features
         .find((f) => f.type === 'extrude');
       expect(extrude && extrude.type === 'extrude' && extrude.params.distance).toBe(0.1);
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+});
+
+describe('ExtrudeDialog operation selector (rendered dialog)', () => {
+  beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      currentSketch: null,
+      sketchActive: false,
+      showExtrudeDialog: true,
+    });
+  });
+
+  const radio = (container: HTMLElement, value: 'join' | 'cut') =>
+    container.querySelector(`input[name="extrude-operation"][value="${value}"]`) as HTMLInputElement;
+
+  /** A 10x10 tree box (x/z -5..5, y 0..10) plus a pocket sketch session. */
+  async function cutScenario() {
+    await warmUpBooleanEngine();
+    const target = createSketch('xz');
+    addRectangle(target, -5, -5, 5, 5);
+    useStore.getState().setCurrentSketch(target);
+    useStore.getState().performExtrude(10, false);
+    const targetBody = useStore.getState().bodies[0]!;
+    const pocket = createSketch('xz');
+    addRectangle(pocket, -2, -2, 2, 2);
+    useStore.getState().setCurrentSketch(pocket);
+    return { targetBody, pocket };
+  }
+
+  it('defaults to Join; Cut with no selection shows the hint and disables Extrude', async () => {
+    const pocket = createSketch('xy');
+    addRectangle(pocket, 0, 0, 10, 5);
+    useStore.setState({ currentSketch: pocket, showExtrudeDialog: true });
+    const mounted = await mountDialog(createElement(ExtrudeDialog));
+    try {
+      expect(radio(mounted.container, 'join').checked).toBe(true);
+      expect(mounted.container.querySelector('[role="note"]')).toBeNull(); // no hint yet
+      expect(applyButton(mounted.container).disabled).toBe(false);
+
+      await act(async () => {
+        radio(mounted.container, 'cut').click();
+      });
+      expect(radio(mounted.container, 'cut').checked).toBe(true);
+      // The inline hint documents the target rule (pick the body first).
+      const note = mounted.container.querySelector('[role="note"]');
+      expect(note).not.toBeNull();
+      expect(note!.textContent).toMatch(/select/i);
+      expect(applyButton(mounted.container).disabled).toBe(true);
+
+      // Switching back to Join re-enables commit without a selection.
+      await act(async () => {
+        radio(mounted.container, 'join').click();
+      });
+      expect(mounted.container.querySelector('[role="note"]')).toBeNull();
+      expect(applyButton(mounted.container).disabled).toBe(false);
+    } finally {
+      await unmountDialog(mounted);
+    }
+  });
+
+  it('Cut with a selected target commits a cut feature and closes', async () => {
+    await cutScenario(); // performExtrude closes the dialog — reopen it
+    useStore.setState({ showExtrudeDialog: true });
+    useStore.getState().selectObject(useStore.getState().bodies[0]!.id);
+    const mounted = await mountDialog(createElement(ExtrudeDialog));
+    try {
+      await act(async () => {
+        radio(mounted.container, 'cut').click();
+      });
+      expect(mounted.container.querySelector('[role="note"]')).toBeNull(); // target present
+      expect(applyButton(mounted.container).disabled).toBe(false);
+
+      await act(async () => {
+        applyButton(mounted.container).click();
+      });
+      const s = useStore.getState();
+      expect(s.showExtrudeDialog).toBe(false);
+      const cut = s.featureTree.features[3]!;
+      expect(cut.type === 'extrude' && cut.params.op).toBe('cut');
+      expect(s.bodies).toHaveLength(1); // the target was consumed
+      expect(computeVolume(s.bodies[0]!)).toBeGreaterThan(840 * 0.97);
+      expect(computeVolume(s.bodies[0]!)).toBeLessThan(840 * 1.03);
     } finally {
       await unmountDialog(mounted);
     }

@@ -31,7 +31,15 @@ export interface SketchFeature extends FeatureBase {
 
 export interface ExtrudeFeature extends FeatureBase {
   type: 'extrude';
-  params: ExtrudeParams;
+  params: ExtrudeParams & {
+    /**
+     * What the extrusion does with the target body (Fusion's Extrude
+     * "Operation"): 'join' (default, omitted = legacy files) creates a new
+     * body; 'cut' subtracts the extruded profile from the body produced by
+     * the non-sketch parent feature, consuming it (one body remains).
+     */
+    op?: 'join' | 'cut';
+  };
 }
 
 export interface RevolveFeature extends FeatureBase {

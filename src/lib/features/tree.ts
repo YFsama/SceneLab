@@ -16,7 +16,7 @@ import type {
   CircularArrayFeature,
   MirrorFeature,
 } from './types';
-import type { SolidBody, Vec3 } from '../geometry/types';
+import type { SolidBody, Vec3, ExtrudeParams } from '../geometry/types';
 import { createExtrude, createRevolve, createLoftSections, createCylinder, createCone, computeBoundingBox, computeBoundingBoxDiagonal } from '../geometry/brep';
 import {
   applyFillet,
@@ -42,14 +42,16 @@ function genId(prefix: string): string {
 
 /**
  * Whether the feature's evaluator consults the boolean engine, making its
- * result depend on engine readiness. Only the hole family does today —
- * evaluateHole → drillHoleInBody (and its counterbore/countersink cutters)
- * route through booleanOp, which is exact when the Manifold WASM engine is
- * warm and a blocky voxel approximation when it is not. Every other evaluator
- * is pure brep math, so their memo entries never need readiness invalidation.
+ * result depend on engine readiness. The hole family does (evaluateHole →
+ * drillHoleInBody and its counterbore/countersink cutters route through
+ * booleanOp), and so does an extrude with op 'cut' (evaluateExtrude →
+ * cutBodyWithCutter) — exact when the Manifold WASM engine is warm and a
+ * blocky voxel approximation when it is not. Every other evaluator is pure
+ * brep math, so their memo entries never need readiness invalidation.
  */
 function featureTouchesBooleanEngine(feature: Feature): boolean {
-  return feature.type === 'hole';
+  if (feature.type === 'hole') return true;
+  return feature.type === 'extrude' && feature.params.op === 'cut';
 }
 
 export class FeatureTree {
@@ -397,38 +399,65 @@ export class FeatureTree {
       .map((id) => this.getFeature(id))
       .find((f): f is SketchFeature => f?.type === 'sketch');
 
+    // The extruded profile — the CUTTER when the operation is 'cut'.
+    let body: SolidBody;
     if (!parentSketch) {
       // Use params profile directly
-      const body = createExtrude(feature.params);
-      return { bodies: [body] };
+      body = createExtrude(feature.params);
+    } else {
+      body = extrudeSketchBody(parentSketch.sketch, feature.params);
     }
 
-    // Get resolved points from sketch
-    const solved = solveSketch(parentSketch.sketch);
-    const profilePoints = extractProfileFromSketch(parentSketch.sketch, solved);
+    // Join (and every op-less legacy feature): a new, standalone body.
+    if (feature.params.op !== 'cut') return { bodies: [body] };
 
-    if (profilePoints.length < 3) {
-      // The sketch did not yield a usable profile (e.g. it is empty). Fall back
-      // to an explicit profile carried on the feature params, if present.
-      if (feature.params.profile.length >= 3) {
-        return { bodies: [createExtrude(feature.params)] };
-      }
-      throw new Error('Sketch profile has fewer than 3 points');
-    }
-
-    // Plane-aware: map the profile onto the plane the user drew it on and
-    // extrude along that plane's normal. For the default 'xz' ground plane
-    // this is bit-identical to the old hardcoded mapping (x, 0, y) + +Y; a
-    // vertical ('xy') sketch now extrudes along world Z instead of lying flat.
-    const planeId = parentSketch.sketch.planeId;
-    const body = createExtrude({
-      ...feature.params,
-      profile: profilePoints.map((p) => sketchToWorld(planeId, p.x, p.y)),
-      direction: planeNormal(planeId),
-    });
-
-    return { bodies: [body] };
+    // Cut (Fusion Extrude ▸ Operation: Cut): subtract the extruded profile
+    // from the target — the first parent that produced a body (the sketch
+    // parent has no result bodies, so firstParentBody resolves the target
+    // regardless of parentId order). The target is CONSUMED like fillet/hole
+    // consume theirs, leaving exactly one body. Consumption happens only on
+    // SUCCESS — cutBodyWithCutter throws on a miss (e.g. the cutter sketch
+    // was later edited off the target), and a failed cut must leave the
+    // un-cut target visible (last-good-state) instead of consuming it into
+    // nothing.
+    const target = this.firstParentBody(feature);
+    if (!target) throw new Error('Cut requires a target body');
+    const cut = cutBodyWithCutter(target.body, body);
+    this.consumed.add(target.featureId);
+    return { bodies: [cut] };
   }
+}
+
+/**
+ * Resolve a sketch into its world-space extruded solid: solve, extract the
+ * profile, map it onto the plane it was drawn on and extrude along that
+ * plane's normal. Shared by the extrude evaluator and the store's
+ * direct-body cut path so both extrude the profile identically. Throws the
+ * evaluator's profile errors (fewer than 3 points) for honest failure.
+ */
+export function extrudeSketchBody(sketch: Sketch, params: ExtrudeParams): SolidBody {
+  const solved = solveSketch(sketch);
+  const profilePoints = extractProfileFromSketch(sketch, solved);
+
+  if (profilePoints.length < 3) {
+    // The sketch did not yield a usable profile (e.g. it is empty). Fall back
+    // to an explicit profile carried on the feature params, if present.
+    if (params.profile.length >= 3) {
+      return createExtrude(params);
+    }
+    throw new Error('Sketch profile has fewer than 3 points');
+  }
+
+  // Plane-aware: map the profile onto the plane the user drew it on and
+  // extrude along that plane's normal. For the default 'xz' ground plane
+  // this is bit-identical to the old hardcoded mapping (x, 0, y) + +Y; a
+  // vertical ('xy') sketch now extrudes along world Z instead of lying flat.
+  const planeId = sketch.planeId;
+  return createExtrude({
+    ...params,
+    profile: profilePoints.map((p) => sketchToWorld(planeId, p.x, p.y)),
+    direction: planeNormal(planeId),
+  });
 }
 
 type Pt = { x: number; y: number };
@@ -768,6 +797,27 @@ export function createMirrorFeature(
     parentIds,
     params: { plane, keepOriginal },
   };
+}
+
+/**
+ * Boolean difference `target − cutter` along the SAME kernel path
+ * drillHoleInBody uses (booleanOp: exact Manifold when warm, voxel fallback
+ * otherwise — synchronous; the pass-26 AABB cache keeps the voxel path fast).
+ * Failure honesty (pass-25/26 rules): a cutter that does not intersect the
+ * target THROWS instead of silently returning the target unchanged, and so
+ * does a cutter that removes the entire target. The cut depth is honest —
+ * the user-specified extrude distance governs, so a partial (blind) cut is a
+ * legitimate result; extend the sketch/distance for a through cut. Shared by
+ * the extrude-cut evaluator (tree targets) and the store's direct-body cut.
+ */
+export function cutBodyWithCutter(target: SolidBody, cutter: SolidBody): SolidBody {
+  // Probe with the intersection first: difference alone cannot tell a miss
+  // from a hit (target − missed-cutter is just the target again).
+  const overlap = booleanOp(target, cutter, 'intersect', 48);
+  if (!overlap) throw new Error('cutter does not intersect the target body');
+  const result = booleanOp(target, cutter, 'difference', 48);
+  if (!result) throw new Error('cut removed the entire target body');
+  return { ...result, name: target.name };
 }
 
 /**

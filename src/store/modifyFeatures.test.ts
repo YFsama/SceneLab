@@ -325,6 +325,70 @@ describe('applyHoleToBody (hole feature action)', () => {
     const hole = useStore.getState().featureTree.features.find((f) => f.type === 'hole')!;
     expect(hole.type === 'hole' && hole.params.center).toEqual({ x: 0, y: 10, z: 0 });
   });
+
+  it('tree body: an explicit direction drills along it, NORMALIZED into the feature params', async () => {
+    await warmUpBooleanEngine();
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    // Enter from the +X face (x = 5), drilling inward along −X — the clicked
+    // face's INWARD normal, as the viewport passes it (here unnormalized).
+    expect(useStore.getState().applyHoleToBody(
+      bodyId, 4, null, { x: 5, y: 5, z: 0 }, { x: -2, y: 0, z: 0 },
+    )).toBe(true);
+
+    const hole = useStore.getState().featureTree.features.find((f) => f.type === 'hole')!;
+    expect(hole.type === 'hole' && hole.params.direction).toEqual({ x: -1, y: 0, z: 0 }); // unit
+    expect(hole.type === 'hole' && hole.params.center).toEqual({ x: 5, y: 5, z: 0 });
+    // Through hole along X: removed ≈ π·2²·10.
+    const removed = 1000 - Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(removed).toBeGreaterThan(Math.PI * 4 * 10 * 0.9);
+    expect(removed).toBeLessThan(Math.PI * 4 * 10 * 1.1);
+  });
+
+  it('direct body: the explicit direction drives the direct drill (undoable)', async () => {
+    await warmUpBooleanEngine();
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    const undoDepth = useStore.getState().undoStack.length;
+
+    // Blind hole entering the +X face (x = 5) along its inward normal (−X),
+    // 5 mm deep. The default −Y axis would only graze this off-axis entry
+    // point, so the removed volume proves the direction was honoured.
+    expect(useStore.getState().applyHoleToBody(
+      box.id, 4, 5, { x: 5, y: 5, z: 0 }, { x: -1, y: 0, z: 0 },
+    )).toBe(true);
+
+    // Direct edit: no feature landed, one undo entry, ~π·4·5 removed.
+    expect(useStore.getState().featureTree.features).toHaveLength(0);
+    expect(useStore.getState().undoStack.length).toBe(undoDepth + 1);
+    const removed = 1000 - Math.abs(computeVolume(useStore.getState().bodies[0]!));
+    expect(removed).toBeGreaterThan(Math.PI * 4 * 5 * 0.9);
+    expect(removed).toBeLessThan(Math.PI * 4 * 5 * 1.1);
+  });
+
+  it('omitting the direction keeps the straight-down (−Y) default on a tree body', async () => {
+    await warmUpBooleanEngine();
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+
+    expect(useStore.getState().applyHoleToBody(bodyId, 4, null, { x: 0, y: 10, z: 0 })).toBe(true);
+    const hole = useStore.getState().featureTree.features.find((f) => f.type === 'hole')!;
+    expect(hole.type === 'hole' && hole.params.direction).toEqual({ x: 0, y: -1, z: 0 });
+  });
+
+  it('a zero-length direction is refused without drilling', () => {
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    expect(useStore.getState().applyHoleToBody(box.id, 4, null, undefined, { x: 0, y: 0, z: 0 })).toBe(false);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+  });
 });
 
 describe('setDimensionTarget (editable drawing dimensions)', () => {
@@ -748,5 +812,36 @@ describe('feature-tree undo/redo', () => {
     // grows by the inner face + side walls. (An open shell is not watertight,
     // so its signed volume is not a meaningful check — face count is.)
     expect(shelled.faces.length).toBeGreaterThan(box.faces.length);
+  });
+
+  it('fillet/chamfer refuse oversize values with the limit toast and no mutation', async () => {
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    clearToasts();
+    const box = createBox(20, 20, 20);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    useStore.setState({ projectDirty: false, undoStack: [] });
+
+    // A 50 mm fillet on a 20 mm box would mangle the body (audit F8).
+    expect(useStore.getState().applyFilletFeature(50)).toBe(false);
+    expect(getToasts().at(-1)!.message).toContain('max 10 mm');
+    // Refused = nothing happened: same body, no history, not dirty.
+    expect(useStore.getState().bodies[0]!.faces.length).toBe(box.faces.length);
+    expect(useStore.getState().undoStack).toHaveLength(0);
+    expect(useStore.getState().projectDirty).toBe(false);
+
+    // In-limit values still apply (faces grow as before).
+    expect(useStore.getState().applyFilletFeature(2)).toBe(true);
+    expect(useStore.getState().bodies[0]!.faces.length).toBeGreaterThan(box.faces.length);
+
+    // Chamfer on a FRESH box (the filleted body's edges are no longer
+    // chamferable — all skipped — which the guard also refuses, with max 0).
+    clearToasts();
+    const box2 = createBox(20, 20, 20);
+    useStore.getState().addDirectBody(box2);
+    useStore.getState().selectObject(box2.id);
+    expect(useStore.getState().applyChamferFeature(50)).toBe(false);
+    expect(getToasts().at(-1)!.message).toContain('max 10 mm');
+    expect(useStore.getState().bodies.find((b) => b.id === box2.id)!.faces.length).toBe(box2.faces.length);
   });
 });

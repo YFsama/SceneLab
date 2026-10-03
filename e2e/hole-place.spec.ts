@@ -32,6 +32,14 @@ async function awaitCanvas(page: Page) {
   return canvas;
 }
 
+/** Read the sketch "Entities: N" counter from the status bar (-1 if absent). */
+async function countEntities(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const m = /Entities:\s*(\d+)/.exec(document.querySelector('footer[role=status]')?.textContent ?? '');
+    return m ? +m[1]! : -1;
+  });
+}
+
 async function countObjects(page: Page): Promise<number> {
   return page.evaluate(() => {
     const m = /Objects:\s*(\d+)/.exec(document.body.textContent ?? '');
@@ -220,4 +228,121 @@ test('a miss keeps the placement armed; Escape cancels it', async ({ page }) => 
   await expect(hint).toHaveCount(0);
   const after = await selectAndReadVolume(page, center);
   expect(Math.abs(after - before)).toBeLessThan(0.5);
+});
+
+/**
+ * SIDE-face placement (pass-27 review #1) + through-shaft click-through
+ * (pass-27 review #4), end to end.
+ *
+ * Phase 1 — from an exact RIGHT view ('3' + 'f') the centre click lands
+ * head-on on the +X face, so the hole must bore LATERALLY along the face's
+ * inward normal (−X). Determinism: the camera looks straight down −X at the
+ * framed box, so the centre pixel maps to the face centre (10, 10, 0) — ±1 mm
+ * of click slop stays well inside the ⌀12 circle, the normal is unchanged,
+ * and the removed volume is the FULL cylinder π·6²·20. The pre-fix world −Y
+ * default would instead gouge from the face centre straight down — a
+ * half-cylinder clipped by the x = +10 wall (≈50% of the full cylinder) or a
+ * near-no-op — the bands separate them.
+ *
+ * Phase 2 — the through-shaft regression. A second ⌀12 through-all hole is
+ * drilled from the TOP view at the face centre (0, 20, 0): its shaft runs
+ * down the box's centre axis and empties BOTH end faces, and the datum-plane
+ * quads (3×3 mm, centred on the origin) sit exactly under that axis. A click
+ * at the hole's screen position then ray-dives down the empty shaft, misses
+ * the solid, and reaches the xz datum plane — the exact path that used to
+ * silently START A SKETCH. Now the body's bounding volume must win the
+ * click: no sketch document appears (the Entities counter only renders while
+ * a sketch is active) and the body stays selected with an unchanged volume.
+ */
+test('side-face click drills along the face normal; a shaft click-through selects the body, never a sketch', async ({ page }) => {
+  await page.goto('/');
+  await awaitCanvas(page);
+
+  // Right-click empty viewport → Insert → Box; Enter commits the 20 mm cube
+  // (it sits on the ground: y ∈ [0, 20], centred on x/z).
+  await page.locator('#viewport-canvas').click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  await menu.getByRole('menuitem', { name: /insert/i }).first().hover();
+  await menu.getByRole('menuitem', { name: /insert/i }).first().click();
+  await page.getByRole('menuitem', { name: 'Box' }).click();
+  await page.getByRole('dialog').press('Enter');
+  await expect.poll(() => countObjects(page), { timeout: 10_000 }).toBe(1);
+
+  const armHole = async (center: { x: number; y: number }, diameter: string) => {
+    await page.mouse.click(center.x, center.y, { button: 'right' });
+    await expect(menu).toBeVisible();
+    const featureItem = menu.getByRole('menuitem', { name: /^Feature\b/ });
+    await featureItem.hover();
+    await featureItem.click();
+    await page.getByRole('menuitem', { name: 'Hole', exact: true }).click();
+    const input = page.locator('#numeric-prompt-input');
+    await expect(input).toBeVisible();
+    await input.fill(diameter);
+    await input.press('Enter');
+    await expect(input).toBeVisible();
+    await input.fill('0');
+    await input.press('Enter');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    const hint = page.getByText('Click the body where the hole should start');
+    await expect(hint).toBeVisible();
+    return hint;
+  };
+
+  // ---- Phase 1: exact right view, side-face placement ------------------
+  await page.keyboard.press('3');
+  await page.waitForTimeout(400);
+  await page.keyboard.press('f');
+  await page.waitForTimeout(300);
+  const vb = (await page.locator('#viewport-canvas').boundingBox())!;
+  const center = { x: vb.x + vb.width / 2, y: vb.y + vb.height / 2 };
+  const before = await selectAndReadVolume(page, center);
+  expect(before).toBeGreaterThan(7000); // 20×20×20 = 8000 mm³
+
+  const hint = await armHole(center, '12');
+  await page.mouse.click(center.x, center.y);
+  await expect(hint).toHaveCount(0);
+
+  // Full lateral cylinder removed (through-all along −X from the +X face);
+  // the floor leaves room for cylinder tessellation slop while still sitting
+  // far above the ≈50% half-cylinder the −Y gouge would remove. The volume
+  // is re-read through a point OUTSIDE the hole (z = 8) because the centre
+  // pixel now ray-dives down the empty shaft.
+  const ideal = Math.PI * 6 * 6 * 20;
+  const sideFacePoint = await screenPointFor(page, { x: 10, y: 10, z: 8 });
+  const after = await selectAndReadVolume(page, sideFacePoint);
+  const removed = before - after;
+  expect(removed).toBeGreaterThan(ideal * 0.8);
+  expect(removed).toBeLessThan(ideal * 1.05);
+
+  // ---- Phase 2: top-view hole on the centre axis, then the shaft click --
+  await page.keyboard.press('2');
+  await page.waitForTimeout(400);
+  await page.keyboard.press('f');
+  await page.waitForTimeout(300);
+  const vb2 = (await page.locator('#viewport-canvas').boundingBox())!;
+  const center2 = { x: vb2.x + vb2.width / 2, y: vb2.y + vb2.height / 2 };
+
+  const hint2 = await armHole(center2, '12');
+  await page.mouse.click(center2.x, center2.y);
+  await expect(hint2).toHaveCount(0);
+  // The second hole removed a substantial extra chunk (minus its overlap
+  // with the lateral hole) — a sanity floor that it really drilled. The
+  // volume is re-read through a top-face point OUTSIDE both holes (the
+  // centre pixel is already the new shaft).
+  const topFacePoint = await screenPointFor(page, { x: 8, y: 20, z: 8 });
+  const afterTopHole = await selectAndReadVolume(page, topFacePoint);
+  expect(afterTopHole).toBeLessThan(after - 500);
+
+  // The click-through: same centre pixel, now the empty shaft. No sketch may
+  // start (the Entities counter renders only while a sketch document is
+  // active)…
+  await page.mouse.click(center2.x, center2.y);
+  await page.waitForTimeout(500);
+  expect(await countEntities(page)).toBe(-1);
+  // …and the body's bounding volume wins the click, so the selection — and
+  // its volume readout — survive unchanged.
+  const afterShaftClick = await readVolume(page);
+  expect(afterShaftClick).not.toBeNull();
+  expect(Math.abs(afterShaftClick! - afterTopHole)).toBeLessThan(0.5);
 });

@@ -9,15 +9,30 @@ import { evalDimension, formatDimensionValue, isPlainNumber } from '../../lib/di
  * Extrude distance dialog with CAD-style expression input: the field keeps the
  * raw text while typing (so intermediate states like `20/` survive) and the
  * value is evaluated and clamped to the 0.1 mm floor only when extruding.
+ *
+ * The Operation selector (F5) makes a POCKET one dialog trip instead of
+ * extrude-cutter → Combine ▸ Subtract: 'join' creates a new body (the
+ * default, and what every earlier extrude did); 'cut' subtracts the extruded
+ * profile from the body that is SELECTED when the dialog opens — the cut
+ * target must be picked BEFORE opening the dialog (the inline hint says so
+ * and the Extrude button stays disabled until a target exists).
  */
 export function ExtrudeDialog() {
   const show = useStore((s) => s.showExtrudeDialog);
   const setShow = useStore((s) => s.setShowExtrudeDialog);
   const performExtrude = useStore((s) => s.performExtrude);
+  // Cut resolves its target through the SELECTED BODY — a stale id (the body
+  // was replaced by a previous cut/fillet) must disable the button, not
+  // enable a silent no-op.
+  const hasTarget = useStore((s) => {
+    const id = s.selectedIds[0];
+    return id !== undefined && s.bodies.some((b) => b.id === id);
+  });
   const { t } = useT();
 
   const [distanceText, setDistanceText] = useState('10');
   const [symmetric, setSymmetric] = useState(false);
+  const [operation, setOperation] = useState<'join' | 'cut'>('join');
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEscapeClose(() => setShow(false), show);
@@ -26,7 +41,10 @@ export function ExtrudeDialog() {
   if (!show) return null;
 
   const evaluated = evalDimension(distanceText);
-  const canExtrude = evaluated !== null;
+  // Cut without a selected target body is refused — the store guard and this
+  // disabled state agree (the hint below explains how to provide one).
+  const cutWithoutTarget = operation === 'cut' && !hasTarget;
+  const canExtrude = evaluated !== null && !cutWithoutTarget;
   const syntaxInvalid = distanceText.trim() !== '' && evaluated === null;
   // Preview only while the text is an actual expression, not a plain number.
   const preview = evaluated !== null && !isPlainNumber(distanceText)
@@ -35,7 +53,7 @@ export function ExtrudeDialog() {
 
   const handleExtrude = () => {
     if (evaluated === null) return;
-    performExtrude(Math.max(0.1, evaluated), symmetric);
+    performExtrude(Math.max(0.1, evaluated), symmetric, operation);
   };
 
   return (
@@ -84,6 +102,42 @@ export function ExtrudeDialog() {
               )}
             </div>
           </div>
+
+          <div>
+            <span id="extrude-operation-label" className="block text-sm text-text-secondary mb-1">
+              {t('feature.operation')}
+            </span>
+            <div className="flex items-center gap-4" role="radiogroup" aria-labelledby="extrude-operation-label">
+              <label className="flex items-center gap-1.5 text-sm text-text-secondary">
+                <input
+                  type="radio"
+                  name="extrude-operation"
+                  value="join"
+                  checked={operation === 'join'}
+                  onChange={() => setOperation('join')}
+                  className="border-panel-border"
+                />
+                {t('feature.join')}
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-text-secondary">
+                <input
+                  type="radio"
+                  name="extrude-operation"
+                  value="cut"
+                  checked={operation === 'cut'}
+                  onChange={() => setOperation('cut')}
+                  className="border-panel-border"
+                />
+                {t('feature.cut')}
+              </label>
+            </div>
+          </div>
+
+          {cutWithoutTarget && (
+            <p className="text-xs text-text-muted" role="note">
+              {t('feature.cutTargetHint')}
+            </p>
+          )}
 
           <div className="flex items-center gap-2">
             <input

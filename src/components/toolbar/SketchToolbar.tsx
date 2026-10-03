@@ -1,6 +1,7 @@
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { Box, RotateCw, LogOut, MoveDiagonal, Scissors, ArrowRightToLine } from 'lucide-react';
+import { Box, RotateCw, LogOut, MoveDiagonal, FlipHorizontal2, Scissors, ArrowRightToLine } from 'lucide-react';
+import { resolveMirrorAxis } from '../../lib/sketch/mirror';
 import { SKETCH_TOOLS } from './sketchTools';
 
 /** Opens the offset-distance prompt for the selected entity (Fusion's Offset:
@@ -38,6 +39,12 @@ export function SketchToolbar() {
     // that; here we just need an entity of an offsetable kind selected.
     return !!e && (e.type === 'line' || e.type === 'circle' || e.type === 'arc' || e.type === 'rectangle');
   })();
+  // Mirror axis resolution (the rule on resolveMirrorAxis): the selection's
+  // single line, or the sketch's only line when the selection has none.
+  const mirrorLineId = resolveMirrorAxis(
+    currentSketch,
+    selectedSketchIds.length > 0 ? selectedSketchIds : selectedSketchId ? [selectedSketchId] : [],
+  );
 
   return (
     <div
@@ -96,6 +103,23 @@ export function SketchToolbar() {
         title={!offsettableSelected ? `${t('sketch.offset')} — ${t('sketch.offsetHint')}` : t('sketch.offset')}
       >
         <MoveDiagonal size={18} />
+      </button>
+
+      {/* Mirror (reflected copy) of the selection about a line — SolidWorks'
+          sketch MIRROR. The axis is the selection's single line, or — when
+          the selection has none — the sketch's only line; otherwise disabled
+          with the "mirror about line" hint (multi-select entities + a mirror
+          line). Click runs the store action; it pushes undo, mirrors via
+          lib/sketch/mirror and selects the copies. */}
+      <button
+        onClick={() => { if (mirrorLineId) useStore.getState().mirrorSelectedSketch(mirrorLineId); }}
+        disabled={!mirrorLineId}
+        className="w-9 h-9 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label={t('sketch.mirror')}
+        aria-disabled={!mirrorLineId}
+        title={!mirrorLineId ? `${t('sketch.mirror')} — ${t('sketch.mirrorPrompt')}` : t('sketch.mirror')}
+      >
+        <FlipHorizontal2 size={18} />
       </button>
 
       {/* Trim / Extend — click-then-act tools (Fusion's TRIM/EXTEND): picking

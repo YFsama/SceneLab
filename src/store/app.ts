@@ -2,16 +2,17 @@ import { create } from 'zustand';
 import type { Sketch } from '../lib/sketch/types';
 import { addLine, addRectangle, addCircle, addArc, addPolygon, addConstraint, removeEntity, pointIdsOf, cloneSketch, detectRectangle, resizeRectangle, filletSketchCorner as filletCorner, offsetEntity, createSketch, solveSketch, type DetectedRectangle } from '../lib/sketch/engine';
 import { offsetSketchProfile } from '../lib/sketch/offset';
+import { mirrorSketchEntities } from '../lib/sketch/mirror';
 import { planeNormal as sketchPlaneNormal } from '../lib/sketch/frames';
 import { trimSketchEntityAt, extendSketchEntityTo } from '../lib/sketch/trim';
 import type { Feature } from '../lib/features/types';
-import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createHoleFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature, drillHoleInBody, topFaceHolePlacement } from '../lib/features/tree';
+import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createHoleFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature, drillHoleInBody, topFaceHolePlacement, extrudeSketchBody, cutBodyWithCutter } from '../lib/features/tree';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, type SerializedReferenceGeometry, type SerializedDrawing } from '../lib/io';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import type { MeasureFacePick, MeasureMode } from '../lib/geometry/measure';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
 import { splitByPlane, asyncBooleanOp, asyncHollowBody, type BooleanOp } from '../lib/geometry/boolean';
-import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, resizeBodyAxis, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices } from '../lib/geometry/operations';
+import { applyCircularArray, applyLinearArray, applyGridArray, applyMirror, applyFillet, applyChamfer, applyShell, placeBodyInFrame, resizeBody, resizeBodyAxis, translateBody, rotateBody, scaleBody, scaleBodyXYZ, mergeBodies, weldVertices, maxFilletRadius, maxChamferDistance } from '../lib/geometry/operations';
 import { computeBoundingBoxCenter } from '../lib/geometry/brep';
 import { findLibraryPart } from '../lib/library/parts';
 import { isTauri, callNative } from '../lib/runtime';
@@ -177,6 +178,16 @@ interface AppState {
    * the copy would collapse.
    */
   offsetSelectedSketch: (distance: number) => boolean;
+  /**
+   * Fusion-style sketch Mirror: reflect the current multi-selection (the
+   * entities to mirror) about the given line entity (`mirrorLineId` is the
+   * axis, picked in the viewport — the line itself is skipped by the engine
+   * when it is part of the selection). The copies are ADDED and become the
+   * selection; one Ctrl+Z step. False (nothing changed) when there is no
+   * sketch or selection, or the engine refuses (missing/degenerate axis,
+   * nothing mirrorable).
+   */
+  mirrorSelectedSketch: (mirrorLineId: string) => boolean;
   /**
    * Fusion-style sketch Trim of the current selection (first multi-select id
    * or the primary one) at `cutPoint`: remove the piece of the entity the
@@ -526,9 +537,12 @@ interface AppState {
   setMeasureFacePick: (pick: MeasureFacePick | null) => void;
   /** Extrude the current sketch into a parametric feature. Returns false —
    * leaving the sketch session, tree and history untouched — when there is no
-   * sketch, the distance is invalid, or the profile can't produce a solid
-   * (a toast explains why). */
-  performExtrude: (distance: number, symmetric: boolean) => boolean;
+   * sketch, the distance is invalid, the profile can't produce a solid
+   * (a toast explains why), or `op` is 'cut' with no body selected as the
+   * target. `op` 'cut' subtracts the extruded profile from the selected
+   * body: parametrically when the tree produced it, otherwise as an
+   * undoable direct edit (the applyModifyFeature dual-path philosophy). */
+  performExtrude: (distance: number, symmetric: boolean, op?: 'join' | 'cut') => boolean;
   /** Revolve the current sketch into a parametric feature. Same failure
    * semantics as performExtrude. */
   performRevolve: (angle: number) => boolean;
@@ -554,11 +568,13 @@ interface AppState {
   /**
    * Drill a hole (Fusion HOLE) in the given body: tree bodies get a parametric
    * hole feature on the timeline, direct bodies an undoable direct edit.
-   * Drills down (−Y) from `center` or, by default, the body's top-face
-   * centroid. `depth` null = through-all. False when the body is missing or
-   * the parameters are invalid (diameter/depth must exceed 0.1 mm).
+   * Drills from `center` (default: the body's top-face centroid) along
+   * `direction` — the clicked face's INWARD normal, normalized — or straight
+   * down (−Y) when omitted. `depth` null = through-all. False when the body
+   * is missing, the parameters are invalid (diameter/depth must exceed 0.1
+   * mm) or `direction` is a zero vector.
    */
-  applyHoleToBody: (bodyId: string, diameter: number, depth: number | null, center?: Vec3) => boolean;
+  applyHoleToBody: (bodyId: string, diameter: number, depth: number | null, center?: Vec3, direction?: Vec3) => boolean;
   /**
    * Editable drawing dimension write-back: resize the given body so its extent
    * along the world axis equals `value` mm. Tree bodies get (or update) a
@@ -972,7 +988,13 @@ export const useStore = create<AppState>((set, get) => {
           workspace,
           sketchActive: true,
           sketchPlaneId: planeId,
-          ...(currentSketch ? {} : { currentSketch: createSketch(planeId) }),
+          // RESUMING the same sketch keeps its undo history; only a FRESH
+          // sketch clears it — a new session must not inherit the previous
+          // one's Ctrl+Z entries (setCurrentSketch's rule, honored here too
+          // because this branch sets currentSketch via raw set).
+          ...(currentSketch
+            ? {}
+            : { currentSketch: createSketch(planeId), sketchUndoStack: [], sketchRedoStack: [] }),
         });
         return;
       }
@@ -1251,6 +1273,35 @@ export const useStore = create<AppState>((set, get) => {
       set((st) => ({ sketchUndoStack: st.sketchUndoStack.slice(0, -1) }));
       return false;
     }
+    set({
+      currentSketch: { ...sketch },
+      selectedSketchId: newIds[0] ?? null,
+      selectedSketchIds: newIds,
+      projectDirty: true,
+    });
+    return true;
+  },
+  mirrorSelectedSketch: (mirrorLineId) => {
+    const s = get();
+    const sketch = s.currentSketch;
+    if (!sketch) return false;
+    // Same target resolution as the other sketch actions: the multi-selection
+    // (falling back to the primary one). The mirror LINE is the parameter —
+    // the axis, not one of the mirrored entities.
+    const ids = s.selectedSketchIds.length > 0
+      ? [...s.selectedSketchIds]
+      : s.selectedSketchId
+        ? [s.selectedSketchId]
+        : [];
+    if (ids.length === 0) return false;
+    pushSketchUndo();
+    const newIds = mirrorSketchEntities(sketch, ids, mirrorLineId);
+    if (newIds === null) {
+      // Nothing was mirrored — drop the now-pointless undo snapshot.
+      set((st) => ({ sketchUndoStack: st.sketchUndoStack.slice(0, -1) }));
+      return false;
+    }
+    // The reflected copies become the selection.
     set({
       currentSketch: { ...sketch },
       selectedSketchId: newIds[0] ?? null,
@@ -2519,46 +2570,127 @@ export const useStore = create<AppState>((set, get) => {
   visionRegion: null,
   setVisionRegion: (visionRegion) => set({ visionRegion }),
 
-  performExtrude: (distance, symmetric) => {
+  performExtrude: (distance, symmetric, op = 'join') => {
     const sketch = get().currentSketch;
     if (!sketch) return false;
     // The dialog clamps to ≥0.1 mm; enforce the same floor for AI/programmatic
     // callers so a degenerate distance can't enter the tree as a failing feature.
     if (!(distance > 0)) return false;
+    // A cut needs a target: the body SELECTED when the dialog opened (Fusion's
+    // Operation: Cut). Refuse without one — the dialog shows feature.cutTargetHint
+    // and disables Extrude; programmatic callers get a silent false like the
+    // other validation guards.
+    let cutTarget: { body: SolidBody; featureId?: string } | undefined;
+    if (op === 'cut') {
+      const body = selectedBody();
+      if (!body) return false;
+      cutTarget = { body, featureId: get().featureTree.findFeatureIdForBody(body.id) };
+    }
     // pushUndo clears the redo branch; a FAILED attempt restores it below.
     const savedRedo = get().redoStack;
     pushUndo();
 
-    // Create features
+    const tree = get().featureTree;
+
+    // Direct-body target (the applyModifyFeature dual-path philosophy): the
+    // tree cannot consume a body it did not produce, so extrude the cutter
+    // from the sketch and subtract it as ONE undoable direct edit. The sketch
+    // feature stays on the timeline so the cutter's profile survives
+    // parametrically; a failure rolls everything back and keeps the session.
+    if (cutTarget && !cutTarget.featureId) {
+      const sketchFeat = createSketchFeature(sketch);
+      tree.addFeature(sketchFeat);
+      tree.recompute();
+      let cut: SolidBody;
+      try {
+        const cutter = extrudeSketchBody(
+          sketch,
+          { profile: [], direction: { x: 0, y: 1, z: 0 }, distance, symmetric },
+        );
+        cut = cutBodyWithCutter(cutTarget.body, cutter);
+      } catch (e) {
+        rollbackFailedSketchFeature(
+          sketchFeat.id, sketchFeat.id, // only the sketch feature was added; the 2nd remove no-ops
+          e instanceof Error ? e.message : String(e), 'toast.extrudeFailed', savedRedo,
+        );
+        return false;
+      }
+    set((s) => ({
+      directBodies: s.directBodies.map((b) =>
+        b.id === cutTarget!.body.id ? { ...cut, color: b.color } : b,
+      ),
+      featureTree: tree,
+      featureVersion: s.featureVersion + 1,
+      // The cut replaced the target — repoint the selection at the result so
+      // a following Cut doesn't enable its button against a dead id.
+      selectedIds: s.selectedIds.map((sid) => (sid === cutTarget!.body.id ? cut.id : sid)),
+      selectedFaceIds: [],
+      selectedEdgeIds: [],
+      sketchActive: false,
+      currentSketch: null,
+      // Ending the sketch session: the NEXT session must not inherit this
+      // one's Ctrl+Z entries (setCurrentSketch clears these; raw set must too).
+      sketchUndoStack: [],
+      sketchRedoStack: [],
+      workspace: 'model',
+      showExtrudeDialog: false,
+      projectDirty: true,
+    }));
+    recombine();
+    return true;
+  }
+
+    // Create features. A tree-target cut parents the extrude on BOTH the
+    // sketch and the target's feature — the evaluator consumes the target.
     const sketchFeat = createSketchFeature(sketch);
     const extrudeFeat = createExtrudeFeature(
-      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance, symmetric },
-      [sketchFeat.id],
+      {
+        profile: [],
+        direction: { x: 0, y: 1, z: 0 },
+        distance,
+        symmetric,
+        // Join stays op-less: byte-identical features/serialization as before.
+        ...(cutTarget ? { op: 'cut' as const } : {}),
+      },
+      cutTarget ? [sketchFeat.id, cutTarget.featureId!] : [sketchFeat.id],
     );
 
     // Batch all updates into a single set() call
-    const tree = get().featureTree;
     tree.addFeature(sketchFeat);
     tree.addFeature(extrudeFeat);
     tree.recompute();
 
     // An unusable profile (open lines, empty sketch, …) surfaces as an
     // evaluator error with zero bodies — fail WITHOUT destroying the sketch
-    // session: roll the features + undo entry back and explain.
+    // session: roll the features + undo entry back and explain. A cut whose
+    // cutter misses the target fails the same way ('cutter does not
+    // intersect the target body').
     const result = tree.getResult(extrudeFeat.id);
     if (!result || result.error || result.bodies.length === 0) {
       rollbackFailedSketchFeature(sketchFeat.id, extrudeFeat.id, result?.error ?? 'the sketch has no closed profile', 'toast.extrudeFailed', savedRedo);
       return false;
     }
 
-    set({
+    set((s) => ({
       featureTree: tree,
+      // A tree-target cut's result body replaced the consumed target — repoint
+      // the selection so a following cut resolves a live body (combineSelected
+      // precedent). Joins have no cutTarget and leave the selection alone.
+      selectedIds: cutTarget
+        ? s.selectedIds.map((sid) => (sid === cutTarget.body.id ? result.bodies[0]!.id : sid))
+        : s.selectedIds,
+      selectedFaceIds: [],
+      selectedEdgeIds: [],
       sketchActive: false,
       currentSketch: null,
+      // Ending the sketch session: the NEXT session must not inherit this
+      // one's Ctrl+Z entries (setCurrentSketch clears these; raw set must too).
+      sketchUndoStack: [],
+      sketchRedoStack: [],
       workspace: 'model',
       showExtrudeDialog: false,
       projectDirty: true,
-    });
+    }));
     recombine();
     return true;
   },
@@ -2588,6 +2720,10 @@ export const useStore = create<AppState>((set, get) => {
       featureTree: tree,
       sketchActive: false,
       currentSketch: null,
+      // Ending the sketch session: the NEXT session must not inherit this
+      // one's Ctrl+Z entries (setCurrentSketch clears these; raw set must too).
+      sketchUndoStack: [],
+      sketchRedoStack: [],
       workspace: 'model',
       showRevolveDialog: false,
       projectDirty: true,
@@ -2637,6 +2773,10 @@ export const useStore = create<AppState>((set, get) => {
       featureTree: tree,
       sketchActive: false,
       currentSketch: null,
+      // Ending the sketch session: the NEXT session must not inherit this
+      // one's Ctrl+Z entries (setCurrentSketch clears these; raw set must too).
+      sketchUndoStack: [],
+      sketchRedoStack: [],
       workspace: 'model',
       projectDirty: true,
     });
@@ -2646,20 +2786,49 @@ export const useStore = create<AppState>((set, get) => {
 
   // Modify features: when the selected body was produced by a feature, add a
   // parametric child feature (Fusion timeline style — recompute replays it);
+  // parametric child feature (Fusion timeline style — recompute replays it);
   // otherwise edit the direct body in place, undoable like other direct edits.
   // Fillet/chamfer scope to the Alt+click edge sub-selection when present
-  // (empty selection = every edge, whole-body treatment).
-  applyFilletFeature: (radius) =>
-    applyModifyFeature(
+  // (empty selection = every edge, whole-body treatment) and are REFUSED with
+  // the oversize toast when the value exceeds the geometric limit for those
+  // edges (applyFillet would otherwise mangle the body and report success).
+  applyFilletFeature: (radius) => {
+    const body = selectedBody();
+    if (body) {
+      const limit = maxFilletRadius(body, scopedEdgeIdsFor(body));
+      if (limit.max === null) {
+        showToast(toastText('toast.filletOversize', { max: 0 }), 'warning');
+        return false;
+      }
+      if (radius > limit.max) {
+        showToast(toastText('toast.filletOversize', { max: Math.round(limit.max * 100) / 100 }), 'warning');
+        return false;
+      }
+    }
+    return applyModifyFeature(
       (parentIds) => createFilletFeature(scopedEdgeIds(), radius, parentIds),
       (body) => applyFillet(body, scopedEdgeIdsFor(body), radius),
-    ),
+    );
+  },
 
-  applyChamferFeature: (distance) =>
-    applyModifyFeature(
+  applyChamferFeature: (distance) => {
+    const body = selectedBody();
+    if (body) {
+      const limit = maxChamferDistance(body, scopedEdgeIdsFor(body));
+      if (limit.max === null) {
+        showToast(toastText('toast.chamferOversize', { max: 0 }), 'warning');
+        return false;
+      }
+      if (distance > limit.max) {
+        showToast(toastText('toast.chamferOversize', { max: Math.round(limit.max * 100) / 100 }), 'warning');
+        return false;
+      }
+    }
+    return applyModifyFeature(
       (parentIds) => createChamferFeature(scopedEdgeIds(), distance, parentIds),
       (body) => applyChamfer(body, scopedEdgeIdsFor(body), distance),
-    ),
+    );
+  },
 
   applyShellFeature: (thickness) =>
     applyModifyFeature(
@@ -2696,29 +2865,39 @@ export const useStore = create<AppState>((set, get) => {
       !keepOriginal,
     ),
 
-  // Hole drills down (−Y) from an explicit centre or the body's top-face
-  // centroid — the same default placement the AI create_hole tool uses.
-  applyHoleToBody: (bodyId, diameter, depth, center) => {
+  // Hole drills from an explicit centre (or the body's top-face centroid)
+  // along an explicit direction (the clicked face's INWARD normal) or, by
+  // default, straight down (−Y) — the same default placement the AI
+  // create_hole tool uses.
+  applyHoleToBody: (bodyId, diameter, depth, center, direction) => {
     if (!Number.isFinite(diameter) || diameter <= 0.1) return false;
     if (depth !== null && (!Number.isFinite(depth) || depth <= 0.1)) return false;
     const s = get();
     const body = s.bodies.find((b) => b.id === bodyId);
     if (!body) return false;
     const start = center ?? topFaceHolePlacement(body).center;
-    const direction: Vec3 = { x: 0, y: -1, z: 0 };
+    // An explicit direction is normalized once here so the tree feature's
+    // params and the direct drill share the exact same axis; a zero vector
+    // has no direction to drill along — refuse it.
+    let dir: Vec3 = { x: 0, y: -1, z: 0 };
+    if (direction) {
+      const len = Math.hypot(direction.x, direction.y, direction.z);
+      if (len < 1e-10) return false;
+      dir = { x: direction.x / len, y: direction.y / len, z: direction.z / len };
+    }
 
     const tree = s.featureTree;
     const parentId = tree.findFeatureIdForBody(bodyId);
     if (parentId) {
       pushUndo();
-      tree.addFeature(createHoleFeature({ center: start, direction, diameter, depth }, [parentId]));
+      tree.addFeature(createHoleFeature({ center: start, direction: dir, diameter, depth }, [parentId]));
       tree.recompute();
       set((st) => ({ featureTree: tree, projectDirty: true, featureVersion: st.featureVersion + 1 }));
       recombine();
       return true;
     }
     pushUndo();
-    const holed = drillHoleInBody(body, { center: start, direction, diameter, depth });
+    const holed = drillHoleInBody(body, { center: start, direction: dir, diameter, depth });
     set((st) => ({
       directBodies: st.directBodies.map((b) => (b.id === bodyId ? holed : b)),
       projectDirty: true,

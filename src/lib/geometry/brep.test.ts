@@ -1974,3 +1974,45 @@ describe('vertex lookup across quantization-bucket straddle', () => {
     expect(curv.gaussianCurvatureMax).toBeCloseTo((7 * Math.PI) / 4, 3);
   });
 });
+
+describe('edge lookup across quantization-bucket straddle', () => {
+  // The EDGE-level twin of the vertex-straddle suite: undirectedEdgeKey
+  // quantizes BOTH endpoints, so a stored edge endpoint at A and a face side
+  // endpoint at B (5e-7 apart, adjacent buckets) used to miss and the shared
+  // edge vanished from edgeToFaces/faceToEdges. The lookup now probes
+  // neighbour-bucket endpoint pairs on a miss.
+  const A = { x: 2e-7, y: 0, z: 0 };
+  const B = { x: 7e-7, y: 0, z: 0 };
+  const P = { x: 1, y: 0, z: 0 };
+  const Q = { x: 0, y: 1, z: 0 };
+
+  /** Body whose stored edge e0 runs A→P while both faces cross it as (B,P). */
+  function straddleEdgeBody(): SolidBody {
+    return {
+      id: 'straddle-edge',
+      name: 'straddle-edge',
+      vertices: [A, P, Q],
+      edges: [{ id: 'e0', start: A, end: P }],
+      faces: [
+        { id: 'f0', vertices: [B, P, Q], normal: { x: 0, y: 0, z: 1 } },
+        { id: 'f1', vertices: [Q, P, B], normal: { x: 0, y: 0, z: 1 } },
+      ],
+    };
+  }
+
+  it('adjacency reports the shared edge both faces cross at the straddling endpoint', () => {
+    const adj = computeAdjacency(straddleEdgeBody());
+    expect(adj.edgeToFaces.get(0)).toEqual([0, 1]);
+    expect(adj.faceToEdges.get(0)).toEqual([0]);
+    expect(adj.faceToEdges.get(1)).toEqual([0]);
+  });
+
+  it('probing does not invent matches: other sides with no stored edge still miss', () => {
+    const adj = computeAdjacency(straddleEdgeBody());
+    // Only the (B,P)/(P,B) sides resolve to e0; (P,Q)/(Q,B)/(B,Q)/(Q,P) have
+    // no indexed edge (P and Q are 1mm apart — far outside any probe radius).
+    expect(adj.faceToEdges.get(0)).toHaveLength(1);
+    expect(adj.faceToEdges.get(1)).toHaveLength(1);
+    expect(adj.edgeToFaces.size).toBe(1);
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyXYZ, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame, sweepBody } from './operations';
-import { createBox } from './brep';
+import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyXYZ, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame, sweepBody, maxFilletRadius, maxChamferDistance } from './operations';
+import { createBox, createCylinder } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import { makeCoordinateSystem } from './referenceGeometry';
 import type { SolidBody, Vec3 } from './types';
@@ -165,6 +165,88 @@ describe('applyChamfer', () => {
     const result = applyChamfer(body, edgeIds, 0.5);
     expect(result.faces.length).toBeGreaterThan(0);
     expect(result.vertices.length).toBeGreaterThan(0);
+  });
+});
+
+describe('maxFilletRadius / maxChamferDistance', () => {
+  // Edge runs along Y (vertical) vs lies in an X/Z plane (rim).
+  const isVertical = (a: Vec3, b: Vec3) =>
+    Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.z - b.z) < 1e-9 && Math.abs(a.y - b.y) > 1e-9;
+
+  it('a 20mm box fillets and chamfers up to 10 on every edge (half the face depth)', () => {
+    const box = createBox(20, 20, 20);
+    // Omitted/empty edgeIds = every edge.
+    const f = maxFilletRadius(box, []);
+    expect(f.max).toBeCloseTo(10, 6);
+    expect(f.skippedEdges).toBe(0);
+    // Explicit all-ids and a single-edge subset give the same bound: every
+    // cube edge borders faces whose in-plane depth from the edge is 20.
+    expect(maxFilletRadius(box, box.edges.map((e) => e.id)).max).toBeCloseTo(10, 6);
+    expect(maxFilletRadius(box, [box.edges[0]!.id]).max).toBeCloseTo(10, 6);
+    const c = maxChamferDistance(box, []);
+    expect(c.max).toBeCloseTo(10, 6);
+    expect(c.skippedEdges).toBe(0);
+  });
+
+  it('limits are per edge-subset: rim vs vertical edges of a 40×10×40 box', () => {
+    const box = createBox(40, 10, 40);
+    const vertical = box.edges.filter((e) => isVertical(e.start, e.end)).map((e) => e.id);
+    const rim = box.edges.filter((e) => !isVertical(e.start, e.end)).map((e) => e.id);
+    expect(vertical.length + rim.length).toBe(box.edges.length);
+    // Vertical edge: both adjacent side faces are 40 deep from it → 20.
+    expect(maxFilletRadius(box, vertical).max).toBeCloseTo(20, 6);
+    // Rim edge: the 10mm side face is the tight one → 5.
+    expect(maxFilletRadius(box, rim).max).toBeCloseTo(5, 6);
+    // All edges → the tightest single-edge bound.
+    expect(maxFilletRadius(box, []).max).toBeCloseTo(5, 6);
+    expect(maxChamferDistance(box, rim).max).toBeCloseTo(5, 6);
+    expect(maxChamferDistance(box, vertical).max).toBeCloseTo(20, 6);
+  });
+
+  it('cylinder: rim edges take ~apothem, side-seam edges only half a facet', () => {
+    const R = 5;
+    const H = 20;
+    const N = 32;
+    const cyl = createCylinder(R, H, N);
+    const facet = 2 * R * Math.sin(Math.PI / N); // polygon side length
+    const rim = cyl.edges.find((e) => Math.abs(Math.hypot(e.end.x - e.start.x, e.end.y - e.start.y, e.end.z - e.start.z) - facet) < 1e-6)!;
+    const seam = cyl.edges.find((e) => Math.hypot(e.end.x - e.start.x, e.end.y - e.start.y, e.end.z - e.start.z) > H - 1e-6)!;
+    // Rim: min(cap depth 2·apothem, side depth H)/2 = apothem.
+    expect(maxFilletRadius(cyl, [rim.id]).max).toBeCloseTo(R * Math.cos(Math.PI / N), 3);
+    expect(maxChamferDistance(cyl, [rim.id]).max).toBeCloseTo(R * Math.cos(Math.PI / N), 3);
+    // Vertical seam: each side quad is only one facet wide → facet/2.
+    expect(maxFilletRadius(cyl, [seam.id]).max).toBeCloseTo(facet / 2, 3);
+    expect(maxChamferDistance(cyl, [seam.id]).max).toBeCloseTo(facet / 2, 3);
+  });
+
+  it('edges without two adjacent faces are skipped; all-skipped yields max null', () => {
+    const p = (x: number, y: number, z: number) => ({ x, y, z });
+    // One edge shared by two triangles, one edge on a single face, one edge on
+    // no face at all — only the first is filletable.
+    const body: SolidBody = {
+      id: 'b', name: 'b',
+      vertices: [p(0, 0, 0), p(1, 0, 0), p(0, 1, 0), p(0, 0, 1), p(2, 0, 0)],
+      edges: [
+        { id: 'shared', start: p(0, 0, 0), end: p(1, 0, 0) },
+        { id: 'single', start: p(1, 0, 0), end: p(0, 1, 0) },
+        { id: 'free', start: p(0, 0, 1), end: p(2, 0, 0) },
+      ],
+      faces: [
+        { id: 'f0', vertices: [p(0, 0, 0), p(1, 0, 0), p(0, 1, 0)], normal: { x: 0, y: 0, z: 1 } },
+        { id: 'f1', vertices: [p(0, 0, 0), p(0, 0, 1), p(1, 0, 0)], normal: { x: 0, y: 1, z: 0 } },
+      ],
+    };
+    const onlyShared = maxFilletRadius(body, ['shared']);
+    expect(onlyShared.max).not.toBeNull();
+    expect(onlyShared.skippedEdges).toBe(0);
+    const all = maxFilletRadius(body, []);
+    expect(all.skippedEdges).toBe(2);
+    expect(all.max).toBeCloseTo(onlyShared.max!, 9);
+    const none = maxFilletRadius(body, ['single', 'free']);
+    expect(none.max).toBeNull();
+    expect(none.skippedEdges).toBe(2);
+    expect(maxChamferDistance(body, ['free']).max).toBeNull();
+    expect(maxChamferDistance(body, ['free']).skippedEdges).toBe(1);
   });
 });
 

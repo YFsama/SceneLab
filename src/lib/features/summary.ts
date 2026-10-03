@@ -11,7 +11,8 @@ export function featureSummary(f: Feature): string {
     case 'sketch':
       return `${f.sketch.entities.size}e`;
     case 'extrude':
-      return `${n(f.params.distance)}mm`;
+      // A cut extrude reads differently from a join on the timeline.
+      return `${f.params.op === 'cut' ? 'cut ' : ''}${n(f.params.distance)}mm`;
     case 'revolve':
       return `${n((f.params.angle * 180) / Math.PI)}°`;
     case 'sweep':

@@ -19,7 +19,7 @@ import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine
 import { computeVolume, computeBoundingBox } from '../geometry/brep';
 import { warmUpBooleanEngine, isManifoldEngineReady } from '../geometry/boolean';
 import { __resetManifoldEngineForTests } from '../geometry/booleanManifold';
-import type { SweepFeature, LoftFeature, HoleFeature } from './types';
+import type { SweepFeature, LoftFeature, HoleFeature, ExtrudeFeature } from './types';
 import { serializeProject, deserializeFeatures, saveToFile, loadFromFile } from '../io/studio3d';
 
 /** A standalone extrude feature that produces a box-like body (no parent sketch). */
@@ -1054,5 +1054,189 @@ describe('plane-aware sweep/loft (sketch frames)', () => {
     // Vertical section reaches world y = 10, flat section reaches z = 10.
     expect(bb.max.y).toBeCloseTo(10, 6);
     expect(bb.max.z).toBeCloseTo(10, 6);
+  });
+});
+
+describe('extrude cut (Fusion Extrude ▸ Operation: Cut)', () => {
+  // The runtime app always has the exact Manifold engine warm; do the same so
+  // the volume math measures the exact boolean, not the voxel approximation.
+  beforeAll(() => warmUpBooleanEngine());
+
+  /** A sketch feature with one rectangle on the 'xz' ground plane (sketch
+   * x→world x, sketch y→world z; the extrude runs along world +Y). */
+  function rectSketch(x1: number, z1: number, x2: number, z2: number) {
+    const sketch = createSketch('xz');
+    addRectangle(sketch, x1, z1, x2, z2);
+    return createSketchFeature(sketch);
+  }
+
+  /** An extrude cut: cutter from the sketch, target = the non-sketch parent. */
+  function cutFeature(sketchFeatId: string, targetFeatId: string, distance: number) {
+    return createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance, op: 'cut' },
+      [sketchFeatId, targetFeatId],
+    );
+  }
+
+  it('cuts a smaller overlapping profile out of the target: volume = target − intersection', () => {
+    const tree = new FeatureTree();
+    const target = boxExtrude(); // 10×10×10: x/z ±5, y 0..10
+    const sf = rectSketch(-2, -2, 2, 2); // pocket x[2,6] × z[2,6]
+    const cut = cutFeature(sf.id, target.id, 10); // full-depth cutter
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+
+    expect(tree.getResult(cut.id)?.error).toBeUndefined();
+    // The cut consumed the target: exactly one output body.
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    expect(tree.getResult(cut.id)?.bodies).toHaveLength(1);
+    // 1000 − 4·4·10 = 840 (±3% covers the voxel fallback too).
+    const vol = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    expect(vol).toBeGreaterThan(840 * 0.97);
+    expect(vol).toBeLessThan(840 * 1.03);
+  });
+
+  it('the distance is honest: a shorter cutter makes a partial (blind) pocket', () => {
+    const tree = new FeatureTree();
+    const target = boxExtrude();
+    const sf = rectSketch(-2, -2, 2, 2);
+    const cut = cutFeature(sf.id, target.id, 5); // half the target's height
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+
+    expect(tree.getResult(cut.id)?.error).toBeUndefined();
+    // 1000 − 4·4·5 = 920: nothing silently extends the cutter through.
+    const vol = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    expect(vol).toBeGreaterThan(920 * 0.97);
+    expect(vol).toBeLessThan(920 * 1.03);
+  });
+
+  it('a cutter that misses the target is an ERROR, not a silent no-op cut', () => {
+    const tree = new FeatureTree();
+    const target = boxExtrude();
+    const sf = rectSketch(20, 20, 24, 24); // far outside the target's footprint
+    const cut = cutFeature(sf.id, target.id, 10);
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+
+    expect(tree.getResult(cut.id)?.error).toContain('cutter does not intersect the target body');
+    expect(tree.getResult(cut.id)?.bodies).toHaveLength(0);
+  });
+
+  it('a cut without a target parent reports an error', () => {
+    const tree = new FeatureTree();
+    const sf = rectSketch(0, 0, 4, 4);
+    const cut = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 10, op: 'cut' },
+      [sf.id], // sketch only — no body-producing parent
+    );
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+    expect(tree.getResult(cut.id)?.error).toContain('Cut requires a target body');
+  });
+
+  it('suppressing the cut restores the target body', () => {
+    const tree = new FeatureTree();
+    const target = boxExtrude();
+    const sf = rectSketch(-2, -2, 2, 2);
+    const cut = cutFeature(sf.id, target.id, 10);
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeLessThan(1000);
+
+    tree.updateFeature(cut.id, (f) => ({ ...f, suppressed: true }));
+    tree.recompute();
+    // Suppressed cut → the unconsumed target is the only output again.
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(1000, 3);
+  });
+
+  it('an op-less extrude never consumes: even with a body parent it joins (legacy semantics)', () => {
+    const tree = new FeatureTree();
+    const target = boxExtrude();
+    const sf = rectSketch(0, 0, 2, 2);
+    // Same shape as a cut feature but WITHOUT op — must stay a plain join.
+    const join = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 3 },
+      [sf.id, target.id],
+    );
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(join);
+    tree.recompute();
+
+    expect(tree.getResult(join.id)?.error).toBeUndefined();
+    // The target is NOT consumed and the extrude made its own body: two out.
+    expect(tree.getLatestBodies()).toHaveLength(2);
+  });
+
+  it('the op param survives a studio3d round-trip and still cuts on recompute', () => {
+    const tree = new FeatureTree();
+    const target = boxExtrude();
+    const sf = rectSketch(-2, -2, 2, 2);
+    const cut = cutFeature(sf.id, target.id, 10);
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+
+    const json = saveToFile(serializeProject('Part', tree.features, []));
+    const parsed = JSON.parse(json) as {
+      features: { type: string; data: Record<string, unknown> }[];
+    };
+    // Serialized wholesale: the cut's params carry op, a join's do not (old
+    // files deserialize without it and evaluate as joins).
+    expect(parsed.features[2]!.data.op).toBe('cut');
+    expect('op' in parsed.features[0]!.data).toBe(false);
+
+    const features = deserializeFeatures(loadFromFile(json));
+    expect(features.map((f) => f.type)).toEqual(['extrude', 'sketch', 'extrude']);
+    const restoredCut = features[2] as ExtrudeFeature;
+    expect(restoredCut.params.op).toBe('cut');
+    expect(restoredCut.parentIds).toEqual([sf.id, target.id]);
+
+    const replay = new FeatureTree();
+    for (const f of features) replay.addFeature(f);
+    replay.recompute();
+    expect(replay.getLatestBodies()).toHaveLength(1);
+    const vol = Math.abs(computeVolume(replay.getLatestBodies()[0]!));
+    expect(vol).toBeGreaterThan(840 * 0.97);
+    expect(vol).toBeLessThan(840 * 1.03);
+  });
+
+  it('a cut evaluated cold (voxel) re-evaluates when the exact engine warms up', async () => {
+    __resetManifoldEngineForTests();
+    expect(isManifoldEngineReady()).toBe(false);
+
+    const tree = new FeatureTree();
+    const target = boxExtrude();
+    const sf = rectSketch(-2, -2, 2, 2);
+    const cut = cutFeature(sf.id, target.id, 10);
+    tree.addFeature(target);
+    tree.addFeature(sf);
+    tree.addFeature(cut);
+    tree.recompute();
+
+    const coldBody = tree.getResult(cut.id)!.bodies[0]!;
+    expect(coldBody).toBeDefined(); // voxel approximation still cut something
+    expect(Math.abs(computeVolume(coldBody))).toBeLessThan(1000);
+
+    await warmUpBooleanEngine();
+    tree.recompute();
+    const warmBody = tree.getResult(cut.id)!.bodies[0]!;
+    // Not pinned: the exact result replaces the blocky voxel one.
+    expect(warmBody).not.toBe(coldBody);
+    const vol = Math.abs(computeVolume(warmBody));
+    expect(vol).toBeGreaterThan(840 * 0.99);
+    expect(vol).toBeLessThan(840 * 1.01);
   });
 });
