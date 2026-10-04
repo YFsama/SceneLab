@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, saveToFile, loadFromFile, type SerializedDrawing } from './studio3d';
+import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, saveToFile, loadFromFile, type SerializedDrawing, type SerializedCam } from './studio3d';
 import { createBox, computeVolume } from '../geometry/brep';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
 import { standardPlanes, makeAxis, makePoint, makeCoordinateSystem } from '../geometry/referenceGeometry';
+import { defaultCamSetup, type CAMOperation } from '../cam/setup';
 
 function pkgVersion(): string {
   // vitest runs with the package root as cwd.
@@ -333,5 +334,96 @@ describe('drawing sheet serialization', () => {
     expect(back.sectionAxis).toBe('off');
     expect(back.details).toEqual([]);
     expect(back.notes).toEqual([]);
+  });
+});
+
+describe('CAM setup serialization', () => {
+  const op: CAMOperation = {
+    id: 'camop_1',
+    name: 'Pocket Box',
+    enabled: true,
+    type: 'pocket',
+    bodyId: 'b1',
+    toolId: 'em-6mm',
+    params: {
+      feedRate: 900, plungeRate: 200, spindleSpeed: 12000,
+      depthOfCut: 1.5, stepover: 2, stockTop: 5, stockBottom: -8,
+      allowance: 0.5,
+    },
+    holes: [{ x: 1, z: 2, depth: 6 }],
+  };
+
+  it('round-trips stock, safe Z and operations', () => {
+    const cam: SerializedCam = { stock: { mode: 'bounding-box', margin: 4 }, safeZAboveStock: 7, operations: [op] };
+    const project = serializeProject('cam-test', [], [], [], undefined, undefined, cam);
+    expect(project.cam).toEqual(cam);
+    const back = deserializeCam(loadFromFile(saveToFile(project)));
+    expect(back.stock).toEqual({ mode: 'bounding-box', margin: 4 });
+    expect(back.safeZAboveStock).toBe(7);
+    expect(back.operations).toEqual([op]);
+  });
+
+  it('round-trips explicit box stock min/max', () => {
+    const cam: SerializedCam = {
+      stock: { mode: 'box', min: { x: -1, y: -2, z: -3 }, max: { x: 4, y: 5, z: 6 } },
+      safeZAboveStock: 5,
+      operations: [],
+    };
+    const project = serializeProject('cam-box', [], [], [], undefined, undefined, cam);
+    expect(deserializeCam(loadFromFile(saveToFile(project))).stock).toEqual(cam.stock);
+  });
+
+  it('omits the cam block when none is provided; old files load with defaults', () => {
+    const project = serializeProject('no-cam', [], []);
+    expect(project.cam).toBeUndefined();
+    expect(deserializeCam(project)).toEqual(defaultCamSetup());
+  });
+
+  it('rejects malformed operations and repairs salvageable ones defensively', () => {
+    const project = serializeProject('x', [], []);
+    (project as { cam?: unknown }).cam = {
+      stock: { mode: 'diagonal' },
+      safeZAboveStock: 'high',
+      operations: [
+        { id: 7, name: 'not an op' }, // no valid type/bodyId/toolId → dropped
+        { // valid shape, junk params → params fall back to defaults
+          id: 'camop_2', name: 'Face', type: 'face', bodyId: 'b', toolId: 't',
+          params: { feedRate: 'fast', stockTop: Number.NaN }, enabled: false,
+        },
+      ],
+    };
+    const back = deserializeCam(project);
+    expect(back.stock).toEqual({ mode: 'bounding-box', margin: 2 });
+    expect(back.safeZAboveStock).toBe(5);
+    expect(back.operations).toHaveLength(1);
+    expect(back.operations[0]!.id).toBe('camop_2');
+    expect(back.operations[0]!.enabled).toBe(false);
+    expect(back.operations[0]!.params.feedRate).toBe(1000); // junk → default
+    expect(back.operations[0]!.params.stockTop).toBe(0); // NaN → default
+    expect(back.operations[0]!.params.allowance).toBeUndefined();
+  });
+
+  it('drops non-finite drill holes but keeps the valid ones', () => {
+    const project = serializeProject('x', [], []);
+    (project as { cam?: unknown }).cam = {
+      stock: { mode: 'bounding-box', margin: 1 },
+      safeZAboveStock: 5,
+      operations: [{
+        id: 'camop_9', name: 'Drill', type: 'drill', bodyId: 'b', toolId: 'drill-3mm', enabled: true,
+        params: {},
+        holes: [{ x: 1, z: 2, depth: 3 }, { x: Number.POSITIVE_INFINITY, z: 0, depth: 1 }, { x: 0 }],
+      }],
+    };
+    const back = deserializeCam(project);
+    expect(back.operations[0]!.holes).toEqual([{ x: 1, z: 2, depth: 3 }]);
+  });
+
+  it('enabled defaults to true when the field is missing', () => {
+    const project = serializeProject('x', [], []);
+    (project as { cam?: unknown }).cam = {
+      operations: [{ id: 'camop_3', name: 'Contour', type: 'contour', bodyId: 'b', toolId: 't', params: {} }],
+    };
+    const back = deserializeCam(project);
+    expect(back.operations[0]!.enabled).toBe(true);
   });
 });

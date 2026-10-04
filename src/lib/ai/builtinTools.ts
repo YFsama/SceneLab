@@ -866,10 +866,19 @@ export function registerBuiltinTools(): void {
         return { success: false, reason: 'Sketch features have no editable params — edit the sketch entities instead' };
       }
       // Shallow params merge: {...f.params, ...patch}. updateFeature pushes
-      // undo, recomputes the tree and bumps featureVersion.
+      // undo, recomputes the tree and bumps featureVersion — and refuses
+      // gated edits (oversize fillet/chamfer values) with false; report that
+      // refusal honestly instead of claiming success.
       const current = existing.params as Record<string, unknown>;
       const merged = { ...current, ...(patch as Record<string, unknown>) };
-      st.updateFeature(featureId, (f) => ({ ...f, params: merged }) as Feature);
+      const applied = st.updateFeature(featureId, (f) => ({ ...f, params: merged }) as Feature);
+      if (!applied) {
+        return {
+          success: false,
+          reason: `Edit refused — e.g. the value exceeds the geometric limit for these edges (a toast explains)`,
+          featureId,
+        };
+      }
       return {
         success: true,
         featureId,

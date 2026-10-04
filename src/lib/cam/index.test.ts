@@ -14,14 +14,14 @@ describe('CAM toolpath generators (contour/drill/face)', () => {
     expect(tp.operation).toBe('contour');
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
     expect(generateGCode(tp)).toContain('G1');
-    // The XY outline is the convex hull → a box projects to its 4 rectangle
-    // corners (no self-intersecting angular-sort artifacts).
-    const distinctXY = new Set(tp.cuttingMoves.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`));
-    expect(distinctXY.size).toBe(4);
+    // The top-view silhouette of a box is its 4-corner XZ rectangle (offset
+    // outward by the cutter radius — still exactly 4 distinct plan points).
+    const distinctXZ = new Set(tp.cuttingMoves.map((p) => `${p.x.toFixed(3)},${p.z.toFixed(3)}`));
+    expect(distinctXZ.size).toBe(4);
   });
 
   it('generateDrillToolpath visits each hole', () => {
-    const holes = [{ x: 0, y: 0, depth: 5 }, { x: 10, y: 5, depth: 5 }];
+    const holes = [{ x: 0, z: 0, depth: 5 }, { x: 10, z: 5, depth: 5 }];
     const tp = generateDrillToolpath(holes, getTool('em-3mm')!, PARAMS);
     expect(tp.operation).toBe('drill');
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
@@ -29,9 +29,9 @@ describe('CAM toolpath generators (contour/drill/face)', () => {
 
   it('drills hole depth measured from the stock top, not absolute Z', () => {
     const raised = { ...PARAMS, stockTop: 12, stockBottom: 2 };
-    const tp = generateDrillToolpath([{ x: 0, y: 0, depth: 5 }], getTool('em-3mm')!, raised);
+    const tp = generateDrillToolpath([{ x: 0, z: 0, depth: 5 }], getTool('em-3mm')!, raised);
     // Plunge should reach stockTop - depth = 12 - 5 = 7, not -5.
-    expect(tp.cuttingMoves[0]!.z).toBeCloseTo(7, 6);
+    expect(tp.cuttingMoves[0]!.y).toBeCloseTo(7, 6);
   });
 
   it('generateFaceToolpath covers the stock top', () => {

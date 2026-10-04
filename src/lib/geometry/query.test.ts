@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { listFaces, angleBetweenFaces } from './query';
-import { createBox, createCylinder, createSphere } from './brep';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { listFaces, angleBetweenFaces, detectCircularHoles } from './query';
+import { createBox, createCylinder, createSphere, createTube } from './brep';
+import { warmUpBooleanEngine, booleanOpManifold } from './booleanManifold';
+import { translateBody } from './operations';
 
 describe('listFaces', () => {
   it('reports a box face: 6 faces, area 100, unit axis normals', () => {
@@ -64,5 +66,59 @@ describe('angleBetweenFaces', () => {
 
   it('returns null for an unknown face id', () => {
     expect(angleBetweenFaces(box, top.id, 'nope')).toBeNull();
+  });
+});
+
+describe('detectCircularHoles', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  it('a watertight undrilled box has no holes', () => {
+    expect(detectCircularHoles(createBox(20, 10, 30))).toEqual([]);
+  });
+
+  it('a plain cylinder is a boss, not a hole', () => {
+    expect(detectCircularHoles(createCylinder(15, 20, 32))).toEqual([]);
+  });
+
+  it('finds the ⌀12 through hole of a tube at the centre', () => {
+    const holes = detectCircularHoles(createTube(15, 6, 20, 32));
+    expect(holes).toHaveLength(1);
+    expect(holes[0]!.centre.x).toBeCloseTo(0, 6);
+    expect(holes[0]!.centre.z).toBeCloseTo(0, 6);
+    expect(holes[0]!.diameter).toBeCloseTo(12, 2);
+    expect(holes[0]!.depth).toBeCloseTo(20, 6);
+  });
+
+  it('finds a drilled ⌀6 hole in a watertight box at the right (x, z) with depth', () => {
+    const box = createBox(20, 20, 30); // x ±10, y 0..20, z ±15
+    const drill = translateBody(createCylinder(3, 30, 24), { x: 4, y: -5, z: 2 });
+    const drilled = booleanOpManifold(box, drill, 'difference');
+    expect(drilled).not.toBeNull();
+    const holes = detectCircularHoles(drilled as NonNullable<typeof drilled>);
+    expect(holes).toHaveLength(1);
+    expect(holes[0]!.centre.x).toBeCloseTo(4, 3);
+    expect(holes[0]!.centre.z).toBeCloseTo(2, 3);
+    expect(holes[0]!.diameter).toBeCloseTo(6, 2);
+    expect(holes[0]!.depth).toBeCloseTo(20, 3);
+  });
+
+  it('finds two separate drilled holes', () => {
+    const box = createBox(30, 20, 20);
+    const drilledPair = booleanOpManifold(
+      translateBody(createCylinder(2, 40, 16), { x: -6, y: -5, z: 0 }),
+      translateBody(createCylinder(2, 40, 16), { x: 6, y: -5, z: 0 }),
+      'union',
+    );
+    expect(drilledPair).not.toBeNull();
+    const drills = drilledPair as NonNullable<typeof drilledPair>;
+    const drilled = booleanOpManifold(box, drills, 'difference');
+    expect(drilled).not.toBeNull();
+    const holes = detectCircularHoles(drilled as NonNullable<typeof drilled>);
+    expect(holes).toHaveLength(2);
+    expect(holes[0]!.centre.x).toBeCloseTo(-6, 3);
+    expect(holes[1]!.centre.x).toBeCloseTo(6, 3);
+    expect(holes[0]!.diameter).toBeCloseTo(4, 2);
   });
 });

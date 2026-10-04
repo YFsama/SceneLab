@@ -14,11 +14,15 @@ import type {
   CircularArrayFeature,
   MirrorFeature,
 } from '../features/types';
-import type { SolidBody } from '../geometry/types';
+import type { SolidBody, Vec3 } from '../geometry/types';
 import type { SketchEntity, SketchConstraint } from '../sketch/types';
 import type { PlaneDefinition } from '../geometry/types';
 import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition, AnnotationDefinition } from '../geometry/referenceGeometry';
 import type { DrawingDetail, DrawingNote, DrawingSectionAxis } from './drawingNotes';
+// Type-only imports: erased at runtime, so the io layer never pulls in the CAM
+// generator stack — the shapes are the contract shared with lib/cam/setup.
+import type { CAMSetup, CAMOperation } from '../cam/setup';
+import type { CAMParameters } from '../cam/types';
 
 /** Datum planes/axes/points/coordinate systems — plain serializable reference geometry. */
 export interface SerializedReferenceGeometry {
@@ -36,6 +40,13 @@ export interface SerializedDrawing {
   notes: DrawingNote[];
 }
 
+/**
+ * CAM setup (cam workspace): stock + ordered operations, structurally the
+ * live CAMSetup (pure data — no caches). The derived toolpath caches are NOT
+ * serialized; they are regenerated from the operations after load.
+ */
+export type SerializedCam = CAMSetup;
+
 export interface ProjectFile {
   version: number;
   name: string;
@@ -47,6 +58,8 @@ export interface ProjectFile {
   referenceGeometry?: SerializedReferenceGeometry;
   /** Drawing-sheet state (optional: older files predate it). */
   drawing?: SerializedDrawing;
+  /** CAM setup (optional: older files predate it; toolpath caches excluded). */
+  cam?: SerializedCam;
   metadata: {
     created: string;
     modified: string;
@@ -83,6 +96,7 @@ export function serializeProject(
   directBodies: SolidBody[] = [],
   referenceGeometry: SerializedReferenceGeometry = { planes: [], axes: [], points: [], coordSystems: [], annotations: [] },
   drawing: SerializedDrawing | null = null,
+  cam: SerializedCam | null = null,
 ): ProjectFile {
   return {
     version: FILE_VERSION,
@@ -90,6 +104,7 @@ export function serializeProject(
     directBodies,
     referenceGeometry,
     ...(drawing ? { drawing } : {}),
+    ...(cam ? { cam } : {}),
     features: features.map((f) => ({
       id: f.id,
       type: f.type,
@@ -164,6 +179,114 @@ export function deserializeDrawing(project: ProjectFile): SerializedDrawing {
     sectionAxis: axis,
     details: Array.isArray(d?.details) ? d.details : [],
     notes: Array.isArray(d?.notes) ? d.notes : [],
+  };
+}
+
+// --- CAM block deserialization ------------------------------------------------
+// Every field is validated with unknown/malformed data falling back to the
+// defaultCamSetup() values (kept in sync here — importing the generator module
+// would chain the whole toolpath stack into the io layer for three constants).
+
+/** Defaults mirroring defaultCamSetup() (lib/cam/setup.ts). */
+const CAM_DEFAULT_MARGIN = 2;
+const CAM_DEFAULT_SAFE_Z = 5;
+const CAM_REQUIRED_PARAM_KEYS = ['feedRate', 'plungeRate', 'spindleSpeed', 'depthOfCut', 'stepover', 'stockTop', 'stockBottom'] as const;
+
+function finiteNum(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+function finiteVec3(v: unknown): Vec3 | null {
+  if (!v || typeof v !== 'object') return null;
+  const x = finiteNum((v as Record<string, unknown>).x);
+  const y = finiteNum((v as Record<string, unknown>).y);
+  const z = finiteNum((v as Record<string, unknown>).z);
+  return x !== null && y !== null && z !== null ? { x, y, z } : null;
+}
+
+function sanitizeCamStock(raw: unknown): CAMSetup['stock'] {
+  if (!raw || typeof raw !== 'object') return { mode: 'bounding-box', margin: CAM_DEFAULT_MARGIN };
+  const s = raw as Record<string, unknown>;
+  if (s.mode === 'bounding-box') {
+    const margin = finiteNum(s.margin);
+    return { mode: 'bounding-box', margin: margin !== null ? margin : CAM_DEFAULT_MARGIN };
+  }
+  if (s.mode === 'box') {
+    const min = finiteVec3(s.min);
+    const max = finiteVec3(s.max);
+    if (min && max) return { mode: 'box', min, max };
+  }
+  return { mode: 'bounding-box', margin: CAM_DEFAULT_MARGIN };
+}
+
+/** Numeric params with finite-number overrides on top of the defaults; the
+ * optional allowance/peckDepth survive only when finite. */
+function sanitizeCamParams(raw: unknown): CAMParameters {
+  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out: CAMParameters = {
+    feedRate: 1000,
+    plungeRate: 300,
+    spindleSpeed: 10000,
+    depthOfCut: 2,
+    stepover: 3,
+    stockTop: 0,
+    stockBottom: -10,
+  };
+  for (const key of CAM_REQUIRED_PARAM_KEYS) {
+    const v = finiteNum(p[key]);
+    if (v !== null) out[key] = v;
+  }
+  const allowance = finiteNum(p.allowance);
+  if (allowance !== null) out.allowance = allowance;
+  const peckDepth = finiteNum(p.peckDepth);
+  if (peckDepth !== null) out.peckDepth = peckDepth;
+  return out;
+}
+
+/** One operation, or null when the record is too malformed to keep. */
+function sanitizeCamOperation(raw: unknown): CAMOperation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const type = o.type;
+  if (
+    typeof o.id !== 'string' || typeof o.name !== 'string' ||
+    (type !== 'pocket' && type !== 'contour' && type !== 'drill' && type !== 'face') ||
+    typeof o.bodyId !== 'string' || typeof o.toolId !== 'string'
+  ) return null;
+  const holes = Array.isArray(o.holes)
+    ? o.holes.flatMap((h): Array<{ x: number; z: number; depth: number }> => {
+        if (!h || typeof h !== 'object') return [];
+        const x = finiteNum((h as Record<string, unknown>).x);
+        const z = finiteNum((h as Record<string, unknown>).z);
+        const depth = finiteNum((h as Record<string, unknown>).depth);
+        return x !== null && z !== null && depth !== null ? [{ x, z, depth }] : [];
+      })
+    : [];
+  return {
+    id: o.id,
+    name: o.name,
+    enabled: o.enabled !== false, // only an explicit false disables
+    type,
+    bodyId: o.bodyId,
+    toolId: o.toolId,
+    params: sanitizeCamParams(o.params),
+    ...(holes.length > 0 ? { holes } : {}),
+  };
+}
+
+/** CAM setup stored in a loaded project (defaults for older/corrupt files). */
+export function deserializeCam(project: ProjectFile): CAMSetup {
+  const cam = project.cam;
+  if (!cam || typeof cam !== 'object') {
+    return { stock: { mode: 'bounding-box', margin: CAM_DEFAULT_MARGIN }, safeZAboveStock: CAM_DEFAULT_SAFE_Z, operations: [] };
+  }
+  const safeZ = finiteNum(cam.safeZAboveStock);
+  return {
+    stock: sanitizeCamStock(cam.stock),
+    safeZAboveStock: safeZ !== null ? safeZ : CAM_DEFAULT_SAFE_Z,
+    operations: Array.isArray(cam.operations)
+      ? cam.operations.map(sanitizeCamOperation).filter((op): op is CAMOperation => op !== null)
+      : [],
   };
 }
 

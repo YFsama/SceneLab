@@ -3,10 +3,13 @@ import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import * as THREE from 'three';
 import { useStore } from '../../store/app';
-import { createSketch, addLine } from '../../lib/sketch/engine';
+import { useViewBookmarks } from '../../store/viewBookmarks';
+import { createSketch, addLine, addArc } from '../../lib/sketch/engine';
 import { createBox, translateBody, type SolidBody } from '../../lib/geometry';
 import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts } from '../../lib/toast';
+import { captureFreshCanvas } from '../../lib/render/capture';
+import { defaultCamSetup } from '../../lib/cam';
 import { ViewportCanvas } from './ViewportCanvas';
 
 // ViewportCanvas is a WebGL component; jsdom has neither WebGL nor a canvas
@@ -15,8 +18,22 @@ import { ViewportCanvas } from './ViewportCanvas';
 // picking, menu construction) is plain math and DOM and runs for real. The
 // right-click → ContextMenu flow below is therefore the true component path.
 
+// Every EllipseCurve the component constructs (circle + arc previews). The arc
+// sweep-direction tests below read the recorded instances; behaviour is the
+// real class's (the recorder only subclasses and notes `this`).
+const recordedCurves = vi.hoisted(() => [] as unknown[]);
+// Scenes passed to renderer.render — the CAM overlay tests reach the live
+// scene graph through them (the component keeps it in a private ref).
+const recordedScenes = vi.hoisted(() => [] as unknown[]);
+
 vi.mock('three', async (importOriginal: () => Promise<typeof import('three')>) => {
   const actual = await importOriginal();
+  class RecordingEllipseCurve extends actual.EllipseCurve {
+    constructor(...args: ConstructorParameters<typeof actual.EllipseCurve>) {
+      super(...args);
+      recordedCurves.push(this);
+    }
+  }
   class FakeWebGLRenderer {
     readonly domElement = document.createElement('canvas');
     outputColorSpace = '';
@@ -25,11 +42,15 @@ vi.mock('three', async (importOriginal: () => Promise<typeof import('three')>) =
     setPixelRatio() {}
     setSize() {}
     setClearColor() {}
-    render() {}
+    render(scene: unknown) {
+      recordedScenes.push(scene);
+    }
     dispose() {}
   }
-  return { ...actual, WebGLRenderer: FakeWebGLRenderer } as unknown as typeof import('three');
+  return { ...actual, WebGLRenderer: FakeWebGLRenderer, EllipseCurve: RecordingEllipseCurve } as unknown as typeof import('three');
 });
+
+const recordedControls = vi.hoisted(() => [] as unknown[]);
 
 vi.mock('three/addons/controls/OrbitControls.js', async () => {
   const { Vector3 } = await import('three');
@@ -43,6 +64,11 @@ vi.mock('three/addons/controls/OrbitControls.js', async () => {
     screenSpacePanning = false;
     zoomToCursor = false;
     mouseButtons: unknown = {};
+    constructor() {
+      // Recorded so tests can reach the ACTIVE camera (controls.object is
+      // re-seated to the ortho camera when the projection is orthographic).
+      recordedControls.push(this);
+    }
     update() {
       (this.object as { lookAt?: (t: unknown) => void } | null)?.lookAt?.(this.target);
       return false;
@@ -551,6 +577,14 @@ describe('ViewportCanvas click-click drawing (rendered)', () => {
 // point. The raycast at pick time is intercepted (mockHits) so the applied
 // center is exactly the synthetic intersection point; the menu/arm path is
 // otherwise the real rendered flow.
+
+/** applyHoleToBody's signature — typed mocks keep the full 5-arg call shape
+ *  (id, ⌀, depth, center?, direction?) without naming unused parameters. */
+type ApplyHoleFn = (
+  id: string, diameter: number, depth: number | null,
+  center?: { x: number; y: number; z: number }, direction?: { x: number; y: number; z: number },
+) => boolean;
+
 describe('ViewportCanvas hole click-to-place (rendered)', () => {
   type SetFromCamera = (this: THREE.Raycaster, coords: THREE.Vector2, camera: THREE.Camera) => void;
   type IntersectObjects = (this: THREE.Raycaster, objects: THREE.Object3D[], recursive?: boolean) => unknown[];
@@ -666,10 +700,7 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
   }
 
   it('arms after the prompts; the next body click drills at the clicked point, then disarms', async () => {
-    // Typed so mock.calls carries the full 5-arg shape (id, ⌀, depth, center?, direction?).
-    const applyHole = vi.fn(
-      (_id: string, _d: number, _h: number | null, _c?: { x: number; y: number; z: number }, _dir?: { x: number; y: number; z: number }) => true,
-    );
+    const applyHole = vi.fn<ApplyHoleFn>(() => true);
     const box = createBox(4, 4, 4);
     useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
 
@@ -789,10 +820,7 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
   // ---- pass-27 review #1: drill along the clicked face's INWARD normal ----
 
   it('drills along the clicked face’s inward world normal (side face → lateral direction)', async () => {
-    // Typed so mock.calls carries the full 5-arg shape (id, ⌀, depth, center?, direction?).
-    const applyHole = vi.fn(
-      (_id: string, _d: number, _h: number | null, _c?: { x: number; y: number; z: number }, _dir?: { x: number; y: number; z: number }) => true,
-    );
+    const applyHole = vi.fn<ApplyHoleFn>(() => true);
     const box = createBox(4, 4, 4);
     useStore.setState({ bodies: [box], selectedIds: [box.id], applyHoleToBody: applyHole });
 
@@ -1033,6 +1061,520 @@ describe('ViewportCanvas hole click-to-place (rendered)', () => {
     } finally {
       mockHits = null;
       mockPlaneHits = null;
+      await unmount(m);
+    }
+  });
+});
+
+// Camera view bookmarks (Fusion-style): capture the live camera pose from the
+// empty-space context menu, then restore it through the SAME
+// 'viewport-camera-snap' event the standard views dispatch (the 250 ms tween
+// listener). The camera itself is the component's real PerspectiveCamera,
+// positioned by the real viewDirection effect — no camera mocking needed.
+describe('ViewportCanvas camera view bookmarks (rendered)', () => {
+  beforeEach(() => {
+    clearToasts();
+    localStorage.clear();
+    useViewBookmarks.setState({ bookmarks: [] });
+    useStore.setState({
+      locale: 'en',
+      workspace: 'model',
+      sketchActive: false,
+      sketchTool: 'select',
+      sketchPlaneId: 'xy',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      selectedEdgeIds: [],
+      selectedFaceIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'front',
+      projection: 'perspective',
+      measureActive: false,
+      visionSelectActive: false,
+      numericPrompt: null,
+    });
+  });
+
+  it('captures via the menu, lists the bookmark, and restores it through the standard snap event', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      const bookmarkLabel = translations.en!['menu.bookmarkCurrent']!;
+
+      // CAPTURE at the front view: the viewDirection effect put the camera at
+      // (0,0,10) aimed at the origin with up +Y (identity orientation).
+      await openBodyMenu(m);
+      expect(menuLabels(m.container)).toContain(bookmarkLabel);
+      // No bookmarks yet: neither a restore entry nor the clear item.
+      expect(menuLabels(m.container)).not.toContain(translations.en!['menu.clearBookmarks']!);
+      await act(async () => { menuButton(m.container, bookmarkLabel)!.click(); });
+
+      const bms = useViewBookmarks.getState().bookmarks;
+      expect(bms).toHaveLength(1);
+      expect(bms[0]!.name).toBe('View 1');
+      expect(bms[0]!.position).toEqual({ x: 0, y: 0, z: 10 });
+      expect(bms[0]!.target).toEqual({ x: 0, y: 0, z: 0 });
+      expect(bms[0]!.quaternion.x).toBeCloseTo(0, 6);
+      expect(bms[0]!.quaternion.y).toBeCloseTo(0, 6);
+      expect(bms[0]!.quaternion.z).toBeCloseTo(0, 6);
+      expect(bms[0]!.quaternion.w).toBeCloseTo(1, 6);
+
+      // RESTORE: move the camera away (top view), then click the listed
+      // bookmark — it must dispatch the standard-view snap event with the
+      // bookmarked direction and up.
+      await act(async () => { useStore.setState({ viewDirection: 'top' }); });
+      await openBodyMenu(m);
+      const restore = menuButton(m.container, '1. View 1');
+      expect(restore).not.toBeNull();
+
+      const snaps: CustomEvent[] = [];
+      const onSnap = (e: Event) => { snaps.push(e as CustomEvent); };
+      window.addEventListener('viewport-camera-snap', onSnap);
+      try {
+        await act(async () => { restore!.click(); });
+      } finally {
+        window.removeEventListener('viewport-camera-snap', onSnap);
+      }
+      expect(snaps).toHaveLength(1);
+      const detail = snaps[0]!.detail as { position: { x: number; y: number; z: number }; up: { x: number; y: number; z: number } };
+      // position = the bookmarked direction from its target (the snap handler
+      // normalizes it — same field semantics the standard views send).
+      expect(detail.position).toEqual({ x: 0, y: 0, z: 10 });
+      // up = the captured orientation's up axis (identity → world +Y).
+      expect(detail.up.x).toBeCloseTo(0, 6);
+      expect(detail.up.y).toBeCloseTo(1, 6);
+      expect(detail.up.z).toBeCloseTo(0, 6);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('restores a bookmarked orbit TARGET and dispatches its direction + captured up', async () => {
+    // A bookmark looking at a non-origin target, captured orientation from a
+    // real camera pose: camera (10,0,10) aimed at (5,0,0) with up +Y.
+    const pose = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 1000);
+    pose.position.set(10, 0, 10);
+    pose.up.set(0, 1, 0);
+    pose.lookAt(5, 0, 0);
+    useViewBookmarks.getState().add({
+      position: { x: 10, y: 0, z: 10 },
+      target: { x: 5, y: 0, z: 0 },
+      quaternion: {
+        x: pose.quaternion.x, y: pose.quaternion.y, z: pose.quaternion.z, w: pose.quaternion.w,
+      },
+    });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      await openBodyMenu(m);
+
+      const snaps: CustomEvent[] = [];
+      const updates: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } }[] = [];
+      const onSnap = (e: Event) => { snaps.push(e as CustomEvent); };
+      const onUpdate = (e: Event) => {
+        updates.push((e as CustomEvent).detail);
+      };
+      window.addEventListener('viewport-camera-snap', onSnap);
+      window.addEventListener('viewport-camera-update', onUpdate);
+      try {
+        await act(async () => {
+          menuButton(m.container, '1. View 1')!.click();
+          // Let the rAF render loop publish the re-seated camera state
+          // (restoreBookmark marks the frame dirty synchronously).
+          await new Promise((r) => { setTimeout(r, 60); });
+        });
+      } finally {
+        window.removeEventListener('viewport-camera-snap', onSnap);
+        window.removeEventListener('viewport-camera-update', onUpdate);
+      }
+
+      // The snap payload: direction = position − target, up = the captured
+      // orientation's up axis.
+      expect(snaps).toHaveLength(1);
+      const detail = snaps[0]!.detail as { position: { x: number; y: number; z: number }; up: { x: number; y: number; z: number } };
+      expect(detail.position).toEqual({ x: 5, y: 0, z: 10 });
+      const expectedUp = new THREE.Vector3(0, 1, 0).applyQuaternion(pose.quaternion);
+      expect(detail.up.x).toBeCloseTo(expectedUp.x, 5);
+      expect(detail.up.y).toBeCloseTo(expectedUp.y, 5);
+      expect(detail.up.z).toBeCloseTo(expectedUp.z, 5);
+
+      // The orbit centre was re-seated to the bookmarked target before the
+      // dispatch — the published camera state carries it (constant through
+      // the tween, which never touches the target).
+      expect(updates.some((u) =>
+        Math.abs(u.target.x - 5) < 1e-6 && Math.abs(u.target.y) < 1e-6 && Math.abs(u.target.z) < 1e-6,
+      )).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('shows Clear view bookmarks only while bookmarks exist, and clearing empties the store', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const viewport = viewportDiv(m.container);
+      viewport.getBoundingClientRect = fakeRect;
+      const clearLabel = translations.en!['menu.clearBookmarks']!;
+
+      await openBodyMenu(m);
+      expect(menuLabels(m.container)).not.toContain(clearLabel);
+      await act(async () => { menuButton(m.container, translations.en!['menu.bookmarkCurrent']!)!.click(); });
+      expect(useViewBookmarks.getState().bookmarks).toHaveLength(1);
+
+      await openBodyMenu(m);
+      expect(menuLabels(m.container)).toContain('1. View 1');
+      expect(menuLabels(m.container)).toContain(clearLabel);
+      await act(async () => { menuButton(m.container, clearLabel)!.click(); });
+      expect(useViewBookmarks.getState().bookmarks).toEqual([]);
+      expect(localStorage.getItem('scenelab.viewBookmarks')).toBe('[]');
+
+      await openBodyMenu(m);
+      expect(menuLabels(m.container)).not.toContain('1. View 1');
+      expect(menuLabels(m.container)).not.toContain(clearLabel);
+    } finally {
+      await unmount(m);
+    }
+  });
+});
+
+// CW arcs (negative signed sweep) must preview as their own clockwise span,
+// not the CCW complement EllipseCurve falls back to. The arc entities are
+// built with the real engine and rendered by the component's real sketch
+// effect; the constructed EllipseCurve instances are captured by the
+// recording subclass in the three mock above.
+describe('ViewportCanvas arc preview sweep direction (rendered)', () => {
+  beforeEach(() => {
+    recordedCurves.length = 0;
+    clearToasts();
+    useStore.setState({
+      locale: 'en',
+      workspace: 'sketch',
+      sketchActive: true,
+      sketchTool: 'select',
+      sketchPlaneId: 'xy',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'top',
+      projection: 'perspective',
+      measureActive: false,
+      numericPrompt: null,
+    });
+  });
+
+  /** Recorded EllipseCurve instances that are NOT full circles. */
+  function recordedArcs(): THREE.EllipseCurve[] {
+    return recordedCurves
+      .filter((c): c is THREE.EllipseCurve => c instanceof THREE.EllipseCurve)
+      .filter((c) => !(c.aStartAngle === 0 && c.aEndAngle === Math.PI * 2));
+  }
+
+  it('renders a CW arc as the clockwise quarter from 0 to −π/2, not its 3/4 CCW complement', async () => {
+    const sketch = createSketch('xy');
+    addArc(sketch, 0, 0, 5, 0, -Math.PI / 2); // CW quarter: (5,0) → (0,−5)
+    addArc(sketch, 10, 0, 4, 0, Math.PI / 2); // CCW control: (14,0) → (10,4)
+    useStore.setState({ currentSketch: sketch });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const arcs = recordedArcs();
+      expect(arcs).toHaveLength(2); // Map insertion order: CW first, CCW second
+      const [cw, ccw] = arcs as [THREE.EllipseCurve, THREE.EllipseCurve];
+
+      // CW arc: sweep sign passed through as aClockwise, so the traced points
+      // walk 0 → −π/2 clockwise.
+      expect(cw.aClockwise).toBe(true);
+      const cwPts = cw.getPoints(64);
+      expect(cwPts[0]!.x).toBeCloseTo(5, 6);
+      expect(cwPts[0]!.y).toBeCloseTo(0, 6);
+      const cwMid = cwPts[32]!;
+      expect(cwMid.x).toBeCloseTo(5 * Math.cos(-Math.PI / 4), 5);
+      expect(cwMid.y).toBeCloseTo(5 * Math.sin(-Math.PI / 4), 5);
+      expect(cwPts[64]!.x).toBeCloseTo(0, 6);
+      expect(cwPts[64]!.y).toBeCloseTo(-5, 6);
+
+      // CCW control arc: unchanged behaviour (aClockwise stays false, quarter
+      // counterclockwise) — the fix must not invert positive sweeps.
+      expect(ccw.aClockwise).toBe(false);
+      const ccwMid = ccw.getPoints(64)[32]!;
+      expect(ccwMid.x).toBeCloseTo(10 + 4 * Math.cos(Math.PI / 4), 5);
+      expect(ccwMid.y).toBeCloseTo(4 * Math.sin(Math.PI / 4), 5);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('the mirror image of a CCW arc (which carries a negative sweep) previews as the same span', async () => {
+    // Mirroring an arc across a line flips the sweep sign by construction
+    // (lib/sketch/mirror swaps the reflected angles); e.g. the CCW quarter
+    // 0→π/2 mirrored across Y becomes π/2→0 — negative, previously rendered
+    // as the 3/4 complement.
+    const sketch = createSketch('xy');
+    addArc(sketch, 0, 0, 5, Math.PI / 2, 0); // negative sweep −π/2
+    useStore.setState({ currentSketch: sketch });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const [arc] = recordedArcs() as [THREE.EllipseCurve];
+      expect(arc).toBeDefined();
+      expect(arc.aClockwise).toBe(true);
+      const pts = arc.getPoints(64);
+      // Starts at the reflected start (0,5) and walks CLOCKWISE to (5,0) —
+      // the mirror image of the CCW quarter, not the long way round.
+      expect(pts[0]!.x).toBeCloseTo(0, 6);
+      expect(pts[0]!.y).toBeCloseTo(5, 6);
+      expect(pts[32]!.x).toBeCloseTo(5 * Math.cos(Math.PI / 4), 5);
+      expect(pts[32]!.y).toBeCloseTo(5 * Math.sin(Math.PI / 4), 5);
+      expect(pts[64]!.x).toBeCloseTo(5, 6);
+      expect(pts[64]!.y).toBeCloseTo(0, 6);
+    } finally {
+      await unmount(m);
+    }
+  });
+});
+
+// CAM toolpath overlay: the real generator produces the toolpath (through the
+// store's addCamOperation), the real component renders it. The overlay group
+// is reached through the scenes the fake renderer records.
+describe('ViewportCanvas CAM toolpath overlay (rendered)', () => {
+  beforeEach(() => {
+    clearToasts();
+    recordedControls.length = 0;
+    recordedScenes.length = 0;
+    useStore.setState({
+      locale: 'en',
+      workspace: 'cam',
+      sketchActive: false,
+      sketchTool: 'select',
+      sketchPlaneId: 'xy',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      selectedEdgeIds: [],
+      selectedFaceIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'iso',
+      projection: 'perspective',
+      measureActive: false,
+      visionSelectActive: false,
+      numericPrompt: null,
+      camSetup: defaultCamSetup(),
+      camToolpaths: {},
+      undoStack: [],
+      redoStack: [],
+    });
+  });
+
+  /** A box body + one ENABLED pocket op added through the real store action
+   * (which runs the real generator and caches the toolpath). */
+  function seedCamOperation(): string {
+    const box = createBox(20, 15, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], objectIds: [box.id] });
+    return useStore.getState().addCamOperation({
+      name: 'Pocket — Box',
+      enabled: true,
+      type: 'pocket',
+      bodyId: box.id,
+      toolId: 'em-6mm',
+      params: { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 10, stockBottom: -5 },
+    });
+  }
+
+  function lastScene(): THREE.Scene {
+    const scene = recordedScenes[recordedScenes.length - 1];
+    expect(scene).toBeDefined();
+    return scene as THREE.Scene;
+  }
+
+  function camGroup(): THREE.Group {
+    const group = lastScene().getObjectByName('cam-toolpaths');
+    expect(group).toBeDefined();
+    return group as THREE.Group;
+  }
+
+  it('builds cut polylines and rapid segments from the cached toolpath in the cam workspace', async () => {
+    const id = seedCamOperation();
+    const cache = useStore.getState().camToolpaths[id]!;
+    expect(cache.toolpath.points.length).toBeGreaterThan(4); // a real zigzag, not a stub
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const group = camGroup();
+      expect(group.visible).toBe(true);
+      const lines = group.children.filter((c): c is THREE.Line => c instanceof THREE.Line);
+      expect(lines.length).toBeGreaterThan(0);
+      // Cut polylines in the cut material (0x89b4fa, opaque-ish)…
+      const cuts = lines.filter((l) => l.name === 'cam-cut');
+      expect(cuts.length).toBeGreaterThan(0);
+      expect((cuts[0]!.material as THREE.LineBasicMaterial).color.getHex()).toBe(0x89b4fa);
+      // …and rapid/plunge segments in the dashed rapid material (0xf38ba8,
+      // depthTest false, drawn on top).
+      const moves = lines.filter((l) => l.name === 'cam-move');
+      expect(moves.length).toBeGreaterThan(0);
+      const rapidMat = moves[0]!.material as THREE.LineDashedMaterial;
+      expect(rapidMat.color.getHex()).toBe(0xf38ba8);
+      expect(rapidMat.depthTest).toBe(false);
+      // Contiguous cutting runs have ≥ 2 vertices each.
+      for (const cut of cuts) {
+        expect((cut.geometry.getAttribute('position') as THREE.BufferAttribute).count).toBeGreaterThanOrEqual(2);
+      }
+      // Points are world coordinates used VERBATIM: every cut vertex is a
+      // toolpath point (x, y, z) with no remap (Float32 attribute storage, so
+      // compare within float32 rounding).
+      const pts3 = cache.toolpath.points;
+      const isToolpathPoint = (x: number, y: number, z: number) =>
+        pts3.some((p) => Math.abs(p.x - x) < 1e-4 && Math.abs(p.y - y) < 1e-4 && Math.abs(p.z - z) < 1e-4);
+      for (const cut of cuts) {
+        const attr = cut.geometry.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < attr.count; i++) {
+          expect(isToolpathPoint(attr.getX(i), attr.getY(i), attr.getZ(i))).toBe(true);
+        }
+      }
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('renders no toolpath lines outside the cam workspace, and a switch rebuilds them', async () => {
+    seedCamOperation();
+    useStore.setState({ workspace: 'model' });
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      // Model workspace: the group exists but is empty and hidden.
+      let group = camGroup();
+      expect(group.children).toHaveLength(0);
+      expect(group.visible).toBe(false);
+
+      // Entering the cam workspace rebuilds the overlay from the same cache.
+      await act(async () => { useStore.setState({ workspace: 'cam' }); });
+      group = camGroup();
+      expect(group.visible).toBe(true);
+      expect(group.children.filter((c) => c instanceof THREE.Line).length).toBeGreaterThan(0);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('disposes line geometries on unmount', async () => {
+    seedCamOperation();
+    const m = await mount(createElement(ViewportCanvas));
+    const group = camGroup();
+    const lines = group.children.filter((c): c is THREE.Line => c instanceof THREE.Line);
+    expect(lines.length).toBeGreaterThan(0);
+    const spies = lines.map((l) => vi.spyOn(l.geometry, 'dispose'));
+    await unmount(m);
+    for (const spy of spies) expect(spy).toHaveBeenCalled();
+  });
+});
+
+// Camera sync regression (pre-v0.23 bug): renderScene used to copy the
+// INACTIVE camera's transform ONTO the active one, silently reverting every
+// orbit/zoom gesture on each rendered frame. The active camera (the one
+// OrbitControls drive — controls.object is re-seated on projection toggles)
+// must be the source of truth; a forced render must leave its position intact.
+describe('ViewportCanvas camera sync — active camera persists (rendered)', () => {
+  beforeEach(() => {
+    clearToasts();
+    recordedControls.length = 0;
+    useStore.setState({
+      locale: 'en',
+      workspace: 'model',
+      sketchActive: false,
+      sketchTool: 'select',
+      sketchPlaneId: 'xy',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      selectedEdgeIds: [],
+      selectedFaceIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'front',
+      projection: 'perspective',
+      measureActive: false,
+      visionSelectActive: false,
+      numericPrompt: null,
+    });
+  });
+
+  /** The controls of the CURRENT mount (the last created instance). */
+  function activeControls(): { object: THREE.Camera } {
+    const controls = recordedControls[recordedControls.length - 1];
+    expect(controls).toBeDefined();
+    return controls as { object: THREE.Camera };
+  }
+
+  it('keeps a perspective-mode gesture across a forced render and mirrors it to the ortho twin', async () => {
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const { object: cam } = activeControls();
+      expect(cam).toBeInstanceOf(THREE.PerspectiveCamera); // controls drive the ACTIVE camera
+      // The front view put both cameras at (0, 0, 10).
+      expect(cam.position.z).toBeCloseTo(10, 6);
+
+      // Simulated gesture (what OrbitControls does to its object on orbit/zoom).
+      await act(async () => { cam.position.set(2, 3, 4); });
+      // Force renderScene NOW (the capture service runs it synchronously) —
+      // the recorded-scene count must grow, proving the render (and therefore
+      // the camera sync inside it) really executed before the assertions.
+      const scenesBefore = recordedScenes.length;
+      await act(async () => { captureFreshCanvas(); });
+      expect(recordedScenes.length).toBeGreaterThan(scenesBefore);
+
+      // The gesture PERSISTS — the old inverted sync reset this to the stale
+      // ortho position (0, 0, 10) every rendered frame.
+      expect(cam.position.x).toBeCloseTo(2, 6);
+      expect(cam.position.y).toBeCloseTo(3, 6);
+      expect(cam.position.z).toBeCloseTo(4, 6);
+
+      // And it propagated to the inactive twin: switching projection puts
+      // OrbitControls on the ortho camera, which must already sit at the
+      // gestured position (the sync's whole purpose).
+      await act(async () => { useStore.setState({ projection: 'orthographic' }); });
+      const { object: ortho } = activeControls();
+      expect(ortho).toBeInstanceOf(THREE.OrthographicCamera);
+      expect(ortho.position.x).toBeCloseTo(2, 6);
+      expect(ortho.position.y).toBeCloseTo(3, 6);
+      expect(ortho.position.z).toBeCloseTo(4, 6);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('keeps an orthographic-mode gesture across a forced render', async () => {
+    useStore.setState({ projection: 'orthographic' });
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const { object: ortho } = activeControls();
+      expect(ortho).toBeInstanceOf(THREE.OrthographicCamera);
+      expect(ortho.position.z).toBeCloseTo(10, 6); // front view, synced at mount
+
+      await act(async () => { ortho.position.set(5, 6, 7); });
+      await act(async () => { captureFreshCanvas(); });
+
+      // PERSISTS — the old inverted sync overwrote the active ortho camera
+      // with the stale perspective twin (0, 0, 10) every rendered frame.
+      expect(ortho.position.x).toBeCloseTo(5, 6);
+      expect(ortho.position.y).toBeCloseTo(6, 6);
+      expect(ortho.position.z).toBeCloseTo(7, 6);
+    } finally {
       await unmount(m);
     }
   });

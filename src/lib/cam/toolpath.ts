@@ -1,6 +1,12 @@
 import type { Toolpath, ToolpathPoint, CAMParameters, ToolDefinition } from './types';
 import type { SolidBody, Vec3 } from '../geometry/types';
-import { convexHull2D } from '../geometry/convexHull';
+import {
+  topSilhouette,
+  offsetPolygon,
+  scanlineIntervals,
+  subtractIntervals,
+  type Point2,
+} from './silhouette';
 
 let nextId = 1;
 function genId(prefix: string): string {
@@ -8,19 +14,39 @@ function genId(prefix: string): string {
 }
 
 /**
- * Ordered move recorder. Toolpaths interleave rapids and cuts (rapid → plunge →
- * cut → retract → …); keeping a single ordered list preserves that sequence so
- * the emitted G-code matches the real tool motion. rapidMoves/cuttingMoves are
- * derived by filtering, for any consumer that wants them split.
+ * Axis convention: every point is stored in SCENE space with y = height above
+ * the table (machine Z). Generators plan in the body's XZ plane — (u, v) =
+ * (body x, body z) — and emit {x: u, y: stockTop − depth, z: v}, so the plunge
+ * axis is always y and renderers never remap. The G-code post-processor maps
+ * machine X = x, Y = z, Z = y.
  */
 class MoveList {
   readonly points: ToolpathPoint[] = [];
+  // Explicit field assignment (not a constructor parameter property) — the
+  // project compiles with erasableSyntaxOnly.
+  private readonly params: CAMParameters;
+  constructor(params: CAMParameters) {
+    this.params = params;
+  }
+
+  /** G0 rapid positioning move. */
   rapid(p: { x: number; y: number; z: number }): void {
     this.points.push({ ...p, rapid: true });
   }
+
+  /** G1 cut at the operation feed rate (or a per-move override). */
   cut(p: { x: number; y: number; z: number; feedRate?: number }): void {
     this.points.push({ ...p, rapid: false });
   }
+
+  /**
+   * G1 plunge — a depth-entering move that always carries the plunge feed
+   * rate, so vertical entries never run at the (faster) cut feed.
+   */
+  plunge(p: { x: number; y: number; z: number }): void {
+    this.points.push({ ...p, rapid: false, feedRate: this.params.plungeRate });
+  }
+
   get rapidMoves(): ToolpathPoint[] {
     return this.points.filter((m) => m.rapid);
   }
@@ -29,51 +55,180 @@ class MoveList {
   }
 }
 
-/** Generate a pocket toolpath for a rectangular area */
+/** Safe traverse height above the stock. */
+function safeY(params: CAMParameters): number {
+  return params.stockTop + 5;
+}
+
+/** Cut levels from stockTop down to stockBottom, one depthOfCut at a time. */
+export function depthLevels(params: CAMParameters): number[] {
+  const total = params.stockTop - params.stockBottom;
+  if (total <= 0) return [];
+  const doc = Math.max(params.depthOfCut, 0.01);
+  const n = Math.max(1, Math.ceil(total / doc - 1e-9));
+  const levels: number[] = [];
+  for (let i = 1; i <= n; i++) levels.push(params.stockTop - Math.min(i * doc, total));
+  return levels;
+}
+
+/** Row positions from vMin to vMax at ≤ stepover, always ending ON vMax. */
+function rowPositions(vMin: number, vMax: number, stepover: number): number[] {
+  const rows: number[] = [];
+  if (vMax <= vMin + 1e-9) return vMin <= vMax ? [vMin] : [];
+  for (let v = vMin; v <= vMax + 1e-9; v += stepover) rows.push(Math.min(v, vMax));
+  if (rows.length === 0 || rows[rows.length - 1]! < vMax - 1e-9) rows.push(vMax);
+  return rows.filter((v, i) => i === 0 || Math.abs(v - rows[i - 1]!) > 1e-6);
+}
+
+/**
+ * Linear ramp entry: descend `descend` over the longest of 2·tool diameter or
+ * a 15° ramp along the first row, instead of plunging straight down. Returns
+ * the u advanced past the ramp (row end when the row is shorter than the
+ * ideal ramp length).
+ */
+function rampLength(tool: ToolDefinition, descend: number, rowLength: number): number {
+  const ideal = Math.max(2 * tool.diameter, descend / Math.tan((15 * Math.PI) / 180));
+  return Math.min(ideal, Math.max(rowLength, 0));
+}
+
+export interface PocketOptions {
+  /** Clip the raster to this body's top-view silhouette instead of raw bounds. */
+  body?: SolidBody;
+  /** Finish stock left on walls (mm); defaults to params.allowance. */
+  allowance?: number;
+}
+
+/** Generate a pocket toolpath: zigzag raster cleared level by level. */
 export function generatePocketToolpath(
   bounds: { min: Vec3; max: Vec3 },
   tool: ToolDefinition,
   params: CAMParameters,
+  options: PocketOptions = {},
 ): Toolpath {
-  const m = new MoveList();
+  const m = new MoveList(params);
+  const r = tool.diameter / 2;
+  const allowance = options.allowance ?? params.allowance ?? 0;
+  const sover = Math.max(0.1, Math.min(params.stepover, tool.diameter * 0.4));
+  const safe = safeY(params);
 
-  const { min, max } = bounds;
-  const stepover = Math.min(params.stepover, tool.diameter * 0.4);
-  const safeZ = params.stockTop + 5;
-  const doc = Math.max(params.depthOfCut, 0.01); // prevent infinite loop
-
-  let currentZ = params.stockTop;
-
-  while (currentZ > params.stockBottom) {
-    currentZ = Math.max(currentZ - doc, params.stockBottom);
-
-    // Zigzag pattern
-    let y = min.y + tool.diameter / 2;
-    let forward = true;
-
-    while (y <= max.y - tool.diameter / 2) {
-      if (forward) {
-        // Rapid to start, plunge, cut across
-        m.rapid({ x: min.x + tool.diameter / 2, y, z: safeZ });
-        m.cut({ x: min.x + tool.diameter / 2, y, z: currentZ });
-        m.cut({ x: max.x - tool.diameter / 2, y, z: currentZ });
-      } else {
-        m.rapid({ x: max.x - tool.diameter / 2, y, z: safeZ });
-        m.cut({ x: max.x - tool.diameter / 2, y, z: currentZ });
-        m.cut({ x: min.x + tool.diameter / 2, y, z: currentZ });
-      }
-
-      forward = !forward;
-      y += stepover;
+  // Raster region: the silhouette inset by the cutter radius (+ allowance),
+  // with islands grown by the same amount so the tool stays clear of them.
+  let outer: Point2[] | null = null;
+  let islands: Point2[][] = [];
+  if (options.body) {
+    const sil = topSilhouette(options.body);
+    if (sil) {
+      outer = offsetPolygon(sil.outer.points, -(r + allowance));
+      islands = sil.islands
+        .map((l) => offsetPolygon(l.points, r + allowance))
+        .filter((p): p is Point2[] => p !== null);
     }
+  }
+  if (!outer || outer.length < 3) {
+    if (options.body) {
+      // The tool does NOT fit the silhouette (inset failed or degenerated).
+      // Falling back to the bounding-box raster would mill the empty regions
+      // of an L/C-shaped part — return an EMPTY toolpath instead; the panel
+      // shows the op with no time and the user can pick a smaller tool.
+      return {
+        id: genId('tp'),
+        name: `Pocket ${bounds.min.x.toFixed(0)},${bounds.min.z.toFixed(0)} (tool too large)`,
+        operation: 'pocket',
+        tool,
+        params,
+        points: [],
+        rapidMoves: [],
+        cuttingMoves: [],
+      };
+    }
+    const inset = r + allowance;
+    let u0 = bounds.min.x + inset;
+    let u1 = bounds.max.x - inset;
+    let v0 = bounds.min.z + inset;
+    let v1 = bounds.max.z - inset;
+    if (u1 < u0) u0 = u1 = (bounds.min.x + bounds.max.x) / 2;
+    if (v1 < v0) v0 = v1 = (bounds.min.z + bounds.max.z) / 2;
+    // Degenerate axes are padded to 4 µm so a scanline row still falls
+    // strictly inside the polygon (rows are inset 1 µm from the extremes).
+    const pad = 4e-6;
+    if (u1 - u0 < 1e-9 && v1 - v0 < 1e-9) {
+      // Region smaller than the tool: single point.
+      outer = [{ u: u0, v: v0 }, { u: u0 + pad, v: v0 }, { u: u0, v: v0 + pad }];
+    } else if (v1 - v0 < 1e-9) {
+      outer = [
+        { u: u0, v: v0 },
+        { u: u1, v: v0 },
+        { u: u1, v: v0 + pad },
+        { u: u0, v: v0 + pad },
+      ];
+    } else {
+      outer = [
+        { u: u0, v: v0 },
+        { u: u1, v: v0 },
+        { u: u1, v: v1 },
+        { u: u0, v: v1 },
+      ];
+    }
+  }
 
-    // Retract
-    m.rapid({ x: min.x, y: min.y, z: safeZ });
+  const vMin = Math.min(...outer.map((p) => p.v));
+  const vMax = Math.max(...outer.map((p) => p.v));
+  // Inset rows by 1 µm: a scanline exactly on an apex vertex of the polygon
+  // finds no crossings, which would drop the clamped first/last rows.
+  const rows = rowPositions(vMin + 1e-6, vMax - 1e-6, sover);
+  const levels = depthLevels(params);
+
+  let forward = true;
+  for (let li = 0; li < levels.length; li++) {
+    const yLevel = levels[li]!;
+    const yPrev = li === 0 ? params.stockTop : levels[li - 1]!;
+    // Rapid descent stops 1 mm above the previously cut surface; the very
+    // first entry of the program ramps instead of plunging.
+    const feedPlane = li === 0 ? params.stockTop + 1 : yPrev + 1;
+    let firstEntry = li === 0;
+
+    for (const v of rows) {
+      const base = scanlineIntervals(outer, v);
+      const blocked = islands.flatMap((poly) => scanlineIntervals(poly, v));
+      const intervals = subtractIntervals(base, blocked);
+
+      for (const [ua, ub] of intervals) {
+        const uA = forward ? ua : ub;
+        const uB = forward ? ub : ua;
+        // Position at safe height, drop to the feed plane, enter, cut across,
+        // retract vertically — never a diagonal rapid below safe height.
+        m.rapid({ x: uA, y: safe, z: v });
+
+        if (firstEntry) {
+          // Rapid to the FEED PLANE, not the stock surface — a G0 touching
+          // the exact estimated surface crashes when the estimate is a hair
+          // high; the ramp below starts from here.
+          m.rapid({ x: uA, y: feedPlane, z: v });
+          const ramp = rampLength(tool, yPrev - yLevel, Math.abs(uB - uA));
+          if (ramp > 1e-6) {
+            const dir = Math.sign(uB - uA) || 1;
+            const uRamp = uA + dir * ramp;
+            m.cut({ x: uRamp, y: yLevel, z: v });
+            if (Math.abs(uB - uRamp) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
+          } else {
+            m.plunge({ x: uA, y: yLevel, z: v });
+            if (Math.abs(uB - uA) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
+          }
+          firstEntry = false;
+        } else {
+          m.rapid({ x: uA, y: feedPlane, z: v });
+          m.plunge({ x: uA, y: yLevel, z: v });
+          if (Math.abs(uB - uA) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
+        }
+        m.rapid({ x: uB, y: safe, z: v });
+        forward = !forward;
+      }
+    }
   }
 
   return {
     id: genId('tp'),
-    name: `Pocket ${bounds.min.x.toFixed(0)},${bounds.min.y.toFixed(0)}`,
+    name: `Pocket ${bounds.min.x.toFixed(0)},${bounds.min.z.toFixed(0)}`,
     operation: 'pocket',
     tool,
     params,
@@ -83,54 +238,62 @@ export function generatePocketToolpath(
   };
 }
 
-/** Generate a contour toolpath around a body's outline */
+export interface ContourOptions {
+  /** Finish stock left on the wall (mm); defaults to params.allowance. */
+  allowance?: number;
+}
+
+/** Generate a contour toolpath around a body's top-view silhouette. */
 export function generateContourToolpath(
   body: SolidBody,
   tool: ToolDefinition,
   params: CAMParameters,
+  options: ContourOptions = {},
 ): Toolpath {
-  const m = new MoveList();
+  const m = new MoveList(params);
+  const safe = safeY(params);
 
-  const safeZ = params.stockTop + 5;
+  const sil = topSilhouette(body);
+  const empty = {
+    id: genId('tp'),
+    name: `Contour ${body.name}`,
+    operation: 'contour' as const,
+    tool,
+    params,
+    points: [],
+    rapidMoves: [],
+    cuttingMoves: [],
+  };
+  if (!sil) return empty;
 
-  // Get outline from top view (XY plane)
-  const outline = getOutlineXY(body);
-
-  if (outline.length < 2) {
-    return {
-      id: genId('tp'),
-      name: `Contour ${body.name}`,
-      operation: 'contour',
-      tool,
-      params,
-      points: [],
-      rapidMoves: [],
-      cuttingMoves: [],
-    };
+  // Cutter compensation: outside the outer loop, inside the islands.
+  const offset = tool.diameter / 2 + (options.allowance ?? params.allowance ?? 0);
+  const paths: Point2[][] = [];
+  const outerPath = offsetPolygon(sil.outer.points, offset);
+  if (outerPath) paths.push(outerPath);
+  for (const island of sil.islands) {
+    const p = offsetPolygon(island.points, -offset);
+    if (p) paths.push(p); // null ⇒ tool cannot fit the hole; skip it
   }
+  if (paths.length === 0) return empty;
 
-  let currentZ = params.stockTop;
-  const contourDoc = Math.max(params.depthOfCut, 0.01);
-
-  while (currentZ > params.stockBottom) {
-    currentZ = Math.max(currentZ - contourDoc, params.stockBottom);
-
-    // Rapid to start, plunge
-    const start = outline[0]!;
-    m.rapid({ x: start.x, y: start.y, z: safeZ });
-    m.cut({ x: start.x, y: start.y, z: currentZ });
-
-    // Follow outline
-    for (let i = 1; i < outline.length; i++) {
-      const pt = outline[i]!;
-      m.cut({ x: pt.x, y: pt.y, z: currentZ });
+  const levels = depthLevels(params);
+  for (let li = 0; li < levels.length; li++) {
+    const yLevel = levels[li]!;
+    const yPrev = li === 0 ? params.stockTop : levels[li - 1]!;
+    const feedPlane = li === 0 ? params.stockTop + 1 : yPrev + 1;
+    for (const path of paths) {
+      const start = path[0]!;
+      m.rapid({ x: start.u, y: safe, z: start.v });
+      m.rapid({ x: start.u, y: feedPlane, z: start.v });
+      m.plunge({ x: start.u, y: yLevel, z: start.v });
+      for (let i = 1; i < path.length; i++) {
+        const pt = path[i]!;
+        m.cut({ x: pt.u, y: yLevel, z: pt.v });
+      }
+      m.cut({ x: start.u, y: yLevel, z: start.v }); // close the loop
+      m.rapid({ x: start.u, y: safe, z: start.v });
     }
-
-    // Close loop
-    m.cut({ x: start.x, y: start.y, z: currentZ });
-
-    // Retract
-    m.rapid({ x: start.x, y: start.y, z: safeZ });
   }
 
   return {
@@ -145,28 +308,38 @@ export function generateContourToolpath(
   };
 }
 
-/** Generate drill toolpath for a list of hole positions */
+/**
+ * A drilling target. Plan coordinates are (x, z) — the silhouette plane. The
+ * legacy `y` spelling is still accepted so old call sites keep compiling.
+ */
+export interface DrillHole {
+  x: number;
+  z?: number;
+  /** Legacy alias for z (scene-y era call sites). */
+  y?: number;
+  /** Hole depth measured down from the stock top. */
+  depth: number;
+}
+
+/** Generate drill toolpath for a list of hole positions. */
 export function generateDrillToolpath(
-  holes: Array<{ x: number; y: number; depth: number }>,
+  holes: DrillHole[],
   tool: ToolDefinition,
   params: CAMParameters,
 ): Toolpath {
-  const m = new MoveList();
-
-  const safeZ = params.stockTop + 5;
-  const retractZ = params.stockTop + 2;
+  const m = new MoveList(params);
+  const safe = safeY(params);
+  const retract = params.stockTop + 2;
 
   for (const hole of holes) {
-    // Rapid to hole position
-    m.rapid({ x: hole.x, y: hole.y, z: safeZ });
-    // Plunge: depth is measured down from the stock surface, not absolute Z.
-    m.cut({ x: hole.x, y: hole.y, z: params.stockTop - hole.depth });
-    // Retract
-    m.rapid({ x: hole.x, y: hole.y, z: retractZ });
+    const v = hole.z ?? hole.y ?? 0;
+    // Position at safe height, drop to the retract plane, plunge, retract.
+    m.rapid({ x: hole.x, y: safe, z: v });
+    m.rapid({ x: hole.x, y: retract, z: v });
+    // Depth is measured down from the stock surface, not absolute Z.
+    m.plunge({ x: hole.x, y: params.stockTop - hole.depth, z: v });
+    m.rapid({ x: hole.x, y: safe, z: v });
   }
-
-  // Final retract
-  m.rapid({ x: 0, y: 0, z: safeZ });
 
   return {
     id: genId('tp'),
@@ -180,38 +353,51 @@ export function generateDrillToolpath(
   };
 }
 
-/** Generate face milling toolpath */
+/** Generate face milling toolpath: full-width zigzag, level by level. */
 export function generateFaceToolpath(
   bounds: { min: Vec3; max: Vec3 },
   tool: ToolDefinition,
   params: CAMParameters,
 ): Toolpath {
-  const m = new MoveList();
+  const m = new MoveList(params);
+  const safe = safeY(params);
+  const sover = Math.max(0.1, Math.min(params.stepover, tool.diameter * 0.75));
 
-  const { min, max } = bounds;
-  const stepover = tool.diameter * 0.6;
-  const safeZ = params.stockTop + 5;
-  const faceZ = params.stockTop - params.depthOfCut;
+  // Overshoot the stock edges by the tool diameter so the face is fully cut.
+  const uMin = bounds.min.x - tool.diameter;
+  const uMax = bounds.max.x + tool.diameter;
+  const rows = rowPositions(bounds.min.z, bounds.max.z, sover);
+  const levels = depthLevels(params);
 
-  let y = min.y;
   let forward = true;
+  for (let li = 0; li < levels.length; li++) {
+    const yLevel = levels[li]!;
+    const yPrev = li === 0 ? params.stockTop : levels[li - 1]!;
+    const feedPlane = li === 0 ? params.stockTop + 1 : yPrev + 1;
+    let firstEntry = li === 0;
 
-  while (y <= max.y) {
-    if (forward) {
-      m.rapid({ x: min.x - tool.diameter, y, z: safeZ });
-      m.cut({ x: min.x - tool.diameter, y, z: faceZ });
-      m.cut({ x: max.x + tool.diameter, y, z: faceZ });
-    } else {
-      m.rapid({ x: max.x + tool.diameter, y, z: safeZ });
-      m.cut({ x: max.x + tool.diameter, y, z: faceZ });
-      m.cut({ x: min.x - tool.diameter, y, z: faceZ });
+    for (const v of rows) {
+      const uA = forward ? uMin : uMax;
+      const uB = forward ? uMax : uMin;
+      m.rapid({ x: uA, y: safe, z: v });
+
+      if (firstEntry) {
+        // Feed plane on the first entry too (never rapid onto the surface).
+        m.rapid({ x: uA, y: feedPlane, z: v });
+        const ramp = rampLength(tool, yPrev - yLevel, Math.abs(uB - uA));
+        const uRamp = uA + Math.sign(uB - uA) * ramp;
+        m.cut({ x: uRamp, y: yLevel, z: v });
+        m.cut({ x: uB, y: yLevel, z: v });
+        firstEntry = false;
+      } else {
+        m.rapid({ x: uA, y: feedPlane, z: v });
+        m.plunge({ x: uA, y: yLevel, z: v });
+        m.cut({ x: uB, y: yLevel, z: v });
+      }
+      m.rapid({ x: uB, y: safe, z: v });
+      forward = !forward;
     }
-
-    forward = !forward;
-    y += stepover;
   }
-
-  m.rapid({ x: 0, y: 0, z: safeZ });
 
   return {
     id: genId('tp'),
@@ -223,29 +409,4 @@ export function generateFaceToolpath(
     rapidMoves: m.rapidMoves,
     cuttingMoves: m.cuttingMoves,
   };
-}
-
-function getOutlineXY(body: SolidBody): Array<{ x: number; y: number }> {
-  // Simple outline extraction: collect all unique XY points from edges
-  const points: Array<{ x: number; y: number }> = [];
-  const seen = new Set<string>();
-
-  for (const edge of body.edges) {
-    const key1 = `${edge.start.x.toFixed(4)},${edge.start.y.toFixed(4)}`;
-    const key2 = `${edge.end.x.toFixed(4)},${edge.end.y.toFixed(4)}`;
-
-    if (!seen.has(key1)) {
-      seen.add(key1);
-      points.push({ x: edge.start.x, y: edge.start.y });
-    }
-    if (!seen.has(key2)) {
-      seen.add(key2);
-      points.push({ x: edge.end.x, y: edge.end.y });
-    }
-  }
-
-  // Order into the outer outline via a 2D convex hull. Sorting by angle from
-  // the centroid (the old approach) self-intersects for non-convex point sets;
-  // the hull is always a simple, non-crossing closed loop to cut around.
-  return convexHull2D(points);
 }

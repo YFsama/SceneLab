@@ -1,7 +1,7 @@
 import { useStore } from '../store/app';
 import { confirm } from './confirm';
 import { translations } from './i18n';
-import { serializeProject, saveToFile, downloadFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, readFileAsText } from './io';
+import { serializeProject, saveToFile, downloadFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, readFileAsText } from './io';
 import { showToast } from './toast';
 import { isTauri, callNative } from './runtime';
 
@@ -22,7 +22,7 @@ export async function openProjectFromFile(): Promise<void> {
       const [json, name] = picked;
       const project = loadFromFile(json);
       useStore.getState().loadProject(
-        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project),
+        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project), deserializeCam(project),
       );
       showToast(`${tr('toast.loaded')} "${name}"`, 'success');
       return;
@@ -40,7 +40,7 @@ export async function openProjectFromFile(): Promise<void> {
     try {
       const project = loadFromFile(await readFileAsText(file));
       useStore.getState().loadProject(
-        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project),
+        deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project), deserializeCam(project),
       );
       showToast(`${tr('toast.loaded')} "${project.name}"`, 'success');
     } catch (err) {
@@ -60,7 +60,7 @@ export async function saveProjectToFile(): Promise<void> {
         planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
       }, {
         sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes,
-      });
+      }, s.camSetup);
     const json = saveToFile(project);
     if (isTauri()) {
       const savedPath = (await callNative('save_project_file', {

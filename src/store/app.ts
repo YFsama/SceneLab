@@ -7,7 +7,10 @@ import { planeNormal as sketchPlaneNormal } from '../lib/sketch/frames';
 import { trimSketchEntityAt, extendSketchEntityTo } from '../lib/sketch/trim';
 import type { Feature } from '../lib/features/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature, createRevolveFeature, createSweepFeature, createLoftFeature, createFilletFeature, createChamferFeature, createShellFeature, createHoleFeature, createScaleFeature, createLinearArrayFeature, createCircularArrayFeature, createMirrorFeature, drillHoleInBody, topFaceHolePlacement, extrudeSketchBody, cutBodyWithCutter } from '../lib/features/tree';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, type SerializedReferenceGeometry, type SerializedDrawing } from '../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, type SerializedReferenceGeometry, type SerializedDrawing } from '../lib/io';
+import { generateOperationToolpath, defaultCamSetup, getTool, estimateMachiningTime } from '../lib/cam';
+import type { CAMSetup, CAMOperation } from '../lib/cam';
+import type { CAMParameters, Toolpath } from '../lib/cam';
 import type { SolidBody, PlaneDefinition, Vec3 } from '../lib/geometry/types';
 import type { MeasureFacePick, MeasureMode } from '../lib/geometry/measure';
 import { standardPlanes, planeFromFace, offsetPlane, midplaneBetweenFaces, axisFromPlanes, axisFromPoints, makePoint, midpoint, pointAtAxisPlaneIntersection, makeCoordinateSystem, type AxisDefinition, type PointDefinition, type CoordinateSystemDefinition, type AnnotationDefinition } from '../lib/geometry/referenceGeometry';
@@ -44,6 +47,46 @@ function withUniqueNames<T extends { name: string }>(bodies: T[], existing: stri
     return name === b.name ? b : { ...b, name };
   });
 }
+
+// --- CAM setup (cam workspace) -------------------------------------------------
+// The CAM job lives in the store like the drawing sheet: pure data + a derived
+// toolpath cache. Ids follow the drawingNotes counter pattern (camop_1, camop_2…).
+
+let nextCamOpId = 1;
+
+/** Session-unique CAM operation id (camop_1, camop_2, …). */
+export function makeCamOpId(): string {
+  return `camop_${nextCamOpId++}`;
+}
+
+/** Bump the counter past every camop_N already present (after loadProject) so
+ * freshly added operations can never collide with restored ones. */
+function seedCamOpCounter(ops: CAMOperation[]): void {
+  for (const op of ops) {
+    const m = /^camop_(\d+)$/.exec(op.id);
+    if (m) nextCamOpId = Math.max(nextCamOpId, Number(m[1]) + 1);
+  }
+}
+
+/**
+ * Cached generation result for one CAM operation: the full Toolpath (points
+ * are SCENE coordinates, y = height — rendered verbatim; the whole object is
+ * what the G-code exporter consumes) plus the machining-time estimate.
+ */
+export interface CamToolpathCache {
+  toolpath: Toolpath;
+  /** estimateMachiningTime(toolpath), minutes. */
+  timeMin: number;
+}
+
+/**
+ * "Deep-ish" patch for updateCamOperation: top-level fields replace, params
+ * merge key-by-key, holes replace wholesale.
+ */
+export type CamOperationPatch = Partial<Omit<CAMOperation, 'id' | 'params' | 'holes'>> & {
+  params?: Partial<CAMParameters>;
+  holes?: CAMOperation['holes'];
+};
 import {
   createBox,
   createCylinder,
@@ -77,6 +120,10 @@ interface HistorySnapshot {
   drawingSectionAxis: DrawingSectionAxis;
   drawingDetails: DrawingDetail[];
   drawingNotes: DrawingNote[];
+  /** CAM setup + the derived toolpath cache (restored together so undo of an
+   * op edit also rewinds its generated toolpath to the pre-edit generation). */
+  camSetup: CAMSetup;
+  camToolpaths: Record<string, CamToolpathCache>;
   /** Deep clone — sketch entities are mutated in place while sketching, so a
    * bare reference would not freeze the snapshot's state. */
   currentSketch: Sketch | null;
@@ -220,7 +267,13 @@ interface AppState {
   featureVersion: number;
   addFeature: (feature: Feature) => void;
   removeFeature: (id: string) => void;
-  updateFeature: (id: string, mutator: (f: Feature) => Feature) => void;
+  /**
+   * Edit a feature in place via a pure mutator and recompute. Fillet/chamfer
+   * radius/distance edits run through the same maxFilletRadius/maxChamferDistance
+   * gate as the apply actions: an oversize (or no-treatable-edges) edit is
+   * refused — false, nothing mutated, no undo entry, limit toast shown.
+   */
+  updateFeature: (id: string, mutator: (f: Feature) => Feature) => boolean;
   /**
    * Reorder a feature in the timeline (Fusion drag-reorder). Dependency order
    * is enforced; returns false and pushes no undo entry for an illegal or
@@ -385,7 +438,7 @@ interface AppState {
   arrangeScene: (bodies: SolidBody[]) => void;
   /** Start a fresh, clean, untitled document (empties everything). */
   newProject: () => void;
-  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry, drawing?: SerializedDrawing) => void;
+  loadProject: (features: Feature[], name?: string, directBodies?: SolidBody[], referenceGeometry?: SerializedReferenceGeometry, drawing?: SerializedDrawing, cam?: CAMSetup) => void;
 
   // Reference geometry — datum planes (SolidWorks Front/Top/Right + custom).
   planes: PlaneDefinition[];
@@ -446,6 +499,25 @@ interface AppState {
   addDrawingNote: (n: DrawingNote) => void;
   updateDrawingNote: (id: string, text: string) => void;
   removeDrawingNote: (id: string) => void;
+
+  // CAM setup state (cam workspace): stock + ordered operations, covered by
+  // undo/redo and serialized with the project (see deserializeCam). The
+  // toolpath cache is DERIVED — never serialized, rebuilt by
+  // regenerateCamToolpaths / on load; regenerate itself is not undoable.
+  camSetup: CAMSetup;
+  /** op id → generated toolpath + time estimate (enabled, resolvable ops only). */
+  camToolpaths: Record<string, CamToolpathCache>;
+  /** Add an operation (id assigned: camop_N); returns the id. Also generates
+   * and caches its toolpath when body + tool resolve. */
+  addCamOperation: (op: Omit<CAMOperation, 'id'>) => string;
+  removeCamOperation: (id: string) => void;
+  /** Patch an operation (top-level fields replace, params merge) and refresh
+   * its cached toolpath. */
+  updateCamOperation: (id: string, patch: CamOperationPatch) => void;
+  setCamStock: (stock: CAMSetup['stock']) => void;
+  /** Recompute the toolpath cache for every enabled op with a resolvable body
+   * and tool. Pure recompute of derived data — no undo entry, no dirty flag. */
+  regenerateCamToolpaths: () => void;
 
   /** Place a body into a coordinate system's frame (rigid transform), replacing it; null if missing. */
   placeBodyInCoordinateSystem: (bodyId: string, csId: string) => string | null;
@@ -705,6 +777,8 @@ export const useStore = create<AppState>((set, get) => {
         drawingSectionAxis: s.drawingSectionAxis,
         drawingDetails: s.drawingDetails,
         drawingNotes: s.drawingNotes,
+        camSetup: s.camSetup,
+        camToolpaths: s.camToolpaths,
         currentSketch: s.currentSketch ? cloneSketch(s.currentSketch) : null,
         sketchUndoStack: s.sketchUndoStack,
         sketchRedoStack: s.sketchRedoStack,
@@ -730,6 +804,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: snap.drawingSectionAxis,
       drawingDetails: snap.drawingDetails,
       drawingNotes: snap.drawingNotes,
+      camSetup: snap.camSetup,
+      camToolpaths: snap.camToolpaths,
       currentSketch: snap.currentSketch,
       sketchUndoStack: snap.sketchUndoStack,
       sketchRedoStack: snap.sketchRedoStack,
@@ -746,6 +822,34 @@ export const useStore = create<AppState>((set, get) => {
   const pushSketchUndo = () => {
     const s = get().currentSketch;
     if (s) set((st) => ({ sketchUndoStack: [...st.sketchUndoStack, cloneSketch(s)].slice(-50), sketchRedoStack: [] }));
+  };
+
+  /** Generate + cache one operation's toolpath, or null when the op is
+   * disabled or its body/tool cannot be resolved (bodies = the RENDER list —
+   * feature-tree bodies + direct bodies — the same list the CAM panel's body
+   * selector offers). A malformed op degrades to "no cache", never a throw. */
+  const resolveCamToolpath = (op: CAMOperation): CamToolpathCache | null => {
+    if (!op.enabled) return null;
+    const body = get().bodies.find((b) => b.id === op.bodyId);
+    const tool = getTool(op.toolId);
+    if (!body || !tool) return null;
+    try {
+      const toolpath = generateOperationToolpath(op, body, tool);
+      return { toolpath, timeMin: estimateMachiningTime(toolpath) };
+    } catch {
+      return null;
+    }
+  };
+
+  /** Rebuild the whole toolpath cache from the current setup (drops entries of
+   * removed/unresolvable ops). */
+  const recomputeCamToolpaths = (): Record<string, CamToolpathCache> => {
+    const next: Record<string, CamToolpathCache> = {};
+    for (const op of get().camSetup.operations) {
+      const cache = resolveCamToolpath(op);
+      if (cache) next[op.id] = cache;
+    }
+    return next;
   };
 
   /** Store-side translation lookup (the same keys useT() resolves in React).
@@ -786,6 +890,7 @@ export const useStore = create<AppState>((set, get) => {
     drawingSectionAxis: DrawingSectionAxis;
     drawingDetails: DrawingDetail[];
     drawingNotes: DrawingNote[];
+    camSetup: CAMSetup;
   };
   let fingerprintMemo: { keys: FingerprintKeys; value: string } | null = null;
 
@@ -819,6 +924,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: s.drawingSectionAxis,
       drawingDetails: s.drawingDetails,
       drawingNotes: s.drawingNotes,
+      camSetup: s.camSetup,
     };
     const prev = fingerprintMemo;
     if (
@@ -836,13 +942,14 @@ export const useStore = create<AppState>((set, get) => {
       prev.keys.annotations === keys.annotations &&
       prev.keys.drawingSectionAxis === keys.drawingSectionAxis &&
       prev.keys.drawingDetails === keys.drawingDetails &&
-      prev.keys.drawingNotes === keys.drawingNotes
+      prev.keys.drawingNotes === keys.drawingNotes &&
+      prev.keys.camSetup === keys.camSetup
     ) {
       return prev.value;
     }
     const p = serializeProject(s.projectName, features, [], s.directBodies, {
       planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
-    }, { sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes });
+    }, { sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes }, s.camSetup);
     const value = JSON.stringify({ ...p, metadata: undefined });
     fingerprintMemo = { keys, value };
     return value;
@@ -923,6 +1030,73 @@ export const useStore = create<AppState>((set, get) => {
     set((s) => ({ undoStack: s.undoStack.slice(0, -1), redoStack: savedRedo, featureVersion: s.featureVersion + 1 }));
     recombine();
     showToast(toastText(toastKey, { msg }), 'warning');
+  };
+
+  /**
+   * First parent feature that produced a body — the SAME resolution the tree's
+   * evaluators use (FeatureTree's private firstParentBody): parent ids in
+   * order, first one whose result has a body. Read here outside evaluation,
+   * from the last recompute's results, so a pre-check sees exactly the body
+   * the evaluator would see for an unchanged upstream (recompute memoizes
+   * parent results to those same objects).
+   */
+  const firstParentResultBody = (tree: FeatureTree, parentIds: string[]): SolidBody | undefined => {
+    for (const id of parentIds) {
+      const body = tree.getResult(id)?.bodies[0];
+      if (body) return body;
+    }
+    return undefined;
+  };
+
+  /**
+   * Pass-#28 size gate, extended to PARAM edits: updateFeature can change an
+   * EXISTING fillet/chamfer feature's radius/distance (ParametersPanel, the AI
+   * update_feature tool), which the apply-time guards never re-check — an
+   * oversize edit could still mangle the body and report success. The honest
+   * pre-check measures the next value against maxFilletRadius/maxChamferDistance
+   * on the parent body with the feature's stored edge selection (the apply
+   * paths' exact rule). Only edits that actually change the gated value
+   * (radius/distance or the edge selection) are checked — a rename or
+   * suppress-toggle of a legacy oversize feature must not be held hostage.
+   * Refusal is atomic by construction: the caller has not pushed undo, mutated
+   * or recomputed yet, so returning false leaves the tree untouched.
+   */
+  const filletChamferEditAllowed = (tree: FeatureTree, current: Feature, next: Feature): boolean => {
+    if (next.type === 'fillet' && current.type === 'fillet') {
+      if (next.params.radius === current.params.radius && next.params.edgeIds === current.params.edgeIds) return true;
+      const parentBody = firstParentResultBody(tree, next.parentIds);
+      // No parent body to measure against (erroring/suppressed upstream) — let
+      // the recompute surface the evaluator's own error, exactly as before.
+      if (!parentBody) return true;
+      const limit = maxFilletRadius(parentBody, next.params.edgeIds);
+      if (limit.max === null) {
+        showToast(toastText('toast.filletNoEdges'), 'warning');
+        return false;
+      }
+      if (next.params.radius > limit.max) {
+        showToast(toastText('toast.filletOversize', { max: Math.round(limit.max * 100) / 100 }), 'warning');
+        return false;
+      }
+      return true;
+    }
+    if (next.type === 'chamfer' && current.type === 'chamfer') {
+      if (next.params.distance === current.params.distance && next.params.edgeIds === current.params.edgeIds) return true;
+      const parentBody = firstParentResultBody(tree, next.parentIds);
+      if (!parentBody) return true;
+      const limit = maxChamferDistance(parentBody, next.params.edgeIds);
+      if (limit.max === null) {
+        showToast(toastText('toast.filletNoEdges'), 'warning');
+        return false;
+      }
+      if (next.params.distance > limit.max) {
+        showToast(toastText('toast.chamferOversize', { max: Math.round(limit.max * 100) / 100 }), 'warning');
+        return false;
+      }
+      return true;
+    }
+    // Any other edit (including a type switch, whose new parents resolve like
+    // the evaluator's) is not gated here.
+    return true;
   };
 
   /**
@@ -1406,12 +1580,20 @@ export const useStore = create<AppState>((set, get) => {
     recombine();
   },
   updateFeature: (id, mutator) => {
-    pushUndo();
     const tree = get().featureTree;
-    tree.updateFeature(id, mutator);
+    const current = tree.getFeature(id);
+    if (!current) return false;
+    // Evaluate the (pure) mutator once up front so the fillet/chamfer size
+    // gate can inspect the NEXT feature before anything is pushed or mutated;
+    // the tree edit below then installs that exact object.
+    const next = mutator(current);
+    if (!filletChamferEditAllowed(tree, current, next)) return false;
+    pushUndo();
+    tree.updateFeature(id, () => next);
     tree.recompute();
     set((s) => ({ featureTree: tree, projectDirty: true, featureVersion: s.featureVersion + 1 }));
     recombine();
+    return true;
   },
   moveFeature: (id, toIndex) => {
     pushUndo();
@@ -2139,7 +2321,7 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
+    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, camSetup, camToolpaths, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
     // Capture the current state BEFORE restoring — applyUndoSnapshot clears
@@ -2151,6 +2333,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis,
       drawingDetails,
       drawingNotes,
+      camSetup,
+      camToolpaths,
       currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
       sketchUndoStack,
       sketchRedoStack,
@@ -2174,7 +2358,7 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
+    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, camSetup, camToolpaths, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
     const current: HistorySnapshot = {
@@ -2184,6 +2368,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis,
       drawingDetails,
       drawingNotes,
+      camSetup,
+      camToolpaths,
       currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
       sketchUndoStack,
       sketchRedoStack,
@@ -2223,6 +2409,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: 'off',
       drawingDetails: [],
       drawingNotes: [],
+      camSetup: defaultCamSetup(),
+      camToolpaths: {},
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -2253,6 +2441,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: 'off',
       drawingDetails: [],
       drawingNotes: [],
+      camSetup: defaultCamSetup(),
+      camToolpaths: {},
       currentSketch: null,
       sketchActive: false,
       projectDirty: true,
@@ -2267,7 +2457,7 @@ export const useStore = create<AppState>((set, get) => {
     set({ projectName: 'Untitled', projectDirty: false, workspace: 'model', selectedSketchId: null, selectedSketchIds: [] });
     set({ savedFingerprint: projectFingerprint() }); // fresh baseline — clean until edited
   },
-  loadProject: (features, name, directBodies = [], referenceGeometry, drawing) => {
+  loadProject: (features, name, directBodies = [], referenceGeometry, drawing, cam) => {
     const tree = new FeatureTree();
     for (const f of features) tree.addFeature(f);
     tree.recompute();
@@ -2287,6 +2477,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: drawing?.sectionAxis ?? 'off',
       drawingDetails: drawing?.details ?? [],
       drawingNotes: drawing?.notes ?? [],
+      camSetup: cam ?? defaultCamSetup(),
       undoStack: [],
       redoStack: [],
       currentSketch: null,
@@ -2295,6 +2486,11 @@ export const useStore = create<AppState>((set, get) => {
       projectDirty: false,
     });
     recombine();
+    // The toolpath cache is derived, never serialized — regenerate it now that
+    // the loaded bodies exist, and seed the op-id counter past any restored
+    // camop_N ids so newly added operations cannot collide with them.
+    seedCamOpCounter(get().camSetup.operations);
+    set({ camToolpaths: recomputeCamToolpaths() });
     set({ savedFingerprint: projectFingerprint() }); // the loaded file is the baseline
   },
 
@@ -2431,6 +2627,65 @@ export const useStore = create<AppState>((set, get) => {
   removeDrawingNote: (id) => {
     pushUndo();
     set((s) => ({ drawingNotes: s.drawingNotes.filter((n) => n.id !== id), projectDirty: true }));
+  },
+
+  // --- CAM setup ---------------------------------------------------------------
+  // Edit actions (add/remove/update/setStock) each push ONE undo entry and set
+  // projectDirty; regenerateCamToolpaths is a pure recompute of derived data
+  // and deliberately pushes neither.
+  camSetup: defaultCamSetup(),
+  camToolpaths: {},
+  addCamOperation: (op) => {
+    pushUndo();
+    const id = makeCamOpId();
+    const newOp: CAMOperation = { ...op, id };
+    const cache = resolveCamToolpath(newOp);
+    set((s) => ({
+      camSetup: { ...s.camSetup, operations: [...s.camSetup.operations, newOp] },
+      ...(cache ? { camToolpaths: { ...s.camToolpaths, [id]: cache } } : {}),
+      projectDirty: true,
+    }));
+    return id;
+  },
+  removeCamOperation: (id) => {
+    pushUndo();
+    set((s) => {
+      const camToolpaths = { ...s.camToolpaths };
+      delete camToolpaths[id];
+      return {
+        camSetup: { ...s.camSetup, operations: s.camSetup.operations.filter((o) => o.id !== id) },
+        camToolpaths,
+        projectDirty: true,
+      };
+    });
+  },
+  updateCamOperation: (id, patch) => {
+    // Unknown id → refuse without the no-op undo entry (the removeDirectBody
+    // hygiene rule).
+    if (!get().camSetup.operations.some((o) => o.id === id)) return;
+    pushUndo();
+    set((s) => {
+      let updated: CAMOperation | null = null;
+      const operations = s.camSetup.operations.map((o) => {
+        if (o.id !== id) return o;
+        // "Deep-ish" patch: top-level fields replace, params merge key-by-key.
+        updated = { ...o, ...patch, params: { ...o.params, ...(patch.params ?? {}) } };
+        return updated;
+      });
+      if (!updated) return {}; // unknown id — nothing to change
+      const cache = resolveCamToolpath(updated);
+      const camToolpaths = { ...s.camToolpaths };
+      if (cache) camToolpaths[id] = cache;
+      else delete camToolpaths[id]; // disabled or unresolvable — no stale cache
+      return { camSetup: { ...s.camSetup, operations }, camToolpaths, projectDirty: true };
+    });
+  },
+  setCamStock: (stock) => {
+    pushUndo();
+    set((s) => ({ camSetup: { ...s.camSetup, stock }, projectDirty: true }));
+  },
+  regenerateCamToolpaths: () => {
+    set({ camToolpaths: recomputeCamToolpaths() });
   },
   placeBodyInCoordinateSystem: (bodyId, csId) => {
     const body = get().bodies.find((b) => b.id === bodyId);
@@ -2791,13 +3046,15 @@ export const useStore = create<AppState>((set, get) => {
   // Fillet/chamfer scope to the Alt+click edge sub-selection when present
   // (empty selection = every edge, whole-body treatment) and are REFUSED with
   // the oversize toast when the value exceeds the geometric limit for those
-  // edges (applyFillet would otherwise mangle the body and report success).
+  // edges (applyFillet would otherwise mangle the body and report success);
+  // when NO selected edge is treatable the limit is null and the refusal uses
+  // the filletNoEdges toast instead of a meaningless "max 0 mm".
   applyFilletFeature: (radius) => {
     const body = selectedBody();
     if (body) {
       const limit = maxFilletRadius(body, scopedEdgeIdsFor(body));
       if (limit.max === null) {
-        showToast(toastText('toast.filletOversize', { max: 0 }), 'warning');
+        showToast(toastText('toast.filletNoEdges'), 'warning');
         return false;
       }
       if (radius > limit.max) {
@@ -2816,7 +3073,8 @@ export const useStore = create<AppState>((set, get) => {
     if (body) {
       const limit = maxChamferDistance(body, scopedEdgeIdsFor(body));
       if (limit.max === null) {
-        showToast(toastText('toast.chamferOversize', { max: 0 }), 'warning');
+        // Same all-edges-skipped case as the fillet guard above.
+        showToast(toastText('toast.filletNoEdges'), 'warning');
         return false;
       }
       if (distance > limit.max) {
@@ -2889,15 +3147,42 @@ export const useStore = create<AppState>((set, get) => {
     const tree = s.featureTree;
     const parentId = tree.findFeatureIdForBody(bodyId);
     if (parentId) {
+      // pushUndo clears the redo branch; a FAILED attempt restores it below.
+      const savedRedo = get().redoStack;
       pushUndo();
-      tree.addFeature(createHoleFeature({ center: start, direction: dir, diameter, depth }, [parentId]));
+      const holeFeat = createHoleFeature({ center: start, direction: dir, diameter, depth }, [parentId]);
+      tree.addFeature(holeFeat);
       tree.recompute();
+      // A hole that does not reach the body surfaces as an evaluator error
+      // with zero bodies ('hole does not reach the body') — roll the feature
+      // and the undo entry back atomically (the performExtrude pattern) and
+      // explain, instead of reporting success with an undrilled body.
+      const result = tree.getResult(holeFeat.id);
+      if (!result || result.error || result.bodies.length === 0) {
+        rollbackFailedSketchFeature(
+          holeFeat.id, holeFeat.id, // only the hole feature was added; the 2nd remove no-ops
+          result?.error ?? 'the hole did not reach the body', 'toast.holeMissed', savedRedo,
+        );
+        return false;
+      }
       set((st) => ({ featureTree: tree, projectDirty: true, featureVersion: st.featureVersion + 1 }));
       recombine();
       return true;
     }
+    // pushUndo clears the redo branch; a FAILED attempt restores it below.
+    const savedRedo = get().redoStack;
     pushUndo();
-    const holed = drillHoleInBody(body, { center: start, direction: dir, diameter, depth });
+    let holed: SolidBody;
+    try {
+      holed = drillHoleInBody(body, { center: start, direction: dir, diameter, depth });
+    } catch {
+      // Missed cutter (off-surface start): nothing was drilled — drop the
+      // undo entry this attempt pushed, restore the redo branch and tell the
+      // user. No mutation happened, so no recompute/recombine is needed.
+      set((st) => ({ undoStack: st.undoStack.slice(0, -1), redoStack: savedRedo }));
+      showToast(toastText('toast.holeMissed'), 'warning');
+      return false;
+    }
     set((st) => ({
       directBodies: st.directBodies.map((b) => (b.id === bodyId ? holed : b)),
       projectDirty: true,
@@ -3066,7 +3351,7 @@ export const useStore = create<AppState>((set, get) => {
     // serialize+zip entirely when nothing changed.
     const fingerprint = projectFingerprint();
     if (lastAutosaveFingerprint !== null && fingerprint === lastAutosaveFingerprint) return false;
-    const { projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes } = get();
+    const { projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes, camSetup } = get();
     try {
       const project = serializeProject(
         projectName,
@@ -3075,6 +3360,7 @@ export const useStore = create<AppState>((set, get) => {
         directBodies,
         { planes, axes, points, coordSystems, annotations },
         { sectionAxis: drawingSectionAxis, details: drawingDetails, notes: drawingNotes },
+        camSetup,
       );
       const json = saveToFile(project);
       localStorage.setItem(AUTOSAVE_KEY, json);
@@ -3105,7 +3391,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!raw) return false;
     try {
       const project = loadFromFile(raw);
-      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project));
+      get().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), deserializeReferenceGeometry(project), deserializeDrawing(project), deserializeCam(project));
       return true;
     } catch {
       return false;

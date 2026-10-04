@@ -6,6 +6,11 @@ import {
   clipSegmentToCircle,
   clipViewToCircle,
   viewTransform,
+  dimensionSheetGeometry,
+  formatDimValue,
+  DIM_OFFSET_PX,
+  DIM_EXT_GAP_PX,
+  DIM_EXT_OVERSHOOT_PX,
   type DrawingView,
 } from './drawing';
 import { createBox, createCylinder } from '../geometry/brep';
@@ -47,6 +52,41 @@ describe('exportDrawingSVG', () => {
     const svg = exportDrawingSVG([view]);
     expect(svg).toContain('<svg');
     expect(svg).toContain('<line');
+  });
+
+  it('SVG arc paths sit on the correct side of their centre (y-flip regression)', () => {
+    // A sectioned cylinder emits a fitted arc; its exported SVG path must
+    // mirror the view's +y-up onto the sheet's +y-down (c.y − r·sin) — the
+    // original bug drew the arc on the WRONG side of the centre.
+    const view = projectBodies(
+      [createCylinder(5, 10, 32)],
+      { x: 0, y: 1, z: 0 },
+      { x: 0, y: 0, z: 1 },
+      50,
+      'Top',
+      { normal: { x: 1, y: 0, z: 0 }, offset: 0 },
+    );
+    expect(view.arcs.length).toBeGreaterThan(0);
+    const svg = exportDrawingSVG([view]);
+    const m = /M ([\d.]+) ([\d.]+) A [\d.]+ [\d.]+ 0 [01] [01] ([\d.]+) ([\d.]+)/.exec(svg);
+    expect(m).not.toBeNull();
+    const arc = view.arcs[0]!;
+    // The exported start/end y must equal toSheet(center ± r·sinθ) — i.e.
+    // the sheet-side mirror. Compute both true endpoints and require the
+    // exported pair to MATCH one of them exactly (not the un-mirrored pair).
+    const cell = { x: 0, y: 0, w: 800, h: 600 };
+    const tr = viewTransform(view, cell);
+    const c = tr.toSheet({ x: arc.center.x, y: arc.center.y });
+    const trueStart = tr.toSheet({
+      x: arc.center.x + arc.radius * Math.cos(arc.startAngle),
+      y: arc.center.y + arc.radius * Math.sin(arc.startAngle),
+    });
+    const exportedStart = { x: Number(m![1]), y: Number(m![2]) };
+    expect(Math.abs(exportedStart.y - trueStart.y)).toBeLessThan(0.05);
+    expect(Math.abs(exportedStart.x - trueStart.x)).toBeLessThan(0.05);
+    // And the start is on the mirrored side of the centre (the bug drew
+    // c.y + r·sin — the reflection).
+    expect(Math.abs(exportedStart.y - c.y)).toBeLessThan(arc.radius * tr.scale + 0.05);
   });
 
   it('SVG has valid XML structure', () => {
@@ -411,5 +451,63 @@ describe('detail-view geometry', () => {
     const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
     const svg = exportDrawingSVG([view], 800, 600);
     expect(svg).toContain('viewBox="0 0 800 600"');
+  });
+});
+
+describe('dimension sheet geometry (offset-collapse fix)', () => {
+  // Regression for the audit's A4 bug: offsets were hardcoded in PROJECTED
+  // units (8/26) and then auto-fit-scaled — a 1000 mm body fit at
+  // ~0.0064 px/unit collapsed the 8-unit gap to ~0.05 px, putting the
+  // dimension line ON the outline.
+  it('a 1000 mm body keeps the width dim line ≥ 20 sheet px below the geometry', () => {
+    const box = createBox(1000, 500, 300);
+    const view = projectBodies([box], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50);
+    const t = viewTransform(view, { x: 0, y: 0, w: 400, h: 300 });
+    const width = view.dimensions.find((d) => d.driver?.axis === 'x')!;
+    const g = dimensionSheetGeometry(width, t.toSheet);
+    const bottomEdgeY = t.toSheet({ x: 0, y: view.bounds.min.y }).y;
+    expect(t.scale).toBeLessThan(0.01); // auto-fit really is squashing the view
+    expect(g.dim.start.y - bottomEdgeY).toBeGreaterThanOrEqual(20);
+    expect(g.dim.start.y - bottomEdgeY).toBeCloseTo(DIM_OFFSET_PX, 6);
+    expect(g.dim.end.y).toBeCloseTo(g.dim.start.y, 6); // parallel to the edge
+  });
+
+  it('the height dim line sits DIM_OFFSET_PX to the right of the geometry', () => {
+    const box = createBox(1000, 500, 300);
+    const view = projectBodies([box], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50);
+    const t = viewTransform(view, { x: 0, y: 0, w: 400, h: 300 });
+    const height = view.dimensions.find((d) => d.driver?.axis === 'y')!;
+    const g = dimensionSheetGeometry(height, t.toSheet);
+    const rightEdgeX = t.toSheet({ x: view.bounds.max.x, y: 0 }).x;
+    expect(g.dim.start.x - rightEdgeX).toBeCloseTo(DIM_OFFSET_PX, 6);
+  });
+
+  it('extension lines gap 1.5 px off the measured points and overshoot 2 px past the dim line', () => {
+    const view = projectBody(createBox(10, 20, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const t = viewTransform(view, { x: 0, y: 0, w: 400, h: 300 });
+    const g = dimensionSheetGeometry(view.dimensions[0]!, t.toSheet);
+    const a = t.toSheet(view.dimensions[0]!.start);
+    const b = t.toSheet(view.dimensions[0]!.end);
+    expect(Math.hypot(g.ext[0]!.start.x - a.x, g.ext[0]!.start.y - a.y)).toBeCloseTo(DIM_EXT_GAP_PX, 6);
+    expect(Math.hypot(g.ext[0]!.end.x - a.x, g.ext[0]!.end.y - a.y)).toBeCloseTo(DIM_OFFSET_PX + DIM_EXT_OVERSHOOT_PX, 6);
+    expect(Math.hypot(g.ext[1]!.start.x - b.x, g.ext[1]!.start.y - b.y)).toBeCloseTo(DIM_EXT_GAP_PX, 6);
+  });
+
+  it('canvas and SVG share one dimension text format (toFixed(1))', () => {
+    const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG([view]);
+    // The old SVG used toFixed(2) and disagreed with the canvas's toFixed(1).
+    expect(formatDimValue(view.dimensions[0]!.value)).toBe('10.0 mm');
+    expect(svg).toContain('>10.0 mm<');
+    expect(svg).not.toContain('10.00 mm');
+  });
+
+  it('generated dims carry measured points on the geometry; offset stays advisory', () => {
+    const view = projectBody(createBox(10, 20, 30), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const width = view.dimensions[0]!;
+    // createBox extrudes its profile from y = 0 up, so the bottom edge is y=0.
+    expect(width.start).toEqual({ x: -5, y: 0 });
+    expect(width.end).toEqual({ x: 5, y: 0 });
+    expect(width.offset).toBe(8); // advisory only, unchanged by the fix
   });
 });

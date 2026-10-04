@@ -14,6 +14,7 @@ import {
   createSweepFeature,
   createLoftFeature,
   canReorderFeatures,
+  drillHoleInBody,
 } from './tree';
 import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
 import { computeVolume, computeBoundingBox } from '../geometry/brep';
@@ -808,6 +809,67 @@ describe('hole counterbore/countersink evaluator', () => {
     ));
     tree.recompute();
     expect(tree.getResult(tree.features[1]!.id)?.error).toContain('Countersink');
+  });
+});
+
+describe('hole failure honesty (miss probe)', () => {
+  beforeAll(() => warmUpBooleanEngine());
+
+  it('drillHoleInBody throws when the cutter does not reach the body', () => {
+    const tree = new FeatureTree();
+    tree.addFeature(boxExtrude20());
+    tree.recompute();
+    const body = tree.getLatestBodies()[0]!;
+    // Blind hole starting 10 mm ABOVE the top face (y = 20): the 5 mm cutter
+    // spans y 30..35 and never touches the box (y 0..20) — the case that used
+    // to hand the body back unchanged as a fake success.
+    expect(() => drillHoleInBody(body, {
+      center: { x: 0, y: 30, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: 5,
+    })).toThrowError('hole does not reach the body');
+  });
+
+  it('a missed hole is an evaluator ERROR with the parent left visible, not a silent no-drill', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude20();
+    tree.addFeature(ext);
+    tree.recompute();
+    tree.addFeature(createHoleFeature(
+      { center: { x: 0, y: 30, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: 5 },
+      [ext.id],
+    ));
+    tree.recompute();
+    expect(tree.getResult(tree.features[1]!.id)?.error).toContain('hole does not reach the body');
+    expect(tree.getResult(tree.features[1]!.id)?.bodies).toHaveLength(0);
+    // Consumption happens only on success (the cut rule): the un-drilled box
+    // is still the output instead of vanishing into a failed feature.
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    expect(Math.abs(computeVolume(tree.getLatestBodies()[0]!))).toBeCloseTo(8000, 0);
+  });
+
+  it('the probe does not reject on-body entries: blind and through-all top-face holes still drill', () => {
+    const drillTop = (depth: number | null) => {
+      const tree = new FeatureTree();
+      const ext = boxExtrude20();
+      tree.addFeature(ext);
+      tree.recompute();
+      tree.addFeature(createHoleFeature(
+        { center: { x: 0, y: 20, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth },
+        [ext.id],
+      ));
+      tree.recompute();
+      return tree;
+    };
+    // The standard placements must be untouched by the probe: a through-all
+    // cutter spans twice the bounding-box diagonal centred on the entry, and a
+    // blind cutter starts exactly on the picked surface point.
+    for (const depth of [5, null] as const) {
+      const tree = drillTop(depth);
+      expect(tree.getResult(tree.features[1]!.id)?.error).toBeUndefined();
+      const removed = 8000 - Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+      const ideal = Math.PI * 3 * 3 * (depth ?? 20);
+      expect(removed).toBeGreaterThan(ideal * 0.9);
+      expect(removed).toBeLessThan(ideal * 1.1);
+    }
   });
 });
 

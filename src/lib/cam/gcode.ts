@@ -1,67 +1,183 @@
 import type { Toolpath, GCodeLine } from './types';
 
-/** Generate G-code from a toolpath */
-export function generateGCode(toolpath: Toolpath): string {
-  const lines: GCodeLine[] = [];
+/**
+ * Machine dialects for the post-processor.
+ * - grbl: no canned cycles (peck drilling is expanded) and no M6 (tool
+ *   changes become `; M6 T…` pause comments).
+ * - linuxcnc: real G83/G80 peck cycles and M6 tool changes; ends with M30.
+ */
+export type MachineProfile = 'grbl' | 'linuxcnc';
 
-  // Header
-  lines.push({ code: 'G90', comment: 'Absolute positioning' });
-  lines.push({ code: 'G21', comment: 'Metric (mm)' });
-  lines.push({ code: 'G17', comment: 'XY plane' });
-  lines.push({ code: '', comment: `Tool: ${toolpath.tool.name}` });
-  lines.push({ code: '', comment: `Operation: ${toolpath.operation}` });
-  lines.push({ code: '', comment: `Feed: ${toolpath.params.feedRate} mm/min` });
-  lines.push({ code: '', comment: `Spindle: ${toolpath.params.spindleSpeed} RPM` });
+function fmt(n: number): string {
+  return n.toFixed(3);
+}
 
-  // Start spindle
-  lines.push({ code: `M3 S${toolpath.params.spindleSpeed}`, comment: 'Start spindle' });
-  lines.push({ code: 'G4 P1', comment: 'Dwell 1s for spindle ramp-up' });
+/** Safe program-level traverse height (machine Z). */
+function programSafeZ(tp: Toolpath | undefined): number {
+  return (tp?.params.stockTop ?? 0) + 10;
+}
 
-  // Emit moves in their true execution order so the G-code matches the tool
-  // motion: rapids (G0) and cuts (G1) are interleaved, not batched.
-  for (const point of toolpath.points) {
-    const xyz = `X${point.x.toFixed(3)} Y${point.y.toFixed(3)} Z${point.z.toFixed(3)}`;
-    if (point.rapid) {
+interface EmitState {
+  /** Last feed word emitted; F is modal so it is only re-emitted on change. */
+  lastFeed?: number;
+}
+
+function emitMoves(tp: Toolpath, profile: MachineProfile, state: EmitState, lines: GCodeLine[]): void {
+  if (tp.operation === 'drill') {
+    emitDrillMoves(tp, profile, state, lines);
+    return;
+  }
+  for (const p of tp.points) {
+    // Scene (x, y, z) → machine X = x, Y = z, Z = y.
+    const xyz = `X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)}`;
+    if (p.rapid) {
       lines.push({ code: `G0 ${xyz}` });
     } else {
-      const feed = point.feedRate ?? toolpath.params.feedRate;
-      lines.push({ code: `G1 ${xyz} F${feed}` });
+      const feed = p.feedRate ?? tp.params.feedRate;
+      if (feed !== state.lastFeed) {
+        lines.push({ code: `G1 ${xyz} F${feed}` });
+        state.lastFeed = feed;
+      } else {
+        lines.push({ code: `G1 ${xyz}` });
+      }
+    }
+  }
+}
+
+/**
+ * Drill cycles. The generator emits one plunge cut per hole; the profile
+ * decides how it is posted: GRBL gets an expanded peck cycle (G1 down at
+ * plunge feed alternating with G0 retracts to the R plane), LinuxCNC gets a
+ * canned G83 … R Q F followed by G80.
+ */
+function emitDrillMoves(
+  tp: Toolpath,
+  profile: MachineProfile,
+  state: EmitState,
+  lines: GCodeLine[],
+): void {
+  const { params } = tp;
+  const retractR = params.stockTop + 2;
+  const peck = Math.max(0.1, params.peckDepth ?? Math.max(0.5, tp.tool.diameter / 2));
+
+  for (const p of tp.points) {
+    if (p.rapid) {
+      lines.push({ code: `G0 X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)}` });
+      continue;
+    }
+
+    const feed = p.feedRate ?? params.plungeRate;
+    const depth = params.stockTop - p.y;
+    if (depth <= 0) continue;
+
+    if (profile === 'linuxcnc') {
+      lines.push({
+        code: `G83 X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)} R${fmt(retractR)} Q${fmt(peck)} F${feed}`,
+        comment: `Drill ⌀${tp.tool.diameter} to depth ${fmt(depth)}`,
+      });
+      state.lastFeed = feed;
+    } else {
+      const pecks = Math.max(1, Math.ceil(depth / peck - 1e-9));
+      lines.push({
+        code: '',
+        comment: `Peck drill (${fmt(p.x)}, ${fmt(p.z)}) depth ${fmt(depth)} — ${pecks} peck(s)`,
+      });
+      for (let i = 1; i <= pecks; i++) {
+        const y = params.stockTop - Math.min(i * peck, depth);
+        if (feed !== state.lastFeed) {
+          lines.push({ code: `G1 Z${fmt(y)} F${feed}` });
+          state.lastFeed = feed;
+        } else {
+          lines.push({ code: `G1 Z${fmt(y)}` });
+        }
+        lines.push({ code: `G0 Z${fmt(retractR)}`, comment: 'Retract to R plane' });
+      }
     }
   }
 
-  // End
-  lines.push({ code: '', comment: 'End of toolpath' });
-  lines.push({ code: 'G0 Z' + (toolpath.params.stockTop + 10).toFixed(1), comment: 'Retract' });
-  lines.push({ code: 'M5', comment: 'Stop spindle' });
-  lines.push({ code: 'G0 X0 Y0', comment: 'Return to origin' });
-  lines.push({ code: 'M2', comment: 'Program end' });
-
-  return lines
-    .map((l) => {
-      if (l.comment && l.code) return `${l.code} ; ${l.comment}`;
-      if (l.comment) return `; ${l.comment}`;
-      return l.code;
-    })
-    .join('\n');
+  if (profile === 'linuxcnc') {
+    lines.push({ code: 'G80', comment: 'Cancel drill cycle' });
+  }
 }
 
-/** Generate G-code for multiple toolpaths */
-export function generateMultiToolGCode(toolpaths: Toolpath[]): string {
-  const sections: string[] = [];
+/** Emit one complete program for the given toolpaths. */
+function emitProgram(toolpaths: Toolpath[], profile: MachineProfile): string {
+  const lines: GCodeLine[] = [];
+  const state: EmitState = {};
+  const last = toolpaths[toolpaths.length - 1];
+  const safeZ = programSafeZ(toolpaths[0] ?? last);
 
-  sections.push('; SceneLab CAM G-code');
-  sections.push(`; Generated: ${new Date().toISOString()}`);
-  sections.push(`; Toolpaths: ${toolpaths.length}`);
-  sections.push('');
+  lines.push({ code: '', comment: 'SceneLab CAM G-code' });
+  lines.push({ code: '', comment: `Generated: ${new Date().toISOString()}` });
+  lines.push({ code: '', comment: `Toolpaths: ${toolpaths.length}` });
+  lines.push({ code: '', comment: `Profile: ${profile}` });
+  lines.push({ code: 'G90', comment: 'Absolute positioning' });
+  lines.push({ code: 'G21', comment: 'Metric (mm)' });
+  lines.push({ code: 'G17', comment: 'XY plane' });
+  lines.push({ code: 'G94', comment: 'Feed per minute' });
+  // Z-only rapid FIRST so no XY traverse can happen below the safe height.
+  lines.push({ code: `G0 Z${fmt(safeZ)}`, comment: 'Safe height before first XY move' });
 
+  const toolNumbers = new Map<string, number>();
+  const toolNumber = (id: string): number => {
+    let n = toolNumbers.get(id);
+    if (n === undefined) {
+      n = toolNumbers.size + 1;
+      toolNumbers.set(id, n);
+    }
+    return n;
+  };
+
+  let prevToolId: string | undefined;
   for (let i = 0; i < toolpaths.length; i++) {
     const tp = toolpaths[i]!;
-    sections.push(`; === Toolpath ${i + 1}: ${tp.name} ===`);
-    sections.push(generateGCode(tp));
-    sections.push('');
+    lines.push({ code: '', comment: `=== Toolpath ${i + 1}: ${tp.name} ===` });
+    lines.push({ code: '', comment: `Tool: ${tp.tool.name} (T${toolNumber(tp.tool.id)})` });
+    lines.push({ code: '', comment: `Operation: ${tp.operation}` });
+
+    if (i > 0) {
+      if (tp.tool.id !== prevToolId) {
+        lines.push({ code: `G0 Z${fmt(programSafeZ(tp))}`, comment: 'Retract for tool change' });
+        lines.push({ code: 'M5', comment: 'Stop spindle' });
+        if (profile === 'linuxcnc') {
+          lines.push({ code: `M6 T${toolNumber(tp.tool.id)}`, comment: 'Tool change' });
+        } else {
+          lines.push({ code: '', comment: `M6 T${toolNumber(tp.tool.id)} — pause and change tool, cycle start to resume` });
+        }
+      }
+    }
+
+    lines.push({ code: `M3 S${tp.params.spindleSpeed}`, comment: 'Start spindle' });
+    lines.push({ code: 'G4 P1', comment: 'Dwell 1s for spindle ramp-up' });
+    emitMoves(tp, profile, state, lines);
+    prevToolId = tp.tool.id;
   }
 
-  return sections.join('\n');
+  // Single footer: spindle off, retract, park, end.
+  lines.push({ code: 'M5', comment: 'Stop spindle' });
+  lines.push({ code: `G0 Z${fmt(programSafeZ(last))}`, comment: 'Retract' });
+  lines.push({ code: 'G0 X0 Y0', comment: 'Return to origin' });
+  lines.push({ code: profile === 'linuxcnc' ? 'M30' : 'M2', comment: 'Program end' });
+
+  return (
+    lines
+      .map((l) => {
+        if (l.comment && l.code) return `${l.code} ; ${l.comment}`;
+        if (l.comment) return `; ${l.comment}`;
+        return l.code;
+      })
+      .join('\n') + '\n'
+  );
+}
+
+/** Generate G-code for a single toolpath. */
+export function generateGCode(toolpath: Toolpath, profile: MachineProfile = 'grbl'): string {
+  return emitProgram([toolpath], profile);
+}
+
+/** Generate one G-code program for multiple toolpaths (single M2/M30). */
+export function generateMultiToolGCode(toolpaths: Toolpath[], profile: MachineProfile = 'grbl'): string {
+  return emitProgram(toolpaths, profile);
 }
 
 const RAPID_RATE = 5000; // mm/min
@@ -87,6 +203,9 @@ export function estimateMachiningTime(toolpath: Toolpath): number {
 
   return totalTime;
 }
+
+/** Alias kept for the setup/UI layer's naming. */
+export const estimateTime = estimateMachiningTime;
 
 function distance(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
   const dx = b.x - a.x;

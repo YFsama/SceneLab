@@ -2,7 +2,22 @@ import { useRef, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
-import { projectBodies, exportDrawingSVG, viewTransform, clipViewToCircle, type DrawingDimension, type SectionPlane, type ViewTransform } from '../../lib/io/drawing';
+import {
+  projectBodies,
+  exportDrawingSVG,
+  viewTransform,
+  clipViewToCircle,
+  clipSegmentToCircle,
+  dimensionSheetGeometry,
+  formatDimValue,
+  calloutSheetGeometry,
+  CENTER_MARK_ARM_RATIO,
+  type DrawingDimension,
+  type SectionPlane,
+  type ViewTransform,
+} from '../../lib/io/drawing';
+import { collectHoleCallouts, type CalloutViewFrame, type HoleCallout } from '../../lib/io/drawingCallouts';
+import type { HoleFeature } from '../../lib/features/types';
 import {
   DETAIL_RADIUS_MM,
   DETAIL_SCALE,
@@ -29,6 +44,17 @@ const GRID_COLS = 2;
 const CELL_W = SHEET_W / GRID_COLS;
 const CELL_H = SHEET_H / GRID_COLS;
 const PAD = 40;
+
+/** Model→view scale the sheet projects at (view units = model mm × this). */
+const PROJECTION_SCALE = 50;
+
+/** The 2×2 grid's view frames (dir = toward the viewer, up = sheet-up). */
+const VIEW_FRAMES: { name: string; frame: CalloutViewFrame }[] = [
+  { name: 'Front', frame: { dir: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, scale: PROJECTION_SCALE } },
+  { name: 'Top', frame: { dir: { x: 0, y: 1, z: 0 }, up: { x: 0, y: 0, z: -1 }, scale: PROJECTION_SCALE } },
+  { name: 'Right', frame: { dir: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 }, scale: PROJECTION_SCALE } },
+  { name: 'Iso', frame: { dir: { x: 0.577, y: 0.577, z: 0.577 }, up: { x: 0, y: 1, z: 0 }, scale: PROJECTION_SCALE } },
+];
 
 /** A placed view: the view plus its grid cell and model↔sheet transform. */
 interface ViewPlacement {
@@ -80,13 +106,32 @@ export function DrawingCanvas() {
   const views = useMemo(() => {
     if (bodies.length === 0) return [];
     const suffix = sectionAxis === 'off' ? '' : ` — ${t('drawing.section')} ${sectionAxis.toUpperCase()}`;
-    return [
-      projectBodies(bodies, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50, `Front${suffix}`, section), // Front
-      projectBodies(bodies, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: -1 }, 50, `Top${suffix}`, section), // Top
-      projectBodies(bodies, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, 50, `Right${suffix}`, section), // Right
-      projectBodies(bodies, { x: 0.577, y: 0.577, z: 0.577 }, { x: 0, y: 1, z: 0 }, 50, `Iso${suffix}`, section), // Iso
-    ];
+    return VIEW_FRAMES.map(({ name, frame }) =>
+      projectBodies(bodies, frame.dir, frame.up, frame.scale, `${name}${suffix}`, section),
+    );
   }, [bodies, section, sectionAxis, t]);
+
+  // Hole callouts are auto-derived from the feature tree (no store state of
+  // their own): every unsuppressed HoleFeature gets a leader on each axis-on
+  // view. The tree mutates in place, so featureVersion is the change signal
+  // (the same pattern ParametersPanel uses).
+  const featureVersion = useStore((s) => s.featureVersion);
+  const thruWord = t('drawing.thru');
+  const holeCallouts = useMemo<HoleCallout[]>(() => {
+    const holes = useStore
+      .getState()
+      .featureTree.features.filter((f): f is HoleFeature => f.type === 'hole' && !f.suppressed);
+    if (holes.length === 0) return [];
+    return collectHoleCallouts(
+      holes,
+      VIEW_FRAMES.map((v) => v.frame),
+      section,
+      thruWord,
+    );
+    // featureVersion is the intentional change signal for the in-place-mutated
+    // feature tree (the linter can't see it through getState).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [featureVersion, section, thruWord]);
 
   // Grid placements of the base views (shared by painting and click handling).
   const placements = useMemo(
@@ -150,6 +195,32 @@ export function DrawingCanvas() {
         ctx.stroke();
       }
 
+      // Arcs detected among the lines (open constant-curvature chains, e.g.
+      // sectioned cylinder caps): drawn as true arcs on the sheet. View +y
+      // maps to sheet −y, so angles negate and the sweep direction flips —
+      // CCW-in-view reads as canvas anticlockwise.
+      for (const arc of view.arcs) {
+        const c = transform.toSheet(arc.center);
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, arc.radius * transform.scale, -arc.startAngle, -arc.endAngle, arc.ccw !== false);
+        ctx.stroke();
+      }
+
+      // Center marks over detected circles: thin ASME crosses, arms 1.25×r.
+      // Always on (no toggle) — annotation, not geometry.
+      ctx.lineWidth = 0.5;
+      for (const m of view.centers ?? []) {
+        const c = transform.toSheet(m);
+        const arm = m.radius * transform.scale * CENTER_MARK_ARM_RATIO;
+        ctx.beginPath();
+        ctx.moveTo(c.x - arm, c.y);
+        ctx.lineTo(c.x + arm, c.y);
+        ctx.moveTo(c.x, c.y - arm);
+        ctx.lineTo(c.x, c.y + arm);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+
       // Section cut faces: hatched fill (45°, drafting convention).
       if (view.sectionFaces && view.sectionFaces.length > 0) {
         ctx.save();
@@ -183,13 +254,13 @@ export function DrawingCanvas() {
       }
 
       // Draw dimensions; editable ones (with a driver) highlight on hover and
-      // open the edit prompt on click.
-      ctx.lineWidth = 0.5;
+      // open the edit prompt on click. The dimension line sits a fixed
+      // sheet-px offset from the measured geometry (dimensionSheetGeometry) —
+      // auto-fit can no longer collapse the gap onto the outline.
       ctx.font = '10px sans-serif';
       for (let d = 0; d < view.dimensions.length; d++) {
         const dim = view.dimensions[d]!;
-        const p1 = transform.toSheet(dim.start);
-        const p2 = transform.toSheet(dim.end);
+        const g = dimensionSheetGeometry(dim, transform.toSheet);
         const hitId = `${i}:${d}`;
         const hovered = dim.driver && hoverHit === hitId;
         const color = hovered ? '#3b82f6' : 'red';
@@ -197,18 +268,43 @@ export function DrawingCanvas() {
         ctx.fillStyle = color;
         ctx.setLineDash([2, 2]);
         ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
+        ctx.moveTo(g.dim.start.x, g.dim.start.y);
+        ctx.lineTo(g.dim.end.x, g.dim.end.y);
         ctx.stroke();
         ctx.setLineDash([]);
+        for (const e of g.ext) {
+          ctx.beginPath();
+          ctx.moveTo(e.start.x, e.start.y);
+          ctx.lineTo(e.end.x, e.end.y);
+          ctx.stroke();
+        }
 
-        const mx = (p1.x + p2.x) / 2;
-        const my = (p1.y + p2.y) / 2;
         ctx.textAlign = 'center';
         if (hovered) ctx.font = 'bold 11px sans-serif';
-        ctx.fillText(`${dim.value.toFixed(1)} mm`, mx, my - 4);
+        ctx.fillText(formatDimValue(dim.value), g.text.x, g.text.y);
         if (hovered) ctx.font = '10px sans-serif';
-        dimHits.push({ id: hitId, x: mx, y: my, dim });
+        dimHits.push({ id: hitId, x: g.text.x, y: g.text.y, dim });
+      }
+
+      // Hole callouts on axis-on views: leader (rim → 45° elbow → shelf) +
+      // localized GD&T text. Auto-derived from the feature tree above.
+      const callouts = holeCallouts.filter((c) => c.viewIndex === i);
+      if (callouts.length > 0) {
+        ctx.strokeStyle = '#333';
+        ctx.fillStyle = '#333';
+        ctx.lineWidth = 0.5;
+        ctx.textAlign = 'left';
+        for (const c of callouts) {
+          const cs = transform.toSheet(c.center);
+          const g = calloutSheetGeometry(cs, c.radius * transform.scale);
+          ctx.beginPath();
+          ctx.moveTo(g.leader[0]!.x, g.leader[0]!.y);
+          ctx.lineTo(g.leader[1]!.x, g.leader[1]!.y);
+          ctx.lineTo(g.leader[2]!.x, g.leader[2]!.y);
+          ctx.stroke();
+          ctx.fillText(c.text, g.text.x, g.text.y);
+        }
+        ctx.lineWidth = 1;
       }
     }
 
@@ -248,16 +344,32 @@ export function DrawingCanvas() {
       ctx.stroke();
       ctx.clip();
       ctx.lineWidth = 1;
-      for (const line of clipViewToCircle(views[detail.viewIndex]!, {
-        center: detail.center,
-        radius: detail.radius,
-      })) {
+      const crop = { center: detail.center, radius: detail.radius };
+      for (const line of clipViewToCircle(views[detail.viewIndex]!, crop)) {
         const p1 = detailPointToSheet(line.start, detail.center, panel);
         const p2 = detailPointToSheet(line.end, detail.center, panel);
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.stroke();
+      }
+      // Center marks inside the crop circle, arms clipped to it.
+      ctx.lineWidth = 0.5;
+      for (const m of views[detail.viewIndex]!.centers ?? []) {
+        const arm = m.radius * CENTER_MARK_ARM_RATIO;
+        if (Math.hypot(m.x - crop.center.x, m.y - crop.center.y) - arm > crop.radius) continue;
+        for (const seg of [
+          clipSegmentToCircle({ x: m.x - arm, y: m.y }, { x: m.x + arm, y: m.y }, crop),
+          clipSegmentToCircle({ x: m.x, y: m.y - arm }, { x: m.x, y: m.y + arm }, crop),
+        ]) {
+          if (!seg) continue;
+          const p1 = detailPointToSheet(seg.start, detail.center, panel);
+          const p2 = detailPointToSheet(seg.end, detail.center, panel);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+        }
       }
       ctx.restore();
 
@@ -316,7 +428,7 @@ export function DrawingCanvas() {
 
     dimHitsRef.current = dimHits;
     noteHitsRef.current = noteHits;
-  }, [views, placements, detailLayout, drawingDetails, drawingNotes, sheetHeight, hoverHit, hoverNoteId, editingNote, t]);
+  }, [views, placements, detailLayout, drawingDetails, drawingNotes, holeCallouts, sheetHeight, hoverHit, hoverNoteId, editingNote, t]);
 
   /** Client event → sheet (canvas px) coordinates (the canvas is CSS-stretched). */
   const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
@@ -493,7 +605,11 @@ export function DrawingCanvas() {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
-    const svg = exportDrawingSVG(views, SHEET_W, SHEET_H, { details: drawingDetails, notes: drawingNotes });
+    const svg = exportDrawingSVG(views, SHEET_W, SHEET_H, {
+      details: drawingDetails,
+      notes: drawingNotes,
+      holeCallouts,
+    });
     downloadFile(svg, 'drawing.svg');
     showToast(t('toast.svgExported'), 'success');
   };

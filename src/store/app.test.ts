@@ -5,7 +5,8 @@ import { createBox, computeVolume, translateBody, computeBoundingBoxCenter, comp
 import { warmUpBooleanEngine } from '../lib/geometry/boolean';
 import { computeMeasureReadout } from '../lib/geometry/measure';
 import { createSketch, addRectangle, addLine, addCircle, addConstraint, addPoint, closestPointPair } from '../lib/sketch/engine';
-import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing } from '../lib/io';
+import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing, deserializeCam } from '../lib/io';
+import { defaultCamSetup } from '../lib/cam';
 import { makeDetailId, makeNoteId } from '../lib/io/drawingNotes';
 
 describe('uniqueBodyName', () => {
@@ -3134,5 +3135,164 @@ describe('sketch-session undo stacks (fresh sessions start clean)', () => {
     expect(useStore.getState().currentSketch).toBeNull();
     expect(useStore.getState().sketchUndoStack).toHaveLength(0);
     expect(useStore.getState().sketchRedoStack).toHaveLength(0);
+  });
+});
+
+// --- CAM setup (operations + derived toolpath cache) --------------------------
+// The CAM job is store state like the drawing sheet: camSetup carries the ops,
+// camToolpaths is the derived cache (never serialized), and every EDIT action
+// pushes exactly one undo entry.
+describe('CAM setup state (operations + toolpath cache)', () => {
+  const params = {
+    feedRate: 1000, plungeRate: 300, spindleSpeed: 10000,
+    depthOfCut: 2, stepover: 3, stockTop: 0, stockBottom: -10,
+  };
+
+  let box: ReturnType<typeof createBox>;
+  beforeEach(() => {
+    box = createBox(20, 15, 10);
+    useStore.setState({
+      bodies: [box], directBodies: [box], objectIds: [box.id],
+      camSetup: defaultCamSetup(), camToolpaths: {},
+      undoStack: [], redoStack: [], projectDirty: false,
+    });
+  });
+
+  it('addCamOperation assigns camop_N ids, appends the op and caches its toolpath', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Pocket', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    expect(id).toMatch(/^camop_\d+$/);
+    const ops = useStore.getState().camSetup.operations;
+    expect(ops.map((o) => o.id)).toEqual([id]);
+    expect(ops[0]!.type).toBe('pocket');
+
+    const cache = useStore.getState().camToolpaths[id]!;
+    expect(cache).toBeDefined();
+    expect(cache.toolpath.points.length).toBeGreaterThan(0); // real generator output
+    expect(cache.timeMin).toBeGreaterThanOrEqual(0);
+    expect(useStore.getState().projectDirty).toBe(true);
+  });
+
+  it('operations survive a workspace switch (project state, not view state)', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Contour', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+    useStore.getState().setWorkspace('cam');
+    useStore.getState().setWorkspace('model');
+    useStore.getState().setWorkspace('cam');
+    expect(useStore.getState().camSetup.operations.map((o) => o.id)).toEqual([id]);
+  });
+
+  it('undo removes the added operation and its cache entry; redo restores both', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Face', enabled: true, type: 'face', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    expect(useStore.getState().undo()).toBe(true);
+    expect(useStore.getState().camSetup.operations).toHaveLength(0);
+    expect(useStore.getState().camToolpaths[id]).toBeUndefined();
+    expect(useStore.getState().redo()).toBe(true);
+    expect(useStore.getState().camSetup.operations.map((o) => o.id)).toEqual([id]);
+    expect(useStore.getState().camToolpaths[id]).toBeDefined();
+  });
+
+  it('removeCamOperation drops the op and cache (and is one undo step)', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Drill', enabled: true, type: 'drill', bodyId: box.id, toolId: 'drill-3mm', params,
+    });
+    useStore.getState().removeCamOperation(id);
+    expect(useStore.getState().camSetup.operations).toHaveLength(0);
+    expect(useStore.getState().camToolpaths[id]).toBeUndefined();
+    useStore.getState().undo();
+    expect(useStore.getState().camSetup.operations.map((o) => o.id)).toEqual([id]);
+  });
+
+  it('updateCamOperation merges params key-by-key and refreshes the cached toolpath', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Pocket', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    const before = useStore.getState().camToolpaths[id]!.toolpath;
+    useStore.getState().updateCamOperation(id, { params: { depthOfCut: 5 }, name: 'Pocket deep' });
+    const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+    expect(op.name).toBe('Pocket deep');
+    expect(op.params.depthOfCut).toBe(5);
+    expect(op.params.feedRate).toBe(params.feedRate); // untouched keys survive the merge
+    const after = useStore.getState().camToolpaths[id]!.toolpath;
+    expect(after).not.toBe(before); // cache regenerated, not reused
+    useStore.getState().undo();
+    expect(useStore.getState().camSetup.operations.find((o) => o.id === id)!.params.depthOfCut).toBe(2);
+  });
+
+  it('disabling an op drops its cache; regenerateCamToolpaths skips disabled ops', () => {
+    const idA = useStore.getState().addCamOperation({
+      name: 'A', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    const idB = useStore.getState().addCamOperation({
+      name: 'B', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+    useStore.getState().updateCamOperation(idA, { enabled: false });
+    expect(useStore.getState().camToolpaths[idA]).toBeUndefined(); // disabled → no cache
+    expect(useStore.getState().camToolpaths[idB]).toBeDefined();
+
+    // Pure recompute: neither an undo entry nor a dirty-flag change.
+    const undoDepth = useStore.getState().undoStack.length; // two adds + the disable
+    useStore.getState().regenerateCamToolpaths();
+    expect(useStore.getState().undoStack).toHaveLength(undoDepth);
+    expect(useStore.getState().camToolpaths[idA]).toBeUndefined();
+    expect(useStore.getState().camToolpaths[idB]).toBeDefined();
+  });
+
+  it('regenerateCamToolpaths drops entries whose body no longer resolves', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Pocket', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    expect(useStore.getState().camToolpaths[id]).toBeDefined();
+    useStore.setState({ bodies: [] }); // body deleted behind CAM's back
+    useStore.getState().regenerateCamToolpaths();
+    expect(useStore.getState().camToolpaths[id]).toBeUndefined();
+  });
+
+  it('setCamStock updates the stock and is undoable', () => {
+    useStore.getState().setCamStock({ mode: 'box', min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 12, z: 30 } });
+    expect(useStore.getState().camSetup.stock).toEqual({ mode: 'box', min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 12, z: 30 } });
+    useStore.getState().undo();
+    expect(useStore.getState().camSetup.stock).toEqual({ mode: 'bounding-box', margin: 2 });
+  });
+
+  it('project round-trip: cam block survives serialize/load and caches regenerate', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Pocket', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+      holes: [{ x: 2, z: 3, depth: 6 }],
+    });
+    const ops = useStore.getState().camSetup.operations;
+
+    const json = saveToFile(serializeProject('CAM Part', [], [], [box], undefined, undefined, useStore.getState().camSetup));
+    const project = loadFromFile(json);
+    const cam = deserializeCam(project);
+    expect(cam.operations).toEqual(ops); // holes included
+    expect(cam.operations[0]!.id).toBe(id);
+
+    // Load into the store: ops restored, cache regenerated (it is not serialized).
+    useStore.getState().loadProject(deserializeFeatures(project), project.name, deserializeDirectBodies(project), undefined, undefined, cam);
+    expect(useStore.getState().camSetup.operations).toEqual(ops);
+    expect(useStore.getState().camToolpaths[id]).toBeDefined();
+    expect(useStore.getState().camToolpaths[id]!.toolpath.points.length).toBeGreaterThan(0);
+    expect(useStore.getState().projectDirty).toBe(false); // the loaded file is the baseline
+
+    // The id counter was seeded past the loaded camop_N: the next add cannot collide.
+    const nextId = useStore.getState().addCamOperation({
+      name: 'Second', enabled: true, type: 'face', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    expect(nextId).not.toBe(id);
+    expect(new Set(useStore.getState().camSetup.operations.map((o) => o.id)).size).toBe(2);
+  });
+
+  it('clearScene resets the CAM setup', () => {
+    useStore.getState().addCamOperation({
+      name: 'Pocket', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    useStore.getState().clearScene();
+    expect(useStore.getState().camSetup).toEqual(defaultCamSetup());
+    expect(useStore.getState().camToolpaths).toEqual({});
   });
 });

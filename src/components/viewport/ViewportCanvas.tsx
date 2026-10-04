@@ -11,6 +11,7 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 import { useStore, type ViewDirection, type SketchPlaneId } from '../../store/app';
+import { useViewBookmarks, type ViewBookmark } from '../../store/viewBookmarks';
 import { createSketch, polygonPoints, snapTargets, closestPointPair } from '../../lib/sketch/engine';
 import { previewDimensionLabel } from '../../lib/sketch/dimensions';
 import { buildBodyMeshArrays } from '../../lib/render/bodyGeometry';
@@ -255,6 +256,9 @@ export function ViewportCanvas() {
   const sketchDimGroupRef = useRef<THREE.Group | null>(null);
   const previewGroupRef = useRef<THREE.Group | null>(null);
   const bodiesGroupRef = useRef<THREE.Group | null>(null);
+  // CAM toolpath overlay (cam workspace) — rebuilt by an effect whenever the
+  // setup or the derived toolpath cache changes.
+  const camGroupRef = useRef<THREE.Group | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   // Live drag-move readout ("Δ 20, -10 mm") shown while a body drag is active.
   // Ref-driven DOM updates, not state: a setState per pointermove re-renders
@@ -371,6 +375,15 @@ export function ViewportCanvas() {
   const measureFacePick = useStore((s) => s.measureFacePick);
   const annotations = useStore((s) => s.annotations);
   const addAnnotation = useStore((s) => s.addAnnotation);
+  // Camera view bookmarks (dedicated store — viewport preference, not project
+  // state). Subscribed so an open context menu re-renders with the new list
+  // the moment a bookmark is captured or cleared.
+  const bookmarks = useViewBookmarks((s) => s.bookmarks);
+  // CAM setup + derived toolpath cache (project state) and whether the cam
+  // workspace is active — the toolpath overlay renders only in that workspace.
+  const camSetup = useStore((s) => s.camSetup);
+  const camToolpaths = useStore((s) => s.camToolpaths);
+  const camWorkspace = useStore((s) => s.workspace === 'cam');
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
   // Hover name tooltip (model mode); updated only when the hovered body changes.
   const [hoverLabel, setHoverLabel] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -456,17 +469,24 @@ export function ViewportCanvas() {
       const ortho = orthoCameraRef.current;
       const controls = controlsRef.current;
       if (!renderer || !scene || !cam || !ortho || !controls) return;
-      // Keep both cameras in sync: copy the active camera's transform to the
-      // inactive one so switching projection is instantaneous.
+      // Keep both cameras in sync: copy the ACTIVE camera's transform to the
+      // inactive one so switching projection is instantaneous. The active
+      // camera is the one OrbitControls drive (controls.object is re-seated on
+      // every projection toggle), so this direction never overwrites a user
+      // gesture — the previous, inverted copy (inactive → active) reverted
+      // every orbit/zoom on each rendered frame. The lookAt orients the
+      // INACTIVE twin (its quaternion is otherwise stale; the active one is
+      // oriented by controls.update()).
       const proj = useStore.getState().projection;
       const activeCam: THREE.Camera = proj === 'orthographic' ? ortho : cam;
       if (proj === 'orthographic') {
+        cam.position.copy(ortho.position);
+        cam.up.copy(ortho.up);
+        cam.lookAt(controls.target);
+      } else {
         ortho.position.copy(cam.position);
         ortho.up.copy(cam.up);
         ortho.lookAt(controls.target);
-      } else {
-        cam.position.copy(ortho.position);
-        cam.up.copy(ortho.up);
       }
       renderer.render(scene, activeCam);
       // Publish camera state so the ViewCube can sync its rotation — only
@@ -507,6 +527,8 @@ export function ViewportCanvas() {
     const hlMat = sketchHlMatRef.current;
     const constructionMat = sketchConstructionMatRef.current;
     const constructionPtMat = sketchConstructionPtMatRef.current;
+    const camRapidMat = camRapidMatRef.current;
+    const camCutMat = camCutMatRef.current;
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -707,6 +729,11 @@ export function ViewportCanvas() {
     scene.add(csGroup);
     csGroupRef.current = csGroup;
 
+    const camGroup = new THREE.Group();
+    camGroup.name = 'cam-toolpaths';
+    scene.add(camGroup);
+    camGroupRef.current = camGroup;
+
     animate();
 
     // Last applied resize values — ResizeObserver fires per frame during
@@ -762,6 +789,15 @@ export function ViewportCanvas() {
       hlMat.dispose();
       constructionMat.dispose();
       constructionPtMat.dispose();
+      // CAM overlay: per-line geometries + the two shared materials.
+      const camGroup = camGroupRef.current;
+      if (camGroup) {
+        for (const child of camGroup.children) {
+          if (child instanceof THREE.Line) child.geometry.dispose();
+        }
+      }
+      camRapidMat.dispose();
+      camCutMat.dispose();
       // Gnomon label sprites (canvas textures) — same teardown as the sketch
       // dimension sprites (disposeSprite).
       for (const s of axisLabelSprites) disposeSprite(s);
@@ -1084,6 +1120,10 @@ export function ViewportCanvas() {
   const sketchHlMatRef = useRef(new THREE.LineBasicMaterial({ color: 0xfab387 }));
   const sketchConstructionMatRef = useRef(new THREE.LineDashedMaterial({ color: 0x6c7086, dashSize: 0.3, gapSize: 0.15 }));
   const sketchConstructionPtMatRef = useRef(new THREE.PointsMaterial({ color: 0x6c7086, size: 4, sizeAttenuation: false }));
+  // Shared materials for the CAM toolpath overlay (created once, disposed on
+  // unmount): rapids dashed and always on top, cuts solid and translucent.
+  const camRapidMatRef = useRef(new THREE.LineDashedMaterial({ color: 0xf38ba8, depthTest: false, transparent: true, opacity: 0.7, dashSize: 0.5, gapSize: 0.3 }));
+  const camCutMatRef = useRef(new THREE.LineBasicMaterial({ color: 0x89b4fa, transparent: true, opacity: 0.9 }));
 
   useEffect(() => {
     const sketchGroup = sketchGroupRef.current;
@@ -1160,7 +1200,15 @@ export function ViewportCanvas() {
         case 'arc': {
           const center = currentSketch.entities.get(entity.centerId);
           if (center?.type === 'point') {
-            const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, entity.startAngle, entity.endAngle, false, 0);
+            // Sketch arcs carry a SIGNED sweep (endAngle − startAngle < 0 =
+            // clockwise — the convention every consumer here walks, e.g.
+            // tree.ts profile extraction). EllipseCurve normalizes a negative
+            // sweep into its [0, 2π] CCW COMPLEMENT, so CW arcs (mirror
+            // copies, trim outputs, the arc tool's atan2<0 commits) rendered
+            // as the wrong arc; pass the sweep sign through as aClockwise so
+            // the preview traces the arc actually sketched.
+            const aClockwise = entity.endAngle - entity.startAngle < 0;
+            const curve = new THREE.EllipseCurve(center.x, center.y, entity.radius, entity.radius, entity.startAngle, entity.endAngle, aClockwise, 0);
             const pts = curve.getPoints(64);
             const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => s2w(p.x, p.y)));
             const line = new THREE.Line(geo, matFor(entity));
@@ -1274,7 +1322,10 @@ export function ViewportCanvas() {
           case 'arc': {
             const r = Math.hypot(m.x - s.x, m.y - s.y);
             const end = Math.atan2(m.y - s.y, m.x - s.x);
-            pts = new THREE.EllipseCurve(s.x, s.y, r, r, 0, end, false, 0).getPoints(64).map((p) => v(p.x, p.y));
+            // Same signed-sweep handling as the committed-arc render above:
+            // the cursor below/right of the start gives atan2 < 0, which must
+            // preview as the small clockwise quarter — not its CCW complement.
+            pts = new THREE.EllipseCurve(s.x, s.y, r, r, 0, end, end < 0, 0).getPoints(64).map((p) => v(p.x, p.y));
             break;
           }
           case 'polygon': {
@@ -1360,8 +1411,8 @@ export function ViewportCanvas() {
         }
       }
       // Constraint badges (Fusion/SolidWorks-style): H/V/∥/⊥/R/… at the
-      // anchor of each applied constraint, in green to separate them from
-      // the amber size labels.
+      // anchor of each applied constraint, in green to separate them from the
+      // amber size labels.
       for (const g of constraintGlyphs(currentSketch)) {
         const s = makeTextSprite(g.text, 0xa6e3a1, 0.24);
         s.position.copy(d2w(g.x, g.y)).addScaledVector(dimFrame.u, 0.9);
@@ -1370,6 +1421,67 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [currentSketch, sketchActive, selectedSketchId, selectedSketchIds, sketchPlaneId]);
+
+  // CAM toolpath overlay (the sketch-group pattern, cam workspace only). One
+  // THREE.Line per CONTIGUOUS CUTTING POLYLINE — rapid and plunge moves break
+  // the runs and draw as thin dashed segments (computeLineDistances) so the
+  // individual cut layers stay readable. Toolpath points are already SCENE
+  // coordinates (x/z plan, y = height) per the generator contract — they are
+  // used verbatim, with no remap. Geometry-only disposal: the two materials
+  // above are shared across rebuilds.
+  useEffect(() => {
+    const camGroup = camGroupRef.current;
+    if (!camGroup) return;
+    const rapidMat = camRapidMatRef.current;
+    const cutMat = camCutMatRef.current;
+
+    while (camGroup.children.length > 0) {
+      const child = camGroup.children[0]!;
+      camGroup.remove(child);
+      if (child instanceof THREE.Line) child.geometry.dispose();
+    }
+
+    camGroup.visible = camWorkspace;
+    if (!camWorkspace) {
+      dirtyRef.current = true;
+      return;
+    }
+
+    for (const op of camSetup.operations) {
+      const cache = camToolpaths[op.id];
+      if (!cache) continue;
+      const plungeRate = cache.toolpath.params.plungeRate;
+      const addRun = (pts: THREE.Vector3[]) => {
+        if (pts.length < 2) return;
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cutMat);
+        line.name = 'cam-cut';
+        camGroup.add(line);
+      };
+      let run: THREE.Vector3[] = [];
+      let prev: THREE.Vector3 | null = null;
+      const flush = () => { addRun(run); run = []; };
+      for (const p of cache.toolpath.points) {
+        const v = new THREE.Vector3(p.x, p.y, p.z);
+        // A move's kind comes from the point being moved TO: rapids are
+        // flagged; plunges are cuts carrying the plunge feed rate.
+        if (p.rapid || (p.feedRate !== undefined && p.feedRate === plungeRate)) {
+          flush();
+          if (prev) {
+            const seg = new THREE.Line(new THREE.BufferGeometry().setFromPoints([prev, v]), rapidMat);
+            seg.computeLineDistances(); // dashes
+            seg.name = 'cam-move';
+            camGroup.add(seg);
+          }
+        } else {
+          if (run.length === 0 && prev) run.push(prev); // connect to the last point
+          run.push(v);
+        }
+        prev = v;
+      }
+      flush();
+    }
+    dirtyRef.current = true;
+  }, [camWorkspace, camSetup, camToolpaths]);
 
   // Incremental body + edge rendering: diff against the cache so only
   // changed/new/removed bodies rebuild geometry. This avoids a full teardown
@@ -2594,6 +2706,81 @@ export function ViewportCanvas() {
     return items;
   }, [selectedSketchId, t, currentSketch]);
 
+  // ---- Camera view bookmarks (Fusion "bookmark this angle") ----
+  // Capture from the perspective camera + the shared orbit target: every
+  // view-change path here drives that pair (the snap listener mirrors the
+  // result onto the ortho camera each tween frame), so a bookmark restores
+  // identically under either projection.
+  const captureBookmark = useCallback((): ViewBookmark | null => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return null;
+    return useViewBookmarks.getState().add({
+      position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+      target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+      quaternion: {
+        x: camera.quaternion.x,
+        y: camera.quaternion.y,
+        z: camera.quaternion.z,
+        w: camera.quaternion.w,
+      },
+    });
+  }, []);
+
+  // Restore rides the SAME 'viewport-camera-snap' event the standard views
+  // use (250 ms slerp tween). That tween slerps the view DIRECTION and lerps
+  // `up` while keeping the orbit radius measured at event time — so re-seat
+  // the orbit centre and radius first: camera to the bookmarked distance from
+  // the bookmarked target, along its CURRENT direction. The event's position
+  // is then the bookmarked direction (position − target; the handler
+  // normalizes it — the standard views send the same field as a direction),
+  // and its up is the captured orientation's up axis (camera-local +Y in
+  // world space). The tween therefore ends exactly on the bookmarked pose.
+  const restoreBookmark = useCallback((bm: ViewBookmark) => {
+    const camera = cameraRef.current;
+    const ortho = orthoCameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const dir = camera.position.clone().sub(controls.target);
+    if (dir.lengthSq() < 1e-12) dir.set(0, 0, 1); // degenerate pose: any start direction
+    dir.normalize();
+    const dist = Math.hypot(
+      bm.position.x - bm.target.x,
+      bm.position.y - bm.target.y,
+      bm.position.z - bm.target.z,
+    );
+    controls.target.set(bm.target.x, bm.target.y, bm.target.z);
+    camera.position.copy(controls.target).addScaledVector(dir, dist);
+    if (ortho) {
+      ortho.position.copy(camera.position);
+      ortho.up.copy(camera.up);
+    }
+    controls.update();
+    dirtyRef.current = true;
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      new THREE.Quaternion(bm.quaternion.x, bm.quaternion.y, bm.quaternion.z, bm.quaternion.w),
+    );
+    window.dispatchEvent(new CustomEvent('viewport-camera-snap', {
+      detail: {
+        position: {
+          x: bm.position.x - bm.target.x,
+          y: bm.position.y - bm.target.y,
+          z: bm.position.z - bm.target.z,
+        },
+        up: { x: up.x, y: up.y, z: up.z },
+      },
+    }));
+  }, []);
+
+  // Palette 'view.bookmarkCurrent' → capture: the same window-event
+  // decoupling as fit-view / arm-hole (the registry cannot reach this
+  // component's camera refs; the listener owns them).
+  useEffect(() => {
+    const onBookmarkView = () => { captureBookmark(); };
+    window.addEventListener('scenelab:bookmark-view', onBookmarkView);
+    return () => window.removeEventListener('scenelab:bookmark-view', onBookmarkView);
+  }, [captureBookmark]);
+
   const bodyMenuItems = useCallback(
     (bodyId: string | null): ContextMenuItem[] => {
       // Empty-space menu: recent tools first (Fusion right-click), then quick
@@ -2627,6 +2814,20 @@ export function ViewportCanvas() {
               { label: projection === 'orthographic' ? t('viewport.perspective') : t('viewport.orthographic'), onClick: () => useStore.getState().toggleProjection(), separatorBefore: true },
             ],
           },
+          // Camera view bookmarks (Fusion): capture the current pose, jump
+          // back to a captured one, clear the set. Restores dispatch the same
+          // 'viewport-camera-snap' tween as the standard views above. The
+          // palette deliberately offers only capture + clear (see
+          // registry.ts) — the restore list is dynamic (one item per stored
+          // bookmark) and is rendered here, fresh on every menu open.
+          { label: t('menu.bookmarkCurrent'), onClick: () => { captureBookmark(); }, separatorBefore: true },
+          ...bookmarks.map((bm, i) => ({
+            label: `${i + 1}. ${bm.name}`,
+            onClick: () => { restoreBookmark(bm); },
+          })),
+          ...(bookmarks.length > 0
+            ? [{ label: t('menu.clearBookmarks'), onClick: () => { useViewBookmarks.getState().clear(); }, danger: true }]
+            : []),
           ...(useStore.getState().clipboard.length > 0
             ? [{ label: t('menu.paste'), onClick: () => runCommand('edit.paste'), separatorBefore: true }]
             : []),
@@ -2877,7 +3078,7 @@ export function ViewportCanvas() {
         { label: t('menu.delete'), onClick: () => removeDirectBody(bodyId), separatorBefore: true, danger: true },
       ];
     },
-    [bodies, t, selectedIds, hiddenIds, selectedEdgeIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, projection, annotations],
+    [bodies, t, selectedIds, hiddenIds, selectedEdgeIds, selectObject, replaceBody, removeDirectBody, addDirectBodies, setPendingPrimitive, ensureStandardPlanes, projection, annotations, bookmarks, captureBookmark, restoreBookmark],
   );
 
   // Zoom-to-fit: frame all bodies (or the default workspace volume) in view,

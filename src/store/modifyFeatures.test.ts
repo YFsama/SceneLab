@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from './app';
 import { FeatureTree, createExtrudeFeature, createSketchFeature } from '../lib/features/tree';
 import { createBox, computeVolume, computeBoundingBox } from '../lib/geometry/brep';
+import { flipBodyNormals } from '../lib/geometry/operations';
 import { warmUpBooleanEngine } from '../lib/geometry/boolean';
 import { createSketch, addRectangle, addCircle, addLine } from '../lib/sketch/engine';
 import type { SolidBody } from '../lib/geometry/types';
@@ -389,10 +390,178 @@ describe('applyHoleToBody (hole feature action)', () => {
     expect(useStore.getState().applyHoleToBody(box.id, 4, null, undefined, { x: 0, y: 0, z: 0 })).toBe(false);
     expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
   });
+
+  it('a hole that does not reach a TREE body rolls the feature back and toasts holeMissed', async () => {
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    await warmUpBooleanEngine();
+    const tree = parametricBox(); // 10×10×10, top face at y = 10
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    const bodyId = useStore.getState().bodies[0]!.id;
+    const undoDepth = useStore.getState().undoStack.length;
+    clearToasts();
+
+    // Blind hole starting 20 mm above the box: the 5 mm cutter spans
+    // y 25..30 and never touches the body (y 0..10).
+    expect(useStore.getState().applyHoleToBody(bodyId, 4, 5, { x: 0, y: 30, z: 0 })).toBe(false);
+    // The failed attempt left no trace: no hole feature, no undo entry, the
+    // body un-drilled — and the user was told why.
+    expect(useStore.getState().featureTree.features).toHaveLength(1);
+    expect(useStore.getState().bodies).toHaveLength(1);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+    expect(useStore.getState().undoStack.length).toBe(undoDepth);
+    expect(getToasts().at(-1)!.message).toContain('did not reach the body');
+  });
+
+  it('a hole that does not reach a DIRECT body mutates nothing and toasts holeMissed', async () => {
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    await warmUpBooleanEngine();
+    const box = createBox(10, 10, 10); // spans y -5..5
+    useStore.getState().addDirectBody(box);
+    const undoDepth = useStore.getState().undoStack.length;
+    useStore.setState({ projectDirty: false });
+    clearToasts();
+
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 5, { x: 0, y: 30, z: 0 })).toBe(false);
+    expect(useStore.getState().featureTree.features).toHaveLength(0);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+    expect(useStore.getState().undoStack.length).toBe(undoDepth);
+    expect(useStore.getState().projectDirty).toBe(false);
+    expect(getToasts().at(-1)!.message).toContain('did not reach the body');
+  });
+
+  it('a flipped-normal body turns the default blind hole into a miss: refused, toasted, untouched', async () => {
+    // topFaceHolePlacement picks faces by normal: after flipBodyNormals the
+    // geometric BOTTOM face is the one whose normal points up, so the default
+    // blind drill starts there and points AWAY from the material — a true
+    // miss the probe must report instead of a fake success.
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    await warmUpBooleanEngine();
+    const box = flipBodyNormals(createBox(10, 10, 10));
+    useStore.getState().addDirectBody(box);
+    const undoDepth = useStore.getState().undoStack.length;
+    useStore.setState({ projectDirty: false });
+    clearToasts();
+
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 5)).toBe(false);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeCloseTo(1000, 3);
+    expect(useStore.getState().undoStack.length).toBe(undoDepth);
+    expect(useStore.getState().projectDirty).toBe(false);
+    expect(getToasts().at(-1)!.message).toContain('did not reach the body');
+  });
+
+  it('the probe does not over-reject flipped-normal bodies: an on-surface entry still drills', async () => {
+    await warmUpBooleanEngine();
+    const box = flipBodyNormals(createBox(10, 10, 10));
+    useStore.getState().addDirectBody(box);
+    // Explicit entry ON the real top face (y = 5): the mesh is inside-out but
+    // the geometry is real, so the probe passes and the hole is drilled.
+    expect(useStore.getState().applyHoleToBody(box.id, 4, 5, { x: 0, y: 5, z: 0 })).toBe(true);
+    expect(Math.abs(computeVolume(useStore.getState().bodies[0]!))).toBeLessThan(1000);
+  });
 });
 
-describe('setDimensionTarget (editable drawing dimensions)', () => {
+describe('updateFeature fillet/chamfer size gate (param edits)', () => {
   beforeEach(() => {
+    useStore.setState({
+      featureTree: new FeatureTree(),
+      directBodies: [],
+      bodies: [],
+      objectIds: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
+    });
+  });
+
+  /** Parametric 10×10×10 tree body with a fillet (r1) child feature, selected. */
+  const setup = (): { filletId: string; undoDepth: number; faces: number } => {
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    useStore.getState().selectObject(useStore.getState().bodies[0]!.id);
+    expect(useStore.getState().applyFilletFeature(1)).toBe(true); // limit is 5
+    const filletId = useStore.getState().featureTree.features
+      .find((f) => f.type === 'fillet')!.id;
+    return {
+      filletId,
+      undoDepth: useStore.getState().undoStack.length,
+      faces: useStore.getState().bodies[0]!.faces.length,
+    };
+  };
+
+  it('refuses an oversize radius edit with the limit toast and no mutation', async () => {
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    const { filletId, undoDepth, faces } = setup();
+    clearToasts();
+
+    // The ParametersPanel / AI update_feature path: editing the EXISTING
+    // fillet's radius past the geometric limit (5 on a 10 mm box) must be
+    // refused exactly like an oversize apply.
+    expect(useStore.getState().updateFeature(filletId, (f) =>
+      f.type === 'fillet' ? { ...f, params: { ...f.params, radius: 50 } } : f,
+    )).toBe(false);
+    const feat = useStore.getState().featureTree.getFeature(filletId)!;
+    expect(feat.type === 'fillet' && feat.params.radius).toBe(1);
+    // Refused = nothing happened: same body, no history entry.
+    expect(useStore.getState().bodies[0]!.faces.length).toBe(faces);
+    expect(useStore.getState().undoStack.length).toBe(undoDepth);
+    expect(getToasts().at(-1)!.message).toContain('max 5 mm');
+  });
+
+  it('an in-limit radius edit applies through the same path', () => {
+    const { filletId } = setup();
+    expect(useStore.getState().updateFeature(filletId, (f) =>
+      f.type === 'fillet' ? { ...f, params: { ...f.params, radius: 2 } } : f,
+    )).toBe(true);
+    const feat = useStore.getState().featureTree.getFeature(filletId)!;
+    expect(feat.type === 'fillet' && feat.params.radius).toBe(2);
+    // The recompute behind the edit re-played the fillet at the new radius.
+    expect(useStore.getState().bodies[0]!.faces.length).toBeGreaterThan(6);
+  });
+
+  it('refuses an oversize chamfer distance edit the same way', async () => {
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    const tree = parametricBox();
+    tree.recompute();
+    useStore.setState({ featureTree: tree });
+    useStore.getState().recomputeTree();
+    useStore.getState().selectObject(useStore.getState().bodies[0]!.id);
+    expect(useStore.getState().applyChamferFeature(1)).toBe(true); // limit is 5
+    const chamferId = useStore.getState().featureTree.features
+      .find((f) => f.type === 'chamfer')!.id;
+    const undoDepth = useStore.getState().undoStack.length;
+    clearToasts();
+
+    expect(useStore.getState().updateFeature(chamferId, (f) =>
+      f.type === 'chamfer' ? { ...f, params: { ...f.params, distance: 50 } } : f,
+    )).toBe(false);
+    const feat = useStore.getState().featureTree.getFeature(chamferId)!;
+    expect(feat.type === 'chamfer' && feat.params.distance).toBe(1);
+    expect(useStore.getState().undoStack.length).toBe(undoDepth);
+    expect(getToasts().at(-1)!.message).toContain('max 5 mm');
+  });
+
+  it('edits that do not touch the gated value are not held hostage', () => {
+    const { filletId } = setup();
+    // Suppress and rename leave radius/edgeIds alone — the gate must not
+    // refuse them even if a legacy feature were over the limit.
+    expect(useStore.getState().updateFeature(filletId, (f) => ({ ...f, suppressed: true }))).toBe(true);
+    expect(useStore.getState().featureTree.getFeature(filletId)!.suppressed).toBe(true);
+    expect(useStore.getState().updateFeature(filletId, (f) => ({ ...f, name: 'Edge blend' }))).toBe(true);
+    expect(useStore.getState().featureTree.getFeature(filletId)!.name).toBe('Edge blend');
+  });
+
+  it('a missing feature id is a plain false (no junk undo entry)', () => {
+    const before = useStore.getState().undoStack.length;
+    expect(useStore.getState().updateFeature('nope', (f) => f)).toBe(false);
+    expect(useStore.getState().undoStack.length).toBe(before);
+  });
+});
+
+describe('setDimensionTarget (editable drawing dimensions)', () => {  beforeEach(() => {
     useStore.setState({
       featureTree: new FeatureTree(),
       directBodies: [],
@@ -835,7 +1004,7 @@ describe('feature-tree undo/redo', () => {
     expect(useStore.getState().bodies[0]!.faces.length).toBeGreaterThan(box.faces.length);
 
     // Chamfer on a FRESH box (the filleted body's edges are no longer
-    // chamferable — all skipped — which the guard also refuses, with max 0).
+    // chamferable — all skipped — which the guard also refuses).
     clearToasts();
     const box2 = createBox(20, 20, 20);
     useStore.getState().addDirectBody(box2);
@@ -843,5 +1012,27 @@ describe('feature-tree undo/redo', () => {
     expect(useStore.getState().applyChamferFeature(50)).toBe(false);
     expect(getToasts().at(-1)!.message).toContain('max 10 mm');
     expect(useStore.getState().bodies.find((b) => b.id === box2.id)!.faces.length).toBe(box2.faces.length);
+  });
+
+  it('an all-edges-skipped selection refuses with the no-edges toast, not "max 0 mm"', async () => {
+    const { clearToasts, getToasts } = await import('../lib/toast');
+    // A filleted box has no treatable edges left: every one is skipped, so the
+    // limit is null — the refusal must explain that (filletNoEdges), not show
+    // a meaningless maximum of 0.
+    const box = createBox(10, 10, 10);
+    useStore.getState().addDirectBody(box);
+    useStore.getState().selectObject(box.id);
+    expect(useStore.getState().applyFilletFeature(1)).toBe(true); // now all edges are arc edges
+    useStore.setState({ undoStack: [] });
+    clearToasts();
+
+    expect(useStore.getState().applyChamferFeature(1)).toBe(false);
+    expect(getToasts().at(-1)!.message).toContain('No filletable edges');
+    clearToasts();
+    expect(useStore.getState().applyFilletFeature(1)).toBe(false);
+    expect(getToasts().at(-1)!.message).toContain('No filletable edges');
+    // Refused: the filleted body is untouched and no history entry landed.
+    expect(useStore.getState().undoStack).toHaveLength(0);
+    expect(useStore.getState().bodies[0]!.faces.length).toBeGreaterThan(box.faces.length);
   });
 });

@@ -314,6 +314,16 @@ describe('tree-aware modify routing (fillet/chamfer/shell/arrays/mirror)', () =>
     expect(fillet.type).toBe('fillet');
     const patched = (await getTool('update_feature')!.execute({ featureId: r.featureId!, params: { radius: 2 } })) as { success: boolean };
     expect(patched.success).toBe(true);
+
+    // The gate: an oversize radius edit is REFUSED and the tool must say so
+    // (the store's updateFeature returns false; the tool used to claim success).
+    const refused = (await getTool('update_feature')!.execute({ featureId: r.featureId!, params: { radius: 999 } })) as {
+      success: boolean; reason?: string;
+    };
+    expect(refused.success).toBe(false);
+    expect(refused.reason).toMatch(/refused|limit/i);
+    const feature = useStore.getState().featureTree.getFeature(r.featureId!);
+    expect(feature?.type === 'fillet' && feature.params.radius).toBe(2); // unchanged
   });
 
   it('chamfer on a tree body routes to a feature too', async () => {

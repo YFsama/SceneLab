@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { featureSummary } from './summary';
+import { featureSummary, holeCalloutText } from './summary';
 import {
   FeatureTree,
   createSketchFeature,
@@ -59,6 +59,17 @@ describe('featureSummary (timeline chip labels)', () => {
     expect(featureSummary(scale)).toBe('x→42');
   });
 
+  it('marks a cut extrude with the locale-neutral scissors glyph', () => {
+    const sf = treeWithEveryType().features[0]!; // any parent id
+    const cut = createExtrudeFeature(
+      { profile: [], direction: { x: 0, y: 1, z: 0 }, distance: 8, symmetric: false, op: 'cut' },
+      [sf.id],
+    );
+    // No English word: the chip (and the AI's summary field) stays glyph-only
+    // in every locale, like the ⌀/⌴/⌵ annotations below.
+    expect(featureSummary(cut)).toBe('✂ 8mm');
+  });
+
   it('summarizes holes with counterbore/countersink (⌴ / ⌵ annotations)', () => {
     const sf = treeWithEveryType().features[0]!; // any parent id
     expect(featureSummary(createHoleFeature(
@@ -88,5 +99,27 @@ describe('featureSummary (timeline chip labels)', () => {
       },
       [sf.id],
     ))).toBe('⌀6×∞ ⌴10×3');
+  });
+});
+
+describe('holeCalloutText (the shared formatting, localized depth word)', () => {
+  const thru = { center: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 6, depth: null };
+
+  it('swaps the through-all word while featureSummary keeps the ∞ chip', () => {
+    expect(holeCalloutText(thru, 'THRU')).toBe('⌀6×THRU'); // the drawing sheet's word
+    expect(holeCalloutText(thru, '∞')).toBe('⌀6×∞'); // the timeline chip's word
+    expect(featureSummary(createHoleFeature(thru, []))).toBe('⌀6×∞'); // behavior unchanged
+    expect(holeCalloutText({ ...thru, depth: 12.5 }, 'THRU')).toBe('⌀6×12.5');
+  });
+
+  it('carries counterbore/countersink annotations with either word', () => {
+    expect(holeCalloutText(
+      { ...thru, counterbore: { diameter: 10, depth: 3 } },
+      'THRU',
+    )).toBe('⌀6×THRU ⌴10×3');
+    expect(holeCalloutText(
+      { ...thru, countersink: { diameter: 10, angleDeg: 90 } },
+      '通孔',
+    )).toBe('⌀6×通孔 ⌵10°90');
   });
 });

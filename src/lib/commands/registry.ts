@@ -1,4 +1,5 @@
 import { useStore, type PrimitiveKind } from '../../store/app';
+import { useViewBookmarks } from '../../store/viewBookmarks';
 import { listFaces } from '../geometry/query';
 import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../projectActions';
 import { LIBRARY_PARTS } from '../library/parts';
@@ -369,6 +370,27 @@ export function initBuiltinCommands(): void {
     category: 'View',
     shortcut: 'Shift+F',
     run: () => { window.dispatchEvent(new CustomEvent('scenelab:fit-view', { detail: { selection: true } })); },
+  });
+  // Camera view bookmarks (Fusion): the palette offers CAPTURE and CLEAR
+  // only. Per-bookmark RESTORE commands are deliberately NOT registered —
+  // the registry is a static table, while the restore list is dynamic (one
+  // entry per stored bookmark, changing on every capture/remove); restores
+  // live in the viewport's empty-space context menu, which renders the
+  // current list on every open. Capture is decoupled like the fit commands:
+  // the event reaches ViewportCanvas's listener, which owns the camera refs.
+  registerCommand({
+    id: 'view.bookmarkCurrent',
+    label: tr('menu.bookmarkCurrent'),
+    labelKey: 'menu.bookmarkCurrent',
+    category: 'View',
+    run: () => { window.dispatchEvent(new CustomEvent('scenelab:bookmark-view')); },
+  });
+  registerCommand({
+    id: 'view.clearBookmarks',
+    label: tr('menu.clearBookmarks'),
+    labelKey: 'menu.clearBookmarks',
+    category: 'View',
+    run: () => { useViewBookmarks.getState().clear(); },
   });
   // Fusion-style Parameters dialog: every driving dimension in the document in
   // one editable table. Opened via the same window-event decoupling as the fit

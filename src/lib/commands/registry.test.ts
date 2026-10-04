@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { registerCommand, getCommand, runCommand, searchCommands, allCommands, clearCommands, recentCommands, initBuiltinCommands, addMidplaneFromSelection, commandLabel } from './registry';
 import { useStore } from '../../store/app';
+import { useViewBookmarks } from '../../store/viewBookmarks';
 import { createBox, createCylinder, createTorus } from '../geometry';
 import { createSketch } from '../sketch/engine';
 import { translations } from '../i18n';
@@ -436,5 +437,66 @@ describe('workspace shortcut hints (F10)', () => {
     // Mirrors initShortcuts: plain M toggles measure, Shift+M jumps to model.
     expect(getCommand('workspace.model')?.shortcut).toBe('Shift+M');
     expect(getCommand('view.measure')?.shortcut).toBe('M');
+  });
+});
+
+describe('view bookmark commands (palette capture + clear)', () => {
+  beforeEach(() => {
+    clearCommands();
+    localStorage.removeItem('scenelab.viewBookmarks');
+    useViewBookmarks.setState({ bookmarks: [] });
+  });
+
+  const seedBookmark = () => useViewBookmarks.getState().add({
+    position: { x: 1, y: 2, z: 3 },
+    target: { x: 0, y: 0, z: 0 },
+    quaternion: { x: 0, y: 0, z: 0, w: 1 },
+  });
+
+  it('registers view.bookmarkCurrent / view.clearBookmarks as View commands', () => {
+    initBuiltinCommands();
+    expect(getCommand('view.bookmarkCurrent')?.category).toBe('View');
+    expect(getCommand('view.clearBookmarks')?.category).toBe('View');
+    // Deliberately NO per-bookmark restore command: the registry is a static
+    // table while the restore list is dynamic (one entry per stored
+    // bookmark) — restores live in the viewport's context menu.
+    expect(allCommands().filter((c) => /^view\.(goToBookmark|restoreBookmark)/.test(c.id))).toHaveLength(0);
+  });
+
+  it('labels come from the shared menu keys and follow a runtime locale switch', () => {
+    initBuiltinCommands();
+    expect(commandLabel(getCommand('view.bookmarkCurrent')!)).toBe(translations.en!['menu.bookmarkCurrent']!);
+    expect(commandLabel(getCommand('view.clearBookmarks')!)).toBe(translations.en!['menu.clearBookmarks']!);
+    useStore.setState({ locale: 'zh' });
+    try {
+      expect(commandLabel(getCommand('view.bookmarkCurrent')!)).toBe(translations.zh!['menu.bookmarkCurrent']!);
+      // …and the zh label finds them in fuzzy search without re-registering.
+      expect(searchCommands(translations.zh!['menu.bookmarkCurrent']!).map((c) => c.id)).toContain('view.bookmarkCurrent');
+    } finally {
+      useStore.setState({ locale: 'en' });
+    }
+  });
+
+  it('view.bookmarkCurrent dispatches scenelab:bookmark-view for the viewport listener', () => {
+    initBuiltinCommands();
+    const events: CustomEvent[] = [];
+    const listener = (e: Event) => { events.push(e as CustomEvent); };
+    window.addEventListener('scenelab:bookmark-view', listener);
+    try {
+      expect(runCommand('view.bookmarkCurrent')).toBe(true);
+    } finally {
+      window.removeEventListener('scenelab:bookmark-view', listener);
+    }
+    expect(events).toHaveLength(1);
+  });
+
+  it('view.clearBookmarks empties the bookmark store (and its persistence)', () => {
+    seedBookmark();
+    seedBookmark();
+    expect(useViewBookmarks.getState().bookmarks).toHaveLength(2);
+    initBuiltinCommands();
+    expect(runCommand('view.clearBookmarks')).toBe(true);
+    expect(useViewBookmarks.getState().bookmarks).toEqual([]);
+    expect(localStorage.getItem('scenelab.viewBookmarks')).toBe('[]');
   });
 });

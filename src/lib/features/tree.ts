@@ -350,8 +350,13 @@ export class FeatureTree {
   private evaluateHole(feature: HoleFeature): FeatureResult {
     const parent = this.firstParentBody(feature);
     if (!parent) throw new Error('Hole requires a parent body');
+    // Consumption only on SUCCESS (the cut rule): drillHoleInBody throws on a
+    // miss ('hole does not reach the body'), and a failed hole must leave the
+    // un-drilled parent visible (last-good-state) instead of consuming it
+    // into nothing.
+    const drilled = drillHoleInBody(parent.body, feature.params);
     this.consumed.add(parent.featureId);
-    return { bodies: [drillHoleInBody(parent.body, feature.params)] };
+    return { bodies: [drilled] };
   }
 
   private evaluateScale(feature: ScaleFeature): FeatureResult {
@@ -829,6 +834,14 @@ export function cutBodyWithCutter(target: SolidBody, cutter: SolidBody): SolidBo
  * (truncated cone whose included angle meets the hole diameter at its base)
  * widens the entry — the counterbore wins when both are present. Shared by
  * the hole feature evaluator and the store's direct-body edit path.
+ *
+ * Failure honesty (the cutBodyWithCutter rule): a cutter that does not reach
+ * the body (e.g. an off-surface start with a blind depth) THROWS 'hole does
+ * not reach the body' instead of silently returning the body unchanged —
+ * difference alone cannot tell a miss from a hit. The intersect probe cannot
+ * reject a legitimate entry: a through-all cutter spans twice the bounding-box
+ * diagonal centred on the start point, and a blind cutter starts exactly on
+ * the picked surface point, so every on-body entry intersects.
  */
 export function drillHoleInBody(
   body: SolidBody,
@@ -859,6 +872,12 @@ export function drillHoleInBody(
     { x: center.x - d.x * backUp, y: center.y - d.y * backUp, z: center.z - d.z * backUp },
     'Hole cutter',
   );
+
+  // Probe with the intersection first (the cutBodyWithCutter pattern): an
+  // empty overlap means the cutter never reached the body, and body − cutter
+  // would just hand back the body unchanged as a fake success.
+  const overlap = booleanOp(body, cutter, 'intersect', 48);
+  if (!overlap) throw new Error('hole does not reach the body');
 
   let result = booleanOp(body, cutter, 'difference', 48);
   if (!result) throw new Error('Hole removed the entire parent body');

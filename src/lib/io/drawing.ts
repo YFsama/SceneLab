@@ -1,5 +1,7 @@
 import type { SolidBody, Vec3 } from '../geometry/types';
 import { layoutDetailPanels, detailPointToSheet, type DetailPanelInput, type DrawingDetail, type DrawingNote } from './drawingNotes';
+import { detectCircles } from './drawingCircles';
+import type { HoleCallout } from './drawingCallouts';
 
 export interface DrawingLine {
   start: { x: number; y: number };
@@ -11,6 +13,19 @@ export interface DrawingArc {
   radius: number;
   startAngle: number;
   endAngle: number;
+  /**
+   * Sweep direction from startAngle to endAngle in view coords (default true
+   * = counter-clockwise). Needed whenever the sweep differs from the default
+   * minor-arc reading — e.g. a sectioned cylinder cap.
+   */
+  ccw?: boolean;
+}
+
+/** An ASME center mark: a detected circle's centre and radius (view units). */
+export interface DrawingCenterMark {
+  x: number;
+  y: number;
+  radius: number;
 }
 
 export interface DrawingDimension {
@@ -18,6 +33,12 @@ export interface DrawingDimension {
   start: { x: number; y: number };
   end: { x: number; y: number };
   value: number;
+  /**
+   * Advisory stacking offset (view units) from generation time. Sheet
+   * renderers ignore it: dimension lines are placed a fixed SHEET-PIXEL
+   * distance from the measured geometry (see dimensionSheetGeometry), so the
+   * gap survives any auto-fit scale.
+   */
   offset: number;
   /**
    * Editable dimensions carry a driver: the dimension measures (and can set)
@@ -35,6 +56,13 @@ export interface DrawingView {
   bounds: { min: { x: number; y: number }; max: { x: number; y: number } };
   /** Section-view cut faces (planar polygons on the cutting plane), hatched. */
   sectionFaces?: { x: number; y: number }[][];
+  /**
+   * Detected circle centres for center marks (see drawingCircles.ts). Always
+   * on — no toggle. Rendered by the canvas + SVG exporter; detail views clip
+   * them via clipSegmentToCircle. The DXF exporter does not consume views
+   * (it exports raw body edges) and is deliberately left without marks.
+   */
+  centers?: DrawingCenterMark[];
 }
 
 /** Half-space section clip: keep the geometry on the negative side of the plane. */
@@ -141,6 +169,102 @@ export function viewTransform(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Dimension sheet geometry.
+//
+// Dimension offsets used to be baked into the generated dim coordinates in
+// PROJECTED units (8 / 26), which auto-fit then scaled: a 1000 mm body fit
+// into a cell at ~0.006 px per unit collapsed the "8 unit" gap to ~0.05 px —
+// the dimension line sat ON the outline. The placement now lives in SHEET
+// pixels, computed per render from the measured points.
+// ---------------------------------------------------------------------------
+
+/** Dimension-line standoff from the measured geometry (sheet px). */
+export const DIM_OFFSET_PX = 24;
+/** Gap between the measured point and the start of its extension line (px). */
+export const DIM_EXT_GAP_PX = 1.5;
+/** Extension-line overshoot past the dimension line (px). */
+export const DIM_EXT_OVERSHOOT_PX = 2;
+
+export interface SheetDimGeometry {
+  /** The dimension line, DIM_OFFSET_PX off the measured span (perpendicular). */
+  dim: { start: { x: number; y: number }; end: { x: number; y: number } };
+  /** Extension lines from each measured point (gap → overshoot). */
+  ext: { start: { x: number; y: number }; end: { x: number; y: number } }[];
+  /** Text anchor: midpoint of the dimension line, a little above it. */
+  text: { x: number; y: number };
+}
+
+/**
+ * Place a dimension on the sheet: the measured points are projected with
+ * `toSheet`, the dimension line is offset perpendicular by DIM_OFFSET_PX (on
+ * the same side the old generator used — below width dims, right of height
+ * dims — because the perpendicular follows the sheet-space start→end
+ * direction), with extension lines in between. Arrowheads are a later pass.
+ */
+export function dimensionSheetGeometry(
+  dim: DrawingDimension,
+  toSheet: (p: { x: number; y: number }) => { x: number; y: number },
+): SheetDimGeometry {
+  const a = toSheet(dim.start);
+  const b = toSheet(dim.end);
+  const ux = b.x - a.x;
+  const uy = b.y - a.y;
+  const len = Math.hypot(ux, uy) || 1;
+  const nx = -uy / len;
+  const ny = ux / len;
+  const at = (p: { x: number; y: number }, d: number) => ({ x: p.x + nx * d, y: p.y + ny * d });
+  const start = at(a, DIM_OFFSET_PX);
+  const end = at(b, DIM_OFFSET_PX);
+  return {
+    dim: { start, end },
+    ext: [
+      { start: at(a, DIM_EXT_GAP_PX), end: at(a, DIM_OFFSET_PX + DIM_EXT_OVERSHOOT_PX) },
+      { start: at(b, DIM_EXT_GAP_PX), end: at(b, DIM_OFFSET_PX + DIM_EXT_OVERSHOOT_PX) },
+    ],
+    text: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 4 },
+  };
+}
+
+/** One shared dimension-text format for the canvas and the SVG exporter. */
+export function formatDimValue(v: number): string {
+  return `${v.toFixed(1)} mm`;
+}
+
+// ---------------------------------------------------------------------------
+// Hole-callout leader geometry (sheet px), shared by the canvas and the SVG
+// exporter; see drawingCallouts.ts for how callouts are derived.
+// ---------------------------------------------------------------------------
+
+/** Horizontal text shelf length after the elbow (sheet px). */
+export const CALLOUT_SHELF_PX = 18;
+
+export interface CalloutSheetGeometry {
+  /** Leader polyline: circle rim → 45° elbow → end of the text shelf. */
+  leader: { x: number; y: number }[];
+  /** Text anchor just past the shelf end. */
+  text: { x: number; y: number };
+}
+
+/** Leader from a hole's rim at 45° up-right to an ~18 px text shelf. */
+export function calloutSheetGeometry(
+  center: { x: number; y: number },
+  radius: number,
+): CalloutSheetGeometry {
+  const k = Math.SQRT1_2;
+  const reach = radius + 10;
+  const elbow = { x: center.x + k * reach, y: center.y - k * reach };
+  const shelfEnd = { x: elbow.x + CALLOUT_SHELF_PX, y: elbow.y };
+  return {
+    leader: [
+      { x: center.x + k * radius, y: center.y - k * radius },
+      elbow,
+      shelfEnd,
+    ],
+    text: { x: shelfEnd.x + 2, y: shelfEnd.y - 3 },
+  };
+}
+
 /** Project a 3D body onto a 2D plane for drawing */
 export function projectBody(
   body: SolidBody,
@@ -168,7 +292,7 @@ export function projectBodies(
   // i.e. +Z out of the screen toward the viewer). Using cross(viewDir, up)
   // instead would flip the drawing horizontally — a front view of +X would
   // project to the left.
-  const right = cross(upDir, viewDir);
+  const right = viewRightAxis(upDir, viewDir);
   const lines: DrawingLine[] = [];
   const sectionFaces: { x: number; y: number }[][] = [];
   // Projected geometry per body: each body's own dimensions are measured from
@@ -243,11 +367,17 @@ export function projectBodies(
   const heightAxis = dominantWorldAxis(upDir);
   const dimensions = bodyDimensions(perBodyPts, widthAxis, heightAxis, scale);
 
+  // Circle/arc detection over the (post section-clip) projected lines: center
+  // marks for closed circular loops, fitted arcs for open constant-curvature
+  // chains. Tessellation lines are kept — the detections annotate them.
+  const { centers, arcs } = detectCircles(lines);
+
   return {
     name,
     lines,
-    arcs: [],
+    arcs,
     dimensions,
+    centers: centers.length > 0 ? centers : undefined,
     sectionFaces: sectionFaces.length > 0 ? sectionFaces : undefined,
     bounds: {
       min: { x: minX, y: minY },
@@ -311,7 +441,8 @@ function chainOnPlaneLoops(segs: [Vec3, Vec3][]): Vec3[][] {
   return loops;
 }
 
-function projectPoint(
+/** Orthographic projection of a 3D point onto a view's 2D plane (× scale). */
+export function projectPoint(
   p: Vec3,
   _viewDir: Vec3,
   right: Vec3,
@@ -322,6 +453,15 @@ function projectPoint(
     x: (p.x * right.x + p.y * right.y + p.z * right.z) * scale,
     y: (p.x * up.x + p.y * up.y + p.z * up.z) * scale,
   };
+}
+
+/**
+ * The screen right-axis of a view frame: right × up = viewDir (+Z out of the
+ * screen). Exported so callout anchoring reuses the exact projection frame
+ * projectBodies uses (a flipped right-axis would mirror hole positions).
+ */
+export function viewRightAxis(upDir: Vec3, viewDir: Vec3): Vec3 {
+  return cross(upDir, viewDir);
 }
 
 /**
@@ -337,7 +477,10 @@ function dominantWorldAxis(v: Vec3): 'x' | 'y' | 'z' | undefined {
   return ax === m ? 'x' : ay === m ? 'y' : 'z';
 }
 
-/** Per-body width/height dimensions, plus overall scene dims when >1 body. */
+/** Per-body width/height dimensions, plus overall scene dims when >1 body.
+ *  start/end sit ON the measured geometry extent — the renderers offset the
+ *  dimension line a fixed sheet-px distance from them (dimensionSheetGeometry);
+ *  `offset` is kept only as advisory stacking info. */
 function bodyDimensions(
   perBody: { body: SolidBody; pts: { x: number; y: number }[] }[],
   widthAxis: 'x' | 'y' | 'z' | undefined,
@@ -356,16 +499,16 @@ function bodyDimensions(
     maxX = Math.max(maxX, bMaxX); maxY = Math.max(maxY, bMaxY);
     dims.push({
       type: 'linear',
-      start: { x: bMinX, y: bMinY - 8 },
-      end: { x: bMaxX, y: bMinY - 8 },
+      start: { x: bMinX, y: bMinY },
+      end: { x: bMaxX, y: bMinY },
       value: (bMaxX - bMinX) / scale,
       offset: 8,
       ...(widthAxis ? { driver: { bodyId: body.id, axis: widthAxis } } : {}),
     });
     dims.push({
       type: 'linear',
-      start: { x: bMaxX + 8, y: bMinY },
-      end: { x: bMaxX + 8, y: bMaxY },
+      start: { x: bMaxX, y: bMinY },
+      end: { x: bMaxX, y: bMaxY },
       value: (bMaxY - bMinY) / scale,
       offset: 8,
       ...(heightAxis ? { driver: { bodyId: body.id, axis: heightAxis } } : {}),
@@ -375,15 +518,15 @@ function bodyDimensions(
     dims.push(
       {
         type: 'linear',
-        start: { x: minX, y: minY - 26 },
-        end: { x: maxX, y: minY - 26 },
+        start: { x: minX, y: minY },
+        end: { x: maxX, y: minY },
         value: (maxX - minX) / scale,
         offset: 26,
       },
       {
         type: 'linear',
-        start: { x: maxX + 26, y: minY },
-        end: { x: maxX + 26, y: maxY },
+        start: { x: maxX, y: minY },
+        end: { x: maxX, y: maxY },
         value: (maxY - minY) / scale,
         offset: 26,
       },
@@ -414,6 +557,45 @@ export interface DrawingSheetExtras {
   details?: DrawingDetail[];
   /** Text notes at sheet px ({x, y} of an 800×600-base sheet). */
   notes?: DrawingNote[];
+  /** Hole callouts (see drawingCallouts.ts); viewIndex indexes `views`. */
+  holeCallouts?: HoleCallout[];
+}
+
+/** Center-mark arm half-length as a multiple of the circle radius (ASME). */
+export const CENTER_MARK_ARM_RATIO = 1.25;
+
+/** The two cross arms of a center mark, as view-coord segments. */
+function centerMarkArms(m: DrawingCenterMark): DrawingLine[] {
+  const arm = m.radius * CENTER_MARK_ARM_RATIO;
+  return [
+    { start: { x: m.x - arm, y: m.y }, end: { x: m.x + arm, y: m.y } },
+    { start: { x: m.x, y: m.y - arm }, end: { x: m.x, y: m.y + arm } },
+  ];
+}
+
+/** SVG arc path honoring start/end angles (the old export drew full circles). */
+function arcToSvgPath(
+  c: { x: number; y: number },
+  r: number,
+  arc: DrawingArc,
+): string {
+  // View coords are +y up, the SHEET's +y is down (viewTransform flips) —
+  // mirror ONLY the y component (c.y − r·sin). The sweep direction is
+  // unchanged by this mapping (view-CCW stays visually CCW on screen =
+  // SVG sweep-flag 0); the original bug was drawing at c.y + r·sin, which
+  // placed the arc on the WRONG side of its center.
+  const at = (angle: number) => ({
+    x: c.x + r * Math.cos(angle),
+    y: c.y - r * Math.sin(angle),
+  });
+  const p1 = at(arc.startAngle);
+  const p2 = at(arc.endAngle);
+  const ccw = arc.ccw !== false;
+  let sweepAngle = ccw ? arc.endAngle - arc.startAngle : arc.startAngle - arc.endAngle;
+  while (sweepAngle < 0) sweepAngle += 2 * Math.PI;
+  while (sweepAngle >= 2 * Math.PI) sweepAngle -= 2 * Math.PI;
+  const largeArc = sweepAngle > Math.PI ? 1 : 0;
+  return `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 ${largeArc} ${ccw ? 0 : 1} ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
 }
 
 /** Export one or more drawing views as SVG, laid out in a grid like the canvas */
@@ -456,12 +638,13 @@ export function exportDrawingSVG(
 
   const placements = list.map((view, i) => ({
     view,
+    viewIndex: i,
     ox: (i % cols) * cellW,
     oy: Math.floor(i / cols) * cellH,
     transform: viewTransform(view, { x: (i % cols) * cellW, y: Math.floor(i / cols) * cellH, w: cellW, h: cellH }, padding),
   }));
 
-  for (const { view, ox, oy, transform } of placements) {
+  for (const { view, viewIndex, ox, oy, transform } of placements) {
     svg += `  <g stroke="black" stroke-width="1" fill="none">\n`;
     for (const line of view.lines) {
       const p1 = transform.toSheet(line.start);
@@ -470,7 +653,18 @@ export function exportDrawingSVG(
     }
     for (const arc of view.arcs) {
       const c = transform.toSheet(arc.center);
-      svg += `    <circle cx="${c.x}" cy="${c.y}" r="${arc.radius * transform.scale}" />\n`;
+      svg += `    <path d="${arcToSvgPath(c, arc.radius * transform.scale, arc)}" />\n`;
+    }
+    // Center marks: thin ASME crosses over detected circles.
+    if (view.centers && view.centers.length > 0) {
+      svg += `    <g stroke-width="0.5">\n`;
+      for (const m of view.centers) {
+        const c = transform.toSheet(m);
+        const arm = m.radius * transform.scale * CENTER_MARK_ARM_RATIO;
+        svg += `      <line x1="${(c.x - arm).toFixed(2)}" y1="${c.y.toFixed(2)}" x2="${(c.x + arm).toFixed(2)}" y2="${c.y.toFixed(2)}" />\n`;
+        svg += `      <line x1="${c.x.toFixed(2)}" y1="${(c.y - arm).toFixed(2)}" x2="${c.x.toFixed(2)}" y2="${(c.y + arm).toFixed(2)}" />\n`;
+      }
+      svg += `    </g>\n`;
     }
     svg += '  </g>\n';
 
@@ -486,16 +680,29 @@ export function exportDrawingSVG(
       svg += '  </g>\n';
     }
 
+    // Dimensions: fixed sheet-px offsets (see dimensionSheetGeometry).
     svg += `  <g stroke="red" stroke-width="0.5" fill="red" font-size="10">\n`;
     for (const dim of view.dimensions) {
-      const p1 = transform.toSheet(dim.start);
-      const p2 = transform.toSheet(dim.end);
-      const mx = (p1.x + p2.x) / 2;
-      const my = (p1.y + p2.y) / 2;
-      svg += `    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke-dasharray="2,2" />\n`;
-      svg += `    <text x="${mx}" y="${my - 4}" text-anchor="middle">${dim.value.toFixed(2)} mm</text>\n`;
+      const g = dimensionSheetGeometry(dim, transform.toSheet);
+      svg += `    <line x1="${g.dim.start.x.toFixed(2)}" y1="${g.dim.start.y.toFixed(2)}" x2="${g.dim.end.x.toFixed(2)}" y2="${g.dim.end.y.toFixed(2)}" stroke-dasharray="2,2" />\n`;
+      for (const e of g.ext) {
+        svg += `    <line x1="${e.start.x.toFixed(2)}" y1="${e.start.y.toFixed(2)}" x2="${e.end.x.toFixed(2)}" y2="${e.end.y.toFixed(2)}" />\n`;
+      }
+      svg += `    <text x="${g.text.x.toFixed(2)}" y="${g.text.y.toFixed(2)}" text-anchor="middle">${formatDimValue(dim.value)}</text>\n`;
     }
     svg += '  </g>\n';
+
+    // Hole callouts: leader + shelf + text (after the dims group).
+    const callouts = (extras.holeCallouts ?? []).filter((c) => c.viewIndex === viewIndex);
+    if (callouts.length > 0) {
+      svg += `  <g stroke="#333" stroke-width="0.5" fill="#333" font-size="10">\n`;
+      for (const c of callouts) {
+        const g = calloutSheetGeometry(transform.toSheet(c.center), c.radius * transform.scale);
+        svg += `    <path d="M${g.leader[0]!.x.toFixed(2)} ${g.leader[0]!.y.toFixed(2)} L${g.leader[1]!.x.toFixed(2)} ${g.leader[1]!.y.toFixed(2)} L${g.leader[2]!.x.toFixed(2)} ${g.leader[2]!.y.toFixed(2)}" fill="none" />\n`;
+        svg += `    <text x="${g.text.x.toFixed(2)}" y="${g.text.y.toFixed(2)}">${escapeXml(c.text)}</text>\n`;
+      }
+      svg += '  </g>\n';
+    }
 
     // View title (top-centre of the cell)
     svg += `  <text x="${ox + cellW / 2}" y="${oy + 20}" text-anchor="middle" font-size="14" font-weight="bold">${escapeXml(view.name)}</text>\n`;
@@ -514,10 +721,25 @@ export function exportDrawingSVG(
     svg += `    <clipPath id="detailClip${panel.detailIndex}"><circle cx="${panel.cx.toFixed(2)}" cy="${panel.cy.toFixed(2)}" r="${panel.rPx.toFixed(2)}" /></clipPath>\n`;
     svg += `    <circle cx="${panel.cx.toFixed(2)}" cy="${panel.cy.toFixed(2)}" r="${panel.rPx.toFixed(2)}" fill="white" stroke="black" stroke-width="1.5" />\n`;
     svg += `    <g clip-path="url(#detailClip${panel.detailIndex})">\n`;
-    for (const line of clipViewToCircle(source.view, { center: detail.center, radius: detail.radius })) {
+    const crop = { center: detail.center, radius: detail.radius };
+    for (const line of clipViewToCircle(source.view, crop)) {
       const p1 = detailPointToSheet(line.start, detail.center, panel);
       const p2 = detailPointToSheet(line.end, detail.center, panel);
       svg += `      <line x1="${p1.x.toFixed(2)}" y1="${p1.y.toFixed(2)}" x2="${p2.x.toFixed(2)}" y2="${p2.y.toFixed(2)}" />\n`;
+    }
+    // Center marks inside the crop circle, arms clipped to it.
+    for (const m of source.view.centers ?? []) {
+      const dMc = Math.hypot(m.x - crop.center.x, m.y - crop.center.y);
+      if (dMc - m.radius * CENTER_MARK_ARM_RATIO > crop.radius) continue;
+      svg += `      <g stroke-width="0.5">\n`;
+      for (const armSeg of centerMarkArms(m)) {
+        const seg = clipSegmentToCircle(armSeg.start, armSeg.end, crop);
+        if (!seg) continue;
+        const p1 = detailPointToSheet(seg.start, detail.center, panel);
+        const p2 = detailPointToSheet(seg.end, detail.center, panel);
+        svg += `        <line x1="${p1.x.toFixed(2)}" y1="${p1.y.toFixed(2)}" x2="${p2.x.toFixed(2)}" y2="${p2.y.toFixed(2)}" />\n`;
+      }
+      svg += `      </g>\n`;
     }
     svg += `    </g>\n`;
     svg += '  </g>\n';
