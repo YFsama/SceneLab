@@ -1257,3 +1257,81 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     bypasses the limit gate (store guard covers the apply paths); camera
     bookmarks / CAM toolpath viz / drawing center marks still queued.
   - **v0.22.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-10-03`: Pass #29 — deep-audit round: CAM core rewrite + drawing manufacturability + bookmarks, v0.23.0 (2421 tests / 146 files green; lint/tsc/build/E2E 24/24 OK).
+  - **Method**: two deep-audit agents (CAM workspace — ran the actual
+    generators/gcode; Drawing workspace — machinist's-eye) whose measured
+    findings drove two waves of 5 implementers; fresh-context review caught
+    a real P0 (miter math) + 3 P1s, all fixed pre-release.
+  - **CAM core rewrite** (audit C-2/C-3): the audit PROVED three critical
+    defects by execution — axis mapping (every exported program mis-cut;
+    Y-up emitted verbatim as machine XYZ), outlines (convex hull → cylinder
+    contour was a RECTANGLE, no cutter comp → 3 mm into the wall), multi-op
+    G-code (M2 per section → only the first op ever runs). Fixed: XZ-plane
+    planning (y=height; gcode X=x/Y=z/Z=y); topSilhouette (half-edge walk +
+    material classification + even-odd islands — L-shape concavity and tube
+    islands verified by execution); offsetPolygon cutter comp; single-program
+    emitProgram (one preamble, Z-only first rapid, modal F, one M2/M30);
+    plunge feeds + ramp entry (plungeRate was dead — full-feed vertical
+    plunges); pocket final-row clamp + scanline island subtraction + EMPTY
+    toolpath when the tool doesn't fit (bbox fallback removed); face
+    layering; detectCircularHoles (flood-grouped faces, circle fit ±2%,
+    INWARD normals — rejects box corners); grbl/linuxcnc machine profiles
+    (expanded pecks vs G83/G80). CAM tests went from existence-asserts to
+    geometric regression tests (grid-sampled coverage, peck counts,
+    one-M2/no-XY-before-Z) — the audit noted the old shallow asserts are
+    exactly why these bugs survived 28 passes.
+  - **Review P0 fixed by coordinator**: offsetPolygon's miter lacked the
+    1/cos(φ/2) scaling — every box contour/pocket wall was gouged 0.88 mm
+    (edges at d·cos45°), and its own test blessed the geometry. Fixed with
+    the correct √(2/(1+n·n)) scale (clamped 3.5×) + the codifying tests
+    rewritten to the true geometry (±(25+3), area 36, vertex band 18.015).
+  - **CAM state/UI**: camSetup + camToolpaths cache in the store (undoable,
+    fingerprinted, serialized as an optional defensive `cam` block;
+    loadProject seeds the op counter); CAMPanel store-driven (per-op
+    enable/remove/regenerate, stock section, body selector — never
+    bodies[0], drill hole detect+pin, machine-profile picker, 4 i18n toast
+    fixes); stock heights SEEDED from the target body bbox (review P1 —
+    the 0/−10 defaults planned below origin-plane bodies); toolpaths
+    rendered in the viewport (blue contiguous cutting runs, red rapids/
+    plunges, cam workspace only); stale-cache auto-regeneration on
+    featureVersion while the CAM workspace is open + visible stale flags
+    (review P1 — body ids rotate on every recompute); pocket tool-too-
+    large now returns an honest empty toolpath.
+  - **Drawing manufacturability** (audit spec 2+1 + the A4 bug): circle
+    detection (segment DEDUPE — stacked prism caps project duplicate
+    parallel edges that broke the chain walk — + chaining + Kåså
+    least-squares arc fit) → DrawingView.centers + REAL arcs (canvas arc
+    branch; SVG path A — review fixed the y-mirror so arcs export on the
+    correct side of their centre); ASME center crosses (canvas/SVG/
+    detail-clipped); hole callouts auto-derived from unsuppressed hole
+    features (holeCalloutText shared with summary; leader rim45°→elbow→
+    shelf; axis-on views only; section culling) — E2E proves ⌀2×THRU in
+    the exported SVG; dimension offset collapse fixed (sheet-px offsets +
+    extension lines + unified precision — the audit's 1000 mm body had
+    0.05 px gaps).
+  - **Viewport**: camera view bookmarks (dedicated persisted store, cap 12,
+    context-menu capture/restore via the existing tween event, palette
+    commands); CAMERA SYNC INVERSION fixed (a v0.8.0 bug — renderScene
+    copied the INACTIVE camera onto the active one every frame, reverting
+    user gestures; masked by re-pinning paths; found by the bookmarks
+    agent's empirical zoom probe); CW arcs preview correctly (aClockwise
+    from the signed sweep — mirror/trim CW arcs were the CCW complement).
+  - **P2 sweep**: updateFeature gates fillet/chamfer param edits (pre-check
+    via public getResult parent resolution — refuses oversize with toasts,
+    gate only fires when the gated value changes); AI update_feature
+    reports the refusal (coordinator + contract test); drillHoleInBody
+    intersect pre-probe + evaluateHole consumes only on success (a failed
+    drill no longer blanks the body); ✂ cut-chip glyph; hole-miss toast.
+  - **Remaining open (review P2s + audits)**: detectCircularHoles returns
+    nothing on voxel-approximation bodies (cold-engine window; warm up
+    first); drill's silent one-hole-at-centre fallback when detection finds
+    nothing; safeZAboveStock serialized but unconsumed (wire or drop);
+    turningAngles wraps the last open-chain point (can suppress a legit
+    arc / flip ccw); regular n≥8-gon bosses get center marks (defensible);
+    sheet-DXF (arcs/circles/TEXT/DIMENSIONS entities — currently raw body
+    wireframe); hidden-line removal; per-view scale/placement + scale
+    labels; SVG title block; tolerance fields; dimension arrowheads
+    (spec 3); machine simulation (cam.simulate key seeded, button pending);
+    tool-library persistence/editor; B-side: bookmark rename, loft AI tool,
+    read_model_file.
+  - **v0.23.0**: version synced across the four manifests; CHANGELOG entry.
