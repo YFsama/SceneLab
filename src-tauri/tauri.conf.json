@@ -1,6 +1,6 @@
 {
   "productName": "SceneLab",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "identifier": "com.scenelab.app",
   "build": {
     "frontendDist": "../dist",

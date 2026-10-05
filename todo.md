@@ -1405,3 +1405,58 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     recurring "external watcher reverting sibling writes" phenomenon (seen by
     3 agents across 2 passes — unattributed, final states always verified).
   - **v0.24.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-10-03`: Pass #31 — kernel roadmap landing: real Manifold fillet/chamfer/shell + Face provenance → analytic STEP cylinders + per-view drawing control, v0.25.0 (2640 tests / 149 files green; lint/tsc/build/E2E 25/25 OK; browser walkthrough 19/19).
+  - **Real Manifold fillet** (KERNEL): cutter = corner-wedge ∩ tangent legs −
+    rolling-ball cylinder (the audit's plain cylinder cuts a groove — found
+    empirically); 90° within +0.26% of analytic, watertight, post-fillet
+    booleans stay exact; overlay retained as cold/non-manifold/reflex
+    fallback. **Review's required fix**: the tangent-leg formula had a
+    flipped sign (r·tan(φ/2) vs the true r·cot(φ/2)) — 120° edges were
+    over-cut 38×, 60° ledged; fixed + hex/tri goldens (0.7%); all prior
+    goldens were box-based which is why only 90° ever passed.
+  - **Real chamfer/shell**: chamfer via 6 half-space boxes per edge (−0.02-
+    0.05% vs corner-corrected); shell convex = exact half-space erosion
+    (sealed 2168/open 1768 exact), non-convex = erodedInteriorVoxel +
+    Manifold difference (Manifold JS has no 3D offset — verified typings).
+  - **Face provenance**: cylinder walls classified in fromManifold (smooth-
+    adjacency union-find ≤45° → Jacobi-eigen axis → Kåsa fit → on-circle
+    0.1%r + ≥300° + ≥12 verts); 48/156 faces tagged on a drilled box,
+    radius exact to 1e-6. Cones (countersinks) not tagged (next pass).
+  - **Analytic STEP cylinders** (STEP2): shared CYLINDRICAL_SURFACE per
+    source key with faceted boundaries; CIRCLE edges only for isolated
+    bands (11.6× shrink) — shared rims keep chords because OCCT SPLITS
+    shells on mixed circle/chord rims (+11.8% measured; the spec's "1 face
+    + 2 CIRCLEs" was empirically unshippable). Real-body export 16.4MB →
+    115KB (142×); OCCT round-trip +0.01%. Threshold asymmetry + grid7
+    float-noise fold fixed along the way.
+  - **Decimation + concave safety**: coplanar-triangle merge (156→52 faces);
+    review found the render/pick fan + toManifold fan wound L-shaped
+    decimated faces inside-out — both now ear-clip via triangulateFace
+    (volume was always safe; visuals/picking/Manifold-input robustness
+    fixed).
+  - **Per-view drawing control** (DWG): DrawingViewPlacement store state
+    (undo/snapshot/fingerprint/serialize/autosave-restore — walkthrough
+    proved placements survive reload); drag (one undo), scale override +
+    ratio labels (canvas/SVG/DXF), hide/restore chips, VARIES title-block;
+    viewTransform ROW-1 OFFSET pre-existing bug fixed (Right/Iso painted
+    over Front/Top since before v0.24.0); projectActions + DXF skip/caption
+    wired by coordinator.
+  - **P3 sweep**: per-segment sim highlight (walkthrough: tool-highlight
+    distance 0-1px mid-segment; cross-op residue cleared); canLink exact
+    segment×island-AABB (old 3-sample gouged a 0.6mm island — red-first
+    test); Newell revolve caps (Pappus-verified); pocket-ring walker issue
+    no longer reproduces on main (stale test fixed); listener soak net-zero.
+  - **Review verdict**: approve with one required fix (the τ sign — done);
+    A×B tagging↔writer integration verified end-to-end against the real
+    classifier + real OCCT (260 edges each referenced exactly twice — no
+    split class); doc overclaims ("exactly") honesty-fixed.
+  - **Remaining open (next pass)**: cone/countersink provenance + creation-
+    side tagging; annulus (multi-loop) cap faces for the full ⌀-hole STEP
+    shrink; fillet exact-path edge-id regeneration vs viewport sub-selections;
+    bookmark-restore stale status-bar view label (cosmetic); drawing scale-
+    field px/mm semantics UX; 8-facet walls tagged at circumradius (7.65%
+    recognition bias — deliberate); hidden-line removal; tolerance fields;
+    reflex-edge exact fillets (overlay only); non-convex shell worker
+    offload; the recurring external-watcher phenomenon (still unattributed;
+    final states always verified).
+  - **v0.25.0**: version synced across the four manifests; CHANGELOG entry.
