@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { LIBRARY_PARTS, LIBRARY_CATEGORIES, findLibraryPart, searchLibraryParts } from './parts';
 import { computeVolume, computeBoundingBox } from '../geometry';
+import { adaptiveSegments } from '../geometry/brep';
 import { translations } from '../i18n';
 
 describe('parts library catalog', () => {
@@ -38,6 +39,21 @@ describe('parts library catalog', () => {
     for (const p of LIBRARY_PARTS) {
       const bb = computeBoundingBox(p.build());
       expect(bb.min.y, `${p.id} should rest on the bed`).toBeGreaterThanOrEqual(-1e-6);
+    }
+  });
+
+  it('hole cutters tessellate at the adaptive facet count for their ⌀', () => {
+    // The quoted clearance ⌀ is what the cutter actually removes: the facet
+    // count holds the 0.005 mm chord tolerance for each nominal diameter.
+    const specs: Array<[id: string, d: number]> = [
+      ['holeM3', 3.6],
+      ['holeM4', 4.6],
+      ['holeM6', 6.4],
+      ['holeM8', 8.6],
+    ];
+    for (const [id, d] of specs) {
+      const faces = findLibraryPart(id)!.build().faces.length;
+      expect(faces, id).toBe(adaptiveSegments(d) + 2); // sides + 2 caps
     }
   });
 });

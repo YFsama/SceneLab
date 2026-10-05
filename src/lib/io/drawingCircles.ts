@@ -47,11 +47,44 @@ const RADIAL_TOL_RATIO = 0.005;
 const RADIAL_TOL_FLOOR = 1e-4;
 /** |Σturning − 2π| below this accepts a loop as a full convex circle. */
 const TOTAL_TURN_TOL = 0.05;
+/**
+ * Turning-angle tie band for the chain continuation pick (in the same 1−cos
+ * units as the pick itself): candidates this close in angle are decided by the
+ * lowest quantized endpoint key so the walk stays deterministic.
+ */
+const TURN_TIE = 1e-12;
+/**
+ * Length-consistency band for the chain continuation pick: a candidate whose
+ * length is within this factor of the incoming segment (either way) counts as
+ * length-consistent and beats length-inconsistent ones. Tessellation chords of
+ * one circle are equal-length; seam spokes to outer corners are 10-50× longer,
+ * and a wider band lets an unrelated walk ramp its step length down onto a
+ * ring one halving at a time (each step may shrink by the band factor), so the
+ * band is kept tight. Ordinary chaining with varying edge lengths is
+ * unaffected — when nothing is length-consistent the pick falls back to the
+ * pure smallest turn.
+ */
+const LENGTH_BAND = 1.5;
 /** Coincidence tolerance for dedupe (stacked prism caps project identically). */
 const DEDUPE_RATIO = 0.01;
 const DEDUPE_FLOOR = 1e-4;
 
-const key = (p: Pt): string => `${p.x.toFixed(KEY_DECIMALS)},${p.y.toFixed(KEY_DECIMALS)}`;
+const key = (p: Pt): string => `${fmt(p.x)},${fmt(p.y)}`;
+
+/** Matches a toFixed result that is all zeroes with a leading minus. */
+const NEG_ZERO = /^-0(?:\.0+)?$/;
+
+/**
+ * toFixed with negative zero normalized: a coordinate that quantizes to
+ * "-0.000000" (e.g. r·sin(2π) = −2.4e-16, the recomputed closing vertex of a
+ * tessellation loop) must key EQUAL to "0.000000". Without this the closure
+ * check in chainSegments fails on that joint and a real circle downgrades to
+ * a full-turn arc.
+ */
+function fmt(n: number): string {
+  const s = n.toFixed(KEY_DECIMALS);
+  return s.charCodeAt(0) === 45 && NEG_ZERO.test(s) ? s.slice(1) : s;
+}
 
 const dist = (a: Pt, b: Pt): number => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -86,6 +119,42 @@ interface Chain {
  * that arrives back at its first point is closed (the duplicate arrival point
  * is dropped). The 2D analogue of drawing.ts's chainOnPlaneLoops, extended to
  * keep open chains (section cuts break cap loops open).
+ *
+ * At a vertex with several unused incident segments (degree ≥ 3) the walk
+ * continues along the SMALLEST TURNING ANGLE relative to the incoming
+ * direction (tangent continuation), ties broken by the lowest quantized
+ * endpoint key. Boolean- Cut / Hole results project extra seam edges whose
+ * endpoints land exactly on ring chord vertices; taking the first unused
+ * incident edge wanders off down a seam spoke and the ring never closes, so
+ * machined holes lost their center marks entirely (QA F7). The ring's own
+ * chords turn ~11° (32-gon); radial seam spokes turn ~90°. One wrinkle the
+ * pure angle rule cannot survive: face triangulations connect OUTER corners
+ * to ring vertices, and by the tangent-chord theorem some of those spokes
+ * leave within ~5° of the ring tangent — straighter than any chord. Those
+ * spokes are 50×+ the chord length, so among angle-competitive candidates the
+ * walk prefers one whose length is consistent with the incoming segment
+ * (tessellation chords of one circle are all the same length); with no
+ * length-consistent candidate it falls back to the smallest turn.
+ *
+ * Real-kernel boolean soups (sketch rect → extrude → Feature Hole) defeat
+ * those local rules in two more ways, both closed here:
+ *
+ *  - The plate's cap triangulation arrives at ring vertices ON long fan
+ *    spokes. Spokes are length-consistent with each other (not with the
+ *    chords), so a walk sweeping the fan hops spoke→spoke straight through
+ *    ring vertices, steps onto a ring only at spoke-free vertices, and walks
+ *    the WHOLE ring before dead-ending at its entry vertex. The ring is
+ *    inside that walk, bracketed by the repeated entry vertex → after the
+ *    forward walk any repeated vertex whose bracketed sub-walk passes the
+ *    circle tests is carved out as a closed chain (the seam prefix stays
+ *    open). Definitive circle evidence, independent of walk order.
+ *  - Chord-length near-tangential fan spokes (the plate corner's fan) tie or
+ *    beat the closing chord on BOTH angle and length at the vertex adjacent
+ *    to the walk's start. So when a continuation exists that leads straight
+ *    back to the START vertex, it is tried speculatively first: if the loop
+ *    it closes passes the circle tests the walk closes there; only when that
+ *    fails does the normal pick stand. (A closed walk that fits a circle IS
+ *    the ring; the spokes are decoration.)
  */
 function chainSegments(segs: DrawingLine[]): Chain[] {
   const adj = new Map<string, { seg: number; other: Pt }[]>();
@@ -97,6 +166,76 @@ function chainSegments(segs: DrawingLine[]): Chain[] {
   });
 
   const used = new Set<number>();
+
+  /** Strictly better under (turn, endpoint-key) with the deterministic tie band. */
+  const beats = (turn: number, k: string, refTurn: number, refKey: string): boolean =>
+    turn < refTurn - TURN_TIE || (Math.abs(turn - refTurn) <= TURN_TIE && k < refKey);
+
+  /**
+   * Straightest continuation from `to` having arrived from `from`: the unused
+   * incident segment minimizing the turn |∠(from→to, to→next)|, ties broken by
+   * the lowest quantized endpoint key. Null at a dead end. A single candidate
+   * short-circuits (the common degree-2 case, identical to the historical
+   * first-unused pick). Candidates whose length is within
+   * [1/LENGTH_BAND, LENGTH_BAND] of the incoming segment win over
+   * length-inconsistent ones (seam-spoke suppression); when NOTHING is
+   * length-consistent the most length-SIMILAR candidate wins (a walk arriving
+   * on a long seam spoke must not hand off to a short chord just because the
+   * chord is the straightest — that swallows the whole ring into the seam
+   * chain, QA F7).
+   */
+  const straightest = (from: Pt, to: Pt): { seg: number; other: Pt } | null => {
+    const cands = (adj.get(key(to)) ?? []).filter((c) => !used.has(c.seg));
+    if (cands.length === 0) return null;
+    if (cands.length === 1) return cands[0]!;
+    const inDx = to.x - from.x;
+    const inDy = to.y - from.y;
+    const inLen = Math.hypot(inDx, inDy);
+    if (inLen < MIN_SEGMENT) return cands[0]!; // degenerate hop — keep old pick
+    let best: { seg: number; other: Pt } | null = null;
+    let bestTurn = Infinity;
+    let bestKey = '';
+    let bandBest: { seg: number; other: Pt } | null = null;
+    let bandTurn = Infinity;
+    let bandKey = '';
+    let simBest: { seg: number; other: Pt } | null = null;
+    let simRatio = Infinity;
+    let simTurn = Infinity;
+    let simKey = '';
+    for (const c of cands) {
+      const outDx = c.other.x - to.x;
+      const outDy = c.other.y - to.y;
+      const outLen = Math.hypot(outDx, outDy);
+      if (outLen < MIN_SEGMENT) continue;
+      const cos = (inDx * outDx + inDy * outDy) / (inLen * outLen);
+      const turn = 1 - Math.max(-1, Math.min(1, cos)); // monotone in |turn angle|
+      const k = key(c.other);
+      if (beats(turn, k, bestTurn, bestKey)) {
+        best = c;
+        bestTurn = turn;
+        bestKey = k;
+      }
+      // Log-length distance from the incoming segment (0 = same length).
+      const ratio = Math.abs(Math.log(outLen / inLen));
+      const simWins =
+        simBest === null ||
+        ratio < simRatio - 1e-12 ||
+        (Math.abs(ratio - simRatio) <= 1e-12 && beats(turn, k, simTurn, simKey));
+      if (simWins) {
+        simBest = c;
+        simRatio = ratio;
+        simTurn = turn;
+        simKey = k;
+      }
+      if (outLen > inLen / LENGTH_BAND && outLen < inLen * LENGTH_BAND && beats(turn, k, bandTurn, bandKey)) {
+        bandBest = c;
+        bandTurn = turn;
+        bandKey = k;
+      }
+    }
+    return bandBest ?? simBest ?? best;
+  };
+
   const chains: Chain[] = [];
   for (let i = 0; i < segs.length; i++) {
     if (used.has(i)) continue;
@@ -114,17 +253,62 @@ function chainSegments(segs: DrawingLine[]): Chain[] {
         pts.pop(); // drop the duplicated closing point
         break;
       }
-      const next = (adj.get(key(cur)) ?? []).find((c) => !used.has(c.seg));
+      const next = straightest(pts[pts.length - 2]!, cur);
       if (!next) break;
+      // Speculative start-closure (see the header comment): an unused
+      // continuation back to the walk's start vertex outranks the normal pick
+      // when the loop it would close passes the circle tests. The loop that
+      // would be classified is pts itself (the arrival point is pushed then
+      // popped by the closure check below), so that is what gets tested.
+      if (pts.length >= MIN_CIRCLE_SEGMENTS && key(next.other) !== startKey) {
+        const closing = (adj.get(key(cur)) ?? []).find(
+          (c) => !used.has(c.seg) && key(c.other) === startKey,
+        );
+        if (closing && circularLoop(pts)) {
+          used.add(closing.seg);
+          cur = closing.other;
+          pts.push(cur);
+          continue;
+        }
+      }
       used.add(next.seg);
       cur = next.other;
       pts.push(cur);
     }
 
-    // Open chains also grow backward from their head.
+    // Ring-inside-a-walk recovery: a walk that entered a ring down a seam
+    // spoke and walked the whole loop dead-ends at (or passes through) its
+    // entry vertex — any vertex appearing twice brackets a sub-walk. Carve
+    // out the LONGEST bracketed sub-walk that passes the circle tests as a
+    // closed chain; the seam prefix stays open for the backward growth below.
     if (!closed) {
+      const firstSeen = new Map<string, number>();
+      let carved: { pts: Pt[]; head: number } | null = null;
+      for (let k = 0; k < pts.length; k++) {
+        const kk = key(pts[k]!);
+        const j = firstSeen.get(kk);
+        if (j === undefined) {
+          firstSeen.set(kk, k);
+          continue;
+        }
+        if (k - j >= 3 && circularLoop(pts.slice(j, k))) {
+          const len = k - j;
+          if (!carved || len > carved.pts.length) carved = { pts: pts.slice(j, k), head: j };
+        }
+      }
+      if (carved) {
+        chains.push({ pts: carved.pts, closed: true });
+        pts.length = carved.head; // the seam prefix remains an open chain
+      }
+    }
+
+    // Open chains also grow backward from their head (same straightest-line
+    // rule, evaluated through the head: ...→p→pts[0]→pts[1] should run
+    // straight through pts[0]).
+    if (!closed && pts.length >= 2) {
       for (let guard = 0; guard <= segs.length; guard++) {
-        const prev = (adj.get(key(pts[0]!)) ?? []).find((c) => !used.has(c.seg));
+        if (pts.length < 2) break;
+        const prev = straightest(pts[1]!, pts[0]!);
         if (!prev) break;
         used.add(prev.seg);
         pts.unshift(prev.other);
@@ -222,6 +406,48 @@ function turningAngles(pts: Pt[], closed: boolean): number[] {
 
 const radialTol = (r: number): number => Math.max(RADIAL_TOL_RATIO * r, RADIAL_TOL_FLOOR);
 
+/**
+ * The closed-loop circle tests: centroid → mean radius, then radial
+ * deviation + convex same-sign turning + total turn ≈ 2π. Returns the fitted
+ * (center, radius) when every test passes, else null. The classifier and the
+ * chain walker's closure rules share this one predicate so "this walk IS the
+ * ring" is decided identically everywhere.
+ */
+function circularLoop(pts: Pt[]): { center: Pt; radius: number } | null {
+  if (pts.length < MIN_CIRCLE_SEGMENTS) return null;
+  let cx = 0;
+  let cy = 0;
+  for (const p of pts) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= pts.length;
+  cy /= pts.length;
+  let r = 0;
+  for (const p of pts) r += dist(p, { x: cx, y: cy });
+  r /= pts.length;
+  if (!(r > MIN_SEGMENT)) return null;
+  const turns = turningAngles(pts, true);
+  if (!sameSignTurns(turns)) return null;
+  const total = turns.reduce((s, t) => s + t, 0);
+  if (Math.abs(Math.abs(total) - 2 * Math.PI) >= TOTAL_TURN_TOL) return null;
+  if (maxRadialDeviation(pts, { x: cx, y: cy }, r) >= radialTol(r)) return null;
+  return { center: { x: cx, y: cy }, radius: r };
+}
+
+/**
+ * Honest radius for a closed regular n-gon loop of circumradius r. View units
+ * carry no physical scale, so the tessellation test is RELATIVE: when the
+ * relative sagitta 1 − cos(π/n) is within RADIAL_TOL_RATIO the loop is a fine
+ * circular tessellation and the circumradius — the radius of the circle the
+ * tessellator aimed at — is quoted exactly (n ≥ 32 under the current 0.5%
+ * ratio); a coarser, deliberate n-gon (a 16-gon sketch circle extrusion, hex
+ * stock) is sized by its across-flats incircle r·cos(π/n) instead.
+ */
+function reportedRadius(r: number, n: number): number {
+  return 1 - Math.cos(Math.PI / n) > RADIAL_TOL_RATIO ? r * Math.cos(Math.PI / n) : r;
+}
+
 /** The center point of either detection shape (mark or arc). */
 function centerOf(d: { center: Pt; radius: number } | DrawingCenterMark): Pt {
   return 'center' in d ? d.center : d;
@@ -245,13 +471,18 @@ export function detectCircles(lines: DrawingLine[]): CircleDetection {
   // Drop degenerate segments (projecting a cylinder's side edges along their
   // axis yields points) and duplicates: stacked prism caps project to the
   // exact same 2D segments, and a duplicate parallel edge makes the chain
-  // walk step straight back to its start (bogus 2-point "loops").
+  // walk step straight back to its start (bogus 2-point "loops"). Degenerate
+  // means zero-length OR both endpoints quantizing to the SAME key — boolean
+  // kernels emit sub-1e-6 sliver edges whose length survives the 1e-9 floor
+  // while both endpoints key identically; such a self-loop edge adds TWO
+  // adjacency entries at one key and poisons the walk.
   const segs: DrawingLine[] = [];
   const seenSeg = new Set<string>();
   for (const l of lines) {
-    if (Math.hypot(l.end.x - l.start.x, l.end.y - l.start.y) <= MIN_SEGMENT) continue;
     const ka = key(l.start);
     const kb = key(l.end);
+    if (ka === kb) continue;
+    if (Math.hypot(l.end.x - l.start.x, l.end.y - l.start.y) <= MIN_SEGMENT) continue;
     const uk = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
     if (seenSeg.has(uk)) continue;
     seenSeg.add(uk);
@@ -262,28 +493,16 @@ export function detectCircles(lines: DrawingLine[]): CircleDetection {
   const arcs: DrawingArc[] = [];
 
   for (const { pts, closed } of chainSegments(segs)) {
-    if (closed && pts.length >= MIN_CIRCLE_SEGMENTS) {
-      // Circle: centroid → mean radius → deviation + turning tests.
-      let cx = 0;
-      let cy = 0;
-      for (const p of pts) {
-        cx += p.x;
-        cy += p.y;
-      }
-      cx /= pts.length;
-      cy /= pts.length;
-      let r = 0;
-      for (const p of pts) r += dist(p, { x: cx, y: cy });
-      r /= pts.length;
-      const turns = turningAngles(pts, true);
-      const total = turns.reduce((s, t) => s + t, 0);
-      if (
-        r > MIN_SEGMENT &&
-        sameSignTurns(turns) &&
-        Math.abs(Math.abs(total) - 2 * Math.PI) < TOTAL_TURN_TOL &&
-        maxRadialDeviation(pts, { x: cx, y: cy }, r) < radialTol(r)
-      ) {
-        centers.push({ x: cx, y: cy, radius: r });
+    if (closed) {
+      // Circle: centroid radius + deviation + turning tests (one shared
+      // predicate with the walker's closure rules).
+      const fit = circularLoop(pts);
+      if (fit) {
+        centers.push({
+          x: fit.center.x,
+          y: fit.center.y,
+          radius: reportedRadius(fit.radius, pts.length),
+        });
         continue;
       }
     }

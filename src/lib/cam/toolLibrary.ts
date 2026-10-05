@@ -93,10 +93,68 @@ const defaultTools: ToolDefinition[] = [
   },
 ];
 
-const customTools: ToolDefinition[] = [];
+// User-defined tools, persisted to localStorage (the viewBookmarks pattern):
+// a preference, not document state — the library survives reloads and New
+// scene without touching the project fingerprint. Access is guarded so the
+// module imports cleanly in non-DOM contexts.
+const STORAGE_KEY = 'scenelab.customTools';
+
+const persist = (tools: ToolDefinition[]): void => {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tools));
+  } catch {
+    // Quota/security errors: the in-memory list stays authoritative.
+  }
+};
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null;
+
+const TOOL_TYPES: readonly ToolDefinition['type'][] = ['endmill', 'ballmill', 'vbit', 'drill'];
+const TOOL_MATERIALS: readonly ToolDefinition['material'][] = ['carbide', 'hss', 'cobalt'];
+
+/** Defensive shape check (a corrupted payload degrades to fewer tools, never
+ *  a crash downstream) — the same contract as the generator's ToolDefinition. */
+export const isToolDefinition = (v: unknown): v is ToolDefinition =>
+  isRecord(v) &&
+  typeof v.id === 'string' && v.id.length > 0 &&
+  typeof v.name === 'string' && v.name.length > 0 &&
+  TOOL_TYPES.includes(v.type as ToolDefinition['type']) &&
+  TOOL_MATERIALS.includes(v.material as ToolDefinition['material']) &&
+  ['diameter', 'fluteLength', 'overallLength', 'flutes'].every(
+    (k) => typeof v[k] === 'number' && Number.isFinite(v[k]) && (v[k] as number) > 0,
+  );
+
+/** Boot state: the persisted list, validated entry by entry. */
+const loadPersisted = (): ToolDefinition[] => {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isToolDefinition);
+  } catch {
+    return [];
+  }
+};
+
+const customTools: ToolDefinition[] = loadPersisted();
 
 export function getAllTools(): ToolDefinition[] {
   return [...defaultTools, ...customTools];
+}
+
+/** The user-defined tools only (the editor list; defaults are immutable). */
+export function getCustomTools(): ToolDefinition[] {
+  return [...customTools];
+}
+
+/** Test/maintenance hook: drop every custom tool (also clears storage). */
+export function clearCustomTools(): void {
+  customTools.length = 0;
+  persist(customTools);
 }
 
 export function getTool(id: string): ToolDefinition | undefined {
@@ -109,9 +167,13 @@ export function addCustomTool(tool: ToolDefinition): void {
   const idx = customTools.findIndex((t) => t.id === tool.id);
   if (idx !== -1) customTools[idx] = tool;
   else customTools.push(tool);
+  persist(customTools);
 }
 
 export function removeCustomTool(id: string): void {
   const idx = customTools.findIndex((t) => t.id === id);
-  if (idx !== -1) customTools.splice(idx, 1);
+  if (idx !== -1) {
+    customTools.splice(idx, 1);
+    persist(customTools);
+  }
 }

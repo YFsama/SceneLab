@@ -23,6 +23,17 @@ export default defineConfig({
           if (id.includes('node_modules/three-mesh-bvh')) return 'vendor-three'
           if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/') || id.includes('node_modules/scheduler')) return 'vendor-react'
           if (id.includes('node_modules/lucide-react')) return 'vendor-icons'
+          // Heavy io layer (STEP export is the biggest single io module).
+          // Everything under src/lib/io is re-exported through io/index.ts,
+          // which the entry graph imports statically (store, projectActions,
+          // registry, ProjectMenu, builtinTools) — so rolldown can never
+          // lazy-split it (the INEFFECTIVE_DYNAMIC_IMPORT audit) and the
+          // whole layer rode along in the 767 kB main chunk. Pinning it into
+          // an 'io' chunk moves those bytes out of main into a chunk that
+          // caches independently and loads in parallel; the dynamic
+          // importers (ViewportCanvas export menu, AI) resolve to the same
+          // chunk — no duplication.
+          if (id.includes('/src/lib/io/')) return 'io'
         },
       },
     },

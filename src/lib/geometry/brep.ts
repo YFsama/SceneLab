@@ -34,21 +34,40 @@ function genId(prefix: string): string {
 }
 
 /**
+ * Newell's-method orientation normal of a closed vertex loop: direction is the
+ * loop's winding normal, magnitude is twice the enclosed area. Unlike a
+ * first-three-vertices cross product this is robust for CONCAVE polygons — a
+ * reflex vertex in the leading triple flips the naive cross the wrong way,
+ * which misoriented the caps of concave extrudes (F5).
+ */
+function newellNormal(verts: Vec3[]): Vec3 {
+  let nx = 0;
+  let ny = 0;
+  let nz = 0;
+  const n = verts.length;
+  for (let i = 0; i < n; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % n]!;
+    nx += (a.y - b.y) * (a.z + b.z);
+    ny += (a.z - b.z) * (a.x + b.x);
+    nz += (a.x - b.x) * (a.y + b.y);
+  }
+  return { x: nx, y: ny, z: nz };
+}
+
+/**
  * Reverse each face's vertex order where it disagrees with the (outward) face
  * normal, so the whole mesh is consistently CCW-outward. This makes the vector
  * areas sum to zero, which is what keeps computeVolume correct and
- * translation-invariant.
+ * translation-invariant. The winding test uses the Newell normal of the whole
+ * loop: the old first-three-vertices cross product reads reflex vertices as a
+ * reversal and corrupted concave faces (L-profile caps, T-slot caps).
  */
 function alignWindingToNormal(faces: Face[]): void {
   for (const f of faces) {
     if (f.vertices.length < 3) continue;
-    const a = f.vertices[0]!;
-    const b = f.vertices[1]!;
-    const c = f.vertices[2]!;
-    const gx = (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y);
-    const gy = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
-    const gz = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    if (gx * f.normal.x + gy * f.normal.y + gz * f.normal.z < 0) {
+    const nn = newellNormal(f.vertices);
+    if (nn.x * f.normal.x + nn.y * f.normal.y + nn.z * f.normal.z < 0) {
       f.vertices.reverse();
     }
   }
@@ -129,7 +148,31 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
     normal: normalize({ ...direction }),
   });
 
-  // Side faces
+  // Side faces. The outward orientation comes from the profile's winding, not
+  // from the vertex-average centroid: for a CONCAVE profile (L, T-slot) the
+  // vertex average can land in the notch — outside the solid — and the
+  // centroid heuristic then points the notch-facing walls inward, collapsing
+  // the signed-volume sum by ~60% (QA F5). For a loop wound CCW around
+  // +direction the outward wall normal is edge × direction; CW is the reverse.
+  const dirHat = normalize({ ...direction });
+  const profileN = newellNormal(bottomVerts);
+  const orient = profileN.x * dirHat.x + profileN.y * dirHat.y + profileN.z * dirHat.z;
+  const centroidOriented = (b1: Vec3, b2: Vec3, t1: Vec3, t2: Vec3): Vec3 => {
+    // Historical fallback for degenerate profiles (extrude direction in the
+    // profile plane): geometric normal flipped away from the vertex centroid.
+    const sn = computeFaceNormal(b1, b2, t2);
+    const fc = {
+      x: (b1.x + b2.x + t2.x + t1.x) / 4 - center.x,
+      y: (b1.y + b2.y + t2.y + t1.y) / 4 - center.y,
+      z: (b1.z + b2.z + t2.z + t1.z) / 4 - center.z,
+    };
+    if (sn.x * fc.x + sn.y * fc.y + sn.z * fc.z < 0) {
+      sn.x = -sn.x;
+      sn.y = -sn.y;
+      sn.z = -sn.z;
+    }
+    return sn;
+  };
   for (let i = 0; i < n; i++) {
     const next = (i + 1) % n;
     const b1 = bottomVerts[i]!;
@@ -137,18 +180,22 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
     const t1 = topVerts[i]!;
     const t2 = topVerts[next]!;
 
-    const sideNormal = computeFaceNormal(b1, b2, t2);
-    // Flip to point away from the centroid (outward) if computeFaceNormal
-    // produced an inward normal for this winding.
-    const fc = {
-      x: (b1.x + b2.x + t2.x + t1.x) / 4 - center.x,
-      y: (b1.y + b2.y + t2.y + t1.y) / 4 - center.y,
-      z: (b1.z + b2.z + t2.z + t1.z) / 4 - center.z,
-    };
-    if (sideNormal.x * fc.x + sideNormal.y * fc.y + sideNormal.z * fc.z < 0) {
-      sideNormal.x = -sideNormal.x;
-      sideNormal.y = -sideNormal.y;
-      sideNormal.z = -sideNormal.z;
+    let sideNormal: Vec3;
+    if (Math.abs(orient) > 1e-12) {
+      const ex = b2.x - b1.x;
+      const ey = b2.y - b1.y;
+      const ez = b2.z - b1.z;
+      const cross = orient > 0
+        ? { x: ey * dirHat.z - ez * dirHat.y, y: ez * dirHat.x - ex * dirHat.z, z: ex * dirHat.y - ey * dirHat.x }
+        : { x: dirHat.y * ez - dirHat.z * ey, y: dirHat.z * ex - dirHat.x * ez, z: dirHat.x * ey - dirHat.y * ex };
+      const cl = Math.sqrt(cross.x * cross.x + cross.y * cross.y + cross.z * cross.z);
+      // cl ≈ 0 means the profile edge runs along the extrude direction —
+      // only possible for a degenerate profile; use the fallback then.
+      sideNormal = cl > 1e-12
+        ? { x: cross.x / cl, y: cross.y / cl, z: cross.z / cl }
+        : centroidOriented(b1, b2, t1, t2);
+    } else {
+      sideNormal = centroidOriented(b1, b2, t1, t2);
     }
     faces.push({
       id: genId('face'),
@@ -343,15 +390,50 @@ export function createBoundingBoxBody(body: SolidBody, margin = 0): SolidBody {
   };
 }
 
-/** Circular cylinder along +Y, approximated by an `segments`-gon prism. */
-export function createCylinder(radius: number, height: number, segments = 32): SolidBody {
+/**
+ * Default chord tolerance for circular tessellations (mm): the largest
+ * allowed deviation (sagitta) between a facet and the true circle it
+ * approximates. 0.005 mm is an order of magnitude under CAM finish stock and
+ * drawing line widths, and keeps ⌀2 holes at the historical 32 facets
+ * (perf-neutral for small holes) while lifting ⌀6 → 55 and ⌀20 → 100.
+ */
+export const DEFAULT_CHORD_TOLERANCE = 0.005;
+
+/**
+ * Facet count that tessellates a circle of `diameter` so no facet deviates
+ * from the true circle by more than `chordTolerance`. An inscribed N-gon of
+ * circumradius R has apothem R·cos(π/N), so its sagitta is R·(1 − cos(π/N));
+ * requiring sagitta ≤ tol inverts to N ≥ π/acos(1 − tol/R). Returns the
+ * ceiling, clamped to [8, 256]. Measured table at the default tolerance:
+ * ⌀2 → 32, ⌀6 → 55, ⌀20 → 100 (and ⌀6 → 122 at tol 0.001).
+ */
+export function adaptiveSegments(diameter: number, chordTolerance = DEFAULT_CHORD_TOLERANCE): number {
+  if (!Number.isFinite(diameter) || diameter <= 0) throw new Error('Diameter must be positive');
+  if (!Number.isFinite(chordTolerance) || chordTolerance <= 0) {
+    throw new Error('Chord tolerance must be positive');
+  }
+  const r = diameter / 2;
+  const cosHalf = 1 - chordTolerance / r;
+  if (cosHalf <= -1) return 8; // tolerance spans the whole radius — minimum facets
+  const raw = Math.ceil(Math.PI / Math.acos(Math.max(-1, Math.min(1, cosHalf))));
+  return Math.max(8, Math.min(256, raw));
+}
+
+/**
+ * Circular cylinder along +Y, approximated by an n-gon prism. Without an
+ * explicit `segments`, n comes from adaptiveSegments(2·radius) — the facet
+ * count that holds the chord tolerance DEFAULT_CHORD_TOLERANCE (⌀2 stays at
+ * 32; larger diameters get proportionally finer). An explicit argument wins.
+ */
+export function createCylinder(radius: number, height: number, segments?: number): SolidBody {
   if (radius <= 0) throw new Error('Radius must be positive');
   if (height <= 0) throw new Error('Height must be positive');
-  if (segments < 3) throw new Error('Cylinder needs at least 3 segments');
+  const n = segments ?? adaptiveSegments(radius * 2);
+  if (n < 3) throw new Error('Cylinder needs at least 3 segments');
 
   const profile: Vec3[] = [];
-  for (let i = 0; i < segments; i++) {
-    const a = (i / segments) * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
     profile.push({ x: Math.cos(a) * radius, y: 0, z: Math.sin(a) * radius });
   }
 
@@ -427,17 +509,23 @@ export function createSphere(radius: number, segments = 16): SolidBody {
   return { id: genId('body'), name: 'Sphere', vertices, faces, edges: buildEdgesFromFaces(faces) };
 }
 
-/** Cone / frustum along +Y. radiusTop = 0 gives a pointed cone. */
+/**
+ * Cone / frustum along +Y. radiusTop = 0 gives a pointed cone. Without an
+ * explicit `segments` the facet count adapts to the larger end's diameter
+ * (adaptiveSegments — both silhouette and any bored top stay within the
+ * default chord tolerance). An explicit argument wins.
+ */
 export function createCone(
   radiusBottom: number,
   radiusTop: number,
   height: number,
-  segments = 32,
+  segments?: number,
 ): SolidBody {
   if (radiusBottom < 0 || radiusTop < 0) throw new Error('Radius cannot be negative');
   if (radiusBottom < 1e-9 && radiusTop < 1e-9) throw new Error('At least one radius must be positive');
   if (height <= 0) throw new Error('Height must be positive');
-  if (segments < 3) throw new Error('Cone needs at least 3 segments');
+  const n = segments ?? adaptiveSegments(2 * Math.max(radiusBottom, radiusTop));
+  if (n < 3) throw new Error('Cone needs at least 3 segments');
 
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
@@ -445,8 +533,8 @@ export function createCone(
 
   const bottom: Vec3[] = [];
   const top: Vec3[] = [];
-  for (let j = 0; j < segments; j++) {
-    const a = (j / segments) * Math.PI * 2;
+  for (let j = 0; j < n; j++) {
+    const a = (j / n) * Math.PI * 2;
     bottom.push({ x: radiusBottom * Math.cos(a), y: 0, z: radiusBottom * Math.sin(a) });
     if (!pointed) top.push({ x: radiusTop * Math.cos(a), y: height, z: radiusTop * Math.sin(a) });
   }
@@ -469,8 +557,8 @@ export function createCone(
     return n;
   };
 
-  for (let j = 0; j < segments; j++) {
-    const next = (j + 1) % segments;
+  for (let j = 0; j < n; j++) {
+    const next = (j + 1) % n;
     if (pointed) {
       const verts = [bottom[j]!, bottom[next]!, apex];
       faces.push({ id: genId('face'), vertices: verts, normal: orientOut(verts) });
@@ -658,13 +746,15 @@ export function createLoft(profileA: Vec3[], profileB: Vec3[]): SolidBody {
  * Hollow truncated cone (funnel / nozzle / vase wall): a frustum with outer
  * radii `bottomRadius`→`topRadius` and a constant `wallThickness`, `height`
  * tall along +Y, base on y = 0. Watertight, with annular top/bottom caps.
+ * Without an explicit `segments` the facet count adapts to the larger end's
+ * diameter (adaptiveSegments).
  */
 export function createFrustumTube(
   bottomRadius: number,
   topRadius: number,
   wallThickness: number,
   height: number,
-  segments = 32,
+  segments?: number,
 ): SolidBody {
   if (!(bottomRadius > 0) || !(topRadius > 0) || !(wallThickness > 0) || !(height > 0)) {
     throw new Error('Frustum tube radii, wall thickness and height must be positive');
@@ -672,14 +762,15 @@ export function createFrustumTube(
   if (wallThickness >= Math.min(bottomRadius, topRadius)) {
     throw new Error('Wall thickness must be smaller than the smaller radius');
   }
-  if (segments < 3) throw new Error('Frustum tube needs at least 3 segments');
+  const n = segments ?? adaptiveSegments(2 * Math.max(bottomRadius, topRadius));
+  if (n < 3) throw new Error('Frustum tube needs at least 3 segments');
 
   const ob: Vec3[] = [];
   const ot: Vec3[] = [];
   const ib: Vec3[] = [];
   const it: Vec3[] = [];
-  for (let i = 0; i < segments; i++) {
-    const a = (i / segments) * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
     const c = Math.cos(a);
     const s = Math.sin(a);
     ob.push({ x: c * bottomRadius, y: 0, z: s * bottomRadius });
@@ -699,9 +790,9 @@ export function createFrustumTube(
   };
 
   const faces: Face[] = [];
-  for (let i = 0; i < segments; i++) {
-    const j = (i + 1) % segments;
-    const am = ((i + 0.5) / segments) * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const am = ((i + 0.5) / n) * Math.PI * 2;
     const rx = Math.cos(am);
     const rz = Math.sin(am);
     const outerQuad = [ob[i]!, ob[j]!, ot[j]!, ot[i]!];
@@ -722,21 +813,24 @@ export function createFrustumTube(
  * Hollow cylinder (tube/pipe): an annular ring of outer radius `outerRadius`
  * and inner radius `innerRadius`, `height` tall along +Y, base on y = 0.
  * Watertight (outer wall, inner wall, and top/bottom annular caps). Common for
- * rings, bushings, spacers and nozzles.
+ * rings, bushings, spacers and nozzles. Without an explicit `segments` the
+ * facet count adapts to the outer diameter (adaptiveSegments), which keeps
+ * both walls within the default chord tolerance.
  */
-export function createTube(outerRadius: number, innerRadius: number, height: number, segments = 32): SolidBody {
+export function createTube(outerRadius: number, innerRadius: number, height: number, segments?: number): SolidBody {
   if (!(outerRadius > 0) || !(innerRadius > 0) || !(height > 0)) {
     throw new Error('Tube radii and height must be positive');
   }
   if (innerRadius >= outerRadius) throw new Error('Inner radius must be smaller than outer radius');
-  if (segments < 3) throw new Error('Tube needs at least 3 segments');
+  const n = segments ?? adaptiveSegments(outerRadius * 2);
+  if (n < 3) throw new Error('Tube needs at least 3 segments');
 
   const ob: Vec3[] = [];
   const ot: Vec3[] = [];
   const ib: Vec3[] = [];
   const it: Vec3[] = [];
-  for (let i = 0; i < segments; i++) {
-    const a = (i / segments) * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
     const c = Math.cos(a);
     const s = Math.sin(a);
     ob.push({ x: c * outerRadius, y: 0, z: s * outerRadius });
@@ -747,9 +841,9 @@ export function createTube(outerRadius: number, innerRadius: number, height: num
   const vertices: Vec3[] = [...ob, ...ot, ...ib, ...it];
 
   const faces: Face[] = [];
-  for (let i = 0; i < segments; i++) {
-    const j = (i + 1) % segments;
-    const am = ((i + 0.5) / segments) * Math.PI * 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const am = ((i + 0.5) / n) * Math.PI * 2;
     const nx = Math.cos(am);
     const nz = Math.sin(am);
     // Outer wall (normal points out), inner wall (points into the hole),
@@ -901,6 +995,141 @@ export function computeCentroid(body: SolidBody): Vec3 {
 }
 
 /**
+ * Triangulate a planar face loop — concave or convex — into triangles that
+ * tile exactly the polygon interior. A fan from verts[0] is only a valid
+ * triangulation when the polygon is convex (or star-shaped from verts[0]);
+ * on an L- or T-shaped face the fan spans out-of-polygon regions and every
+ * consumer that walks the triangles one-by-one (unsigned area sums, ray
+ * targets, per-triangle quality stats) reads geometry that is not part of the
+ * solid (QA F5). No reusable pure tessellator exists in the codebase — the
+ * Manifold boolean path triangulates internally behind a WASM engine and
+ * returns its own mesh — so this is a compact ear-clipping implementation:
+ *
+ *  - triangles and convex loops (every primitive cap, boolean output) take the
+ *    fan fast path, bit-identical to the historical sums;
+ *  - concave loops are projected onto the dominant plane of their Newell
+ *    normal, wound CCW in 2D, and clipped ear-by-ear (reflex-vertex aware,
+ *    collinear-tolerant);
+ *  - degenerate leftovers fall back to the fan so callers never regress.
+ */
+export function triangulateFace(verts: Vec3[]): Array<[Vec3, Vec3, Vec3]> {
+  const n = verts.length;
+  if (n < 3) return [];
+  if (n === 3) return [[verts[0]!, verts[1]!, verts[2]!]];
+
+  // Drop consecutive duplicates (and a duplicated closing vertex) — a repeated
+  // corner makes reflex classification and the ear test see zero-area slivers.
+  const same = (a: Vec3, b: Vec3) =>
+    Math.abs(a.x - b.x) < 1e-12 && Math.abs(a.y - b.y) < 1e-12 && Math.abs(a.z - b.z) < 1e-12;
+  const loop: Vec3[] = [];
+  for (const v of verts) {
+    if (loop.length === 0 || !same(loop[loop.length - 1]!, v)) loop.push(v);
+  }
+  if (loop.length > 1 && same(loop[0]!, loop[loop.length - 1]!)) loop.pop();
+  const m = loop.length;
+  if (m < 3) return [];
+  if (m === 3) return [[loop[0]!, loop[1]!, loop[2]!]];
+
+  // Project onto the dominant plane of the Newell normal (area sign preserved
+  // up to a constant factor — only the 2D orientation matters below).
+  const nn = newellNormal(loop);
+  const ax = Math.abs(nn.x) >= Math.abs(nn.y) && Math.abs(nn.x) >= Math.abs(nn.z)
+    ? 0
+    : Math.abs(nn.y) >= Math.abs(nn.z)
+      ? 1
+      : 2;
+  const p2 = (v: Vec3): { x: number; y: number } =>
+    ax === 0 ? { x: v.y, y: v.z } : ax === 1 ? { x: v.z, y: v.x } : { x: v.x, y: v.y };
+  const pts = loop.map(p2);
+
+  const cross2 = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+  // Tolerance scaled to the loop's extent so exact-on-diagonal contacts don't
+  // block ears and float noise doesn't read as reflex.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const eps = 1e-12 * Math.max(1e-30, (maxX - minX) ** 2 + (maxY - minY) ** 2);
+
+  let signedArea = 0;
+  for (let i = 0; i < m; i++) {
+    signedArea += pts[i]!.x * pts[(i + 1) % m]!.y - pts[(i + 1) % m]!.x * pts[i]!.y;
+  }
+  const fan = (ring: number[]): Array<[Vec3, Vec3, Vec3]> => {
+    const out: Array<[Vec3, Vec3, Vec3]> = [];
+    for (let i = 1; i < ring.length - 1; i++) {
+      out.push([loop[ring[0]!]!, loop[ring[i]!]!, loop[ring[i + 1]!]!]);
+    }
+    return out;
+  };
+  // Near-zero area: degenerate/collinear loop — keep the historical fan.
+  if (Math.abs(signedArea) < eps) return fan(loop.map((_, i) => i));
+
+  // Convex fast path: every turn matching the loop's orientation → the
+  // historical fan is a valid partition, in the loop's original winding.
+  // (Orientation-aware so CW-projected convex quads — sphere rows, box caps —
+  // stay on the fan and keep their golden sums bit-for-bit.)
+  const orientSign = signedArea > 0 ? 1 : -1;
+  let convex = true;
+  for (let i = 0; i < m; i++) {
+    if (cross2(pts[(i - 1 + m) % m]!, pts[i]!, pts[(i + 1) % m]!) * orientSign < -eps) {
+      convex = false;
+      break;
+    }
+  }
+  if (convex) return fan(loop.map((_, i) => i));
+
+  // Ear clipping works CCW; flip the index order if the projection is CW, and
+  // flip each clipped triangle back so the output winding matches the loop's
+  // original orientation (the signed-volume sums depend on it).
+  const idx: number[] = loop.map((_, i) => i);
+  const cw = signedArea < 0;
+  if (cw) idx.reverse();
+
+  const pointStrictlyIn = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) =>
+    cross2(a, b, p) > eps && cross2(b, c, p) > eps && cross2(c, a, p) > eps;
+
+  const tris: Array<[number, number, number]> = [];
+  let guard = m * m + m;
+  while (idx.length > 3 && guard-- > 0) {
+    const len = idx.length;
+    let clipped = false;
+    for (let i = 0; i < len; i++) {
+      const ia = idx[(i - 1 + len) % len]!;
+      const ib = idx[i]!;
+      const ic = idx[(i + 1) % len]!;
+      if (cross2(pts[ia]!, pts[ib]!, pts[ic]!) <= eps) continue; // reflex or collinear at ib
+      let blocked = false;
+      for (const j of idx) {
+        if (j === ia || j === ib || j === ic) continue;
+        if (pointStrictlyIn(pts[j]!, pts[ia]!, pts[ib]!, pts[ic]!)) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+      tris.push(cw ? [ic, ib, ia] : [ia, ib, ic]);
+      idx.splice(i, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) break; // numerical stall — fan the remainder (below)
+  }
+  if (idx.length === 3) {
+    const [a, b, c] = [idx[0]!, idx[1]!, idx[2]!];
+    tris.push(cw ? [c, b, a] : [a, b, c]);
+    return tris.map(([ta, tb, tc]) => [loop[ta]!, loop[tb]!, loop[tc]!]);
+  }
+  // Degenerate remainder (all-collinear leftovers etc.): fan it — in the loop's
+  // ORIGINAL order (idx may be reversed), preserving the original winding.
+  const remainder = cw ? [...idx].reverse() : idx;
+  return [...tris.map(([ta, tb, tc]) => [loop[ta]!, loop[tb]!, loop[tc]!] as [Vec3, Vec3, Vec3]), ...fan(remainder)];
+}
+
+/**
  * Volume-weighted centroid (true center of mass for a uniform-density solid),
  * via signed tetrahedra from the origin. Falls back to the vertex centroid for
  * degenerate (near-zero-volume) meshes.
@@ -911,11 +1140,7 @@ export function computeVolumetricCentroid(body: SolidBody): Vec3 {
   let cy = 0;
   let cz = 0;
   for (const face of body.faces) {
-    const verts = face.vertices;
-    for (let i = 1; i < verts.length - 1; i++) {
-      const a = verts[0]!;
-      const b = verts[i]!;
-      const c = verts[i + 1]!;
+    for (const [a, b, c] of triangulateFace(face.vertices)) {
       const tv =
         (a.x * (b.y * c.z - b.z * c.y) -
           a.y * (b.x * c.z - b.z * c.x) +
@@ -932,14 +1157,11 @@ export function computeVolumetricCentroid(body: SolidBody): Vec3 {
 }
 
 export function computeVolume(body: SolidBody): number {
-  // Signed volume using divergence theorem
+  // Signed volume using divergence theorem. Faces are triangulated by
+  // triangulateFace (concave-safe); convex faces fan exactly as before.
   let volume = 0;
   for (const face of body.faces) {
-    const verts = face.vertices;
-    for (let i = 1; i < verts.length - 1; i++) {
-      const v0 = verts[0]!;
-      const v1 = verts[i]!;
-      const v2 = verts[i + 1]!;
+    for (const [v0, v1, v2] of triangulateFace(face.vertices)) {
       volume += signedTriangleVolume(v0, v1, v2);
     }
   }
@@ -994,11 +1216,7 @@ export function computeMassProperties(body: SolidBody, density = 1): MassPropert
   ];
 
   for (const face of body.faces) {
-    const verts = face.vertices;
-    for (let i = 1; i < verts.length - 1; i++) {
-      const a = verts[0]!;
-      const b = verts[i]!;
-      const cc = verts[i + 1]!;
+    for (const [a, b, cc] of triangulateFace(face.vertices)) {
       const det = signedTriangleVolume(a, b, cc); // det[a b c] = 6·V_tet
       det6 += det;
       comX += det * (a.x + b.x + cc.x);
@@ -1102,12 +1320,9 @@ function computeFaceNormal(a: Vec3, b: Vec3, c: Vec3): Vec3 {
 export function computeSurfaceArea(body: SolidBody): number {
   let area = 0;
   for (const face of body.faces) {
-    const verts = face.vertices;
-    // Triangulate face using fan from first vertex
-    for (let i = 1; i < verts.length - 1; i++) {
-      const v0 = verts[0]!;
-      const v1 = verts[i]!;
-      const v2 = verts[i + 1]!;
+    // Concave-safe triangulation: a fan over-counts an L-shaped face by the
+    // out-of-polygon regions it sweeps (QA F5).
+    for (const [v0, v1, v2] of triangulateFace(face.vertices)) {
       area += triangleArea(v0, v1, v2);
     }
   }
@@ -1243,9 +1458,8 @@ export function computeAverageVertexDegree(body: SolidBody): number {
 
 export function computeFaceArea(face: Face): number {
   let area = 0;
-  const verts = face.vertices;
-  for (let i = 1; i < verts.length - 1; i++) {
-    area += triangleArea(verts[0]!, verts[i]!, verts[i + 1]!);
+  for (const [a, b, c] of triangulateFace(face.vertices)) {
+    area += triangleArea(a, b, c);
   }
   return area;
 }
@@ -1376,12 +1590,8 @@ export function computeMeshQuality(body: SolidBody): MeshQuality {
     const verts = face.vertices;
     if (verts.length < 3) continue;
 
-    // For each triangle in the face
-    for (let i = 1; i < verts.length - 1; i++) {
-      const v0 = verts[0]!;
-      const v1 = verts[i]!;
-      const v2 = verts[i + 1]!;
-
+    // For each triangle in the face (concave-safe triangulation — QA F5)
+    for (const [v0, v1, v2] of triangulateFace(verts)) {
       // Edge lengths
       const a = Math.sqrt((v1.x - v0.x) ** 2 + (v1.y - v0.y) ** 2 + (v1.z - v0.z) ** 2);
       const b = Math.sqrt((v2.x - v1.x) ** 2 + (v2.y - v1.y) ** 2 + (v2.z - v1.z) ** 2);
@@ -2760,12 +2970,11 @@ export function computeThickness(body: SolidBody): ThicknessInfo {
   const diag = Math.hypot(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) || 1;
   const eps = diag * 1e-5;
 
-  // Pre-triangulate all faces once for ray targets.
+  // Pre-triangulate all faces once for ray targets (concave-safe: phantom
+  // fan triangles outside an L-shaped face would fake inner walls).
   const tris: [Vec3, Vec3, Vec3][] = [];
   for (const f of body.faces) {
-    for (let i = 1; i < f.vertices.length - 1; i++) {
-      tris.push([f.vertices[0]!, f.vertices[i]!, f.vertices[i + 1]!]);
-    }
+    tris.push(...triangulateFace(f.vertices));
   }
 
   // Sample faces to keep the O(F²) probe bounded on large meshes.

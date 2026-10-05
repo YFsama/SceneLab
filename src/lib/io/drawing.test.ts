@@ -11,6 +11,12 @@ import {
   DIM_OFFSET_PX,
   DIM_EXT_GAP_PX,
   DIM_EXT_OVERSHOOT_PX,
+  CUT_PLANE_ARROW_LEN_PX,
+  CUT_PLANE_EXTEND_PX,
+  CUT_PLANE_LABEL_GAP_PX,
+  cutPlaneSheetTrace,
+  sectionScreenMapping,
+  titleBlockLayout,
   type DrawingView,
 } from './drawing';
 import { createBox, createCylinder } from '../geometry/brep';
@@ -509,5 +515,156 @@ describe('dimension sheet geometry (offset-collapse fix)', () => {
     expect(width.start).toEqual({ x: -5, y: 0 });
     expect(width.end).toEqual({ x: 5, y: 0 });
     expect(width.offset).toBe(8); // advisory only, unchanged by the fix
+  });
+});
+
+describe('section cutting-plane annotation (B10)', () => {
+  it('maps the section axis onto parent views and only parent views', () => {
+    // Front frame (right = +X, up = +Y).
+    const right = { x: 1, y: 0, z: 0 };
+    const up = { x: 0, y: 1, z: 0 };
+    expect(sectionScreenMapping(right, up, 'x')).toEqual({ screen: 'x', sign: 1 });
+    expect(sectionScreenMapping(right, up, 'y')).toEqual({ screen: 'y', sign: 1 });
+    expect(sectionScreenMapping(right, up, 'z')).toBeNull(); // looking along Z
+    // Top frame (right = +X, up = −Z): a Z-cut maps to screen y with sign −1.
+    expect(sectionScreenMapping(right, { x: 0, y: 0, z: -1 }, 'z')).toEqual({ screen: 'y', sign: -1 });
+    // Iso frame: oblique, never annotated.
+    expect(sectionScreenMapping({ x: 0.577, y: 0, z: -0.577 }, up, 'x')).toBeNull();
+  });
+
+  it('places the trace across the view with outward arrows and letters', () => {
+    const view: DrawingView = {
+      name: 'Front',
+      lines: [{ start: { x: -100, y: -50 }, end: { x: 100, y: -50 } }],
+      arcs: [],
+      dimensions: [],
+      bounds: { min: { x: -100, y: -50 }, max: { x: 100, y: 50 } },
+    };
+    const toSheet = (p: { x: number; y: number }) => ({ x: 400 + p.x * 2, y: 300 - p.y * 2 });
+    const trace = cutPlaneSheetTrace(view, toSheet, {
+      viewIndex: 0,
+      coord: 0,
+      screen: 'x',
+      arrow: { x: -1, y: 0 },
+      label: 'A',
+    });
+    expect(trace).not.toBeNull();
+    // Vertical chain line at the projected cut position (x = 400)…
+    expect(trace!.line.start.x).toBeCloseTo(400, 6);
+    expect(trace!.line.end.x).toBeCloseTo(400, 6);
+    // …spanning the view bounds extended by CUT_PLANE_EXTEND_PX.
+    expect(trace!.line.start.y).toBeCloseTo(300 - 100 - CUT_PLANE_EXTEND_PX, 6);
+    expect(trace!.line.end.y).toBeCloseTo(300 + 100 + CUT_PLANE_EXTEND_PX, 6);
+    // Arrows at both ends point left (viewing −X); tips 10 px past the ends.
+    expect(trace!.arrows).toHaveLength(2);
+    for (const a of trace!.arrows) {
+      expect(a.tip.x).toBeCloseTo(400 - CUT_PLANE_ARROW_LEN_PX, 6);
+      expect(a.base1.x).toBeCloseTo(400, 6);
+    }
+    // Letters sit left of the arrow tips.
+    expect(trace!.labels).toHaveLength(2);
+    for (const l of trace!.labels) {
+      expect(l.x).toBeCloseTo(400 - CUT_PLANE_ARROW_LEN_PX - CUT_PLANE_LABEL_GAP_PX, 6);
+      expect(l.x).toBeLessThan(400 - CUT_PLANE_ARROW_LEN_PX);
+    }
+  });
+
+  it('horizontal traces follow screen y and return null for empty views', () => {
+    const view: DrawingView = {
+      name: 'Top',
+      lines: [{ start: { x: -100, y: -50 }, end: { x: 100, y: -50 } }],
+      arcs: [],
+      dimensions: [],
+      bounds: { min: { x: -100, y: -50 }, max: { x: 100, y: 50 } },
+    };
+    const toSheet = (p: { x: number; y: number }) => ({ x: p.x, y: -p.y });
+    const trace = cutPlaneSheetTrace(view, toSheet, {
+      viewIndex: 0,
+      coord: -25,
+      screen: 'y',
+      arrow: { x: 0, y: -1 },
+      label: 'A',
+    });
+    expect(trace!.line.start.y).toBeCloseTo(25, 6); // −(−25), constant along the trace
+    expect(trace!.line.start.x).toBeCloseTo(-100 - CUT_PLANE_EXTEND_PX, 6);
+    expect(trace!.line.end.x).toBeCloseTo(100 + CUT_PLANE_EXTEND_PX, 6);
+    // Arrows point up (0, −1) in sheet space: tips above the line.
+    expect(trace!.arrows[0]!.tip.y).toBeLessThan(25);
+    const empty: DrawingView = {
+      name: 'Empty',
+      lines: [],
+      arcs: [],
+      dimensions: [],
+      bounds: { min: { x: 0, y: 0 }, max: { x: 0, y: 0 } },
+    };
+    expect(
+      cutPlaneSheetTrace(empty, toSheet, { viewIndex: 0, coord: 0, screen: 'x', arrow: { x: 1, y: 0 }, label: 'A' }),
+    ).toBeNull();
+  });
+});
+
+describe('exportDrawingSVG title block (B7 parity)', () => {
+  const view = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+
+  it('contains the title-block text nodes for the project name', () => {
+    const svg = exportDrawingSVG([view], 800, 600, { titleBlock: { projectName: 'SceneParity' } });
+    expect(svg).toContain('>SceneParity<');
+    // The block's frame sits at the bottom-right corner: x = 800−200−4 = 596,
+    // y = 600−60−4 = 536.
+    expect(svg).toMatch(/<rect x="596" y="536" width="200" height="60"/);
+  });
+
+  it('draws a default block (Untitled, Scale/Date/Units fields) without extras', () => {
+    const svg = exportDrawingSVG([view], 800, 600);
+    expect(svg).toContain('>Untitled<');
+    expect(svg).toMatch(/Scale: /);
+    expect(svg).toMatch(/Date: /);
+    expect(svg).toMatch(/Units: /);
+  });
+
+  it('matches the shared titleBlockLayout field anchors', () => {
+    const tb = titleBlockLayout(
+      {
+        title: 'T', projectName: 'P', scaleLabel: 'S', scaleValue: 'sv', dateLabel: 'D',
+        dateValue: 'dv', unitsLabel: 'U', unitsValue: 'mm', version: 'V',
+      },
+      800,
+      600,
+    );
+    expect(tb.rect).toEqual({ x: 596, y: 536, w: 200, h: 60 });
+    expect(tb.fields.map((f) => f.text)).toEqual(['T', 'P', 'S: sv', 'D: dv', 'U: mm', 'V']);
+    expect(tb.fields[0]).toMatchObject({ x: 601, y: 554, size: 11, bold: true });
+  });
+});
+
+describe('exportDrawingSVG section views (B10)', () => {
+  it('renders the SECTION A-A view title and the cutting-plane trace', () => {
+    const view = projectBodies(
+      [createCylinder(5, 10, 32)],
+      { x: 0, y: 1, z: 0 },
+      { x: 0, y: 0, z: 1 },
+      50,
+      'Top — SECTION A-A',
+      { normal: { x: 1, y: 0, z: 0 }, offset: 0 },
+    );
+    const svg = exportDrawingSVG([view], 800, 600, {
+      sectionCuts: [{ viewIndex: 0, coord: 0, screen: 'x', arrow: { x: -1, y: 0 }, label: 'A' }],
+    });
+    expect(svg).toContain('SECTION A-A');
+    // One letter per trace end.
+    expect((svg.match(/<text[^>]*>A<\/text>/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // The phantom chain dash pattern on the trace line.
+    expect(svg).toContain('stroke-dasharray="16,4,5,4"');
+    // Filled arrowheads.
+    expect(svg).toMatch(/<polygon points="[\d.-]+,[\d.-]+ [\d.-]+,[\d.-]+ [\d.-]+,[\d.-]+" stroke="none" \/>/);
+  });
+
+  it('omits traces for sectionCuts aimed at other views', () => {
+    const a = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    const b = projectBody(createBox(10, 10, 10), { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const svg = exportDrawingSVG([a, b], 800, 600, {
+      sectionCuts: [{ viewIndex: 1, coord: 0, screen: 'x', arrow: { x: -1, y: 0 }, label: 'A' }],
+    });
+    expect((svg.match(/<text[^>]*>A<\/text>/g) ?? []).length).toBe(2); // only view B's trace
   });
 });

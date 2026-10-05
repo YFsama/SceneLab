@@ -6,6 +6,7 @@ import { createBox } from '../../lib/geometry';
 import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { FeatureTree, createHoleFeature } from '../../lib/features/tree';
+import { CUT_PLANE_ARROW_LEN_PX, CUT_PLANE_DASH, CUT_PLANE_EXTEND_PX, CUT_PLANE_LABEL_GAP_PX, projectBodies, viewTransform } from '../../lib/io/drawing';
 import { DrawingCanvas } from './DrawingCanvas';
 
 // DrawingCanvas is a plain 2D-canvas component — mountable headless like the
@@ -235,6 +236,177 @@ describe('DrawingCanvas with a holed feature tree (callout derivation)', () => {
       expect(svg).not.toContain('THRU');
     } finally {
       await unmount(m);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section cutting-plane annotation (B10): jsdom has no 2D rasterizer, so the
+// paint effect's getContext('2d') normally returns null — stub it with a
+// recorder and assert the trace commands land at the expected sheet coords.
+// ---------------------------------------------------------------------------
+
+interface CtxCall {
+  op: string;
+  args: unknown[];
+}
+
+/** A 2D-context stand-in that records every drawing call. */
+function recordingContext(calls: CtxCall[]): CanvasRenderingContext2D {
+  const mk = (op: string) => (...args: unknown[]) => {
+    calls.push({ op, args });
+  };
+  return {
+    fillRect: mk('fillRect'),
+    strokeRect: mk('strokeRect'),
+    fillText: mk('fillText'),
+    measureText: (t: string) => ({ width: t.length * 6 }),
+    beginPath: mk('beginPath'),
+    moveTo: mk('moveTo'),
+    lineTo: mk('lineTo'),
+    closePath: mk('closePath'),
+    stroke: mk('stroke'),
+    fill: mk('fill'),
+    save: mk('save'),
+    restore: mk('restore'),
+    clip: mk('clip'),
+    arc: mk('arc'),
+    setLineDash: mk('setLineDash'),
+  } as unknown as CanvasRenderingContext2D;
+}
+
+describe('DrawingCanvas section cutting-plane annotation (B10)', () => {
+  const realGetContext = canvasProto.getContext;
+  const realCreateObjectURL = URL.createObjectURL;
+  let calls: CtxCall[];
+
+  beforeEach(() => {
+    clearToasts();
+    calls = [];
+    canvasProto.getContext = function () {
+      return recordingContext(calls);
+    };
+    useStore.setState({
+      locale: 'en',
+      bodies: [createBox(10, 10, 10)],
+      selectedIds: [],
+      drawingDetails: [],
+      drawingNotes: [],
+      drawingSectionAxis: 'x',
+      numericPrompt: null,
+      featureTree: new FeatureTree(),
+      featureVersion: 1,
+    });
+  });
+
+  afterEach(() => {
+    canvasProto.getContext = realGetContext;
+    (URL as unknown as Record<string, unknown>).createObjectURL = realCreateObjectURL;
+  });
+
+  it('renders the view arrows and letters at the expected sheet positions', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      // Expected positions computed with the exact same primitives the
+      // component uses (projectBodies + viewTransform over the canvas's
+      // 400×300 cells with PAD 40): box x ∈ [−5,5] → the X-cut plane at
+      // model x=0 projects to view coord 0; parents of an X-cut are Front
+      // and Top (Right looks along X; iso frames are never annotated).
+      const box = createBox(10, 10, 10);
+      const section = { normal: { x: 1, y: 0, z: 0 }, offset: 0 };
+      const front = projectBodies([box], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50, 'Front', section);
+      const tr = viewTransform(front, { x: 0, y: 0, w: 400, h: 300 }, 40);
+      const traceX = tr.toSheet({ x: 0, y: 0 }).x;
+      const expectedX = traceX - CUT_PLANE_ARROW_LEN_PX - CUT_PLANE_LABEL_GAP_PX;
+      const expectedYs = [
+        tr.toSheet({ x: 0, y: front.bounds.max.y }).y - CUT_PLANE_EXTEND_PX + 3,
+        tr.toSheet({ x: 0, y: front.bounds.min.y }).y + CUT_PLANE_EXTEND_PX + 3,
+      ].sort((a, b) => a - b);
+
+      const letters = calls.filter((c) => c.op === 'fillText' && c.args[0] === 'A');
+      expect(letters).toHaveLength(4); // 2 views × both ends
+      const frontLetters = letters.filter((c) => Math.abs((c.args[1] as number) - expectedX) < 1e-6);
+      expect(frontLetters).toHaveLength(2);
+      const ys = frontLetters.map((c) => c.args[2] as number).sort((a, b) => a - b);
+      expect(ys[0]).toBeCloseTo(expectedYs[0]!, 6);
+      expect(ys[1]).toBeCloseTo(expectedYs[1]!, 6);
+
+      // The phantom chain dash pattern is applied for the traces.
+      expect(
+        calls.some(
+          (c) => c.op === 'setLineDash' && JSON.stringify(c.args[0]) === JSON.stringify([...CUT_PLANE_DASH]),
+        ),
+      ).toBe(true);
+      // Arrowheads are filled triangles near the trace ends.
+      const fills = calls.filter((c) => c.op === 'fill');
+      expect(fills.length).toBeGreaterThanOrEqual(4);
+      // Sectioned view titles use the pre-seeded sectionTitle key.
+      expect(calls.some((c) => c.op === 'fillText' && String(c.args[0]).includes('SECTION A-A'))).toBe(true);
+      // The title block still paints (shared layout, B7).
+      expect(calls.some((c) => c.op === 'strokeRect')).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('paints no trace when the section is off', async () => {
+    useStore.setState({ drawingSectionAxis: 'off' });
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      expect(calls.filter((c) => c.op === 'fillText' && c.args[0] === 'A')).toHaveLength(0);
+      expect(calls.some((c) => c.op === 'fillText' && String(c.args[0]).includes('SECTION'))).toBe(false);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('exports SVG containing SECTION A-A, the trace letters and the title block', async () => {
+    let captured: Blob | null = null;
+    (URL as unknown as Record<string, unknown>).createObjectURL = (b: Blob) => {
+      captured = b;
+      return 'blob:stub';
+    };
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      await act(async () => {
+        exportButton(m.container, 'export.svg')!.click();
+      });
+      const svg = await blobText(captured!);
+      expect(svg).toContain('SECTION A-A');
+      expect((svg.match(/<text[^>]*>A<\/text>/g) ?? []).length).toBeGreaterThanOrEqual(4);
+      expect(svg).toContain('stroke-dasharray="16,4,5,4"');
+      // Title block parity: the canvas reads projectName from the store.
+      expect(svg).toContain('>Untitled<');
+    } finally {
+      await unmount(m);
+      (URL as unknown as Record<string, unknown>).createObjectURL = realCreateObjectURL;
+    }
+  });
+
+  it('exports the sheet DXF (2D entities + layers), not the raw wireframe', async () => {
+    let captured: Blob | null = null;
+    (URL as unknown as Record<string, unknown>).createObjectURL = (b: Blob) => {
+      captured = b;
+      return 'blob:stub';
+    };
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      await act(async () => {
+        exportButton(m.container, 'export.dxf')!.click();
+      });
+      expect(toastMessages()).toContain(translations.en!['toast.dxfExported']!);
+      const dxf = await blobText(captured!);
+      // A sheet DXF: layer table with the annotation layers, view titles as
+      // TEXT, dimension SOLID arrowheads, the cut letters, the title block.
+      for (const layer of ['OUTLINE', 'CENTER', 'CALLOUT', 'NOTES', 'DIMENSIONS']) {
+        expect(dxf).toContain(`2\r\n${layer}\r\n`);
+      }
+      expect(dxf).toContain('SECTION A-A');
+      expect(dxf).toMatch(/0\r\nSOLID\r\n/);
+      expect(dxf).toMatch(/0\r\nTEXT\r\n/);
+    } finally {
+      await unmount(m);
+      (URL as unknown as Record<string, unknown>).createObjectURL = realCreateObjectURL;
     }
   });
 });

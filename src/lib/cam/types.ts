@@ -21,6 +21,9 @@ export interface CAMParameters {
   allowance?: number;
   /** Drill peck increment (mm). Default: max(0.5, tool.diameter / 2). */
   peckDepth?: number;
+  /** Traverse height above the stock top (mm); seeded from
+   * CAMSetup.safeZAboveStock when the panel adds an op. Default 5. */
+  safeZAboveStock?: number;
 }
 
 /**

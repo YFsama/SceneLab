@@ -4,7 +4,7 @@
 // catalog so every entry point stays consistent.
 import {
   createBox, createCylinder, createSphere, createPrism,
-  createTube, createWedge, createCoil, createExtrude, createLoft,
+  createTube, createWedge, createCoil, createExtrude, createLoft, adaptiveSegments,
 } from '../geometry/brep';
 import { translateBody, rotateBody, mergeBodies } from '../geometry/operations';
 import { booleanOp } from '../geometry/boolean';
@@ -45,7 +45,7 @@ function buildGear(teeth = 12, rootR = 14, tipR = 16.5, bore = 4, thickness = 5)
     pts.push({ x: Math.cos(a + tooth / 2) * rootR, y: 0, z: Math.sin(a + tooth / 2) * rootR });
   }
   const blank = createExtrude({ profile: pts, direction: { x: 0, y: 1, z: 0 }, distance: thickness });
-  const cut = booleanOp(blank, createCylinder(bore, thickness), 'difference', 48);
+  const cut = booleanOp(blank, createCylinder(bore, thickness, adaptiveSegments(bore * 2)), 'difference', 48);
   return { ...(cut ?? blank), name: 'Gear' };
 }
 
@@ -54,7 +54,7 @@ function buildHexNut(): SolidBody {
   const h = 6.5;
   // Across-flats 13 → circumradius 13/√3.
   const blank = createPrism(6, 13 / Math.sqrt(3), h);
-  const cut = booleanOp(blank, createCylinder(4, h), 'difference', 48);
+  const cut = booleanOp(blank, createCylinder(4, h, adaptiveSegments(8)), 'difference', 48);
   return { ...(cut ?? blank), name: 'Hex nut' };
 }
 
@@ -64,7 +64,7 @@ function buildArch(): SolidBody {
   // Cylinder along +Y rotated 90° about X lies along +Z, then lifted to the
   // top face so the cut opens upward through the full depth.
   const tool = translateBody(
-    rotateBody(createCylinder(11, 10), { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } }, Math.PI / 2),
+    rotateBody(createCylinder(11, 10, adaptiveSegments(22)), { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } }, Math.PI / 2),
     { x: 0, y: 26, z: -5 },
   );
   const cut = booleanOp(base, tool, 'difference', 48);
@@ -192,26 +192,28 @@ export const LIBRARY_PARTS: LibraryPart[] = [
     ),
   },
 
-  // ---- Hole cutters (for boolean subtract workflows / dowel pins) ----
+  // ---- Hole cutters (for boolean subtract workflows / dowel pins). Facet
+  // counts adapt to the hole diameter (0.005 mm chord tolerance), so the
+  // quoted clearance ⌀ is what the cutter actually removes. ----
   {
     id: 'holeM3', category: 'holes', spec: 'M3 ⌀3.6',
     keywords: ['hole', 'm3', 'drill', 'kong', '孔', '钻孔'],
-    build: () => ({ ...createCylinder(1.8, 20), name: 'M3 hole' }),
+    build: () => ({ ...createCylinder(1.8, 20, adaptiveSegments(3.6)), name: 'M3 hole' }),
   },
   {
     id: 'holeM4', category: 'holes', spec: 'M4 ⌀4.6',
     keywords: ['hole', 'm4', 'drill', 'kong', '孔', '钻孔'],
-    build: () => ({ ...createCylinder(2.3, 20), name: 'M4 hole' }),
+    build: () => ({ ...createCylinder(2.3, 20, adaptiveSegments(4.6)), name: 'M4 hole' }),
   },
   {
     id: 'holeM6', category: 'holes', spec: 'M6 ⌀6.4',
     keywords: ['hole', 'm6', 'drill', 'kong', '孔', '钻孔'],
-    build: () => ({ ...createCylinder(3.2, 20), name: 'M6 hole' }),
+    build: () => ({ ...createCylinder(3.2, 20, adaptiveSegments(6.4)), name: 'M6 hole' }),
   },
   {
     id: 'holeM8', category: 'holes', spec: 'M8 ⌀8.6',
     keywords: ['hole', 'm8', 'drill', 'kong', '孔', '钻孔'],
-    build: () => ({ ...createCylinder(4.3, 20), name: 'M8 hole' }),
+    build: () => ({ ...createCylinder(4.3, 20, adaptiveSegments(8.6)), name: 'M8 hole' }),
   },
 
   // ---- Fun / starter shapes ----

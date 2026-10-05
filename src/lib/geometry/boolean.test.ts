@@ -1,9 +1,22 @@
-import { describe, it, expect } from 'vitest';
-import { booleanOp, hollowBody, splitByPlane, mirrorMerge } from './boolean';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  booleanOp,
+  asyncBooleanOp,
+  hollowBody,
+  splitByPlane,
+  mirrorMerge,
+  isBodyManifoldCompatible,
+  lastBooleanFallbackReason,
+  setBooleanFallbackNotifier,
+  isManifoldEngineReady,
+} from './boolean';
 import { booleanOpVoxel } from './booleanVoxel';
 import { createBox, createCylinder, createSphere, checkManifold, computeVolume } from './brep';
-import { translateBody } from './operations';
+import { isPointInsideBody } from './measure';
+import { translateBody, applyFillet } from './operations';
 import { makePlane } from './referenceGeometry';
+import { getToasts, clearToasts } from '../toast';
+import type { SolidBody, Vec3 } from './types';
 
 describe('booleanOp', () => {
   const a = createBox(10, 10, 10); // x,z ∈ [-5,5], y ∈ [0,10], vol 1000
@@ -375,5 +388,170 @@ describe('voxel boolean performance', () => {
     expect(r).not.toBeNull();
     expect(Math.abs(computeVolume(r!))).toBeGreaterThan(1000); // sphere − ~half overlap
     expect(ms).toBeLessThan(8000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pass-30 B/C: voxel-fallback guardrails and isotropic hollow erosion.
+// ---------------------------------------------------------------------------
+
+/** A closed box with one dangling triangle — boundary edges, can never be
+ *  converted by the exact engine (same class as a fillet/chamfer overlay). */
+function boxWithDanglingFace(): SolidBody {
+  const box = createBox(10, 10, 10);
+  const v = box.vertices[0]!;
+  return {
+    ...box,
+    faces: [
+      ...box.faces,
+      {
+        id: 'dangling',
+        vertices: [v, { x: v.x + 3, y: v.y + 3, z: v.z }, { x: v.x, y: v.y + 3, z: v.z + 3 }],
+        normal: { x: 1, y: 0, z: 0 },
+      },
+    ],
+  };
+}
+
+describe('voxel fallback guardrails', () => {
+  afterEach(() => {
+    setBooleanFallbackNotifier(null);
+    vi.restoreAllMocks();
+    clearToasts();
+  });
+
+  it('isBodyManifoldCompatible: clean primitives and voxel meshes pass; open meshes and fillet overlays fail', () => {
+    expect(isBodyManifoldCompatible(createBox(10, 10, 10))).toBe(true);
+    expect(isBodyManifoldCompatible(createCylinder(5, 10, 16))).toBe(true);
+    // A voxel result is a closed grid mesh — manifold.
+    const vox = booleanOp(createBox(10, 10, 10), translateBody(createBox(10, 10, 10), { x: 5, y: 0, z: 0 }), 'union', 12);
+    expect(vox).not.toBeNull();
+    expect(isBodyManifoldCompatible(vox!)).toBe(true);
+    // The pass-30 fillet overlay is honestly non-manifold (4-face spines) —
+    // the exact path can never take it, so booleans after a fillet warn.
+    expect(isBodyManifoldCompatible(applyFillet(createBox(30, 10, 30), [], 1))).toBe(false);
+    expect(isBodyManifoldCompatible(boxWithDanglingFace())).toBe(false);
+  });
+
+  it('sync booleanOp records why it left the exact path; refusing is opt-in', () => {
+    const cutter = translateBody(createBox(4, 4, 12), { x: 0, y: 4, z: 0 });
+    // Default (allowVoxelFallback unset): voxel fallback still happens —
+    // previous behavior preserved for CAM/feature callers.
+    expect(booleanOp(boxWithDanglingFace(), cutter, 'difference', 10)).not.toBeNull();
+    expect(lastBooleanFallbackReason()).toBe('non-manifold-input');
+    // Opt-out: null instead of silently grinding a blocky 15 s voxel result.
+    expect(booleanOp(boxWithDanglingFace(), cutter, 'difference', 10, { allowVoxelFallback: false })).toBeNull();
+    expect(lastBooleanFallbackReason()).toBe('non-manifold-input');
+    // Clean bodies with the engine cold record engine-not-ready — a normal
+    // startup state, not an input defect (skipped if some test warmed WASM).
+    if (!isManifoldEngineReady()) {
+      expect(booleanOp(createBox(10, 10, 10), cutter, 'difference', 10)).not.toBeNull();
+      expect(lastBooleanFallbackReason()).toBe('engine-not-ready');
+    }
+  });
+
+  it('asyncBooleanOp on a filleted body warns via toast + console and still returns the voxel result', async () => {
+    const filleted = applyFillet(createBox(30, 10, 30), [], 1);
+    const cutter = translateBody(createBox(4, 4, 12), { x: 0, y: 5, z: 0 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    clearToasts();
+    // The voxel result is still returned: the guardrail makes the 15–19 s
+    // blocky cliff VISIBLE, not fatal — CAM and feature-recompute chains
+    // keep working either way.
+    const result = await asyncBooleanOp(filleted, cutter, 'difference', 10);
+    expect(result).not.toBeNull();
+    expect(checkManifold(result!).boundaryEdges).toBe(0);
+    expect(lastBooleanFallbackReason()).toBe('non-manifold-input');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain('non-manifold');
+    const toasts = getToasts();
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]!.type).toBe('warning');
+  });
+
+  it('a 16-op chain on the same non-manifold body warns once per episode, and clean cold-engine ops stay silent', async () => {
+    const notifier = vi.fn();
+    setBooleanFallbackNotifier(notifier);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Clean bodies, cold engine: normal startup fallback — silent.
+    const box = createBox(10, 10, 10);
+    const cutter = translateBody(createBox(2, 2, 12), { x: 0, y: 4, z: 0 });
+    await asyncBooleanOp(box, cutter, 'difference', 8);
+    expect(notifier).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    // 16-hole drill chain on one non-manifold body: one announcement.
+    const bad = boxWithDanglingFace();
+    for (let i = 0; i < 16; i++) {
+      const hole = translateBody(cutter, { x: (i - 8) * 1.1, y: 0, z: 0 });
+      await asyncBooleanOp(bad, hole, 'difference', 8);
+    }
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(notifier.mock.calls[0]![0].reason).toBe('non-manifold-input');
+    expect(warn).not.toHaveBeenCalled(); // custom notifier replaces console+toast
+  });
+
+  it('the manifold precheck is cheap enough to gate every fallback (≈24k-face voxel mesh)', () => {
+    const mesh = hollowBody(createBox(40, 40, 40), 2, 40)!;
+    expect(mesh.faces.length).toBeGreaterThan(5000);
+    const t0 = performance.now();
+    expect(isBodyManifoldCompatible(mesh)).toBe(true);
+    const ms = performance.now() - t0;
+    // Measured ~10–40 ms — three orders of magnitude under the 15–19 s voxel
+    // op it gates. Generous bound for CI variance.
+    expect(ms).toBeLessThan(500);
+  });
+});
+
+describe('hollowBody isotropic erosion (anisotropic-cell fix)', () => {
+  // Walk inward from a face of the hollow body until the ray leaves the
+  // material — the walked distance is the local wall thickness. Probe lines
+  // are deliberately off the body's symmetry axes: isPointInsideBody's
+  // near-diagonal ray grazes lattice edges on symmetric lines and flips
+  // parity there.
+  const wallAlong = (body: SolidBody, from: Vec3, dir: Vec3): number => {
+    const step = 0.02;
+    let walked = 0;
+    for (let t = step; t < 14; t += step) {
+      const p = { x: from.x + dir.x * t, y: from.y + dir.y * t, z: from.z + dir.z * t };
+      if (!isPointInsideBody(body, p)) return t - step;
+      walked = t;
+    }
+    return walked;
+  };
+
+  it('a 30×30×10 plate at nominal wall 2 keeps ≥ 1.6 mm on every axis (was one 0.208 mm cell)', () => {
+    // createBox(30, 30, 10): x ∈ [−15,15], y ∈ [0,30], z ∈ [−5,5]; cells at
+    // res 48 are 0.625 × 0.625 × 0.208 — the anisotropy that used to thin
+    // the z walls to a single cell.
+    const h = hollowBody(createBox(30, 30, 10), 2, 48)!;
+    expect(h).not.toBeNull();
+    expect(checkManifold(h).boundaryEdges).toBe(0); // still watertight
+    expect(Math.abs(computeVolume(h))).toBeGreaterThan(0);
+    expect(Math.abs(computeVolume(h))).toBeLessThan(9000);
+
+    const walls = [
+      wallAlong(h, { x: -14.99, y: 13.37, z: 1.71 }, { x: 1, y: 0, z: 0 }),
+      wallAlong(h, { x: 14.99, y: 13.37, z: -1.71 }, { x: -1, y: 0, z: 0 }),
+      wallAlong(h, { x: 1.37, y: 0.01, z: 2.91 }, { x: 0, y: 1, z: 0 }),
+      wallAlong(h, { x: 1.37, y: 29.99, z: 2.91 }, { x: 0, y: -1, z: 0 }),
+      wallAlong(h, { x: 1.37, y: 13.37, z: 4.99 }, { x: 0, y: 0, z: -1 }),
+      wallAlong(h, { x: 1.37, y: 13.37, z: -4.99 }, { x: 0, y: 0, z: 1 }),
+    ];
+    for (const w of walls) expect(w).toBeGreaterThanOrEqual(1.6);
+    // And not absurdly thick either (quantized to ~1.9–2.1).
+    for (const w of walls) expect(w).toBeLessThanOrEqual(2.6);
+  });
+
+  it('a cube keeps its nominal wall (2 mm on 0.5 mm cells → ~2.0)', () => {
+    const h = hollowBody(createBox(20, 20, 20), 2, 40)!;
+    const w = wallAlong(h, { x: -9.99, y: 3.37, z: 1.71 }, { x: 1, y: 0, z: 0 });
+    expect(w).toBeGreaterThanOrEqual(1.6);
+    expect(w).toBeLessThanOrEqual(2.6);
+  });
+
+  it('hollow meshes stay closed (no boundary edges)', () => {
+    const h = hollowBody(createBox(40, 40, 40), 2, 40)!;
+    expect(h.faces.length).toBeGreaterThan(5000);
+    expect(checkManifold(h).boundaryEdges).toBe(0);
   });
 });

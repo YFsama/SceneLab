@@ -87,6 +87,27 @@ export type CamOperationPatch = Partial<Omit<CAMOperation, 'id' | 'params' | 'ho
   params?: Partial<CAMParameters>;
   holes?: CAMOperation['holes'];
 };
+
+/**
+ * A CAM operation carrying the stable-identity binding the store attaches
+ * (F3). `bodyFeatureId` is the id of the feature-tree feature whose result
+ * produced `bodyId` when the op was added/last retargeted. Tree recompute
+ * rotates result-body ids on every upstream parametric edit (evaluators mint
+ * fresh body ids), so the exact-id match dies with the first edit and the op
+ * would dangle forever; the binding lets resolution fall back to "the current
+ * body of that feature" and repoint the op.
+ *
+ * It lives ON the operation object — not in a side table — so undo/redo
+ * snapshots (HistorySnapshot keeps camSetup by reference) and any camSetup
+ * serialization carry it automatically. Structural extension of CAMOperation
+ * (lib/cam is read-only here); the field is optional and invisible to the
+ * CAM layer, which never reads it.
+ */
+type BoundCamOperation = CAMOperation & { bodyFeatureId?: string };
+
+/** The stable-identity binding of an op, if the store captured one. */
+const camOpFeatureId = (op: CAMOperation): string | undefined =>
+  (op as BoundCamOperation).bodyFeatureId;
 import {
   createBox,
   createCylinder,
@@ -824,13 +845,37 @@ export const useStore = create<AppState>((set, get) => {
     if (s) set((st) => ({ sketchUndoStack: [...st.sketchUndoStack, cloneSketch(s)].slice(-50), sketchRedoStack: [] }));
   };
 
+  /**
+   * The body a CAM op targets (F3 stable identity), resolved in two steps:
+   * 1. exact `bodyId` in the render list (feature-tree bodies + direct
+   *    bodies — the same list the CAM panel's body selector offers);
+   * 2. when the exact id no longer exists, the CURRENT body of the feature
+   *    whose result produced `bodyId` when the op was added (the
+   *    `bodyFeatureId` binding). Tree recompute rotates result-body ids on
+   *    every upstream parametric edit, so step 1 alone made every op on a
+   *    tree body dangle forever after one edit; the feature id is stable
+   *    across recomputes. Within the feature's result a body still carrying
+   *    the op's original id wins (modify features keep the parent's id),
+   *    else the feature's first body. Direct bodies never get a binding, so
+   *    they keep today's exact-id-only path. Null = unresolvable.
+   */
+  const resolveCamOpBody = (op: CAMOperation): SolidBody | null => {
+    const exact = get().bodies.find((b) => b.id === op.bodyId);
+    if (exact) return exact;
+    const featureId = camOpFeatureId(op);
+    if (!featureId) return null;
+    const result = get().featureTree.getResult(featureId);
+    if (!result || result.bodies.length === 0) return null;
+    return result.bodies.find((b) => b.id === op.bodyId) ?? result.bodies[0]!;
+  };
+
   /** Generate + cache one operation's toolpath, or null when the op is
-   * disabled or its body/tool cannot be resolved (bodies = the RENDER list —
-   * feature-tree bodies + direct bodies — the same list the CAM panel's body
-   * selector offers). A malformed op degrades to "no cache", never a throw. */
+   * disabled or its body/tool cannot be resolved (via resolveCamOpBody — the
+   * render list first, then the stable feature binding). A malformed op
+   * degrades to "no cache", never a throw. */
   const resolveCamToolpath = (op: CAMOperation): CamToolpathCache | null => {
     if (!op.enabled) return null;
-    const body = get().bodies.find((b) => b.id === op.bodyId);
+    const body = resolveCamOpBody(op);
     const tool = getTool(op.toolId);
     if (!body || !tool) return null;
     try {
@@ -850,6 +895,31 @@ export const useStore = create<AppState>((set, get) => {
       if (cache) next[op.id] = cache;
     }
     return next;
+  };
+
+  /**
+   * F3 cache repair: rewrite `op.bodyId` to the body its feature binding NOW
+   * produces, for ops whose exact id no longer exists but whose feature path
+   * resolves. This is repair of derived plumbing inside regenerate — which is
+   * documented no-undo — NOT a user edit, so no undo entry is pushed and
+   * projectDirty stays untouched; camSetup is replaced immutably, so history
+   * snapshots keep their own (older, self-consistent) references. Ops without
+   * a binding (direct-body targets) or with a dead feature are left as-is —
+   * they honestly surface the panel's stale flag instead of silently
+   * retargeting. Returns the operations array, same reference when nothing
+   * repointed.
+   */
+  const repointCamOperationBodies = (): CAMOperation[] => {
+    const ops = get().camSetup.operations;
+    let changed = false;
+    const next = ops.map((op): CAMOperation => {
+      if (get().bodies.some((b) => b.id === op.bodyId)) return op; // still exact
+      const resolved = resolveCamOpBody(op); // feature-binding fallback
+      if (!resolved || resolved.id === op.bodyId) return op;
+      changed = true;
+      return { ...op, bodyId: resolved.id };
+    });
+    return changed ? next : ops;
   };
 
   /** Store-side translation lookup (the same keys useT() resolves in React).
@@ -2277,12 +2347,27 @@ export const useStore = create<AppState>((set, get) => {
   clipboard: [],
   pasteCount: 0,
   copySelected: () => {
-    const { selectedIds, directBodies } = get();
+    const { selectedIds, directBodies, featureTree } = get();
     const sel = new Set(selectedIds);
     const copied = directBodies.filter((b) => sel.has(b.id));
+    // F9: tree bodies copy too — baked into the clipboard as a deep snapshot
+    // with a FRESH id at copy time (zero-offset translateBody, the
+    // pasteInPlace deep-copy trick; color carried explicitly because
+    // translateBody drops it). The pasted copy is therefore a plain direct
+    // body: it never aliases the tree's result, survives later tree edits,
+    // and is editable the way any imported body is. The name keeps the
+    // original — paste appends ' copy' and withUniqueNames dedupes, exactly
+    // like the direct-body flow. Bodies of suppressed/consumed features are
+    // not in getLatestBodies, i.e. not selectable in the viewport, so the
+    // latest output mirrors what the user picked. Previously a tree-body-only
+    // selection copied NOTHING and Ctrl+V silently no-op'd.
+    const baked = featureTree
+      .getLatestBodies()
+      .filter((b) => sel.has(b.id))
+      .map((b) => ({ ...translateBody(b, { x: 0, y: 0, z: 0 }), color: b.color }));
     // Reset the cascade so the first paste lands one step from the originals.
-    set({ clipboard: copied, pasteCount: 0 });
-    return copied.length;
+    set({ clipboard: [...copied, ...baked], pasteCount: 0 });
+    return copied.length + baked.length;
   },
   cutSelected: () => {
     const n = get().copySelected();
@@ -2638,7 +2723,19 @@ export const useStore = create<AppState>((set, get) => {
   addCamOperation: (op) => {
     pushUndo();
     const id = makeCamOpId();
-    const newOp: CAMOperation = { ...op, id };
+    // F3 stable identity: capture the producing feature when the target is a
+    // tree body, so recompute's id rotation cannot orphan the op. Direct
+    // bodies resolve no feature and keep the exact-id path only (the
+    // direct-body guard matters: brep and operations mint independent
+    // body_N counters, so ids can collide across the two worlds).
+    const featureId = get().directBodies.some((b) => b.id === op.bodyId)
+      ? undefined
+      : get().featureTree.findFeatureIdForBody(op.bodyId);
+    const newOp: BoundCamOperation = {
+      ...op,
+      id,
+      ...(featureId ? { bodyFeatureId: featureId } : {}),
+    };
     const cache = resolveCamToolpath(newOp);
     set((s) => ({
       camSetup: { ...s.camSetup, operations: [...s.camSetup.operations, newOp] },
@@ -2665,12 +2762,22 @@ export const useStore = create<AppState>((set, get) => {
     if (!get().camSetup.operations.some((o) => o.id === id)) return;
     pushUndo();
     set((s) => {
-      let updated: CAMOperation | null = null;
+      let updated: BoundCamOperation | null = null;
       const operations = s.camSetup.operations.map((o) => {
         if (o.id !== id) return o;
         // "Deep-ish" patch: top-level fields replace, params merge key-by-key.
-        updated = { ...o, ...patch, params: { ...o.params, ...(patch.params ?? {}) } };
-        return updated;
+        const merged: BoundCamOperation = { ...o, ...patch, params: { ...o.params, ...(patch.params ?? {}) } };
+        // F3: retargeting the op rebinds the stable identity to the NEW
+        // body's producer — a stale binding would resurrect the old tree body
+        // after the new target dies, contradicting the retarget. An unchanged
+        // bodyId keeps the binding the op already carries.
+        if (patch.bodyId !== undefined && patch.bodyId !== o.bodyId) {
+          merged.bodyFeatureId = s.directBodies.some((b) => b.id === patch.bodyId)
+            ? undefined
+            : s.featureTree.findFeatureIdForBody(patch.bodyId);
+        }
+        updated = merged;
+        return merged;
       });
       if (!updated) return {}; // unknown id — nothing to change
       const cache = resolveCamToolpath(updated);
@@ -2685,6 +2792,15 @@ export const useStore = create<AppState>((set, get) => {
     set((s) => ({ camSetup: { ...s.camSetup, stock }, projectDirty: true }));
   },
   regenerateCamToolpaths: () => {
+    // F3 cache repair first: repoint ops whose exact body id was rotated away
+    // by an upstream parametric edit to the current body of their bound
+    // feature, so the recompute below (and the G-code export feeding off the
+    // cache) sees them. No undo entry, no dirty flip — regenerate is derived
+    // data, and the repoint is repair, not a user edit.
+    const operations = repointCamOperationBodies();
+    if (operations !== get().camSetup.operations) {
+      set((s) => ({ camSetup: { ...s.camSetup, operations } }));
+    }
     set({ camToolpaths: recomputeCamToolpaths() });
   },
   placeBodyInCoordinateSystem: (bodyId, csId) => {

@@ -17,7 +17,7 @@ import type {
   MirrorFeature,
 } from './types';
 import type { SolidBody, Vec3, ExtrudeParams } from '../geometry/types';
-import { createExtrude, createRevolve, createLoftSections, createCylinder, createCone, computeBoundingBox, computeBoundingBoxDiagonal } from '../geometry/brep';
+import { createExtrude, createRevolve, createLoftSections, createCylinder, createCone, computeBoundingBox, computeBoundingBoxDiagonal, adaptiveSegments } from '../geometry/brep';
 import {
   applyFillet,
   applyChamfer,
@@ -125,12 +125,26 @@ export class FeatureTree {
    * (fillet, shell, arrays, …) attach parametrically to a body picked in the
    * viewport, the way Fusion 360 chains timeline features. Undefined for
    * direct bodies (created outside the tree).
+   *
+   * The LATEST producer wins, not the first: a modify feature (fillet,
+   * chamfer, shell, scale, …) returns a body that KEEPS its parent's body id
+   * (see applyFillet's `{ id: body.id, … }`), so after extrude→fillet the SAME
+   * body id legitimately appears in both results at once. Consumption is what
+   * says which one is real — getLatestBodies hides the consumed extrude and
+   * shows only the fillet's body — so the feature the user's picked body
+   * actually comes from is the most RECENT producer. Returning the first
+   * match (the pre-fillet extrude) parented downstream features on stale
+   * geometry and left the modifier's body unconsumed, duplicating the body in
+   * the output (the hole-after-fillet bug).
    */
   findFeatureIdForBody(bodyId: string): string | undefined {
-    for (const [featureId, result] of this.results) {
-      if (result.bodies.some((b) => b.id === bodyId)) return featureId;
+    let latest: string | undefined;
+    for (const feature of this.features) {
+      if (feature.suppressed) continue; // suppressed features show no bodies
+      const result = this.results.get(feature.id);
+      if (result?.bodies.some((b) => b.id === bodyId)) latest = feature.id;
     }
-    return undefined;
+    return latest;
   }
 
   recompute(): void {
@@ -582,8 +596,11 @@ function extractProfileFromSketch(sketch: Sketch, solved: Map<string, Pt>): Pt[]
     } else if (entity.type === 'circle') {
       const c = solved.get(entity.centerId);
       if (c) {
-        for (let i = 0; i < 32; i++) {
-          const a = (i / 32) * Math.PI * 2;
+        // Facet count adapts to the diameter (0.005 mm chord tolerance), so a
+        // ⌀40 sketch circle no longer comes out as coarse as a ⌀2 one.
+        const circleSegs = adaptiveSegments(entity.radius * 2);
+        for (let i = 0; i < circleSegs; i++) {
+          const a = (i / circleSegs) * Math.PI * 2;
           other.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
         }
       }
@@ -591,7 +608,7 @@ function extractProfileFromSketch(sketch: Sketch, solved: Map<string, Pt>): Pt[]
       const c = solved.get(entity.centerId);
       if (c) {
         const sweep = entity.endAngle - entity.startAngle;
-        const steps = Math.max(2, Math.ceil((Math.abs(sweep) / (Math.PI * 2)) * 32));
+        const steps = Math.max(2, Math.ceil((Math.abs(sweep) / (Math.PI * 2)) * adaptiveSegments(entity.radius * 2)));
         for (let i = 0; i <= steps; i++) {
           const a = entity.startAngle + (sweep * i) / steps;
           other.push({ x: c.x + entity.radius * Math.cos(a), y: c.y + entity.radius * Math.sin(a) });
@@ -863,9 +880,11 @@ export function drillHoleInBody(
   // it (pulled back by half its length) so it out-runs the parent both ways.
   const backUp = depth === null ? height / 2 : 0;
 
-  // createCylinder builds a 32-gon prism along +Y with its base centred on the
-  // origin — rotate +Y onto the drill direction, then move the base into place.
-  let cutter = createCylinder(diameter / 2, height);
+  // createCylinder builds a tolerance-bounded n-gon prism (n =
+  // adaptiveSegments(diameter), 0.005 mm chord tolerance — ⌀6 → 55) along +Y
+  // with its base centred on the origin — rotate +Y onto the drill direction,
+  // then move the base into place.
+  let cutter = createCylinder(diameter / 2, height, adaptiveSegments(diameter));
   cutter = rotateUpToDirection(cutter, d);
   cutter = translateBody(
     cutter,
@@ -909,7 +928,7 @@ function drillCounterbore(
   // depth is clamped to the through-all cutter length so it can never out-run
   // the parent geometry by an unbounded amount.
   const depth = Math.min(cb.depth, throughHeight);
-  let cutter = createCylinder(cb.diameter / 2, depth);
+  let cutter = createCylinder(cb.diameter / 2, depth, adaptiveSegments(cb.diameter));
   cutter = rotateUpToDirection(cutter, d);
   cutter = translateBody(cutter, center, 'Counterbore cutter');
   const result = booleanOp(body, cutter, 'difference', 48);
@@ -947,8 +966,9 @@ function drillCountersink(
     cs.diameter / 2 - depth * Math.tan(halfAngle),
   );
   // createCone tapers from radiusBottom at y = 0 up to radiusTop at y = height —
-  // exactly the frustum needed with its wide face on the entry point.
-  let cutter = createCone(cs.diameter / 2, topRadius, depth);
+  // exactly the frustum needed with its wide face on the entry point. Facet
+  // count adapts to the countersink diameter (0.005 mm chord tolerance).
+  let cutter = createCone(cs.diameter / 2, topRadius, depth, adaptiveSegments(cs.diameter));
   cutter = rotateUpToDirection(cutter, d);
   cutter = translateBody(cutter, center, 'Countersink cutter');
   const result = booleanOp(body, cutter, 'difference', 48);

@@ -265,6 +265,216 @@ export function calloutSheetGeometry(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Sheet title block (B7 parity): the bottom-right block the canvas paints,
+// shared verbatim by the SVG and sheet-DXF exporters so exports match the app.
+// ---------------------------------------------------------------------------
+
+/** Title-block fields; renderers only draw them, never derive them. */
+export interface SheetTitleBlock {
+  /** The block's own label (t('drawing.title')). */
+  title: string;
+  projectName: string;
+  scaleLabel: string;
+  scaleValue: string;
+  dateLabel: string;
+  dateValue: string;
+  unitsLabel: string;
+  unitsValue: string;
+  version: string;
+}
+
+/** English fallbacks for renderers invoked without title-block extras. */
+export function defaultTitleBlock(): SheetTitleBlock {
+  return {
+    title: 'Title',
+    projectName: 'Untitled',
+    scaleLabel: 'Scale',
+    scaleValue: 'Auto (fit)',
+    dateLabel: 'Date',
+    dateValue: new Date().toLocaleDateString(),
+    unitsLabel: 'Units',
+    unitsValue: 'mm',
+    version: 'SceneLab',
+  };
+}
+
+export const TITLE_BLOCK_W = 200;
+export const TITLE_BLOCK_H = 60;
+export const TITLE_BLOCK_MARGIN = 4;
+
+export interface SheetTitleBlockLayout {
+  rect: { x: number; y: number; w: number; h: number };
+  dividerH: DrawingLine;
+  dividerV: DrawingLine;
+  /** Text fields with baseline anchors and font sizes (sheet px). */
+  fields: { text: string; x: number; y: number; size: number; bold: boolean }[];
+}
+
+/** Place the title block into the bottom-right corner of a width×height sheet. */
+export function titleBlockLayout(tb: SheetTitleBlock, width: number, height: number): SheetTitleBlockLayout {
+  const x = width - TITLE_BLOCK_W - TITLE_BLOCK_MARGIN;
+  const y = height - TITLE_BLOCK_H - TITLE_BLOCK_MARGIN;
+  const midX = x + TITLE_BLOCK_W * 0.4;
+  return {
+    rect: { x, y, w: TITLE_BLOCK_W, h: TITLE_BLOCK_H },
+    dividerH: {
+      start: { x, y: y + TITLE_BLOCK_H / 2 },
+      end: { x: x + TITLE_BLOCK_W, y: y + TITLE_BLOCK_H / 2 },
+    },
+    dividerV: { start: { x: midX, y }, end: { x: midX, y: y + TITLE_BLOCK_H } },
+    fields: [
+      { text: tb.title, x: x + 5, y: y + 18, size: 11, bold: true },
+      { text: tb.projectName, x: x + 5, y: y + 35, size: 10, bold: false },
+      { text: `${tb.scaleLabel}: ${tb.scaleValue}`, x: x + 5, y: y + 52, size: 10, bold: false },
+      { text: `${tb.dateLabel}: ${tb.dateValue}`, x: midX + 5, y: y + 18, size: 10, bold: false },
+      { text: `${tb.unitsLabel}: ${tb.unitsValue}`, x: midX + 5, y: y + 35, size: 10, bold: false },
+      { text: tb.version, x: midX + 5, y: y + 52, size: 10, bold: false },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Section cutting-plane annotation (B10): the chain-line trace, view-direction
+// arrows and cut letter on each PARENT view, shared by the canvas, the SVG
+// exporter and the sheet-DXF exporter. The view looking along the section axis
+// is the section view itself and carries no trace.
+// ---------------------------------------------------------------------------
+
+/** How far the trace extends past the view's bounds (sheet px). */
+export const CUT_PLANE_EXTEND_PX = 10;
+/** Cutting-plane arrow length and half-width (sheet px). */
+export const CUT_PLANE_ARROW_LEN_PX = 10;
+export const CUT_PLANE_ARROW_HALF_W_PX = 3.5;
+/** Gap between an arrow tip and its letter (sheet px). */
+export const CUT_PLANE_LABEL_GAP_PX = 8;
+/** Phantom chain (long-dash short-dash) pattern for the trace line. */
+export const CUT_PLANE_DASH: readonly number[] = [16, 4, 5, 4];
+
+/** A cutting-plane trace on one parent view, described view-space. */
+export interface SectionCutInfo {
+  viewIndex: number;
+  /**
+   * The plane's coordinate in view units along the mapped screen axis (the
+   * projection of the section offset; view units = model mm × view scale).
+   */
+  coord: number;
+  /** Which screen axis the world section axis projects onto. */
+  screen: 'x' | 'y';
+  /** Sheet-space unit direction the arrows point (the viewing direction). */
+  arrow: { x: number; y: number };
+  /** The cut letter (t('drawing.cutPlaneLabel'), 'A'). */
+  label: string;
+}
+
+/**
+ * Which screen axis of a view frame a world section axis maps onto, when the
+ * frame is axis-aligned. Returns null for oblique frames (iso) and for the
+ * view that looks along the axis (that view IS the section view).
+ */
+export function sectionScreenMapping(
+  right: Vec3,
+  up: Vec3,
+  axis: 'x' | 'y' | 'z',
+): { screen: 'x' | 'y'; sign: 1 | -1 } | null {
+  const r = axis === 'x' ? right.x : axis === 'y' ? right.y : right.z;
+  const u = axis === 'x' ? up.x : axis === 'y' ? up.y : up.z;
+  if (Math.abs(r) >= 0.9) return { screen: 'x', sign: r > 0 ? 1 : -1 };
+  if (Math.abs(u) >= 0.9) return { screen: 'y', sign: u > 0 ? 1 : -1 };
+  return null;
+}
+
+/**
+ * Derive one parent view's cutting-plane annotation from its view frame.
+ * Returns null when the view is not a parent (oblique frame, or the view
+ * direction is the section axis — the section view itself).
+ */
+export function sectionCutInfo(
+  viewIndex: number,
+  frame: { dir: Vec3; up: Vec3; scale: number },
+  section: { axis: 'x' | 'y' | 'z'; offset: number },
+  label: string,
+): SectionCutInfo | null {
+  const d = frame.dir;
+  const axisAligned = Math.abs(d.x) > 0.9 || Math.abs(d.y) > 0.9 || Math.abs(d.z) > 0.9;
+  if (!axisAligned) return null;
+  const m = sectionScreenMapping(viewRightAxis(frame.up, frame.dir), frame.up, section.axis);
+  if (!m) return null;
+  // The plane's screen coordinate: a world point on the plane projects to
+  // (offset · screenAxis) × scale along the mapped axis.
+  return {
+    viewIndex,
+    coord: section.offset * m.sign * frame.scale,
+    screen: m.screen,
+    // Viewing direction = −normal: along −(screen axis sign) in view space.
+    // toSheet preserves +x but flips y, so screen-y flips again.
+    arrow: m.screen === 'x' ? { x: -m.sign, y: 0 } : { x: 0, y: m.sign },
+    label,
+  };
+}
+
+/** A placed cutting-plane trace: chain line, arrow triangles, letter anchors. */
+export interface CutPlaneTrace {
+  line: { start: { x: number; y: number }; end: { x: number; y: number } };
+  arrows: { tip: { x: number; y: number }; base1: { x: number; y: number }; base2: { x: number; y: number } }[];
+  labels: { x: number; y: number }[];
+}
+
+/**
+ * Place a cutting-plane trace on the sheet: a chain line across the view's
+ * projected bounds (extended CUT_PLANE_EXTEND_PX past each end), arrows
+ * pointing along the section's viewing direction at both ends, and the cut
+ * letter just past each arrow. Returns null for a geometry-less view.
+ */
+export function cutPlaneSheetTrace(
+  view: DrawingView,
+  toSheet: (p: { x: number; y: number }) => { x: number; y: number },
+  cut: SectionCutInfo,
+): CutPlaneTrace | null {
+  const b = view.bounds;
+  if (b.max.x - b.min.x < 1e-9 && b.max.y - b.min.y < 1e-9) return null;
+  const len = Math.hypot(cut.arrow.x, cut.arrow.y) || 1;
+  const dir = { x: cut.arrow.x / len, y: cut.arrow.y / len };
+  const perp = { x: -dir.y, y: dir.x };
+  let start: { x: number; y: number };
+  let end: { x: number; y: number };
+  if (cut.screen === 'x') {
+    // The plane is a constant-view-x line: vertical on the sheet.
+    const x = toSheet({ x: cut.coord, y: 0 }).x;
+    const yTop = toSheet({ x: 0, y: b.max.y }).y;
+    const yBot = toSheet({ x: 0, y: b.min.y }).y;
+    start = { x, y: yTop - CUT_PLANE_EXTEND_PX };
+    end = { x, y: yBot + CUT_PLANE_EXTEND_PX };
+  } else {
+    const y = toSheet({ x: 0, y: cut.coord }).y;
+    const xL = toSheet({ x: b.min.x, y: 0 }).x;
+    const xR = toSheet({ x: b.max.x, y: 0 }).x;
+    start = { x: xL - CUT_PLANE_EXTEND_PX, y };
+    end = { x: xR + CUT_PLANE_EXTEND_PX, y };
+  }
+  const at = (p: { x: number; y: number }) => ({
+    tip: { x: p.x + dir.x * CUT_PLANE_ARROW_LEN_PX, y: p.y + dir.y * CUT_PLANE_ARROW_LEN_PX },
+    base1: {
+      x: p.x + perp.x * CUT_PLANE_ARROW_HALF_W_PX,
+      y: p.y + perp.y * CUT_PLANE_ARROW_HALF_W_PX,
+    },
+    base2: {
+      x: p.x - perp.x * CUT_PLANE_ARROW_HALF_W_PX,
+      y: p.y - perp.y * CUT_PLANE_ARROW_HALF_W_PX,
+    },
+  });
+  const reach = CUT_PLANE_ARROW_LEN_PX + CUT_PLANE_LABEL_GAP_PX;
+  return {
+    line: { start, end },
+    arrows: [at(start), at(end)],
+    // +3 y: nudge the letter's alphabetic baseline toward optical centring.
+    labels: [
+      { x: start.x + dir.x * reach, y: start.y + dir.y * reach + 3 },
+      { x: end.x + dir.x * reach, y: end.y + dir.y * reach + 3 },
+    ],
+  };
+}
+
 /** Project a 3D body onto a 2D plane for drawing */
 export function projectBody(
   body: SolidBody,
@@ -559,6 +769,13 @@ export interface DrawingSheetExtras {
   notes?: DrawingNote[];
   /** Hole callouts (see drawingCallouts.ts); viewIndex indexes `views`. */
   holeCallouts?: HoleCallout[];
+  /**
+   * Section cutting-plane annotations (see sectionCutInfo): the chain-line
+   * trace + arrows + letter on each parent view the section axis cuts.
+   */
+  sectionCuts?: SectionCutInfo[];
+  /** Title-block fields (B7 parity); missing fields fall back to English. */
+  titleBlock?: Partial<SheetTitleBlock>;
 }
 
 /** Center-mark arm half-length as a multiple of the circle radius (ASME). */
@@ -701,7 +918,24 @@ export function exportDrawingSVG(
         svg += `    <path d="M${g.leader[0]!.x.toFixed(2)} ${g.leader[0]!.y.toFixed(2)} L${g.leader[1]!.x.toFixed(2)} ${g.leader[1]!.y.toFixed(2)} L${g.leader[2]!.x.toFixed(2)} ${g.leader[2]!.y.toFixed(2)}" fill="none" />\n`;
         svg += `    <text x="${g.text.x.toFixed(2)}" y="${g.text.y.toFixed(2)}">${escapeXml(c.text)}</text>\n`;
       }
-      svg += '  </g>\n';
+      svg += `  </g>\n`;
+    }
+
+    // Cutting-plane traces (B10): chain line + view-direction arrows + the
+    // cut letter on each parent view of the section.
+    for (const cut of extras.sectionCuts ?? []) {
+      if (cut.viewIndex !== viewIndex) continue;
+      const trace = cutPlaneSheetTrace(view, transform.toSheet, cut);
+      if (!trace) continue;
+      svg += `  <g stroke="black" fill="black">\n`;
+      svg += `    <line x1="${trace.line.start.x.toFixed(2)}" y1="${trace.line.start.y.toFixed(2)}" x2="${trace.line.end.x.toFixed(2)}" y2="${trace.line.end.y.toFixed(2)}" stroke-width="1.2" stroke-dasharray="${CUT_PLANE_DASH.join(',')}" />\n`;
+      for (const a of trace.arrows) {
+        svg += `    <polygon points="${a.tip.x.toFixed(2)},${a.tip.y.toFixed(2)} ${a.base1.x.toFixed(2)},${a.base1.y.toFixed(2)} ${a.base2.x.toFixed(2)},${a.base2.y.toFixed(2)}" stroke="none" />\n`;
+      }
+      for (const l of trace.labels) {
+        svg += `    <text x="${l.x.toFixed(2)}" y="${l.y.toFixed(2)}" text-anchor="middle" font-size="12" font-weight="bold" stroke="none">${escapeXml(cut.label || 'A')}</text>\n`;
+      }
+      svg += `  </g>\n`;
     }
 
     // View title (top-centre of the cell)
@@ -751,6 +985,18 @@ export function exportDrawingSVG(
     if (!note.text) continue;
     svg += `  <text x="${note.x.toFixed(2)}" y="${note.y.toFixed(2)}" font-size="12" fill="black">${escapeXml(note.text)}</text>\n`;
   }
+
+  // Title block (B7): the same bottom-right block the canvas paints — shared
+  // geometry via titleBlockLayout, so the export matches the on-screen sheet.
+  const tb = titleBlockLayout({ ...defaultTitleBlock(), ...extras.titleBlock }, width, totalHeight);
+  svg += `  <g stroke="#333" fill="#333">\n`;
+  svg += `    <rect x="${tb.rect.x}" y="${tb.rect.y}" width="${tb.rect.w}" height="${tb.rect.h}" fill="none" />\n`;
+  svg += `    <line x1="${tb.dividerH.start.x.toFixed(2)}" y1="${tb.dividerH.start.y.toFixed(2)}" x2="${tb.dividerH.end.x.toFixed(2)}" y2="${tb.dividerH.end.y.toFixed(2)}" />\n`;
+  svg += `    <line x1="${tb.dividerV.start.x.toFixed(2)}" y1="${tb.dividerV.start.y.toFixed(2)}" x2="${tb.dividerV.end.x.toFixed(2)}" y2="${tb.dividerV.end.y.toFixed(2)}" />\n`;
+  for (const field of tb.fields) {
+    svg += `    <text x="${field.x}" y="${field.y}" font-size="${field.size}"${field.bold ? ' font-weight="bold"' : ''}>${escapeXml(field.text)}</text>\n`;
+  }
+  svg += `  </g>\n`;
 
   svg += '</svg>';
   return svg;

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { listFaces, angleBetweenFaces, detectCircularHoles } from './query';
-import { createBox, createCylinder, createSphere, createTube } from './brep';
+import { createBox, createCylinder, createSphere, createTube, createPrism, adaptiveSegments } from './brep';
 import { warmUpBooleanEngine, booleanOpManifold } from './booleanManifold';
 import { translateBody } from './operations';
 
@@ -87,7 +87,9 @@ describe('detectCircularHoles', () => {
     expect(holes).toHaveLength(1);
     expect(holes[0]!.centre.x).toBeCloseTo(0, 6);
     expect(holes[0]!.centre.z).toBeCloseTo(0, 6);
-    expect(holes[0]!.diameter).toBeCloseTo(12, 2);
+    // 32 explicit facets: coarser than the kernel's chord tolerance, so the
+    // honest size is the inscribed (across-flats) diameter 2R·cos(π/32).
+    expect(holes[0]!.diameter).toBeCloseTo(12 * Math.cos(Math.PI / 32), 6);
     expect(holes[0]!.depth).toBeCloseTo(20, 6);
   });
 
@@ -100,7 +102,7 @@ describe('detectCircularHoles', () => {
     expect(holes).toHaveLength(1);
     expect(holes[0]!.centre.x).toBeCloseTo(4, 3);
     expect(holes[0]!.centre.z).toBeCloseTo(2, 3);
-    expect(holes[0]!.diameter).toBeCloseTo(6, 2);
+    expect(holes[0]!.diameter).toBeCloseTo(6 * Math.cos(Math.PI / 24), 6);
     expect(holes[0]!.depth).toBeCloseTo(20, 3);
   });
 
@@ -119,6 +121,44 @@ describe('detectCircularHoles', () => {
     expect(holes).toHaveLength(2);
     expect(holes[0]!.centre.x).toBeCloseTo(-6, 3);
     expect(holes[1]!.centre.x).toBeCloseTo(6, 3);
-    expect(holes[0]!.diameter).toBeCloseTo(4, 2);
+    expect(holes[0]!.diameter).toBeCloseTo(4 * Math.cos(Math.PI / 16), 6);
+  });
+
+  it('an adaptive ⌀6 hole (N=55) quotes the nominal ⌀6 exactly', () => {
+    // With the adaptive kernel a ⌀6 cutter becomes a 55-gon whose sagitta
+    // (0.0049 mm) is within the 0.005 mm chord tolerance, so the reported
+    // diameter is the nominal circumdiameter — no undersizing.
+    const box = createBox(20, 20, 30);
+    const drill = translateBody(createCylinder(3, 30, adaptiveSegments(6)), { x: 0, y: -5, z: 0 });
+    const drilled = booleanOpManifold(box, drill, 'difference');
+    expect(drilled).not.toBeNull();
+    const holes = detectCircularHoles(drilled as NonNullable<typeof drilled>);
+    expect(holes).toHaveLength(1);
+    expect(holes[0]!.diameter).toBeCloseTo(6, 5);
+  });
+
+  it('an 8-gon hole is no longer classified as circular (threshold ≥12)', () => {
+    // The audit's misclassification: an octagonal sketch extrusion cut into a
+    // plate used to be quoted as a ⌀ hole riding its circumcircle.
+    const box = createBox(20, 20, 30);
+    const drill = translateBody(createCylinder(3, 30, 8), { x: 0, y: -5, z: 0 });
+    const drilled = booleanOpManifold(box, drill, 'difference');
+    expect(drilled).not.toBeNull();
+    expect(detectCircularHoles(drilled as NonNullable<typeof drilled>)).toEqual([]);
+  });
+
+  it('a 12-gon hole stays circular but quotes its inscribed ⌀', () => {
+    const box = createBox(20, 20, 30);
+    const drill = translateBody(createCylinder(3, 30, 12), { x: 0, y: -5, z: 0 });
+    const drilled = booleanOpManifold(box, drill, 'difference');
+    expect(drilled).not.toBeNull();
+    const holes = detectCircularHoles(drilled as NonNullable<typeof drilled>);
+    expect(holes).toHaveLength(1);
+    // Across flats: the largest pin that fits a dodecagonal ⌀6-circumradius hole.
+    expect(holes[0]!.diameter).toBeCloseTo(6 * Math.cos(Math.PI / 12), 4);
+  });
+
+  it('a hexagonal prism reports no circular hole', () => {
+    expect(detectCircularHoles(createPrism(6, 10, 5))).toEqual([]);
   });
 });

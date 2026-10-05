@@ -84,6 +84,29 @@ describe('saveToFile / loadFromFile', () => {
     expect(loaded.bodies.length).toBe(1);
   });
 
+  it('autosave form is COMPACT: no pretty-print newlines, ~⅓ the pretty size', () => {
+    // The localStorage/autosave path (store.autosave) writes whatever
+    // saveToFile returns; the old null/2 pretty print tripled the stored
+    // bytes for zero function. Default must be compact.
+    const tree = new FeatureTree();
+    const box = createBox(20, 15, 10);
+    const project = serializeProject('Autosave', tree.features, [box], [box, box]);
+
+    const compact = saveToFile(project); // autosave / default
+    const pretty = saveToFile(project, { pretty: true });
+
+    expect(compact).not.toContain('\n');
+    expect(compact).not.toContain('\n  ');
+    expect(pretty).toContain('\n  '); // opt-in still pretty-prints
+    // Depth-heavy bodies dominate real projects: compact must be a small
+    // fraction of the pretty size (measured ~30% on box bodies).
+    expect(compact.length).toBeLessThan(pretty.length * 0.45);
+    // Byte saving is the point — assert real bloat, not a rounding error.
+    expect(pretty.length - compact.length).toBeGreaterThan(1000);
+    // Same document: both parse back to the identical project.
+    expect(loadFromFile(compact)).toEqual(loadFromFile(pretty));
+  });
+
   it('round-trips reference geometry (planes/axes/points)', () => {
     const tree = new FeatureTree();
     const refGeo = {

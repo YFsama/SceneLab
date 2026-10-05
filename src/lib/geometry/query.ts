@@ -1,5 +1,5 @@
 import type { SolidBody, Vec3 } from './types';
-import { computeFaceAreas } from './brep';
+import { computeFaceAreas, DEFAULT_CHORD_TOLERANCE } from './brep';
 
 export interface FaceInfo {
   id: string;
@@ -67,13 +67,27 @@ export interface CircularHole {
 }
 
 /**
+ * Minimum polygon facet count for a wall to read as a circular hole. Counted
+ * as distinct ring corners, not wall faces — booleans triangulate the wall
+ * quads, so face count is 2× the facets there. 12 keeps genuine tessellations
+ * (and the 55-gon a ⌀6 hole now gets) while rejecting deliberate 8-gon sketch
+ * extrusions that used to masquerade as ⌀-quoted circles; hexagon bosses were
+ * already below the old threshold of 8.
+ */
+const MIN_HOLE_FACES = 12;
+
+/**
  * Detect circular holes drilled along the Y axis in a (possibly watertight)
  * solid — something findBoundaryLoops cannot do, since a drilled body has no
  * open edges. Vertical wall faces are flood-grouped by shared edges; a group
- * qualifies when its vertices sit at a near-constant radius (±2%) from a
- * common axis, its face normals wind a full turn around that axis, and the
- * normals point toward the axis (a hole, not a boss). Returns holes sorted by
- * (x, z) for deterministic output.
+ * qualifies when its ring spans at least MIN_HOLE_FACES distinct corners, its
+ * vertices sit at a near-constant radius (±2%) from a common axis, its face
+ * normals wind a full turn around that axis, and the normals point toward the
+ * axis (a hole, not a boss). The reported diameter is honest about the
+ * polygonal wall: a coarse, deliberate n-gon quotes its inscribed
+ * (across-flats) diameter, while a tolerance-conforming tessellation
+ * (anything adaptiveSegments produced) quotes the nominal circumdiameter.
+ * Returns holes sorted by (x, z) for deterministic output.
  */
 export function detectCircularHoles(body: SolidBody): CircularHole[] {
   const TOL = 1e-6;
@@ -129,11 +143,7 @@ export function detectCircularHoles(body: SolidBody): CircularHole[] {
 
   const holes: CircularHole[] = [];
   for (const group of groups) {
-    // A polygonal circle needs enough flats to be distinguishable from
-    // rectangular walls (whose four corner vertices are also concyclic).
-    if (group.length < 8) continue;
-
-    // Circle fit: the centroid of a full ring's vertices is its centre.
+    // Collect the wall's vertices (deduplicated by 3D key).
     const seen = new Set<string>();
     const pts: Array<{ x: number; z: number; y: number }> = [];
     for (const fi of group) {
@@ -144,6 +154,18 @@ export function detectCircularHoles(body: SolidBody): CircularHole[] {
         pts.push({ x: v.x, z: v.z, y: v.y });
       }
     }
+
+    // Facet count = distinct ring corners in the XZ plane (the top and bottom
+    // rings of a through wall land on the same corners; a triangulated wall
+    // does not add any). A polygonal circle needs enough corners to be
+    // distinguishable from rectangular walls (whose four corners are also
+    // concyclic) and from deliberate low-count polygons (8-gon extrusions).
+    const cornerKeys = new Set<string>();
+    for (const p of pts) cornerKeys.add(`${q(p.x)},${q(p.z)}`);
+    const n = cornerKeys.size;
+    if (n < MIN_HOLE_FACES) continue;
+
+    // Circle fit: the centroid of a full ring's vertices is its centre.
     const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
     const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
 
@@ -159,15 +181,15 @@ export function detectCircularHoles(body: SolidBody): CircularHole[] {
     let inward = true;
     for (const fi of group) {
       const f = body.faces[fi]!;
-      const n = normalize(f.normal);
+      const nrm = normalize(f.normal);
       const fcx = f.vertices.reduce((s, v) => s + v.x, 0) / f.vertices.length;
       const fcz = f.vertices.reduce((s, v) => s + v.z, 0) / f.vertices.length;
-      if (n.x * (fcx - cx) + n.z * (fcz - cz) >= -1e-9 * meanR) {
+      if (nrm.x * (fcx - cx) + nrm.z * (fcz - cz) >= -1e-9 * meanR) {
         inward = false;
         break;
       }
-      const len = Math.hypot(n.x, n.z);
-      if (len > 1e-9) angles.push(Math.atan2(n.z, n.x));
+      const len = Math.hypot(nrm.x, nrm.z);
+      if (len > 1e-9) angles.push(Math.atan2(nrm.z, nrm.x));
     }
     if (!inward || angles.length < 8) continue;
     angles.sort((a, b) => a - b);
@@ -177,11 +199,21 @@ export function detectCircularHoles(body: SolidBody): CircularHole[] {
     }
     if (maxGap > Math.PI / 3) continue;
 
+    // Honest diameter. The wall is an n-gon whose vertices ride the cutter's
+    // circumcircle: the largest pin that actually fits is the incircle,
+    // ⌀ 2R·cos(π/n). When the sagitta R·(1 − cos(π/n)) is within the kernel's
+    // chord tolerance (any tessellation adaptiveSegments produced — e.g. the
+    // 55-gon a ⌀6 hole now gets), the polygon IS the circle for practical
+    // purposes and the nominal circumdiameter is quoted unchanged; a coarser,
+    // deliberate n-gon (12- to 54-gon) is quoted across flats.
+    const sagitta = meanR * (1 - Math.cos(Math.PI / n));
+    const diameter = sagitta > DEFAULT_CHORD_TOLERANCE ? 2 * meanR * Math.cos(Math.PI / n) : 2 * meanR;
+
     const yMin = Math.min(...pts.map((p) => p.y));
     const yMax = Math.max(...pts.map((p) => p.y));
     holes.push({
       centre: { x: cx, z: cz },
-      diameter: 2 * meanR,
+      diameter,
       depth: yMax - yMin,
     });
   }

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from 'react';
+import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
@@ -12,8 +12,14 @@ import {
   formatDimValue,
   calloutSheetGeometry,
   CENTER_MARK_ARM_RATIO,
+  CUT_PLANE_DASH,
+  cutPlaneSheetTrace,
+  sectionCutInfo,
+  titleBlockLayout,
   type DrawingDimension,
+  type SectionCutInfo,
   type SectionPlane,
+  type SheetTitleBlock,
   type ViewTransform,
 } from '../../lib/io/drawing';
 import { collectHoleCallouts, type CalloutViewFrame, type HoleCallout } from '../../lib/io/drawingCallouts';
@@ -30,7 +36,7 @@ import {
   type DrawingNote,
 } from '../../lib/io/drawingNotes';
 import { downloadFile } from '../../lib/io/studio3d';
-import { exportDXF } from '../../lib/io/dxf';
+import { exportSheetDXF } from '../../lib/io/dxf';
 import { exportCanvasAsPDF } from '../../lib/io/pdf';
 import { showToast } from '../../lib/toast';
 import { Download, ZoomIn, StickyNote } from 'lucide-react';
@@ -105,11 +111,29 @@ export function DrawingCanvas() {
 
   const views = useMemo(() => {
     if (bodies.length === 0) return [];
-    const suffix = sectionAxis === 'off' ? '' : ` — ${t('drawing.section')} ${sectionAxis.toUpperCase()}`;
+    // Section-labeled views carry the pre-seeded SECTION A-A title as a
+    // suffix (`Front — SECTION A-A`): every grid view is sectioned here, so
+    // keeping the base name preserves view identity — the plain-title
+    // variant would lose it.
+    const suffix = sectionAxis === 'off' ? '' : ` — ${t('drawing.sectionTitle')}`;
     return VIEW_FRAMES.map(({ name, frame }) =>
       projectBodies(bodies, frame.dir, frame.up, frame.scale, `${name}${suffix}`, section),
     );
   }, [bodies, section, sectionAxis, t]);
+
+  // Cutting-plane annotations (B10): one trace per axis-on PARENT view the
+  // section axis cuts (front/top/right per the axis). The view looking along
+  // the axis IS the section view and gets no trace; iso frames are skipped.
+  const cutLabel = t('drawing.cutPlaneLabel');
+  const sectionCuts = useMemo<SectionCutInfo[]>(() => {
+    if (sectionAxis === 'off' || !section) return [];
+    const out: SectionCutInfo[] = [];
+    VIEW_FRAMES.forEach(({ frame }, i) => {
+      const cut = sectionCutInfo(i, frame, { axis: sectionAxis, offset: section.offset }, cutLabel);
+      if (cut) out.push(cut);
+    });
+    return out;
+  }, [section, sectionAxis, cutLabel]);
 
   // Hole callouts are auto-derived from the feature tree (no store state of
   // their own): every unsuppressed HoleFeature gets a leader on each axis-on
@@ -154,6 +178,24 @@ export function DrawingCanvas() {
     return layoutDetailPanels(inputs, SHEET_W, SHEET_H, CELL_W, CELL_H);
   }, [drawingDetails, placements]);
   const sheetHeight = SHEET_H + detailLayout.stripHeight;
+
+  /**
+   * Title-block fields for the painted sheet and the SVG/DXF exports — one
+   * source so the exports match what is on screen (B7 parity). projectName
+   * is read fresh from the store (not a subscription) exactly like the old
+   * inline paint code did.
+   */
+  const buildTitleBlock = useCallback((): SheetTitleBlock => ({
+    title: t('drawing.title'),
+    projectName: useStore.getState().projectName || 'Untitled',
+    scaleLabel: t('drawing.scale'),
+    scaleValue: t('drawing.autoScale'),
+    dateLabel: t('drawing.date'),
+    dateValue: new Date().toLocaleDateString(),
+    unitsLabel: t('drawing.units'),
+    unitsValue: 'mm',
+    version: `SceneLab v${__APP_VERSION__}`,
+  }), [t]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -306,6 +348,37 @@ export function DrawingCanvas() {
         }
         ctx.lineWidth = 1;
       }
+
+      // Cutting-plane trace (B10): phantom chain across the parent view with
+      // view-direction arrows and the cut letter at both ends. Geometry is
+      // shared with the SVG/DXF exporters (cutPlaneSheetTrace).
+      for (const cut of sectionCuts) {
+        if (cut.viewIndex !== i) continue;
+        const trace = cutPlaneSheetTrace(view, transform.toSheet, cut);
+        if (!trace) continue;
+        ctx.strokeStyle = 'black';
+        ctx.fillStyle = 'black';
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([...CUT_PLANE_DASH]);
+        ctx.beginPath();
+        ctx.moveTo(trace.line.start.x, trace.line.start.y);
+        ctx.lineTo(trace.line.end.x, trace.line.end.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        for (const a of trace.arrows) {
+          ctx.beginPath();
+          ctx.moveTo(a.tip.x, a.tip.y);
+          ctx.lineTo(a.base1.x, a.base1.y);
+          ctx.lineTo(a.base2.x, a.base2.y);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        for (const l of trace.labels) ctx.fillText(cut.label, l.x, l.y);
+      }
+      ctx.lineWidth = 1;
+      ctx.textAlign = 'left';
     }
 
     // Grid lines between views (base sheet only)
@@ -398,37 +471,28 @@ export function DrawingCanvas() {
       noteHits.push({ id: note.id, x: note.x, y: note.y, w: textW });
     }
 
-    // Title block (bottom-right corner, SolidWorks style).
-    const tbW = 200, tbH = 60;
-    const tbX = w - tbW - 4, tbY = sheetHeight - tbH - 4;
+    // Title block (bottom-right corner, SolidWorks style). Shared layout
+    // with the SVG/DXF exporters (B7 parity — the exports draw this too).
+    const tb = titleBlockLayout(buildTitleBlock(), w, sheetHeight);
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 1;
-    ctx.strokeRect(tbX, tbY, tbW, tbH);
-    // Horizontal divider
+    ctx.strokeRect(tb.rect.x, tb.rect.y, tb.rect.w, tb.rect.h);
     ctx.beginPath();
-    ctx.moveTo(tbX, tbY + tbH / 2);
-    ctx.lineTo(tbX + tbW, tbY + tbH / 2);
-    ctx.stroke();
-    // Vertical divider
-    ctx.beginPath();
-    ctx.moveTo(tbX + tbW * 0.4, tbY);
-    ctx.lineTo(tbX + tbW * 0.4, tbY + tbH);
+    ctx.moveTo(tb.dividerH.start.x, tb.dividerH.start.y);
+    ctx.lineTo(tb.dividerH.end.x, tb.dividerH.end.y);
+    ctx.moveTo(tb.dividerV.start.x, tb.dividerV.start.y);
+    ctx.lineTo(tb.dividerV.end.x, tb.dividerV.end.y);
     ctx.stroke();
     ctx.fillStyle = '#333';
-    ctx.font = 'bold 11px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(t('drawing.title'), tbX + 5, tbY + 18);
-    ctx.font = '10px sans-serif';
-    ctx.fillText(useStore.getState().projectName || 'Untitled', tbX + 5, tbY + 35);
-    ctx.fillText(`${t('drawing.scale')}: ${t('drawing.autoScale')}`, tbX + 5, tbY + 52);
-    ctx.textAlign = 'left';
-    ctx.fillText(`${t('drawing.date')}: ${new Date().toLocaleDateString()}`, tbX + tbW * 0.4 + 5, tbY + 18);
-    ctx.fillText(`${t('drawing.units')}: mm`, tbX + tbW * 0.4 + 5, tbY + 35);
-    ctx.fillText(`SceneLab v${__APP_VERSION__}`, tbX + tbW * 0.4 + 5, tbY + 52);
+    for (const field of tb.fields) {
+      ctx.font = `${field.bold ? 'bold ' : ''}${field.size}px sans-serif`;
+      ctx.fillText(field.text, field.x, field.y);
+    }
 
     dimHitsRef.current = dimHits;
     noteHitsRef.current = noteHits;
-  }, [views, placements, detailLayout, drawingDetails, drawingNotes, holeCallouts, sheetHeight, hoverHit, hoverNoteId, editingNote, t]);
+  }, [views, placements, detailLayout, drawingDetails, drawingNotes, holeCallouts, sectionCuts, sheetHeight, hoverHit, hoverNoteId, editingNote, buildTitleBlock, t]);
 
   /** Client event → sheet (canvas px) coordinates (the canvas is CSS-stretched). */
   const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
@@ -609,6 +673,8 @@ export function DrawingCanvas() {
       details: drawingDetails,
       notes: drawingNotes,
       holeCallouts,
+      sectionCuts,
+      titleBlock: buildTitleBlock(),
     });
     downloadFile(svg, 'drawing.svg');
     showToast(t('toast.svgExported'), 'success');
@@ -630,11 +696,20 @@ export function DrawingCanvas() {
   };
 
   const handleExportDXF = () => {
-    if (bodies.length === 0) {
+    if (views.length === 0) {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
-    const dxf = exportDXF(bodies);
+    // The sheet as true 2D DXF (views at sheet scale, dims/callouts/notes/
+    // traces as LINE/CIRCLE/ARC/TEXT/SOLID) — not the raw-body wireframe the
+    // AI/io path's exportDXF still emits.
+    const dxf = exportSheetDXF(views, SHEET_W, SHEET_H, {
+      details: drawingDetails,
+      notes: drawingNotes,
+      holeCallouts,
+      sectionCuts,
+      titleBlock: buildTitleBlock(),
+    });
     downloadFile(dxf, 'drawing.dxf');
     showToast(t('toast.dxfExported'), 'success');
   };

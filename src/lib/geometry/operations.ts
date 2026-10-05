@@ -7,15 +7,58 @@ function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
 }
 
-/** Fillet: round edges by replacing them with arc-like faces */
+/**
+ * Fillet: round convex edges by overlaying a closed subtractive "sliver"
+ * shell per edge (arc facets + wall quads + end-cap fans).
+ *
+ * Geometry (per filleted edge, ARC_SEGMENTS = 8 facets):
+ * - The arc center sits INSIDE the corner, at `radius / cos(halfAngle)` from
+ *   the edge along the interior bisector `-(n1+n2)/|n1+n2)|` (halfAngle =
+ *   half the angle between the adjacent face normals). The previous
+ *   implementation put the center on the +bisector — outside the solid — so
+ *   every strip floated r·√2 off the part and swept a full π, ending buried
+ *   inside the material: +volume instead of −, 6.93 mm protrusion past the
+ *   bbox at r=4.9, 49.6° normal kinks, 216 non-manifold boundary edges.
+ * - The arc sweeps α ∈ [−halfAngle, +halfAngle] around that center, so it
+ *   runs tangent-to-face → tangent-to-face EXACTLY: the tangent lines land
+ *   in-plane at `radius·cot(halfAngle)` (= radius for a 90° corner) along
+ *   each adjacent face. 8 facets over the 90° quarter of a box edge means
+ *   11.25° steps (the old 180° sweep over 8 segments kinked 49.6°).
+ *
+ * Overlay semantics (deliberate stopgap, kept honest):
+ * - The original faces are kept, NOT trimmed — the viewport still shows the
+ *   flat faces under the fillet. What is added per edge is a *closed,
+ *   inward-wound shell* covering exactly the material a true fillet removes
+ *   (the cross-section square-minus-quarter-disk sliver, swept along the
+ *   edge). Consequences:
+ *   • computeVolume decreases by the exact per-edge sliver volume
+ *     ((1 − π/4)·r²·edgeLength per 90° edge) — the shells of edges meeting
+ *     at a corner overlap, so a full-box fillet over-counts removal by
+ *     8·r³·D with D ≈ 0.23 (≈5% at r=1 and ≈20% at r = half the narrow
+ *     face; see the golden tests for the analytic corner formula).
+ *   • parity/raycast point-in-mesh tests (voxel fallback) now see the
+ *     sliver regions as removed rather than gaining arbitrary
+ *     double-crossings — the voxel result is blocky but corner-correct.
+ * - The body remains deliberately NON-manifold: each filleted spine edge
+ *   carries 4 faces (the two kept originals + the two shell walls), so
+ *   checkManifold/isBodyManifoldCompatible report it and the boolean
+ *   guardrails in boolean.ts surface every post-fillet voxel fallback
+ *   instead of silently eating the 15–19 s voxel cliff.
+ * - Convex edges only: a concave (reflex) edge would need material ADDed
+ *   outside the body; bodies this app builds today (boxes, prisms, extrudes,
+ *   voxels) only have convex edges.
+ *
+ * `edgeIds` semantics: an empty list means EVERY edge (whole-body fillet);
+ * ids that do not exist match nothing. Edges with fewer than two adjacent
+ * faces or a degenerate tangent (same skips as maxFilletRadius) pass through
+ * untouched.
+ */
 export function applyFillet(body: SolidBody, edgeIds: string[], radius: number): SolidBody {
   if (radius <= 0) return body;
-  // Empty selection means every edge (whole-body fillet, like a UI without
-  // edge picking yet); an explicit list fillets only those edges.
   const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
-  const ARC_SEGMENTS = 8; // number of quads approximating the fillet arc
+  const ARC_SEGMENTS = 8; // arc facets per fillet — 11.25° steps over a 90° corner
 
-  const newFaces: Face[] = [...body.faces]; // keep original faces
+  const newFaces: Face[] = [...body.faces]; // keep original faces (overlay)
   const newEdges: Edge[] = [];
 
   for (const edge of body.edges) {
@@ -31,95 +74,129 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
     const [face1, face2] = adjacentFaces;
     if (!face1 || !face2) { newEdges.push(edge); continue; }
 
-    // The fillet arc swings from face1's surface to face2's surface, centered
-    // on the edge. The arc lies in the plane defined by the edge direction and
-    // the bisector of the two face normals.
     const edgeDir = normalize({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
     const n1 = normalize(face1.normal);
     const n2 = normalize(face2.normal);
 
-    // Build an orthonormal frame: edgeDir (along edge), n1 (face1 normal), and
-    // a tangent perpendicular to both.
-    const tangent = cross(n1, edgeDir);
-    const tangentLen = vecLen(tangent);
-    if (tangentLen < 1e-9) { newEdges.push(edge); continue; }
-    const t = { x: tangent.x / tangentLen, y: tangent.y / tangentLen, z: tangent.z / tangentLen };
+    // Coplanar adjacent faces (same-direction normals): a flat seam, not a
+    // corner. Empirically this fires on VOXEL-UNION flat seams (thousands per
+    // merged body) — the overlay wall quads are antiparallel (dot ≈ −1) and
+    // are caught by the bisLen check below instead. Filleting a flat seam is
+    // meaningless either way; skipped identically in edgeFeatureLimit.
+    if (n1.x * n2.x + n1.y * n2.y + n1.z * n2.z > 1 - 1e-6) { newEdges.push(edge); continue; }
 
-    // The fillet center is offset from the edge along the bisector by the
-    // radius divided by sin(half-angle).
+    // Degenerate tangency — skip exactly like edgeFeatureLimit/maxFilletRadius.
+    if (vecLen(cross(n1, edgeDir)) < 1e-9) { newEdges.push(edge); continue; }
+
+    // Outward bisector m (from the arc center back toward the edge). The
+    // center lies at −m·centerOffset, i.e. INSIDE the material.
+    const bisSum = { x: n1.x + n2.x, y: n1.y + n2.y, z: n1.z + n2.z };
+    const bisLen = vecLen(bisSum);
+    if (bisLen < 1e-9) { newEdges.push(edge); continue; } // faces fold back flat-to-flat
+    const m = { x: bisSum.x / bisLen, y: bisSum.y / bisLen, z: bisSum.z / bisLen };
+
     const dotNN = Math.max(-1, Math.min(1, n1.x * n2.x + n1.y * n2.y + n1.z * n2.z));
     const halfAngle = Math.acos(dotNN) / 2;
-    const sinHalf = Math.sin(halfAngle);
-    const centerOffset = sinHalf > 1e-6 ? radius / sinHalf : radius;
-    const bisector = normalize({ x: n1.x + n2.x, y: n1.y + n2.y, z: n1.z + n2.z });
+    const cosHalf = Math.cos(halfAngle);
+    if (cosHalf < 1e-6) { newEdges.push(edge); continue; } // knife-edge dihedral
+    const centerOffset = radius / cosHalf;
 
-    // Generate arc segments along the edge.
-    for (let seg = 0; seg < ARC_SEGMENTS; seg++) {
-      const a0 = (seg / ARC_SEGMENTS) * Math.PI;
-      const a1 = ((seg + 1) / ARC_SEGMENTS) * Math.PI;
+    // Second in-plane axis of the arc: w = edgeDir × m (unit, ⟂ m).
+    const w = normalize(cross(edgeDir, m));
 
-      // Arc points at the start and end of this segment, at both edge endpoints.
-      const arcPoint = (angle: number, edgeT: number): Vec3 => {
-        const along = { x: edge.start.x + edgeDir.x * edgeT, y: edge.start.y + edgeDir.y * edgeT, z: edge.start.z + edgeDir.z * edgeT };
-        const r0 = centerOffset * Math.cos(angle);
-        const r1 = radius * Math.sin(angle);
-        return {
-          x: along.x + bisector.x * r0 + t.x * r1,
-          y: along.y + bisector.y * r0 + t.y * r1,
-          z: along.z + bisector.z * r0 + t.z * r1,
-        };
-      };
+    // Radial direction of the arc at angle α (from the center toward the edge).
+    const radial = (a: number): Vec3 => ({
+      x: m.x * Math.cos(a) + w.x * Math.sin(a),
+      y: m.y * Math.cos(a) + w.y * Math.sin(a),
+      z: m.z * Math.cos(a) + w.z * Math.sin(a),
+    });
+    // Point on the arc at angle α, swept over an edge endpoint.
+    const arcPoint = (a: number, base: Vec3): Vec3 => ({
+      x: base.x + m.x * (radius * Math.cos(a) - centerOffset) + w.x * radius * Math.sin(a),
+      y: base.y + m.y * (radius * Math.cos(a) - centerOffset) + w.y * radius * Math.sin(a),
+      z: base.z + m.z * (radius * Math.cos(a) - centerOffset) + w.z * radius * Math.sin(a),
+    });
 
-      const v00 = arcPoint(a0, 0);
-      const v10 = arcPoint(a1, 0);
-      const v01 = arcPoint(a0, 1);
-      const v11 = arcPoint(a1, 1);
-
-      // Quad face (two triangles).
-      const faceNormal = normalize(cross(
-        { x: v10.x - v00.x, y: v10.y - v00.y, z: v10.z - v00.z },
-        { x: v01.x - v00.x, y: v01.y - v00.y, z: v01.z - v00.z },
-      ));
-      newFaces.push({
-        id: genId('face'),
-        vertices: [v00, v10, v11, v01],
-        normal: faceNormal,
-      });
-
-      newEdges.push(
-        { id: genId('edge'), start: v00, end: v10 },
-        { id: genId('edge'), start: v01, end: v11 },
-      );
+    // Sample the arc from face to face at both edge endpoints.
+    const startLine: Vec3[] = [];
+    const endLine: Vec3[] = [];
+    for (let i = 0; i <= ARC_SEGMENTS; i++) {
+      const a = -halfAngle + (2 * halfAngle * i) / ARC_SEGMENTS;
+      startLine.push(arcPoint(a, edge.start));
+      endLine.push(arcPoint(a, edge.end));
     }
 
-    // Edges connecting the arc endpoints to the original edge.
-    const arcStart0 = {
-      x: edge.start.x + bisector.x * centerOffset,
-      y: edge.start.y + bisector.y * centerOffset,
-      z: edge.start.z + bisector.z * centerOffset,
+    // Arc facets. Desired normal: radial at the facet midpoint (toward the
+    // edge = outward from the remaining material, like a true fillet face).
+    for (let i = 0; i < ARC_SEGMENTS; i++) {
+      const aMid = -halfAngle + (2 * halfAngle * (i + 0.5)) / ARC_SEGMENTS;
+      pushShellFace(newFaces, [startLine[i]!, startLine[i + 1]!, endLine[i + 1]!, endLine[i]!], radial(aMid));
+    }
+
+    // Wall quads from the edge to each tangent line. The tangent line at
+    // angle a lies on one adjacent face's plane; that face's normal has
+    // dot 1 with radial(a) (the other only dot(n1,n2)).
+    const faceNormalAtEnd = (a: number): Vec3 => {
+      const r = radial(a);
+      return dot(n1, r) >= dot(n2, r) ? n1 : n2;
     };
-    const arcEnd0 = {
-      x: edge.end.x + bisector.x * centerOffset,
-      y: edge.end.y + bisector.y * centerOffset,
-      z: edge.end.z + bisector.z * centerOffset,
-    };
+    pushShellFace(newFaces, [edge.start, edge.end, endLine[0]!, startLine[0]!], neg(faceNormalAtEnd(-halfAngle)));
+    pushShellFace(newFaces, [edge.start, edge.end, endLine[ARC_SEGMENTS]!, startLine[ARC_SEGMENTS]!], neg(faceNormalAtEnd(halfAngle)));
+
+    // End caps: triangle fans from each edge endpoint across the arc
+    // polyline, closing the shell (every shared edge keeps exactly two faces).
+    for (let i = 0; i < ARC_SEGMENTS; i++) {
+      pushShellFace(newFaces, [edge.start, startLine[i]!, startLine[i + 1]!], edgeDir);
+      pushShellFace(newFaces, [edge.end, endLine[i]!, endLine[i + 1]!], neg(edgeDir));
+    }
+
+    // Edges: keep the original edge (the walls still meet along it), plus
+    // the two tangent lines and the cap outline polylines.
+    newEdges.push(edge);
     newEdges.push(
-      { id: genId('edge'), start: edge.start, end: arcStart0 },
-      { id: genId('edge'), start: edge.end, end: arcEnd0 },
+      { id: genId('edge'), start: startLine[0]!, end: endLine[0]! },
+      { id: genId('edge'), start: startLine[ARC_SEGMENTS]!, end: endLine[ARC_SEGMENTS]! },
     );
+    for (let i = 0; i < ARC_SEGMENTS; i++) {
+      newEdges.push({ id: genId('edge'), start: startLine[i]!, end: startLine[i + 1]! });
+      newEdges.push({ id: genId('edge'), start: endLine[i]!, end: endLine[i + 1]! });
+    }
   }
 
   const newVertices = dedupVertices(newFaces);
   return { id: body.id, name: body.name, vertices: newVertices, faces: newFaces, edges: newEdges };
 }
 
-/** Chamfer: bevel edges by cutting them at an angle */
+/**
+ * Chamfer: bevel convex edges with an equal-leg `distance` cut, overlaid as
+ * a closed subtractive wedge shell per edge.
+ *
+ * Geometry: on each adjacent face, the chamfer leg runs in-plane, `distance`
+ * away from the edge (directions u1/u2 point from the edge INTO each face,
+ * found via cross(edgeDir, normal) oriented toward the face's vertices). The
+ * chamfer face is the plane through both leg lines — the diamond's outer
+ * corner sits exactly `distance` from the edge along each face, at 45° to
+ * both faces on a 90° corner. The previous implementation offset the quad
+ * corners by −normal·distance, burying the whole face INSIDE the solid.
+ *
+ * Overlay semantics (same deliberate stopgap as applyFillet): the original
+ * faces are kept, and each chamfer is emitted as a closed, inward-wound
+ * shell (chamfer quad + two wall quads lying on the adjacent faces + two
+ * triangular caps) covering exactly the wedge a true chamfer removes
+ * (cross-section right triangle d×d, i.e. d²/2 per unit of edge length).
+ * computeVolume therefore decreases by exactly d²·edgeLength/2 per 90° edge;
+ * wedges of edges meeting at a corner overlap, over-counting removal by
+ * 8·d³·D_w with D_w ≈ 0.75 (≈5% at d=1, ≈25% at d = half the narrow face;
+ * see the golden tests). Like applyFillet the body stays non-manifold (each
+ * chamfered spine edge carries 4 faces) so boolean guardrails fire. Convex
+ * edges only, same as applyFillet.
+ */
 export function applyChamfer(body: SolidBody, edgeIds: string[], distance: number): SolidBody {
   if (distance <= 0) return body;
   // Empty selection means every edge (see applyFillet).
   const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
 
-  const newFaces: Face[] = [...body.faces]; // keep original faces
+  const newFaces: Face[] = [...body.faces]; // keep original faces (overlay)
   const newEdges: Edge[] = [];
 
   for (const edge of body.edges) {
@@ -135,34 +212,51 @@ export function applyChamfer(body: SolidBody, edgeIds: string[], distance: numbe
     const [face1, face2] = adjacentFaces;
     if (!face1 || !face2) { newEdges.push(edge); continue; }
 
+    const edgeDir = normalize({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
     const n1 = normalize(face1.normal);
     const n2 = normalize(face2.normal);
 
-    // Chamfer: offset each edge endpoint inward along both face normals by
-    // `distance`. This creates 4 new points per edge (2 per face), forming a
-    // diamond-shaped chamfer face.
-    const sOff1: Vec3 = { x: edge.start.x - n1.x * distance, y: edge.start.y - n1.y * distance, z: edge.start.z - n1.z * distance };
-    const sOff2: Vec3 = { x: edge.start.x - n2.x * distance, y: edge.start.y - n2.y * distance, z: edge.start.z - n2.z * distance };
-    const eOff1: Vec3 = { x: edge.end.x - n1.x * distance, y: edge.end.y - n1.y * distance, z: edge.end.z - n1.z * distance };
-    const eOff2: Vec3 = { x: edge.end.x - n2.x * distance, y: edge.end.y - n2.y * distance, z: edge.end.z - n2.z * distance };
+    // Coplanar adjacent faces: flat seam, not a corner (see applyFillet).
+    if (n1.x * n2.x + n1.y * n2.y + n1.z * n2.z > 1 - 1e-6) { newEdges.push(edge); continue; }
 
-    // Chamfer face: a quad connecting the two offset lines.
-    const chamferNormal = normalize(cross(
-      { x: sOff2.x - sOff1.x, y: sOff2.y - sOff1.y, z: sOff2.z - sOff1.z },
-      { x: eOff1.x - sOff1.x, y: eOff1.y - sOff1.y, z: eOff1.z - sOff1.z },
-    ));
-    newFaces.push({
-      id: genId('face'),
-      vertices: [sOff1, eOff1, eOff2, sOff2],
-      normal: chamferNormal,
-    });
+    // In-plane unit direction on each face pointing AWAY from the edge (into
+    // the face), oriented by the face's own vertices.
+    const inPlaneAway = (face: Face, n: Vec3): Vec3 | null => {
+      const t = cross(edgeDir, n);
+      const len = vecLen(t);
+      if (len < 1e-9) return null; // edge parallel to the face normal — degenerate
+      const cand = { x: t.x / len, y: t.y / len, z: t.z / len };
+      let side = 0;
+      for (const v of face.vertices) {
+        side += (v.x - edge.start.x) * cand.x + (v.y - edge.start.y) * cand.y + (v.z - edge.start.z) * cand.z;
+      }
+      return side >= 0 ? cand : neg(cand);
+    };
+    const u1 = inPlaneAway(face1, n1);
+    const u2 = inPlaneAway(face2, n2);
+    if (!u1 || !u2) { newEdges.push(edge); continue; }
 
-    // New edges for the chamfer outline.
+    // Chamfer leg lines: distance d in-plane along each face.
+    const p1s = addScaled(edge.start, u1, distance);
+    const p1e = addScaled(edge.end, u1, distance);
+    const p2s = addScaled(edge.start, u2, distance);
+    const p2e = addScaled(edge.end, u2, distance);
+
+    // Chamfer face (desired normal toward the corner = outward from the
+    // remaining material, 45° to both faces on a 90° edge).
+    const bisOut = normalize({ x: u1.x + u2.x, y: u1.y + u2.y, z: u1.z + u2.z });
+    pushShellFace(newFaces, [p1s, p2s, p2e, p1e], neg(bisOut));
+
+    // Walls on the adjacent faces + end caps: the closed wedge shell.
+    pushShellFace(newFaces, [edge.start, edge.end, p1e, p1s], neg(n1));
+    pushShellFace(newFaces, [edge.start, edge.end, p2e, p2s], neg(n2));
+    pushShellFace(newFaces, [edge.start, p1s, p2s], edgeDir);
+    pushShellFace(newFaces, [edge.end, p1e, p2e], neg(edgeDir));
+
+    newEdges.push(edge);
     newEdges.push(
-      { id: genId('edge'), start: sOff1, end: eOff1 },
-      { id: genId('edge'), start: sOff2, end: eOff2 },
-      { id: genId('edge'), start: sOff1, end: sOff2 },
-      { id: genId('edge'), start: eOff1, end: eOff2 },
+      { id: genId('edge'), start: p1s, end: p1e },
+      { id: genId('edge'), start: p2s, end: p2e },
     );
   }
 
@@ -189,15 +283,19 @@ export interface EdgeFeatureLimit {
  * Largest fillet radius that keeps every fillet arc inside the adjacent faces'
  * extents, derived from how applyFillet builds its geometry.
  *
- * The arc cross-section at a point E on the edge is the half-ellipse
- *   p(a) = E + bisector·(radius/sin(halfAngle))·cos(a) + tangent·(radius)·sin(a),
- * whose component along each face's in-plane edge-perpendicular direction is
- *   radius·(±cos(a) + sin(a))  —  the (radius/sinHalf)·sinHalf cancellation is
- * exact — so the arc reaches at most √2·radius into EITHER adjacent face's
- * plane, independent of the dihedral. Constraining radius to half the face's
- * in-plane depth from the edge therefore guarantees the arc's √2 bulge stays
- * inside the face (√2/2 ≈ 0.707 of the depth) while also leaving the far half
- * of the face for opposite-edge treatments.
+ * The arc cross-section is tangent to both faces: its tangent lines land
+ * in-plane at radius·cot(halfAngle) from the edge (exactly `radius` on a 90°
+ * corner), and the arc bulges no farther. Constraining radius to half the
+ * face's in-plane depth from the edge therefore guarantees the arc stays
+ * inside the face on 90° corners (the box/extrude/voxel bodies this app
+ * builds) while leaving the far half of the face for opposite-edge
+ * treatments.
+ *
+ * Caveat (unchanged bound, documented): on shallow dihedrals — e.g. a
+ * cylinder's side-seam edges, where halfAngle ≈ 5.6° — cot(halfAngle) ≈ 10,
+ * so the tangent lines reach ~10×radius in-plane and can overshoot the
+ * face's extent even below this bound. Tightening per-dihedral would change
+ * the pass-28 limits (e.g. the cylinder seam bound); deferred.
  *
  * `edgeIds` follows applyFillet semantics: an empty list means EVERY edge;
  * ids that do not exist on the body match nothing (and are ignored), exactly
@@ -211,12 +309,12 @@ export function maxFilletRadius(body: SolidBody, edgeIds: string[]): EdgeFeature
  * Largest chamfer distance that keeps the chamfer face inside the adjacent
  * faces' extents, derived from how applyChamfer builds its geometry.
  *
- * applyChamfer offsets each edge endpoint by exactly `distance` along both
- * adjacent face normals, so every generated point departs at most `distance`
- * from the edge (the true chamfer leg). Capping `distance` at half of each
- * adjacent face's in-plane depth from the edge keeps the chamfer inside the
- * near half of the face — it can never reach past the face's medial line or
- * poke out of the opposite side.
+ * applyChamfer runs each chamfer leg in-plane, exactly `distance` away from
+ * the edge along each adjacent face (u1/u2 directions), so every generated
+ * point departs at most `distance` from the edge — the true chamfer leg.
+ * Capping `distance` at half of each adjacent face's in-plane depth from the
+ * edge keeps the chamfer inside the near half of the face — it can never
+ * reach past the face's medial line or poke out of the opposite side.
  *
  * Same `edgeIds` semantics as applyChamfer (empty = every edge). Pure.
  */
@@ -241,6 +339,15 @@ function edgeFeatureLimit(
     const adjacent = body.faces.filter((f) => faceContainsEdge(f, edge));
     const [face1, face2] = adjacent;
     if (adjacent.length < 2 || !face1 || !face2) { skipped++; continue; }
+
+    // Coplanar adjacent faces: flat seam, not a corner — skipped by the
+    // appliers, so skipped here too (the closed-shell overlays create these
+    // on the original faces).
+    {
+      const a = normalize(face1.normal);
+      const b = normalize(face2.normal);
+      if (a.x * b.x + a.y * b.y + a.z * b.z > 1 - 1e-6) { skipped++; continue; }
+    }
 
     if (kind === 'fillet') {
       const edgeDir = normalize({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
@@ -692,6 +799,38 @@ export function placeBodyInFrame(body: SolidBody, cs: CoordinateSystemDefinition
 }
 
 // --- Helpers ---
+
+/**
+ * Append a shell face wound so its stored normal matches `desired` — the
+ * winding is flipped if the natural vertex order opposes it, which makes the
+ * divergence-theorem volume of a closed shell exact regardless of which
+ * order the caller listed its vertices in.
+ */
+function pushShellFace(out: Face[], verts: Vec3[], desired: Vec3): void {
+  const a = verts[0]!;
+  const e1 = { x: verts[1]!.x - a.x, y: verts[1]!.y - a.y, z: verts[1]!.z - a.z };
+  // Use the last vertex (adjacent to the first in a ring) for planar quads;
+  // falls back to the third for triangles where they coincide.
+  const b = verts[verts.length - 1]!;
+  const e2 = verts.length >= 4
+    ? { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }
+    : { x: verts[2]!.x - a.x, y: verts[2]!.y - a.y, z: verts[2]!.z - a.z };
+  const wn = cross(e1, e2);
+  const ordered = wn.x * desired.x + wn.y * desired.y + wn.z * desired.z >= 0 ? verts : [...verts].reverse();
+  out.push({ id: genId('face'), vertices: ordered, normal: normalize(desired) });
+}
+
+function dot(a: Vec3, b: Vec3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function neg(v: Vec3): Vec3 {
+  return { x: -v.x, y: -v.y, z: -v.z };
+}
+
+function addScaled(v: Vec3, dir: Vec3, s: number): Vec3 {
+  return { x: v.x + dir.x * s, y: v.y + dir.y * s, z: v.z + dir.z * s };
+}
 
 /**
  * Replace a body with its 3D convex hull — the tightest convex solid that

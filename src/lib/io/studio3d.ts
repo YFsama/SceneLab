@@ -342,8 +342,20 @@ export function deserializeFeatures(project: ProjectFile): Feature[] {
   });
 }
 
-export function saveToFile(project: ProjectFile): string {
-  return JSON.stringify(project, null, 2);
+/** Output form of {@link saveToFile}: compact by default, pretty on demand. */
+export interface SaveFileOptions {
+  /** Pretty-print with 2-space indent (human-readable .studio3d export). */
+  pretty?: boolean;
+}
+
+/**
+ * Serialize a project to JSON. COMPACT by default: the pretty variant put
+ * ~3× the bytes into localStorage/autosave (and desktop crash snapshots) for
+ * zero functional gain — loadFromFile only JSON.parses. Pass
+ * `{ pretty: true }` when a human is meant to read the file.
+ */
+export function saveToFile(project: ProjectFile, options: SaveFileOptions = {}): string {
+  return options.pretty ? JSON.stringify(project, null, 2) : JSON.stringify(project);
 }
 
 export function loadFromFile(json: string): ProjectFile {

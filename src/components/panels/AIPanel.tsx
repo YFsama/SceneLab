@@ -20,6 +20,7 @@ export function AIPanel() {
   const [showSettings, setShowSettings] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [visionEnabled, setVisionEnabled] = useState(false);
+  const workspace = useStore((s) => s.workspace);
   const visionSelectActive = useStore((s) => s.visionSelectActive);
   const visionRegion = useStore((s) => s.visionRegion);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -31,6 +32,21 @@ export function AIPanel() {
       toolsRegistered = true;
     }
   }, []);
+
+  // F6: the panel floats fixed over the bottom-right corner, which is where
+  // the CAM and Drawing panels put their lower controls — open-by-default it
+  // covered them. Collapse when those workspaces ACTIVATE (including a mount
+  // that already starts there — the sentinel starts null), using the
+  // React-documented adjust-state-during-render pattern (an effect would be
+  // a cascading setState-in-effect; deriving `expanded` from the workspace
+  // would make a manual reopen impossible while staying in the workspace).
+  // Reopening is manual (the floating bot button / 'scenelab:open-ai'), and
+  // switching back to model/sketch never forces the panel open.
+  const [collapsedFromWorkspace, setCollapsedFromWorkspace] = useState<string | null>(null);
+  if (collapsedFromWorkspace !== workspace) {
+    setCollapsedFromWorkspace(workspace);
+    if (workspace === 'cam' || workspace === 'drawing') setExpanded(false);
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

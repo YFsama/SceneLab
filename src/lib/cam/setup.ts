@@ -46,8 +46,11 @@ export function defaultCamSetup(): CAMSetup {
 /**
  * Generate the toolpath for one operation against its body. Drill operations
  * use op.holes when non-empty, otherwise holes are auto-detected on the body
- * (detectCircularHoles); if none are found the operation falls back to a
- * single hole at the top-view centre of the body.
+ * (detectCircularHoles). With neither, the operation THROWS — the old
+ * silent fallback (one hole at the body's top-view centre, full depth) would
+ * drill an unrequested hole straight through the part — and the caller's
+ * try/catch (resolveCamToolpath) drops the op from the cache so the panel's
+ * stale flag surfaces the problem instead.
  */
 export function generateOperationToolpath(
   op: CAMOperation,
@@ -67,7 +70,7 @@ export function generateOperationToolpath(
     case 'face':
       return generateFaceToolpath(computeBoundingBox(body), tool, op.params);
     case 'drill': {
-      let holes: Array<{ x: number; z: number; depth: number }> =
+      const holes: Array<{ x: number; z: number; depth: number }> =
         op.holes && op.holes.length > 0
           ? op.holes
           : detectCircularHoles(body).map((h) => ({
@@ -76,15 +79,14 @@ export function generateOperationToolpath(
               depth: h.depth,
             }));
       if (holes.length === 0) {
-        // Fallback: one hole at the body's top-view centre, full depth.
-        const bb = computeBoundingBox(body);
-        holes = [
-          {
-            x: (bb.min.x + bb.max.x) / 2,
-            z: (bb.min.z + bb.max.z) / 2,
-            depth: op.params.stockTop - op.params.stockBottom,
-          },
-        ];
+        // No explicit pins and nothing detectable: refuse rather than guess.
+        // The throw is descriptive on purpose — it names both remedies, and
+        // callers that surface errors (instead of dropping the op) can show
+        // it verbatim.
+        throw new Error(
+          `drill operation "${op.name}" found no circular holes on body "${body.name}" — ` +
+            'pin holes explicitly or check the body',
+        );
       }
       return generateDrillToolpath(holes, tool, op.params);
     }

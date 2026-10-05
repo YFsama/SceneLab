@@ -3,7 +3,7 @@ import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray
 import { createBox, createCylinder } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import { makeCoordinateSystem } from './referenceGeometry';
-import type { SolidBody, Vec3 } from './types';
+import type { SolidBody, Vec3, Edge, Face } from './types';
 
 describe('translateBody', () => {
   it('shifts the bounding box by the offset and preserves volume', () => {
@@ -165,6 +165,301 @@ describe('applyChamfer', () => {
     const result = applyChamfer(body, edgeIds, 0.5);
     expect(result.faces.length).toBeGreaterThan(0);
     expect(result.vertices.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Golden geometry for the pass-30 fillet/chamfer fix. The old fillet put the
+// arc center on the OUTWARD bisector and swept π, so every strip floated
+// r·√2 outside the part and ended buried inside it: ΔVolume +14.42 at r=1 on
+// a 30×10×30 plate (a true fillet REMOVES), 6.93 mm protrusion at r=4.9,
+// 49.6° normal kinks. The chamfer buried its whole face inside the solid.
+// ---------------------------------------------------------------------------
+
+/** Faces of `body` whose boundary contains `edge` (vertex-ring matching). */
+function facesOfEdge(body: SolidBody, edge: Edge): Face[] {
+  const eq = (p: Vec3, q: Vec3) => Math.abs(p.x - q.x) < 1e-9 && Math.abs(p.y - q.y) < 1e-9 && Math.abs(p.z - q.z) < 1e-9;
+  const ringHas = (f: Face) => {
+    for (let i = 0; i < f.vertices.length; i++) {
+      const a = f.vertices[i]!;
+      const b = f.vertices[(i + 1) % f.vertices.length]!;
+      if ((eq(a, edge.start) && eq(b, edge.end)) || (eq(a, edge.end) && eq(b, edge.start))) return true;
+    }
+    return false;
+  };
+  return body.faces.filter(ringHas);
+}
+
+const nrm = (v: Vec3): Vec3 => {
+  const l = Math.hypot(v.x, v.y, v.z);
+  return { x: v.x / l, y: v.y / l, z: v.z / l };
+};
+const d3 = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+const angleBetween = (a: Vec3, b: Vec3) => Math.acos(Math.max(-1, Math.min(1, d3(nrm(a), nrm(b)))));
+
+/** Max distance the body pokes outside `bb`, per axis (negative = inside). */
+function protrusionBeyond(body: SolidBody, bb: ReturnType<typeof computeBoundingBox>): number {
+  let worst = -Infinity;
+  for (const v of body.vertices) {
+    worst = Math.max(worst, bb.min.x - v.x, v.x - bb.max.x, bb.min.y - v.y, v.y - bb.max.y, bb.min.z - v.z, v.z - bb.max.z);
+  }
+  return worst;
+}
+
+describe('applyFillet golden geometry (30×10×30 plate)', () => {
+  const box = createBox(30, 10, 30); // 9000 mm³, 280 mm of edges
+  const bb = computeBoundingBox(box);
+  const sumL = 4 * (30 + 10 + 30);
+  const SLIVER = 1 - Math.PI / 4; // sliver cross-section per 90° edge, r=1
+
+  // Analytic corner correction, stated formula. A true full-box fillet
+  // removes the UNION of the 12 edge slivers; the per-edge sum counts the
+  // triple overlaps at the 8 corners twice. Inside one r-cube at a corner
+  // (axes along the three meeting edges) each sliver occupies volume
+  // (1 − π/4)·r³ — the quarter-square minus the quarter cylinder whose axis
+  // is the third edge — and the three overlap in
+  //   U·r³ = |{(y−r)²+(z−r)² > r² ∨ (x−r)²+(z−r)² > r² ∨ (x−r)²+(y−r)² > r²}|
+  // (by the x→r−x cube symmetry this is the same measure as the y²+z²>1 form
+  // quadrature below). The per-corner double-count is D = 3(1−π/4) − U and
+  //   V_true(r) = (1 − π/4)·r²·ΣL − 8·D·r³.
+  const NQ = 100;
+  const U = (() => {
+    let hits = 0;
+    for (let i = 0; i < NQ; i++) for (let j = 0; j < NQ; j++) for (let k = 0; k < NQ; k++) {
+      const x = (i + 0.5) / NQ, y = (j + 0.5) / NQ, z = (k + 0.5) / NQ;
+      if (y * y + z * z > 1 || x * x + z * z > 1 || x * x + y * y > 1) hits++;
+    }
+    return hits / NQ ** 3;
+  })();
+  const cornerD = 3 * SLIVER - U;
+
+  const removedAt = (r: number) => computeVolume(box) - computeVolume(applyFillet(box, [], r));
+
+  it(`corner quadrature sanity: U=${U.toFixed(4)}, D=3(1−π/4)−U=${cornerD.toFixed(4)}`, () => {
+    // Guards the formula inputs: each sliver alone fills 1−π/4 ≈ 0.2146 of
+    // the unit cube, the union is between one and three slivers.
+    expect(U).toBeGreaterThan(SLIVER);
+    expect(U).toBeLessThan(3 * SLIVER);
+    expect(cornerD).toBeGreaterThan(0);
+  });
+
+  it('never protrudes beyond the original bbox (≤ 0.01 mm) at r = 1 / 2 / 4.9', () => {
+    for (const r of [1, 2, 4.9]) {
+      const f = applyFillet(box, [], r);
+      expect(protrusionBeyond(f, bb)).toBeLessThanOrEqual(0.01);
+    }
+  });
+
+  it('ΔVolume is negative (material removed) and monotone in r', () => {
+    const delta = (r: number) => computeVolume(applyFillet(box, [], r)) - computeVolume(box);
+    expect(delta(1)).toBeLessThan(0);
+    expect(delta(2)).toBeLessThan(delta(1));
+    expect(delta(4.9)).toBeLessThan(delta(2));
+  });
+
+  it('removal tracks the analytic sliver union: within 15% at r=1/2, within 25% at r=4.9', () => {
+    // The overlay removes the per-edge sliver exactly (plus the ~2.4%
+    // chord-vs-arc bulge of the 8-facet polyline), so it over-counts only by
+    // the corner double-count 8·D·r³ — 5% at r=1, 9% at r=2, and 20% at
+    // r=4.9 where the r³ corner term peaks against the r² edge term at the
+    // pass-28 maxFilletRadius bound.
+    for (const [r, tol] of [[1, 0.15], [2, 0.15], [4.9, 0.25]] as const) {
+      const trueRemoval = SLIVER * r * r * sumL - 8 * cornerD * r ** 3;
+      const removed = removedAt(r);
+      expect(Math.abs(removed - trueRemoval)).toBeLessThanOrEqual(tol * trueRemoval);
+    }
+  });
+
+  it('a single edge removes exactly its own sliver: (1 − π/4)·r²·L within 5%', () => {
+    const edge = box.edges[0]!; // (−15,0,−15) → (15,0,−15), L = 30
+    const f = applyFillet(box, [edge.id], 2);
+    const removed = computeVolume(box) - computeVolume(f);
+    // Exact sliver 25.75; the inscribed 8-chord polyline adds ~2.4% (0.605),
+    // so the closed shell measures 26.36 — inside the 5% band by design.
+    expect(removed).toBeLessThan(SLIVER * 4 * 30 * 1.05);
+    expect(removed).toBeGreaterThan(SLIVER * 4 * 30 * 0.95);
+  });
+
+  it('arc facets: 11.25° steps (≤ 11.5° kink), tangent ends, outward from the material', () => {
+    const edge = box.edges[0]!;
+    const r = 2;
+    const f = applyFillet(box, [edge.id], r);
+    const [face1, face2] = facesOfEdge(box, edge);
+    expect(face1 && face2).toBeTruthy();
+    const n1 = nrm(face1!.normal);
+    const n2 = nrm(face2!.normal);
+    const edgeDir = nrm({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
+    const m = nrm({ x: n1.x + n2.x, y: n1.y + n2.y, z: n1.z + n2.z }); // outward bisector
+    // In-plane second axis for measuring normal angles around the edge.
+    const q = nrm({
+      x: edgeDir.y * n1.z - edgeDir.z * n1.y,
+      y: edgeDir.z * n1.x - edgeDir.x * n1.z,
+      z: edgeDir.x * n1.y - edgeDir.y * n1.x,
+    });
+    const angleAround = (v: Vec3) => Math.atan2(d3(v, q), d3(v, n1));
+    // New quads only (original faces are the same object references).
+    const newQuads = f.faces.filter((fc) => !box.faces.includes(fc) && fc.vertices.length === 4);
+    // Arc facets point toward the corner (positive on the outward bisector);
+    // wall quads point into the material (negative on it).
+    const arcFacets = newQuads.filter((fc) => d3(fc.normal, m) > 0).sort((a, b) => angleAround(a.normal) - angleAround(b.normal));
+    const walls = newQuads.filter((fc) => d3(fc.normal, m) <= 0);
+    expect(arcFacets).toHaveLength(8);
+    expect(walls).toHaveLength(2);
+    // Consecutive facet normals step exactly one 90°/8 = 11.25° (the old
+    // 180° sweep over 8 segments kinked 49.6°).
+    for (let i = 1; i < arcFacets.length; i++) {
+      const kink = angleBetween(arcFacets[i - 1]!.normal, arcFacets[i]!.normal);
+      expect(kink).toBeLessThanOrEqual((11.5 * Math.PI) / 180);
+      expect(kink).toBeGreaterThanOrEqual((11 * Math.PI) / 180);
+    }
+    // The facet fan spans face-to-face: first/last facets are half a step
+    // (5.625°) off the face normals — tangency, no seam kink.
+    expect(angleBetween(arcFacets[0]!.normal, n1) + angleBetween(arcFacets[0]!.normal, n2)).toBeCloseTo(Math.PI / 2, 6);
+    expect(angleBetween(arcFacets[0]!.normal, arcFacets[arcFacets.length - 1]!.normal)).toBeCloseTo((78.75 * Math.PI) / 180, 4);
+    // Walls lie flat on the faces they share (normal = −face normal).
+    for (const w of walls) {
+      const flat = Math.abs(d3(w.normal, n1)) > Math.abs(d3(w.normal, n2)) ? n1 : n2;
+      expect(angleBetween(w.normal, flat)).toBeCloseTo(Math.PI, 7);
+    }
+  });
+
+  it('tangent lines land exactly on the adjacent faces at distance r (90° corner)', () => {
+    const edge = box.edges[0]!;
+    const r = 2;
+    const f = applyFillet(box, [edge.id], r);
+    const dir = nrm({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
+    const [face1, face2] = facesOfEdge(box, edge);
+    for (const face of [face1!, face2!]) {
+      const n = nrm(face.normal);
+      const p0 = face.vertices[0]!;
+      // Every new vertex built on this face's plane is on the plane; any that
+      // stand off the edge line are the tangent line — exactly r in-plane.
+      let sawTangent = false;
+      for (const fc of f.faces) {
+        if (box.faces.includes(fc)) continue;
+        for (const v of fc.vertices) {
+          const planeDist = Math.abs(d3({ x: v.x - p0.x, y: v.y - p0.y, z: v.z - p0.z }, n));
+          if (planeDist > 1e-9) continue;
+          const rel = { x: v.x - edge.start.x, y: v.y - edge.start.y, z: v.z - edge.start.z };
+          const along = d3(rel, dir);
+          const perp = Math.hypot(rel.x - along * dir.x, rel.y - along * dir.y, rel.z - along * dir.z);
+          if (perp > 1e-6) {
+            expect(perp).toBeCloseTo(r, 9);
+            sawTangent = true;
+          }
+        }
+      }
+      expect(sawTangent).toBe(true);
+    }
+  });
+
+  it('filleted body is honestly non-manifold (spine edges carry 4 faces) — the boolean guardrail keys on this', () => {
+    const f = applyFillet(box, [], 1);
+    const mc = checkManifold(f);
+    expect(mc.isManifold).toBe(false);
+    expect(mc.nonManifoldEdges).toBeGreaterThanOrEqual(12); // one per filleted spine
+    expect(mc.boundaryEdges).toBe(0); // shells closed: no dangling boundary
+  });
+});
+
+describe('applyChamfer golden geometry (30×10×30 plate)', () => {
+  const box = createBox(30, 10, 30);
+  const bb = computeBoundingBox(box);
+  const sumL = 4 * (30 + 10 + 30);
+
+  // True full-box chamfer removal = union of the 12 wedges (per edge the
+  // right-triangle prism d²L/2). At a corner the three wedges
+  // {y+z≤d}, {x+z≤d}, {x+y≤d} overlap; their union fills U_w·d³ of the
+  // d-cube (quadrature below), each wedge alone ½d³, so the per-corner
+  // double-count is D_w = 3/2 − U_w and
+  //   V_true(d) = d²·ΣL/2 − 8·D_w·d³.
+  const NQ = 100;
+  const Uw = (() => {
+    let hits = 0;
+    for (let i = 0; i < NQ; i++) for (let j = 0; j < NQ; j++) for (let k = 0; k < NQ; k++) {
+      const x = (i + 0.5) / NQ, y = (j + 0.5) / NQ, z = (k + 0.5) / NQ;
+      if (y + z <= 1 || x + z <= 1 || x + y <= 1) hits++;
+    }
+    return hits / NQ ** 3;
+  })();
+  const cornerDw = 1.5 - Uw;
+
+  it(`wedge corner quadrature sanity: U_w=${Uw.toFixed(4)}, D_w=3/2−U_w=${cornerDw.toFixed(4)}`, () => {
+    expect(Uw).toBeGreaterThan(0.5);
+    expect(Uw).toBeLessThan(1);
+    expect(cornerDw).toBeGreaterThan(0);
+  });
+
+  it('never protrudes beyond the original bbox (protrusion stays 0)', () => {
+    for (const d of [1, 2, 4.9]) {
+      const c = applyChamfer(box, [], d);
+      expect(protrusionBeyond(c, bb)).toBeLessThanOrEqual(0.01);
+    }
+  });
+
+  it('ΔVolume is negative (was nonsense before) and monotone in d', () => {
+    const delta = (d: number) => computeVolume(applyChamfer(box, [], d)) - computeVolume(box);
+    expect(delta(1)).toBeLessThan(0);
+    expect(delta(2)).toBeLessThan(delta(1));
+    expect(delta(4.9)).toBeLessThan(delta(2));
+  });
+
+  it('removal equals the wedge sum exactly; within 15% of the corner-corrected union at d=1/2, 30% at d=4.9', () => {
+    for (const d of [1, 2, 4.9]) {
+      const removed = computeVolume(box) - computeVolume(applyChamfer(box, [], d));
+      expect(removed).toBeCloseTo((0.5 * d * d * sumL), 6); // exact per-edge wedge sum
+      const trueRemoval = 0.5 * d * d * sumL - 8 * cornerDw * d ** 3;
+      const tol = d < 3 ? 0.15 : 0.30; // corner double-count grows ∝ d³
+      expect(Math.abs(removed - trueRemoval)).toBeLessThanOrEqual(tol * trueRemoval);
+    }
+  });
+
+  it('chamfer face is a true 45° bevel: equal legs d along both faces', () => {
+    const edge = box.edges[0]!;
+    const d = 2;
+    const c = applyChamfer(box, [edge.id], d);
+    const [face1, face2] = facesOfEdge(box, edge);
+    const n1 = nrm(face1!.normal);
+    const n2 = nrm(face2!.normal);
+    const newQuads = c.faces.filter((fc) => !box.faces.includes(fc) && fc.vertices.length === 4);
+    // The chamfer quad leans 45° against BOTH faces (walls lie flat on them).
+    const lean = newQuads.filter((fc) => {
+      const a = Math.abs(d3(fc.normal, n1));
+      const b = Math.abs(d3(fc.normal, n2));
+      return Math.abs(a - Math.SQRT1_2) < 1e-9 && Math.abs(b - Math.SQRT1_2) < 1e-9;
+    });
+    expect(lean).toHaveLength(1);
+    // Legs: every wall's tangent line sits exactly d in-plane from the edge.
+    const dir = nrm({ x: edge.end.x - edge.start.x, y: edge.end.y - edge.start.y, z: edge.end.z - edge.start.z });
+    for (const face of [face1!, face2!]) {
+      const n = nrm(face.normal);
+      const p0 = face.vertices[0]!;
+      let sawLeg = false;
+      for (const fc of c.faces) {
+        if (box.faces.includes(fc)) continue;
+        for (const v of fc.vertices) {
+          const planeDist = Math.abs(d3({ x: v.x - p0.x, y: v.y - p0.y, z: v.z - p0.z }, n));
+          if (planeDist < 1e-9) {
+            const rel = { x: v.x - edge.start.x, y: v.y - edge.start.y, z: v.z - edge.start.z };
+            const along = d3(rel, dir);
+            const perp = Math.hypot(rel.x - along * dir.x, rel.y - along * dir.y, rel.z - along * dir.z);
+            if (perp > 1e-6) {
+              expect(perp).toBeCloseTo(d, 9);
+              sawLeg = true;
+            }
+          }
+        }
+      }
+      expect(sawLeg).toBe(true);
+    }
+  });
+
+  it('chamfered body is honestly non-manifold (spine edges carry 4 faces)', () => {
+    const c = applyChamfer(box, [], 1);
+    const mc = checkManifold(c);
+    expect(mc.isManifold).toBe(false);
+    expect(mc.nonManifoldEdges).toBeGreaterThanOrEqual(12);
+    expect(mc.boundaryEdges).toBe(0);
   });
 });
 

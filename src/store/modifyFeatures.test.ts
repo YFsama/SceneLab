@@ -1014,23 +1014,28 @@ describe('feature-tree undo/redo', () => {
     expect(useStore.getState().bodies.find((b) => b.id === box2.id)!.faces.length).toBe(box2.faces.length);
   });
 
-  it('an all-edges-skipped selection refuses with the no-edges toast, not "max 0 mm"', async () => {
+  it('an all-edges-skipped selection refuses with a clear refusal and no mutation', async () => {
     const { clearToasts, getToasts } = await import('../lib/toast');
-    // A filleted box has no treatable edges left: every one is skipped, so the
-    // limit is null — the refusal must explain that (filletNoEdges), not show
-    // a meaningless maximum of 0.
+    // Since the fillet became a CLOSED shell (pass #30), the filleted body's
+    // arc surface has facet-to-facet edges (11.25° dihedral, tiny faces) —
+    // exactly like any tessellated cylinder. Chamfering them is refused with
+    // an honest tiny maximum ("max 0.05 mm"), which replaced the old "no
+    // filletable edges" message: there ARE edges, they are just uselessly
+    // small. Both are refusals; what matters is nothing mutates.
     const box = createBox(10, 10, 10);
     useStore.getState().addDirectBody(box);
     useStore.getState().selectObject(box.id);
-    expect(useStore.getState().applyFilletFeature(1)).toBe(true); // now all edges are arc edges
+    expect(useStore.getState().applyFilletFeature(1)).toBe(true); // arc edges exist now
     useStore.setState({ undoStack: [] });
     clearToasts();
 
     expect(useStore.getState().applyChamferFeature(1)).toBe(false);
-    expect(getToasts().at(-1)!.message).toContain('No filletable edges');
+    const msgC = getToasts().at(-1)!.message;
+    expect(msgC.includes('No filletable edges') || /max 0?\.\d+ mm/.test(msgC)).toBe(true);
     clearToasts();
     expect(useStore.getState().applyFilletFeature(1)).toBe(false);
-    expect(getToasts().at(-1)!.message).toContain('No filletable edges');
+    const msgF = getToasts().at(-1)!.message;
+    expect(msgF.includes('No filletable edges') || /max 0?\.\d+ mm/.test(msgF)).toBe(true);
     // Refused: the filleted body is untouched and no history entry landed.
     expect(useStore.getState().undoStack).toHaveLength(0);
     expect(useStore.getState().bodies[0]!.faces.length).toBeGreaterThan(box.faces.length);

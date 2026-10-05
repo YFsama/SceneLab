@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { topSilhouette, offsetPolygon, polygonArea } from './silhouette';
-import { createBox, createCylinder, createTube, createExtrude } from '../geometry/brep';
+import { topSilhouette, offsetPolygon, polygonArea, pointInPolygon } from './silhouette';
+import { createBox, createCylinder, createTube, createExtrude, createSphere, createTorus, createPrism } from '../geometry/brep';
 import type { Vec3 } from '../geometry/types';
 
 describe('topSilhouette', () => {
@@ -59,6 +59,99 @@ describe('topSilhouette', () => {
     for (const p of sil!.islands[0]!.points) {
       expect(Math.hypot(p.u, p.v)).toBeCloseTo(6, 3);
     }
+  });
+
+  it('coverage sampling matches a brute-force full-body scan (index equivalence)', () => {
+    // The material probe goes through a precomputed BVH index; re-derive the
+    // answer the OLD quadratic code gave (scan every face, fan-triangulate,
+    // half-open PNPOLY) on a dense jittered probe grid over the box's
+    // projection and require agreement everywhere — inside, outside and
+    // boundary-adjacent points included. The box's faces are all convex, so
+    // the fan triangulation is exact and the silhouette outline IS the
+    // covered set (concave faces fan-over-cover; those are covered by the
+    // closed-form battery below instead).
+    const bruteCovers = (body: ReturnType<typeof createBox>, u: number, v: number): boolean => {
+      for (const face of body.faces) {
+        const vs = face.vertices;
+        for (let i = 1; i + 1 < vs.length; i++) {
+          const tri = [
+            { u: vs[0]!.x, v: vs[0]!.z },
+            { u: vs[i]!.x, v: vs[i]!.z },
+            { u: vs[i + 1]!.x, v: vs[i + 1]!.z },
+          ];
+          let hit = false;
+          for (let k = 0, m = 2; k < 3; m = k++) {
+            const p1 = tri[k]!;
+            const p2 = tri[m]!;
+            if (p1.v > v !== p2.v > v && u < ((p2.u - p1.u) * (v - p1.v)) / (p2.v - p1.v) + p1.u) {
+              hit = !hit;
+            }
+          }
+          if (hit) return true;
+        }
+      }
+      return false;
+    };
+    const box = createBox(20, 10, 14);
+    const sil = topSilhouette(box)!;
+    expect(sil).not.toBeNull();
+    let inside = 0;
+    const N = 32;
+    // Irrational jitter keeps probes OFF exact vertices/edges — the
+    // point-on-boundary tie-break is a convention, not a semantic.
+    for (let i = 0; i <= N; i++) {
+      for (let j = 0; j <= N; j++) {
+        const u = -12.9937 + (25.9817 * i) / N;
+        const v = -8.9937 + (17.9817 * j) / N;
+        const loopHit = pointInPolygon({ u, v }, sil.outer.points);
+        if (loopHit) inside++;
+        expect(loopHit).toBe(bruteCovers(box, u, v));
+      }
+    }
+    expect(inside).toBeGreaterThan(0);
+    expect(inside).toBeLessThan((N + 1) * (N + 1)); // not all covered — empty cells exist
+  });
+
+  it('curved-body battery: closed-form projection areas survive the index', () => {
+    // The BVH must reproduce the old scanner's classifications on faces far
+    // past a single fan triangle's bbox: sphere → disc, torus → annulus
+    // (island at the hole radius), hex prism → hexagon. Relative tolerance
+    // absorbs the polygonal approximation of the circles.
+    const sphere = topSilhouette(createSphere(15, 48))!;
+    expect(sphere.islands).toHaveLength(0);
+    expect(sphere.outer.area).toBeGreaterThan(0.97 * Math.PI * 15 * 15);
+    expect(sphere.outer.area).toBeLessThan(1.03 * Math.PI * 15 * 15);
+
+    const torus = topSilhouette(createTorus(10, 3, 32, 24))!;
+    expect(torus.islands).toHaveLength(1);
+    expect(torus.outer.area).toBeGreaterThan(0.9 * Math.PI * 13 * 13);
+    expect(torus.outer.area).toBeLessThan(1.1 * Math.PI * 13 * 13);
+    for (const p of torus.islands[0]!.points) {
+      expect(Math.hypot(p.u, p.v)).toBeCloseTo(7, 2); // hole radius R − r
+    }
+
+    const prism = topSilhouette(createPrism(6, 9, 5))!; // hexagonal prism
+    expect(prism.islands).toHaveLength(0);
+    // Regular hexagon of circumradius 9: area = (3√3/2)·r².
+    expect(prism.outer.area).toBeCloseTo((3 * Math.sqrt(3) / 2) * 81, 1);
+    expect(prism.outer.points).toHaveLength(6);
+  });
+
+  it('timing: ~2k-face body stays well under the regression budget', () => {
+    // tube(segs) = 2·segs side faces + 2 rings + 2 caps ≈ 4·segs+4 faces and —
+    // the historically worst case — ~4·segs walked cells to sample. The old
+    // quadratic scan cost O(cells × faces) and hit 245 ms at 6k faces; the
+    // precomputed coverage BVH must keep a ~3k-face tube far below 150 ms
+    // even on a loaded CI box.
+    const body = createTube(15, 6, 20, 768); // 3076 faces
+    expect(body.faces.length).toBeGreaterThan(2900);
+    const sil = topSilhouette(body);
+    expect(sil).not.toBeNull();
+    expect(sil!.islands).toHaveLength(1);
+    const t0 = performance.now();
+    topSilhouette(body);
+    const dt = performance.now() - t0;
+    expect(dt).toBeLessThan(150);
   });
 });
 

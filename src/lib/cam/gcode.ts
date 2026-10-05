@@ -1,4 +1,5 @@
 import type { Toolpath, GCodeLine } from './types';
+import { safeMargin } from './toolpath';
 
 /**
  * Machine dialects for the post-processor.
@@ -12,9 +13,16 @@ function fmt(n: number): string {
   return n.toFixed(3);
 }
 
-/** Safe program-level traverse height (machine Z). */
+/**
+ * Program-level traverse height (machine Z). Always at least the op's
+ * safeZAboveStock margin (serialized in the setup) and never below the
+ * historical 10 mm envelope, so tool-change retractions clear a raised
+ * safe margin too.
+ */
 function programSafeZ(tp: Toolpath | undefined): number {
-  return (tp?.params.stockTop ?? 0) + 10;
+  const base = tp?.params.stockTop ?? 0;
+  const margin = tp ? safeMargin(tp.params) : 10;
+  return base + Math.max(10, margin);
 }
 
 interface EmitState {
@@ -57,7 +65,9 @@ function emitDrillMoves(
   lines: GCodeLine[],
 ): void {
   const { params } = tp;
-  const retractR = params.stockTop + 2;
+  // Same R plane the generator used: the 2 mm approach clearance, never
+  // above the op's safeZAboveStock margin (toolpath and G-code must agree).
+  const retractR = params.stockTop + Math.min(2, safeMargin(params));
   const peck = Math.max(0.1, params.peckDepth ?? Math.max(0.5, tp.tool.diameter / 2));
 
   for (const p of tp.points) {

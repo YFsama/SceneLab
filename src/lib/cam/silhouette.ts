@@ -60,28 +60,137 @@ export function pointInPolygon(p: Point2, poly: Point2[]): boolean {
  * closed solid — passes through that column. Faces are fan-triangulated and
  * tested with a consistent half-open PNPOLY rule so shared triangle borders
  * are never double-counted.
+ *
+ * The old implementation re-scanned and re-fan-triangulated EVERY face per
+ * probed point (O(probes × faces) — 240 ms on a 6k-face tube). Probing now
+ * goes through {@link buildCoverageIndex}, which triangulates once and packs
+ * the projected triangles into a BVH so a probe tests only the handful of
+ * triangles whose bbox contains the point.
  */
-function bodyCoversPoint(body: SolidBody, u: number, v: number): boolean {
+interface CoverageIndex {
+  /** Flat triangle coords: au, av, bu, bv, cu, cv per triangle. */
+  tri: number[];
+  /** Triangle indices arranged into per-node contiguous leaf ranges. */
+  order: number[];
+  /** Per-node AABBs (parallel arrays, node 0 = root). */
+  minU: number[];
+  minV: number[];
+  maxU: number[];
+  maxV: number[];
+  /** Leaf (>0): first index into `order` + triangle count. Inner: children. */
+  start: number[];
+  count: number[];
+  left: number[];
+  right: number[];
+}
+
+/** Half-open (PNPOLY) coverage test on one flat-encoded projected triangle. */
+function triangleCovers(tri: number[], o: number, u: number, v: number): boolean {
+  let hit = false;
+  for (let k = 0, m = 4; k < 6; m = k, k += 2) {
+    const v1 = tri[o + k + 1]!;
+    const v2 = tri[o + m + 1]!;
+    if (v1 > v !== v2 > v) {
+      const u1 = tri[o + k]!;
+      const u2 = tri[o + m]!;
+      if (u < ((u2 - u1) * (v - v1)) / (v2 - v1) + u1) hit = !hit;
+    }
+  }
+  return hit;
+}
+
+const BVH_LEAF_SIZE = 4;
+
+/**
+ * Triangulate every face once (fan, the same rule the old per-probe code
+ * used) and pack the projected triangles into a median-split AABB BVH. A
+ * uniform grid was tried first but fan caps of high-segment cylinders are
+ * long rim-to-centre slivers whose bboxes flood half the grid each; the BVH
+ * clusters slivers by centroid instead, so both build and probe stay near
+ * linearithmic regardless of triangle shape. A triangle covering a point
+ * necessarily lives in a node whose bbox contains the point, so the pruned
+ * answer is identical to the old full scan.
+ */
+function buildCoverageIndex(body: SolidBody): CoverageIndex | null {
+  const tri: number[] = [];
+  const centroidU: number[] = [];
+  const centroidV: number[] = [];
   for (const face of body.faces) {
     const vs = face.vertices;
     for (let i = 1; i + 1 < vs.length; i++) {
       const a = vs[0]!;
       const b = vs[i]!;
       const c = vs[i + 1]!;
-      let hit = false;
-      const tri = [
-        { u: a.x, v: a.z },
-        { u: b.x, v: b.z },
-        { u: c.x, v: c.z },
-      ];
-      for (let k = 0, m = 2; k < 3; m = k++) {
-        const p1 = tri[k]!;
-        const p2 = tri[m]!;
-        if (p1.v > v !== p2.v > v && u < ((p2.u - p1.u) * (v - p1.v)) / (p2.v - p1.v) + p1.u) {
-          hit = !hit;
-        }
+      tri.push(a.x, a.z, b.x, b.z, c.x, c.z);
+      centroidU.push((a.x + b.x + c.x) / 3);
+      centroidV.push((a.z + b.z + c.z) / 3);
+    }
+  }
+  const n = tri.length / 6;
+  if (n === 0) return null;
+
+  const ix: CoverageIndex = {
+    tri, order: Array.from({ length: n }, (_, i) => i),
+    minU: [], minV: [], maxU: [], maxV: [], start: [], count: [], left: [], right: [],
+  };
+
+  const newNode = (): number => {
+    ix.minU.push(0); ix.minV.push(0); ix.maxU.push(0); ix.maxV.push(0);
+    ix.start.push(0); ix.count.push(0); ix.left.push(-1); ix.right.push(-1);
+    return ix.minU.length - 1;
+  };
+
+  const build = (lo: number, hi: number): number => {
+    const node = newNode();
+    let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+    for (let i = lo; i < hi; i++) {
+      const t = ix.order[i]! * 6;
+      minU = Math.min(minU, ix.tri[t]!, ix.tri[t + 2]!, ix.tri[t + 4]!);
+      maxU = Math.max(maxU, ix.tri[t]!, ix.tri[t + 2]!, ix.tri[t + 4]!);
+      minV = Math.min(minV, ix.tri[t + 1]!, ix.tri[t + 3]!, ix.tri[t + 5]!);
+      maxV = Math.max(maxV, ix.tri[t + 1]!, ix.tri[t + 3]!, ix.tri[t + 5]!);
+    }
+    ix.minU[node] = minU; ix.maxU[node] = maxU;
+    ix.minV[node] = minV; ix.maxV[node] = maxV;
+    if (hi - lo <= BVH_LEAF_SIZE) {
+      ix.start[node] = lo;
+      ix.count[node] = hi - lo;
+      return node;
+    }
+    const slice = ix.order.slice(lo, hi);
+    if (maxU - minU >= maxV - minV) {
+      slice.sort((a, b) => centroidU[a]! - centroidU[b]!);
+    } else {
+      slice.sort((a, b) => centroidV[a]! - centroidV[b]!);
+    }
+    for (let i = 0; i < slice.length; i++) ix.order[lo + i] = slice[i]!;
+    const mid = (lo + hi) >> 1;
+    ix.left[node] = build(lo, mid);
+    ix.right[node] = build(mid, hi);
+    return node;
+  };
+
+  build(0, n);
+  return ix;
+}
+
+/** Probe the precomputed coverage BVH: does any projected triangle cover (u, v)? */
+function indexCoversPoint(ix: CoverageIndex, u: number, v: number): boolean {
+  const stack: number[] = [0];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (u < ix.minU[node]! || u > ix.maxU[node]! || v < ix.minV[node]! || v > ix.maxV[node]!) {
+      continue;
+    }
+    const cnt = ix.count[node]!;
+    if (cnt > 0) {
+      const start = ix.start[node]!;
+      for (let i = 0; i < cnt; i++) {
+        const t = ix.order[start + i]!;
+        if (triangleCovers(ix.tri, t * 6, u, v)) return true;
       }
-      if (hit) return true;
+    } else {
+      stack.push(ix.left[node]!, ix.right[node]!);
     }
   }
   return false;
@@ -186,6 +295,11 @@ export function topSilhouette(body: SolidBody): TopSilhouette | null {
   }
 
   // 3. Keep bounded CCW faces that sit over material.
+  // The coverage probe runs once per walked cell, so build the projected
+  // triangle grid ONCE here (the old code re-scanned every face per cell —
+  // quadratic, 240 ms on a 6k-face tube). A body with no projectable area
+  // (shouldn't happen past step 1) covers nothing.
+  const coverage = buildCoverageIndex(body);
   const materialLoops = loops.filter((l) => {
     const area = polygonArea(l.points);
     if (area <= 1e-9) return false; // CW (unbounded side) or degenerate
@@ -208,7 +322,7 @@ export function topSilhouette(body: SolidBody): TopSilhouette | null {
     const len = Math.hypot(du, dv) || 1;
     // Left normal of the travel direction (CCW interior side).
     const sample = { u: (a.u + b.u) / 2 - (dv / len) * 1e-3, v: (a.v + b.v) / 2 + (du / len) * 1e-3 };
-    return bodyCoversPoint(body, sample.u, sample.v);
+    return coverage !== null && indexCoversPoint(coverage, sample.u, sample.v);
   });
   if (materialLoops.length === 0) return null;
 

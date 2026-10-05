@@ -5,6 +5,7 @@ import {
   generateDrillToolpath,
   generateFaceToolpath,
 } from './toolpath';
+import { estimateMachiningTime } from './gcode';
 import { createBox, createCylinder, createTube } from '../geometry/brep';
 import type { ToolDefinition, CAMParameters, Toolpath, ToolpathPoint } from './types';
 
@@ -195,6 +196,85 @@ describe('generatePocketToolpath', () => {
       expect(Math.hypot(p.x, p.z)).toBeGreaterThanOrEqual(15 - r - 0.5);
     }
   });
+
+  it('links consecutive rows with cut moves — fewer rapids, less estimated time', () => {
+    // A plain rectangular pocket: every row transition is linkable, so the
+    // retract→rapid→plunge detours disappear except at the level boundary.
+    const linked = generatePocketToolpath(pocketBounds, tool, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0,
+    });
+    const unlinked = generatePocketToolpath(pocketBounds, tool, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0,
+    }, { linkRows: false });
+
+    // Same coverage: identical cutting rows.
+    expect(linked.cuttingMoves.length).toBeGreaterThan(0);
+    // Fewer rapids (retract+traverse+feedplane per row saved)…
+    expect(linked.rapidMoves.length).toBeLessThan(unlinked.rapidMoves.length);
+    // …so the estimated machining time drops.
+    expect(estimateMachiningTime(linked)).toBeLessThan(estimateMachiningTime(unlinked));
+
+    // A link move is a CUT between two different rows: consecutive non-rapid
+    // points whose z (row axis) differs and which is not a plunge.
+    let links = 0;
+    for (let i = 1; i < linked.points.length; i++) {
+      const a = linked.points[i - 1]!;
+      const b = linked.points[i]!;
+      if (b.rapid) continue;
+      if (Math.abs(b.z - a.z) > 1e-6 && b.feedRate !== params.plungeRate) links++;
+    }
+    expect(links).toBeGreaterThan(0);
+  });
+
+  it('never links across an island — the chord guard falls back to the retract detour', () => {
+    // A tube pocketed: the ⌀12 hole is an island. Rows crossing the hole
+    // split into two intervals; the straight chord between them runs through
+    // the island, so the midpoint guard must reject the link.
+    const tube = createTube(15, 6, 20, 32);
+    const tp = generatePocketToolpath(
+      { min: { x: -15, y: 0, z: -15 }, max: { x: 15, y: 20, z: 15 } },
+      { ...tool, diameter: 3, fluteLength: 12 },
+      { ...params, depthOfCut: 20, stockTop: 20, stockBottom: 0 },
+      { body: tube },
+    );
+    // Every cut stays inside the annulus: outside the island grown by the
+    // cutter radius (6+1.5) and inside the outer loop inset by it (15−1.5).
+    const r = 1.5;
+    for (const p of tp.cuttingMoves) {
+      const dist = Math.hypot(p.x, p.z);
+      expect(dist).toBeGreaterThanOrEqual(6 + r - 0.05);
+      expect(dist).toBeLessThanOrEqual(15 - r + 0.05);
+    }
+  });
+
+  it('keeps every rapid that starts below safe height vertical (linking version)', () => {
+    const tp = generatePocketToolpath(pocketBounds, tool, params);
+    const safe = params.stockTop + 5;
+    for (let i = 1; i < tp.points.length; i++) {
+      const prev = tp.points[i - 1]!;
+      const p = tp.points[i]!;
+      if (p.rapid && prev.y < safe - 1e-6) {
+        expect(Math.abs(p.x - prev.x)).toBeLessThan(1e-9);
+        expect(Math.abs(p.z - prev.z)).toBeLessThan(1e-9);
+        expect(p.y).toBeGreaterThan(prev.y);
+      }
+    }
+  });
+
+  it('honors safeZAboveStock for the traverse height (pass-29 review #10)', () => {
+    const high = generatePocketToolpath(pocketBounds, tool, {
+      ...params, safeZAboveStock: 12, stockTop: 10, stockBottom: 0, depthOfCut: 10,
+    });
+    const low = generatePocketToolpath(pocketBounds, tool, {
+      ...params, safeZAboveStock: 3, stockTop: 10, stockBottom: 0, depthOfCut: 10,
+    });
+    const maxY = (tp: Toolpath) => Math.max(...tp.points.map((p) => p.y));
+    // The traverse plane tracks the margin, not the hardcoded +5.
+    expect(maxY(high)).toBeCloseTo(10 + 12, 6);
+    expect(maxY(low)).toBeCloseTo(10 + 3, 6);
+    // …and nothing was ever planned above the respective safe plane.
+    for (const p of low.points) expect(p.y).toBeLessThanOrEqual(10 + 3 + 1e-9);
+  });
 });
 
 describe('generateContourToolpath', () => {
@@ -298,6 +378,23 @@ describe('generateDrillToolpath', () => {
     const tp = generateDrillToolpath([{ x: 4, y: 6, depth: 5 }], tool, params);
     expect(tp.cuttingMoves[0]!.z).toBeCloseTo(6, 6);
     expect(tp.cuttingMoves[0]!.y).toBeCloseTo(params.stockTop - 5, 6);
+  });
+
+  it('drops to the R plane at min(2, safeZAboveStock) before plunging', () => {
+    // Default margin (5) → the classic 2 mm approach clearance.
+    const normal = generateDrillToolpath([{ x: 0, z: 0, depth: 3 }], tool, { ...params, stockTop: 10 });
+    // A tight margin (1) is honored instead of dipping below the traverse
+    // plane the user asked for.
+    const tight = generateDrillToolpath(
+      [{ x: 0, z: 0, depth: 3 }],
+      tool,
+      { ...params, stockTop: 10, safeZAboveStock: 1 },
+    );
+    const yBeforePlunge = (tp: Toolpath) => tp.points[tp.points.indexOf(tp.cuttingMoves[0]!) - 1]!.y;
+    expect(yBeforePlunge(normal)).toBeCloseTo(12, 6);
+    expect(yBeforePlunge(tight)).toBeCloseTo(11, 6);
+    // The traverse itself sits at stockTop + margin.
+    expect(tight.points[0]!.y).toBeCloseTo(11, 6);
   });
 });
 

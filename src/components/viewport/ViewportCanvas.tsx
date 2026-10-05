@@ -28,6 +28,7 @@ import { faceAreaAndCentroid } from '../../lib/geometry/measure';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { runCommand, recentCommands, commandLabel } from '../../lib/commands/registry';
+import type { ToolpathPoint } from '../../lib/cam';
 import { Maximize2, Check, Box } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
@@ -259,6 +260,30 @@ export function ViewportCanvas() {
   // CAM toolpath overlay (cam workspace) — rebuilt by an effect whenever the
   // setup or the derived toolpath cache changes.
   const camGroupRef = useRef<THREE.Group | null>(null);
+  // CAM machine simulation. The PANEL dispatches 'scenelab:cam-sim' window
+  // events (play/pause/reset/seek, the arm-hole decoupling — no store field);
+  // this component owns the entire sim state in refs and walks the cached
+  // toolpath on the render loop's rAF. The tool mesh lives in its OWN group
+  // because the overlay effect clears camGroup's children on every rebuild.
+  const camSimGroupRef = useRef<THREE.Group | null>(null);
+  const camSimRef = useRef<{
+    opId: string;
+    points: ToolpathPoint[];
+    /** Cumulative distance at each point (mm); feeds[i] = arrival speed (mm/s). */
+    cum: number[];
+    feeds: number[];
+    total: number;
+    /** Move index being executed (arrival at points[seg]) + distance in it. */
+    seg: number;
+    dist: number;
+    playing: boolean;
+    diameter: number;
+    lastT: number | null;
+  } | null>(null);
+  const camSimTickRef = useRef<((now: number) => void) | null>(null);
+  // Dim twin of the cut material: the not-yet-cut remainder of the simulated
+  // path renders faint while the walked part stays bright.
+  const camCutDimMatRef = useRef(new THREE.LineBasicMaterial({ color: 0x89b4fa, transparent: true, opacity: 0.25 }));
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   // Live drag-move readout ("Δ 20, -10 mm") shown while a body drag is active.
   // Ref-driven DOM updates, not state: a setState per pointermove re-renders
@@ -507,13 +532,16 @@ export function ViewportCanvas() {
       }
     };
 
-    const animate = () => {
+    const animate = (now?: number) => {
       frameIdRef2.current = requestAnimationFrame(animate);
       const controls = controlsRef.current;
       if (controls) {
         const moved = controls.update();
         if (moved) dirtyRef.current = true;
       }
+      // Machine simulation advances on the same rAF cadence (dt from the
+      // rAF timestamp) and marks the frame dirty only when it actually moved.
+      if (now !== undefined) camSimTickRef.current?.(now);
       if (dirtyRef.current) {
         renderScene();
         dirtyRef.current = false;
@@ -529,6 +557,7 @@ export function ViewportCanvas() {
     const constructionPtMat = sketchConstructionPtMatRef.current;
     const camRapidMat = camRapidMatRef.current;
     const camCutMat = camCutMatRef.current;
+    const camCutDimMat = camCutDimMatRef.current;
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -734,6 +763,14 @@ export function ViewportCanvas() {
     scene.add(camGroup);
     camGroupRef.current = camGroup;
 
+    // The simulated cutter lives beside the overlay group (its children are
+    // not lines and would leak through the overlay's geometry-only teardown).
+    const camSimGroup = new THREE.Group();
+    camSimGroup.name = 'cam-sim-group';
+    camSimGroup.visible = false;
+    scene.add(camSimGroup);
+    camSimGroupRef.current = camSimGroup;
+
     animate();
 
     // Last applied resize values — ResizeObserver fires per frame during
@@ -798,6 +835,18 @@ export function ViewportCanvas() {
       }
       camRapidMat.dispose();
       camCutMat.dispose();
+      // Simulation: tool-mesh geometries/material + the dim cut material.
+      camCutDimMat.dispose();
+      const simGroup = camSimGroupRef.current;
+      if (simGroup) {
+        for (const child of [...simGroup.children]) {
+          simGroup.remove(child);
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        }
+      }
       // Gnomon label sprites (canvas textures) — same teardown as the sketch
       // dimension sprites (disposeSprite).
       for (const s of axisLabelSprites) disposeSprite(s);
@@ -1441,6 +1490,11 @@ export function ViewportCanvas() {
       if (child instanceof THREE.Line) child.geometry.dispose();
     }
 
+    // The cache the sim was walking is gone/rekeyed — drop the sim state (a
+    // new play event rebuilds it against the fresh cache) and hide the tool.
+    camSimRef.current = null;
+    if (camSimGroupRef.current) camSimGroupRef.current.visible = false;
+
     camGroup.visible = camWorkspace;
     if (!camWorkspace) {
       dirtyRef.current = true;
@@ -1451,16 +1505,22 @@ export function ViewportCanvas() {
       const cache = camToolpaths[op.id];
       if (!cache) continue;
       const plungeRate = cache.toolpath.params.plungeRate;
-      const addRun = (pts: THREE.Vector3[]) => {
+      // simMarks records, per cut-run vertex, the toolpath point index it
+      // came from — the sim maps walked distance → per-line progress.
+      const addRun = (pts: THREE.Vector3[], marks: number[], opId: string) => {
         if (pts.length < 2) return;
         const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cutMat);
         line.name = 'cam-cut';
+        line.userData.simMarks = marks;
+        line.userData.opId = opId;
         camGroup.add(line);
       };
       let run: THREE.Vector3[] = [];
+      let runMarks: number[] = [];
       let prev: THREE.Vector3 | null = null;
-      const flush = () => { addRun(run); run = []; };
-      for (const p of cache.toolpath.points) {
+      const flush = () => { addRun(run, runMarks, op.id); run = []; runMarks = []; };
+      for (let i = 0; i < cache.toolpath.points.length; i++) {
+        const p = cache.toolpath.points[i]!;
         const v = new THREE.Vector3(p.x, p.y, p.z);
         // A move's kind comes from the point being moved TO: rapids are
         // flagged; plunges are cuts carrying the plunge feed rate.
@@ -1473,8 +1533,12 @@ export function ViewportCanvas() {
             camGroup.add(seg);
           }
         } else {
-          if (run.length === 0 && prev) run.push(prev); // connect to the last point
+          if (run.length === 0 && prev) {
+            run.push(prev); // connect to the last point
+            runMarks.push(i - 1);
+          }
           run.push(v);
+          runMarks.push(i);
         }
         prev = v;
       }
@@ -1482,6 +1546,215 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [camWorkspace, camSetup, camToolpaths]);
+
+  // CAM machine simulation (the arm-hole event pattern, inverted: the PANEL
+  // dispatches 'scenelab:cam-sim' {action:'play'|'pause'|'reset'|'seek',
+  // opId?, t?} and this side owns every ref). The cutter walks the op's
+  // ordered toolpath points at feed-derived speeds (rapids at 5× the cut
+  // feed), on the render loop's rAF; walked cut polylines stay bright while
+  // the remainder dims.
+  useEffect(() => {
+    const RAPID_FACTOR = 5; // rapid speed = 5 × the cut feed
+
+    /** Simple cutter proxy: cone tip (apex at the group origin) + shank,
+     * sized from the tool diameter. THREE primitives only, no assets. */
+    const buildToolMesh = (diameter: number): THREE.Group => {
+      const g = new THREE.Group();
+      g.name = 'cam-sim-tool';
+      const r = Math.max(diameter / 2, 0.2);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x94e2d5, metalness: 0.6, roughness: 0.35 });
+      const tipH = Math.max(diameter * 0.6, 0.5);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(r, tipH, 20), mat);
+      tip.rotation.x = Math.PI; // apex pointing down, at group origin
+      tip.position.y = tipH / 2;
+      const shankH = Math.max(4 * diameter, 8);
+      const shank = new THREE.Mesh(new THREE.CylinderGeometry(r, r, shankH, 20), mat);
+      shank.position.y = tipH + shankH / 2;
+      g.add(tip, shank);
+      return g;
+    };
+
+    const disposeToolMesh = (g: THREE.Object3D | null | undefined): void => {
+      if (!g) return;
+      for (const child of [...g.children]) {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+        g.remove(child);
+      }
+    };
+
+    /** Dim everything not yet walked: per cut line of the sim op, the
+     * vertices whose cumulative distance ≤ D are "done" (bright + drawRange
+     * truncation), the rest dim. */
+    const updateHighlight = (opId: string, cum: number[], walked: number): void => {
+      const group = camGroupRef.current;
+      const bright = camCutMatRef.current;
+      const dim = camCutDimMatRef.current;
+      if (!group) return;
+      for (const child of group.children) {
+        if (!(child instanceof THREE.Line) || child.name !== 'cam-cut') continue;
+        if (child.userData.opId !== opId) continue;
+        const marks = child.userData.simMarks as number[] | undefined;
+        if (!marks) continue;
+        let done = 0;
+        while (done < marks.length && cum[marks[done]!]! <= walked) done++;
+        child.material = done > 0 ? bright : dim;
+        child.geometry.setDrawRange(0, done > 0 ? done : Infinity);
+      }
+    };
+
+    /** Place the cutter at absolute distance D along the path. */
+    const setSimPosition = (
+      sim: NonNullable<typeof camSimRef.current>,
+      walked: number,
+    ): void => {
+      const d = Math.max(0, Math.min(walked, sim.total));
+      // Binary search the move containing d (cum[i-1] ≤ d ≤ cum[i]).
+      let lo = 1;
+      let hi = sim.points.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (sim.cum[mid]! < d) lo = mid + 1;
+        else hi = mid;
+      }
+      const segLen = sim.cum[lo]! - sim.cum[lo - 1]!;
+      const t = segLen > 1e-12 ? (d - sim.cum[lo - 1]!) / segLen : 0;
+      const a = sim.points[lo - 1]!;
+      const b = sim.points[lo]!;
+      const tool = camSimGroupRef.current?.children[0];
+      if (tool) tool.position.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+      sim.seg = lo;
+      sim.dist = d - sim.cum[lo - 1]!;
+      updateHighlight(sim.opId, sim.cum, d);
+      dirtyRef.current = true;
+    };
+
+    /** (Re)load the sim for an op: fresh tool mesh, cumulative distances and
+     * per-move speeds (mm/s; rapids at 5× the cut feed, plunges at their
+     * plunge feed). */
+    const ensureSim = (
+      opId: string,
+      points: ToolpathPoint[],
+      feedRate: number,
+      diameter: number,
+    ) => {
+      const sim = camSimRef.current;
+      const group = camSimGroupRef.current;
+      if (!group) return null;
+      if (sim && sim.opId === opId && sim.diameter === diameter) return sim;
+      disposeToolMesh(group.children[0]);
+      group.add(buildToolMesh(diameter));
+      group.visible = true;
+      const cum = [0];
+      const feeds = [0];
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1]!;
+        const b = points[i]!;
+        cum.push(cum[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z));
+        const mmMin = b.rapid ? RAPID_FACTOR * feedRate : (b.feedRate ?? feedRate);
+        feeds.push(Math.max(mmMin, 1) / 60);
+      }
+      const next = {
+        opId, points, cum, feeds,
+        total: cum[cum.length - 1]!,
+        seg: 1, dist: 0, playing: false, diameter, lastT: null as number | null,
+      };
+      camSimRef.current = next;
+      setSimPosition(next, 0);
+      return next;
+    };
+
+    const onCamSim = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        action: 'play' | 'pause' | 'reset' | 'seek';
+        opId?: string;
+        t?: number;
+      };
+      const s = useStore.getState();
+      const op = d.opId !== undefined
+        ? s.camSetup.operations.find((o) => o.id === d.opId)
+        : s.camSetup.operations.find((o) => o.enabled && s.camToolpaths[o.id]);
+      if (!op) return;
+      const cache = s.camToolpaths[op.id];
+      if (!cache || cache.toolpath.points.length < 2) return;
+      const { params, tool } = cache.toolpath;
+      const sim = ensureSim(op.id, cache.toolpath.points, params.feedRate, tool.diameter);
+      if (!sim) return;
+      switch (d.action) {
+        case 'play':
+          if (sim.seg >= sim.points.length) setSimPosition(sim, 0); // finished → restart
+          sim.playing = true;
+          sim.lastT = null; // re-arm dt on the next tick
+          break;
+        case 'pause':
+          sim.playing = false;
+          break;
+        case 'reset':
+          sim.playing = false;
+          sim.lastT = null;
+          setSimPosition(sim, 0);
+          break;
+        case 'seek': {
+          const t = typeof d.t === 'number' ? Math.max(0, Math.min(1, d.t)) : 0;
+          setSimPosition(sim, t * sim.total);
+          break;
+        }
+      }
+    };
+    window.addEventListener('scenelab:cam-sim', onCamSim);
+
+    const tick = (now: number): void => {
+      const sim = camSimRef.current;
+      if (!sim) return;
+      if (sim.lastT === null) {
+        sim.lastT = now;
+        return;
+      }
+      if (!sim.playing) {
+        sim.lastT = now; // no time debt accumulates while paused
+        return;
+      }
+      const dt = Math.min((now - sim.lastT) / 1000, 0.1); // tab-switch clamp
+      sim.lastT = now;
+      // Carry TIME across segment boundaries — each move runs at its own
+      // speed (rapid 5×, plunge slower), so leftover distance from a fast
+      // move must not leak into a slow one at the wrong rate.
+      let timeLeft = dt;
+      while (sim.seg < sim.points.length && timeLeft > 1e-9) {
+        const speed = sim.feeds[sim.seg]!;
+        const remain = sim.cum[sim.seg]! - sim.cum[sim.seg - 1]! - sim.dist;
+        const need = remain / speed;
+        if (timeLeft < need) {
+          sim.dist += timeLeft * speed;
+          timeLeft = 0;
+        } else {
+          timeLeft -= need;
+          sim.seg += 1;
+          sim.dist = 0;
+        }
+      }
+      if (sim.seg >= sim.points.length) {
+        sim.playing = false; // program end — parked on the last point, all bright
+        setSimPosition(sim, sim.total);
+        return;
+      }
+      setSimPosition(sim, sim.cum[sim.seg - 1]! + sim.dist);
+    };
+    camSimTickRef.current = tick;
+
+    return () => {
+      window.removeEventListener('scenelab:cam-sim', onCamSim);
+      camSimTickRef.current = null;
+      camSimRef.current = null;
+      const group = camSimGroupRef.current;
+      if (group) {
+        disposeToolMesh(group.children[0]);
+        group.visible = false;
+      }
+    };
+  }, []);
 
   // Incremental body + edge rendering: diff against the cache so only
   // changed/new/removed bodies rebuild geometry. This avoids a full teardown

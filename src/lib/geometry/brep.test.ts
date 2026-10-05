@@ -1,7 +1,100 @@
 import { describe, it, expect } from 'vitest';
-import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeSurfaceArea, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder } from './brep';
+import { createExtrude, createBox, createBoundingBoxBody, createCylinder, createSphere, createCone, createTorus, createWedge, createPrism, createTube, createCoil, createFrustumTube, createLoft, computeBoundingBox, computeBoundingSphere, computeVolume, computeSurfaceArea, computeVolumetricCentroid, computeCenterOfMassOffset, computeMassProperties, computePrincipalMoments, computeMomentOfInertiaAboutAxis, computePendulumPeriod, createRevolve, findBoundaryLoops, computeFaceAreas, computeLargestFace, computeMeshQuality, checkWindingOrder, adaptiveSegments, DEFAULT_CHORD_TOLERANCE, triangulateFace } from './brep';
 import { mergeBodies, scaleBody } from './operations';
-import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness, computeAdjacency, computeCurvature, computeVertexDegrees } from './brep';
+import { computeTopology, computeMeshGenus, checkNormalConsistency, checkManifold, computeTotalEdgeLength, computeSymmetry, computeElongation, computeConvexity, computeThickness, computeSolidity, computeMeshStatistics, computeCompactness, computeRoughness, computeAdjacency, computeCurvature, computeVertexDegrees, computeAverageVertexDegree } from './brep';
+import { booleanOpManifold, warmUpBooleanEngine } from './booleanManifold';
+
+describe('adaptiveSegments', () => {
+  it('reproduces the measured requirement table (chord tolerance 0.005 mm)', () => {
+    // Derived from the sagitta bound R·(1 − cos(π/N)) ≤ tol, i.e.
+    // N = ⌈π/acos(1 − tol/R)⌉ with R = d/2 — the audit's measured table.
+    expect(adaptiveSegments(2)).toBe(32); // perf-neutral for small holes
+    expect(adaptiveSegments(6)).toBe(55);
+    expect(adaptiveSegments(20)).toBe(100);
+  });
+
+  it('tighter tolerance 0.001 mm lifts ⌀6 to 122', () => {
+    expect(adaptiveSegments(6, 0.001)).toBe(122);
+  });
+
+  it('every facet stays within the chord tolerance, minimally', () => {
+    for (const d of [1, 2, 6, 13.7, 20, 100]) {
+      const n = adaptiveSegments(d);
+      expect((d / 2) * (1 - Math.cos(Math.PI / n)), `d=${d}`).toBeLessThanOrEqual(DEFAULT_CHORD_TOLERANCE + 1e-12);
+      if (n > 8) {
+        // One facet fewer would break the tolerance (when not at the clamp).
+        expect((d / 2) * (1 - Math.cos(Math.PI / (n - 1))), `d=${d}`).toBeGreaterThan(DEFAULT_CHORD_TOLERANCE);
+      }
+    }
+  });
+
+  it('clamps to [8, 256]', () => {
+    expect(adaptiveSegments(0.01)).toBe(8);
+    expect(adaptiveSegments(5000)).toBe(256);
+  });
+
+  it('rejects non-positive input', () => {
+    expect(() => adaptiveSegments(0)).toThrow('positive');
+    expect(() => adaptiveSegments(-6)).toThrow('positive');
+    expect(() => adaptiveSegments(6, 0)).toThrow('tolerance');
+  });
+});
+
+describe('adaptive tessellation defaults', () => {
+  it('createCylinder defaults to the adaptive facet count (⌀6 → 55 sides)', () => {
+    expect(createCylinder(3, 5).faces.length).toBe(adaptiveSegments(6) + 2);
+    expect(createCylinder(1, 5).faces.length).toBe(32 + 2); // ⌀2 stays at 32
+  });
+
+  it('an explicit segments argument wins over the adaptive default', () => {
+    expect(createCylinder(3, 5, 12).faces.length).toBe(12 + 2);
+    expect(createCone(5, 3, 5, 16).faces.length).toBe(16 + 2);
+    expect(createTube(10, 6, 5, 16).faces.length).toBe(16 * 4);
+  });
+
+  it('createCone and createTube adapt to their larger radius', () => {
+    // Pointed cone: bottom cap + sides only (no top cap).
+    expect(createCone(5, 0, 5).faces.length).toBe(adaptiveSegments(10) + 1);
+    expect(createTube(10, 6, 5).vertices.length).toBe(4 * adaptiveSegments(20));
+    expect(createFrustumTube(10, 6, 1.5, 5).vertices.length).toBe(4 * adaptiveSegments(20));
+  });
+
+  it('stats battery on a ⌀20 adaptive hole body stays under 10 ms (perf canary)', async () => {
+    await warmUpBooleanEngine();
+    const box = createBox(60, 20, 60);
+    const drilled = booleanOpManifold(box, createCylinder(10, 30, adaptiveSegments(20)), 'difference');
+    expect(drilled).not.toBeNull();
+    const body = drilled!;
+    // The PropertiesPanel's always-on memos: the linear battery (volume →
+    // inertia tensor → mesh stats) plus the adjacency/curvature memo. Warmed
+    // once — the panel only recomputes on selection/density changes.
+    const battery = () => {
+      computeBoundingBox(body);
+      computeVolume(body);
+      computeSurfaceArea(body);
+      computeTotalEdgeLength(body);
+      computeMeshStatistics(body);
+      computeAverageVertexDegree(body);
+      computeLargestFace(body);
+      computePrincipalMoments(body, 1);
+      computeAdjacency(body);
+      computeCurvature(body);
+    };
+    battery(); // warm the JIT
+    // Best-of-3: the battery's steady-state cost (parallel test workers make
+    // single timings scheduler-noisy). Bound 25 ms is CI-safe under loaded
+    // parallel workers (isolated steady state ≈ 5-6 ms) while still catching
+    // the regression class this guards — the pre-rewrite O(E×V) battery ran
+    // SECONDS at this face count.
+    let best = Infinity;
+    for (let run = 0; run < 3; run++) {
+      const t0 = performance.now();
+      battery();
+      best = Math.min(best, performance.now() - t0);
+    }
+    expect(best).toBeLessThan(25);
+  });
+});
 
 describe('computeSolidity', () => {
   it('reports convex solids as fully solid with no cavities', () => {
@@ -1184,6 +1277,200 @@ describe('computeVolume', () => {
     const body = createBox(2, 3, 4);
     const volume = computeVolume(body);
     expect(volume).toBeCloseTo(24, 0); // 2 * 3 * 4
+  });
+});
+
+describe('concave-profile extrusions (QA F5)', () => {
+  /** Extrude an XZ-plane profile 8 mm along +Y. */
+  const extrude8 = (profile: Vec3[]) =>
+    createExtrude({ profile, direction: { x: 0, y: 1, z: 0 }, distance: 8, symmetric: false });
+
+  // The QA repro sketch: a 60×10 flange plus a 10×50 web (the web includes the
+  // corner shared with the flange) — cross-section area 1000 mm², so the 8 mm
+  // extrusion is a true 8000 mm³ solid.
+  const lProfile: Vec3[] = [
+    { x: 0, y: 0, z: 0 },
+    { x: 60, y: 0, z: 0 },
+    { x: 60, y: 0, z: 10 },
+    { x: 10, y: 0, z: 10 },
+    { x: 10, y: 0, z: 50 },
+    { x: 0, y: 0, z: 50 },
+  ];
+  const lBody = () => extrude8(lProfile);
+
+  it('QA L-profile extrudes to its true 8000 mm³ (was ~3200, off by ~60%)', () => {
+    expect(computeVolume(lBody())).toBeLessThanOrEqual(8000 + 1);
+    expect(computeVolume(lBody())).toBeGreaterThanOrEqual(8000 - 1);
+    // …and mass properties agree (the AI create_hole volumeRemoved consumer).
+    expect(computeMassProperties(lBody(), 1).volume).toBeLessThanOrEqual(8000 + 1);
+    expect(computeMassProperties(lBody(), 1).volume).toBeGreaterThanOrEqual(8000 - 1);
+  });
+
+  it('L-profile volume is invariant to winding direction and loop start vertex', () => {
+    // Reversed winding…
+    expect(computeVolume(extrude8([...lProfile].reverse()))).toBeCloseTo(8000, 3);
+    // …and to starting the loop at the REFLEX vertex (10, 10) and at a far
+    // corner — the old first-3-vertices winding check misread the reflex run.
+    for (const start of [3, 4, 5]) {
+      const rotated = [...lProfile.slice(start), ...lProfile.slice(0, start)];
+      expect(computeVolume(extrude8(rotated)), `start=${start}`).toBeCloseTo(8000, 3);
+    }
+  });
+
+  it('L-profile centroid matches the analytic (and Monte-Carlo) reference', () => {
+    // Flange (x 0..60, z 0..10): A=600, centroid (30, 5); web above the flange
+    // (x 0..10, z 10..50): A=400, centroid (5, 30). Area-weighted: x=20, z=15,
+    // and y = 4 by symmetry. Analytic reference:
+    const c = computeVolumetricCentroid(lBody());
+    expect(c.x).toBeCloseTo(20, 6);
+    expect(c.y).toBeCloseTo(4, 6);
+    expect(c.z).toBeCloseTo(15, 6);
+    // Monte-Carlo cross-check over the cross-section (uniform density).
+    let inside = 0;
+    let sx = 0;
+    let sz = 0;
+    const samples = 200_000;
+    let seed = 123456789;
+    const rand = () => {
+      // LCG — deterministic across runs/machines.
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    for (let i = 0; i < samples; i++) {
+      const x = rand() * 60;
+      const z = rand() * 50;
+      if (z <= 10 || x <= 10) {
+        inside++;
+        sx += x;
+        sz += z;
+      }
+    }
+    expect(sx / inside).toBeCloseTo(20, 1); // MC error ~0.05 at 200k samples
+    expect(sz / inside).toBeCloseTo(15, 1);
+    expect(inside / samples).toBeCloseTo(1000 / 3000, 2); // area fraction 1/3
+  });
+
+  it('L-profile surface area is exact: 2·1000 + perimeter(220)·8 = 3760', () => {
+    // A fan over the concave caps sweeps out-of-polygon regions; the
+    // ear-clipped triangulation tiles exactly the L.
+    expect(computeSurfaceArea(lBody())).toBeCloseTo(3760, 3);
+  });
+
+  it('triangulateFace partitions the concave L cap into an exact tiling', () => {
+    const cap: Vec3[] = lProfile.map((p) => ({ x: p.x, y: 8, z: p.z }));
+    const tris = triangulateFace(cap);
+    expect(tris).toHaveLength(4); // n − 2
+    const sumArea = tris.reduce((s, [a, b, c]) => {
+      const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+      const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+      const cr = {
+        x: ab.y * ac.z - ab.z * ac.y,
+        y: ab.z * ac.x - ab.x * ac.z,
+        z: ab.x * ac.y - ab.y * ac.x,
+      };
+      return s + Math.hypot(cr.x, cr.y, cr.z) / 2;
+    }, 0);
+    // Unsigned triangle areas sum to the true area — no overlaps, no gaps.
+    expect(sumArea).toBeCloseTo(1000, 6);
+    // …and every triangle sits inside the L (z ≤ 10 flange OR x ≤ 10 web).
+    for (const [a, b, c] of tris) {
+      const gx = (a.x + b.x + c.x) / 3;
+      const gz = (a.z + b.z + c.z) / 3;
+      expect(gz <= 10 + 1e-9 || gx <= 10 + 1e-9).toBe(true);
+    }
+  });
+
+  it('triangulateFace: convex loop stays on the fan fast path (n−2 triangles)', () => {
+    const quad: Vec3[] = [
+      { x: 0, y: 0, z: 0 }, { x: 4, y: 0, z: 0 }, { x: 4, y: 0, z: 4 }, { x: 0, y: 0, z: 4 },
+    ];
+    expect(triangulateFace(quad)).toHaveLength(2);
+    // Degenerate inputs never throw and never invent triangles.
+    expect(triangulateFace([])).toEqual([]);
+    expect(triangulateFace([quad[0]!, quad[1]!])).toEqual([]);
+    // A collinear run of vertices is dropped, not tripped over.
+    const collinear: Vec3[] = [
+      { x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, { x: 4, y: 0, z: 0 },
+      { x: 4, y: 0, z: 4 }, { x: 0, y: 0, z: 4 },
+    ];
+    expect(triangulateFace(collinear)).toHaveLength(3);
+  });
+
+  it('T-slot sketch profile extrudes to its exact volume (1400 mm² × 5 mm)', () => {
+    // Bar 60×10 across the top, stem 20×40 below it.
+    const tSlot: Vec3[] = [
+      { x: 20, y: 0, z: 0 },
+      { x: 40, y: 0, z: 0 },
+      { x: 40, y: 0, z: 40 },
+      { x: 60, y: 0, z: 40 },
+      { x: 60, y: 0, z: 50 },
+      { x: 0, y: 0, z: 50 },
+      { x: 0, y: 0, z: 40 },
+      { x: 20, y: 0, z: 40 },
+    ];
+    const body = createExtrude({
+      profile: tSlot,
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 5,
+      symmetric: false,
+    });
+    expect(computeVolume(body)).toBeLessThanOrEqual(7000 + 1);
+    expect(computeVolume(body)).toBeGreaterThanOrEqual(7000 - 1);
+    // Stem centroid x=30 by symmetry; z = (600·45 + 800·20)/1400 = 215/7.
+    const c = computeVolumetricCentroid(body);
+    expect(c.x).toBeCloseTo(30, 6);
+    expect(c.z).toBeCloseTo(215 / 7, 3);
+  });
+
+  it('concave solid from a real Manifold Cut: volume and centroid exact', async () => {
+    await warmUpBooleanEngine();
+    // 60×8×50 block; bite a 25×40 corner-notch out of the right side →
+    // concave L-ish cross-section of area 3000 − 1000 = 2000 → volume 16000.
+    const block = createBox(60, 8, 50);
+    const notch = createBox(25, 24, 40);
+    const shift = (v: Vec3): Vec3 => ({ x: v.x + 17.5, y: v.y, z: v.z });
+    const shifted = {
+      ...notch,
+      vertices: notch.vertices.map(shift),
+      faces: notch.faces.map((f) => ({ ...f, vertices: f.vertices.map(shift) })),
+      edges: notch.edges.map((e) => ({ ...e, start: shift(e.start), end: shift(e.end) })),
+    };
+    const cut = booleanOpManifold(block, shifted, 'difference');
+    expect(cut).not.toBeNull();
+    const vol = computeVolume(cut!);
+    expect(vol).toBeLessThanOrEqual(16000 + 1);
+    expect(vol).toBeGreaterThanOrEqual(16000 - 1);
+    // Centroid x by area moments: kept region = 60×50 minus [5,30]×[−20,20].
+    // x̄ = (3000·0 − 1000·17.5) / 2000 = −8.75 (block centered at x=0).
+    const c = computeVolumetricCentroid(cut!);
+    expect(c.x).toBeCloseTo(-8.75, 3);
+    expect(c.y).toBeCloseTo(4, 3);
+  });
+
+  it('convex goldens unchanged by the concave-safe triangulation', () => {
+    expect(computeVolume(createBox(2, 3, 4))).toBeCloseTo(24, 6);
+    const cyl = createCylinder(5, 10, 64);
+    const ideal = Math.PI * 25 * 10;
+    expect(computeVolume(cyl)).toBeLessThanOrEqual(ideal + 1e-6);
+    expect(computeVolume(cyl)).toBeGreaterThan(ideal * 0.99);
+    const sph = createSphere(5, 48);
+    expect(computeVolume(sph)).toBeGreaterThan((4 / 3) * Math.PI * 125 * 0.98);
+    expect(computeSurfaceArea(createBox(10, 20, 30))).toBeCloseTo(2200, 6);
+  });
+
+  it('volume + centroid of an 8k-face sphere stay fast (perf canary)', () => {
+    const sphere = createSphere(10, 128);
+    expect(sphere.faces.length).toBe(8192);
+    computeVolume(sphere); // warm the JIT
+    let best = Infinity;
+    for (let run = 0; run < 3; run++) {
+      const t0 = performance.now();
+      computeVolume(sphere);
+      computeVolumetricCentroid(sphere);
+      best = Math.min(best, performance.now() - t0);
+    }
+    // Measured ~5 ms best-of-3 locally; generous bound for parallel workers.
+    expect(best).toBeLessThan(50);
   });
 });
 

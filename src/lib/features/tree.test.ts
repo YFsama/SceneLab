@@ -17,7 +17,7 @@ import {
   drillHoleInBody,
 } from './tree';
 import { createSketch, addRectangle, addCircle, addLine } from '../sketch/engine';
-import { computeVolume, computeBoundingBox } from '../geometry/brep';
+import { computeVolume, computeBoundingBox, adaptiveSegments } from '../geometry/brep';
 import { warmUpBooleanEngine, isManifoldEngineReady } from '../geometry/boolean';
 import { __resetManifoldEngineForTests } from '../geometry/booleanManifold';
 import type { SweepFeature, LoftFeature, HoleFeature, ExtrudeFeature } from './types';
@@ -155,6 +155,96 @@ describe('FeatureTree', () => {
     // The extrude body is consumed by the fillet — only one body remains.
     expect(bodies.length).toBe(1);
     expect(tree.getResult(fillet.id)?.bodies.length).toBe(1);
+  });
+
+  it('findFeatureIdForBody returns the LATEST producer after a fillet (F4)', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const bodyId = tree.getResult(ext.id)!.bodies[0]!.id;
+    expect(tree.findFeatureIdForBody(bodyId)).toBe(ext.id); // sole producer
+
+    const edges = tree.getResult(ext.id)!.bodies[0]!.edges.slice(0, 4).map((e) => e.id);
+    const fillet = createFilletFeature(edges, 0.5, [ext.id]);
+    tree.addFeature(fillet);
+    tree.recompute();
+
+    // The fillet's result KEEPS the parent's body id (applyFillet returns
+    // `{ id: body.id, … }`), so the same id now appears in BOTH results — but
+    // the extrude is consumed. The lookup must agree with getLatestBodies
+    // (which shows only the fillet's body): the fillet is the producer.
+    expect(tree.findFeatureIdForBody(bodyId)).toBe(fillet.id);
+  });
+
+  it('hole-after-fillet parents on the fillet and does not duplicate the body (F4)', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const edges = tree.getResult(ext.id)!.bodies[0]!.edges.slice(0, 4).map((e) => e.id);
+    const fillet = createFilletFeature(edges, 0.5, [ext.id]);
+    tree.addFeature(fillet);
+    tree.recompute();
+    expect(tree.getLatestBodies()).toHaveLength(1);
+
+    // The store's applyHoleToBody resolves the parent exactly this way.
+    const bodyId = tree.getLatestBodies()[0]!.id;
+    const parentId = tree.findFeatureIdForBody(bodyId);
+    expect(parentId).toBe(fillet.id);
+
+    tree.addFeature(createHoleFeature(
+      { center: { x: 0, y: 10, z: 0 }, direction: { x: 0, y: -1, z: 0 }, diameter: 4, depth: null },
+      [parentId!],
+    ));
+    tree.recompute();
+
+    // Both modifiers consumed their parent — still exactly ONE body out. (The
+    // first-producer bug parented the hole on the consumed extrude, leaving
+    // the fillet's body unconsumed: 1 → 2 duplicated objects.)
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    const removed = 1000 - Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    const idealHole = Math.PI * 2 * 2 * 10;
+    expect(removed).toBeGreaterThan(idealHole * 0.9);
+    expect(removed).toBeLessThan(idealHole * 1.1);
+  });
+
+  it('extrude Cut after a fillet targets the fillet result (F4)', () => {
+    const tree = new FeatureTree();
+    const ext = boxExtrude();
+    tree.addFeature(ext);
+    tree.recompute();
+    const edges = tree.getResult(ext.id)!.bodies[0]!.edges.slice(0, 4).map((e) => e.id);
+    const fillet = createFilletFeature(edges, 0.5, [ext.id]);
+    tree.addFeature(fillet);
+    tree.recompute();
+
+    // performExtrude resolves its cut target exactly this way: the feature id
+    // of the selected body becomes the cut's second parent.
+    const parentId = tree.findFeatureIdForBody(tree.getLatestBodies()[0]!.id);
+    expect(parentId).toBe(fillet.id);
+
+    const cut = createExtrudeFeature(
+      {
+        profile: [
+          { x: -1, y: 0, z: -1 }, { x: 1, y: 0, z: -1 },
+          { x: 1, y: 0, z: 1 }, { x: -1, y: 0, z: 1 },
+        ],
+        direction: { x: 0, y: 1, z: 0 },
+        distance: 20, // spans the whole 10 mm box — a through cut
+        op: 'cut',
+      },
+      [parentId!],
+    );
+    tree.addFeature(cut);
+    tree.recompute();
+
+    // The cut consumed the FILLET (not the already-consumed extrude): one
+    // body out, no error, and the 2×2 through-slot actually removed material.
+    expect(tree.getResult(cut.id)?.error).toBeUndefined();
+    expect(tree.getLatestBodies()).toHaveLength(1);
+    const volume = Math.abs(computeVolume(tree.getLatestBodies()[0]!));
+    expect(volume).toBeLessThan(1000 - 0.9 * (2 * 2 * 10));
   });
 
   it('chamfer and shell evaluate without error', () => {
@@ -728,18 +818,29 @@ describe('hole counterbore/countersink evaluator', () => {
 
   const entry = { center: { x: 0, y: 20, z: 0 }, direction: { x: 0, y: -1, z: 0 } };
 
-  it('counterbore: removed volume ≈ through cylinder + counterbore ring (±10%)', () => {
+  it('counterbore: removed volume ≈ the exact adaptive-polygon union (±10%)', () => {
     const removed = removedVolume({
       ...entry,
       diameter: 6,
       depth: null, // through-all
       counterbore: { diameter: 10, depth: 3 },
     });
-    // The exact union of both cutters: the ⌀6 cylinder through the full 20mm
-    // plus the ⌀10×3 counterbore MINUS the ⌀6 part it already removed.
-    const ideal = Math.PI * 3 * 3 * 20 + (Math.PI * 5 * 5 * 3 - Math.PI * 3 * 3 * 3);
+    // History: this used to pass at ±10% around the smooth-ideal volume
+    // (π·r²h + counterbore ring) because the fixed 32-gon cutters removed
+    // only 0.9936 = (32/2·sin(2π/32))/π of it — the measured 32-gon area
+    // factor. Since the cutters went adaptive (⌀6 → 55-gon, ⌀10 → 71-gon),
+    // the expectation is the exact polygon union: the through 55-gon prism
+    // plus the 71-gon counterbore band over its 3 mm. The warm Manifold
+    // engine is exact, so the removed volume matches it tightly.
+    const ngonArea = (n: number, r: number) => (n / 2) * r * r * Math.sin((2 * Math.PI) / n);
+    const a6 = ngonArea(adaptiveSegments(6), 3);
+    const a10 = ngonArea(adaptiveSegments(10), 5);
+    const ideal = a6 * 20 + (a10 - a6) * 3;
     expect(removed).toBeGreaterThan(ideal * 0.9);
     expect(removed).toBeLessThan(ideal * 1.1);
+    // …and tightly on the polygon union itself (the old ±10% slack was for
+    // the voxel fallback engine).
+    expect(removed).toBeCloseTo(ideal, 1);
   });
 
   it('countersink: removed volume ≈ through cylinder + frustum − overlap (±10%)', () => {

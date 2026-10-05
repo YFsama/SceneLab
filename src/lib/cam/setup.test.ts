@@ -93,10 +93,15 @@ describe('generateOperationToolpath', () => {
     expect(tp.cuttingMoves[0]!.y).toBeCloseTo(0, 6); // stockTop 20 − depth 20
   });
 
-  it('falls back to one hole at the body centre when nothing is detected', () => {
-    const tp = generateOperationToolpath(op({ type: 'drill' }), createBox(30, 20, 20), tool);
-    expect(tp.cuttingMoves).toHaveLength(1);
-    expect(tp.cuttingMoves[0]!.x).toBeCloseTo(0, 6); // box spans x/z −15..15
-    expect(tp.cuttingMoves[0]!.z).toBeCloseTo(0, 6);
+  it('THROWS on an undrilled body instead of guessing a centre hole (pass-29 review #8)', () => {
+    // A plain box has no circular holes: the old fallback drilled one
+    // unrequested full-depth hole through the middle of the part. The
+    // generator must refuse — resolveCamToolpath's try/catch then drops the
+    // op from the cache and the panel's stale flag surfaces it.
+    expect(() => generateOperationToolpath(op({ type: 'drill' }), createBox(30, 20, 20), tool))
+      .toThrowError(/no circular holes/);
+    // …and the message names both remedies.
+    expect(() => generateOperationToolpath(op({ type: 'drill' }), createBox(30, 20, 20), tool))
+      .toThrowError(/pin holes explicitly|check the body/);
   });
 });

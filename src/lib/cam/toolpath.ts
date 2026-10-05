@@ -5,6 +5,7 @@ import {
   offsetPolygon,
   scanlineIntervals,
   subtractIntervals,
+  pointInPolygon,
   type Point2,
 } from './silhouette';
 
@@ -55,9 +56,20 @@ class MoveList {
   }
 }
 
+/**
+ * Traverse clearance above the stock top (mm) — CAMSetup.safeZAboveStock as
+ * carried by the operation params. Defaults to the setup default (5); a
+ * non-finite or non-positive value falls back too (a 0 clearance traverse
+ * would scrape the estimated surface).
+ */
+export function safeMargin(params: CAMParameters): number {
+  const z = params.safeZAboveStock;
+  return typeof z === 'number' && Number.isFinite(z) && z > 0 ? z : 5;
+}
+
 /** Safe traverse height above the stock. */
 function safeY(params: CAMParameters): number {
-  return params.stockTop + 5;
+  return params.stockTop + safeMargin(params);
 }
 
 /** Cut levels from stockTop down to stockBottom, one depthOfCut at a time. */
@@ -96,6 +108,14 @@ export interface PocketOptions {
   body?: SolidBody;
   /** Finish stock left on walls (mm); defaults to params.allowance. */
   allowance?: number;
+  /**
+   * Link consecutive raster rows with a cut move at cut depth instead of
+   * retract→rapid→plunge (default true). Both row endpoints sit inside the
+   * inset region, so the swept disc clears the walls; the link is skipped
+   * (full retract detour) when the straight chord leaves the region — e.g.
+   * crossing an island or a strong concavity.
+   */
+  linkRows?: boolean;
 }
 
 /** Generate a pocket toolpath: zigzag raster cleared level by level. */
@@ -177,6 +197,20 @@ export function generatePocketToolpath(
   // finds no crossings, which would drop the clamped first/last rows.
   const rows = rowPositions(vMin + 1e-6, vMax - 1e-6, sover);
   const levels = depthLevels(params);
+  const linkRows = options.linkRows !== false;
+
+  /** True when the straight chord a→b stays inside the raster region (outer
+   * minus islands). Sampled at the quarter/mid points: a strongly concave
+   * outline can push a chord outside between samples, so this is a
+   * conservative guard — anything doubtful falls back to the retract detour. */
+  const canLink = (a: Point2, b: Point2): boolean => {
+    for (const t of [0.25, 0.5, 0.75]) {
+      const p = { u: a.u + (b.u - a.u) * t, v: a.v + (b.v - a.v) * t };
+      if (!pointInPolygon(p, outer)) return false;
+      for (const island of islands) if (pointInPolygon(p, island)) return false;
+    }
+    return true;
+  };
 
   let forward = true;
   for (let li = 0; li < levels.length; li++) {
@@ -186,6 +220,10 @@ export function generatePocketToolpath(
     // first entry of the program ramps instead of plunging.
     const feedPlane = li === 0 ? params.stockTop + 1 : yPrev + 1;
     let firstEntry = li === 0;
+    // Where the cutter stands between passes at THIS level (the zigzag
+    // alternates direction, so it is each interval's far end). Null before
+    // the first entry and after each level-end retract.
+    let rowEnd: Point2 | null = null;
 
     for (const v of rows) {
       const base = scanlineIntervals(outer, v);
@@ -195,35 +233,48 @@ export function generatePocketToolpath(
       for (const [ua, ub] of intervals) {
         const uA = forward ? ua : ub;
         const uB = forward ? ub : ua;
-        // Position at safe height, drop to the feed plane, enter, cut across,
-        // retract vertically — never a diagonal rapid below safe height.
-        m.rapid({ x: uA, y: safe, z: v });
+        // How far along the row the ENTRY moves already cut (the first-entry
+        // ramp may have covered part of it).
+        let cutTo = uA;
 
-        if (firstEntry) {
-          // Rapid to the FEED PLANE, not the stock surface — a G0 touching
-          // the exact estimated surface crashes when the estimate is a hair
-          // high; the ramp below starts from here.
-          m.rapid({ x: uA, y: feedPlane, z: v });
-          const ramp = rampLength(tool, yPrev - yLevel, Math.abs(uB - uA));
-          if (ramp > 1e-6) {
-            const dir = Math.sign(uB - uA) || 1;
-            const uRamp = uA + dir * ramp;
-            m.cut({ x: uRamp, y: yLevel, z: v });
-            if (Math.abs(uB - uRamp) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
-          } else {
-            m.plunge({ x: uA, y: yLevel, z: v });
-            if (Math.abs(uB - uA) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
-          }
-          firstEntry = false;
+        if (linkRows && rowEnd && canLink(rowEnd, { u: uA, v })) {
+          // Row link: cut straight to the next row's start at the same level.
+          // No retract, no plunge — the saved rapid detour is where the
+          // estimated-time drop comes from.
+          m.cut({ x: uA, y: yLevel, z: v });
         } else {
-          m.rapid({ x: uA, y: feedPlane, z: v });
-          m.plunge({ x: uA, y: yLevel, z: v });
-          if (Math.abs(uB - uA) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
+          // Full entry: retract VERTICALLY from the previous row end (never
+          // a diagonal rapid below safe height), traverse at safe, drop to
+          // the feed plane, then enter.
+          if (rowEnd) m.rapid({ x: rowEnd.u, y: safe, z: rowEnd.v });
+          m.rapid({ x: uA, y: safe, z: v });
+          if (firstEntry) {
+            // Rapid to the FEED PLANE, not the stock surface — a G0 touching
+            // the exact estimated surface crashes when the estimate is a hair
+            // high; the ramp below starts from here.
+            m.rapid({ x: uA, y: feedPlane, z: v });
+            const ramp = rampLength(tool, yPrev - yLevel, Math.abs(uB - uA));
+            if (ramp > 1e-6) {
+              const dir = Math.sign(uB - uA) || 1;
+              const uRamp = uA + dir * ramp;
+              m.cut({ x: uRamp, y: yLevel, z: v });
+              cutTo = uRamp;
+            } else {
+              m.plunge({ x: uA, y: yLevel, z: v });
+            }
+            firstEntry = false;
+          } else {
+            m.rapid({ x: uA, y: feedPlane, z: v });
+            m.plunge({ x: uA, y: yLevel, z: v });
+          }
         }
-        m.rapid({ x: uB, y: safe, z: v });
+        if (Math.abs(uB - cutTo) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
+        rowEnd = { u: uB, v };
         forward = !forward;
       }
     }
+    // Level done — retract from wherever the cutter finished.
+    if (rowEnd) m.rapid({ x: rowEnd.u, y: safe, z: rowEnd.v });
   }
 
   return {
@@ -329,7 +380,9 @@ export function generateDrillToolpath(
 ): Toolpath {
   const m = new MoveList(params);
   const safe = safeY(params);
-  const retract = params.stockTop + 2;
+  // Pre-plunge clearance (the drill R plane): the fixed 2 mm approach, never
+  // higher than the traverse margin so a tight safeZAboveStock is honored.
+  const retract = params.stockTop + Math.min(2, safeMargin(params));
 
   for (const hole of holes) {
     const v = hole.z ?? hole.y ?? 0;

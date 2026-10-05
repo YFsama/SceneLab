@@ -61,7 +61,9 @@ export async function saveProjectToFile(): Promise<void> {
       }, {
         sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes,
       }, s.camSetup);
-    const json = saveToFile(project);
+      // Pretty for the deliberate file export — a human may open it; the
+      // autosave path stays compact (3× smaller).
+      const json = saveToFile(project, { pretty: true });
     if (isTauri()) {
       const savedPath = (await callNative('save_project_file', {
         json,

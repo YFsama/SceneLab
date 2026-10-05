@@ -523,7 +523,7 @@ export function registerBuiltinTools(): void {
       properties: {
         radius: { type: 'number', description: 'Radius in mm' },
         height: { type: 'number', description: 'Height in mm' },
-        segments: { type: 'number', description: 'Facet count (default 32)' },
+        segments: { type: 'number', description: 'Facet count (default: adaptive to the diameter for ~0.005 mm chord tolerance)' },
       },
       required: ['radius', 'height'],
     },
@@ -568,7 +568,7 @@ export function registerBuiltinTools(): void {
         radiusBottom: { type: 'number', description: 'Bottom radius in mm' },
         radiusTop: { type: 'number', description: 'Top radius in mm (0 for a pointed cone)' },
         height: { type: 'number', description: 'Height in mm' },
-        segments: { type: 'number', description: 'Facet count (default 32)' },
+        segments: { type: 'number', description: 'Facet count (default: adaptive to the diameter for ~0.005 mm chord tolerance)' },
       },
       required: ['radiusBottom', 'radiusTop', 'height'],
     },

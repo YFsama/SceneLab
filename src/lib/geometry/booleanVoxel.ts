@@ -156,7 +156,18 @@ export function splitByPlaneVoxel(
   };
 }
 
-/** Voxel hollow: erode the interior by the wall thickness, keep the shell. */
+/** Voxel hollow: erode the interior by the wall thickness, keep the shell.
+ *
+ * The erosion is a true EUCLIDEAN distance transform on the (possibly
+ * anisotropic) occupancy grid: a cell counts as interior only when its
+ * center is at least `wallThickness` (+ half the smallest cell — the wall
+ * surface sits between cell centers) from the nearest empty cell, measured
+ * in real mm. The previous per-axis Chebyshev erosion quantized the wall
+ * per axis: on a 30×30×10 plate at res 48 the cells were 0.625×0.625×0.208,
+ * so a nominal 2 mm wall could thin to a single 0.208 mm cell. Distance
+ * erosion keeps the wall isotropic on any cell aspect ratio (and correct
+ * along diagonal boundaries, which box erosion over-cut).
+ */
 export function hollowBodyVoxel(body: SolidBody, wallThickness: number, resolution = 40): SolidBody | null {
   if (!(wallThickness > 0)) throw new Error('Wall thickness must be positive');
   const bb = aabb(body);
@@ -170,50 +181,111 @@ export function hollowBodyVoxel(body: SolidBody, wallThickness: number, resoluti
 
   const inside = new Uint8Array(N * N * N);
   prepareBodyForInsideTests(body);
+  // Tiny fixed jitter on the sample points. isPointInsideBody's ray has
+  // nearly-equal components, so UNJITTERED lattice-aligned samples (cell
+  // centers of an axis-aligned box) systematically graze target edges and
+  // flip parity — 182 spurious holes in a perfect 20 mm cube at res 40 —
+  // which distance erosion would then carve into wall-sized craters. The
+  // offsets are far smaller than a cell and break the symmetry for good.
+  const jx = 0.0113, jy = 0.0239, jz = 0.0051;
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= n; j++) {
       for (let k = 1; k <= n; k++) {
-        const p = { x: lo.x + (i - 1 + 0.5) * cs.x, y: lo.y + (j - 1 + 0.5) * cs.y, z: lo.z + (k - 1 + 0.5) * cs.z };
+        const p = { x: lo.x + (i - 1 + 0.5) * cs.x + jx, y: lo.y + (j - 1 + 0.5) * cs.y + jy, z: lo.z + (k - 1 + 0.5) * cs.z + jz };
         if (isPointInsideBody(body, p)) inside[idx(i, j, k)] = 1;
       }
     }
   }
 
-  // Wall thickness in cells along each axis; erode by that many cells.
-  const tx = Math.max(1, Math.round(wallThickness / cs.x));
-  const ty = Math.max(1, Math.round(wallThickness / cs.y));
-  const tz = Math.max(1, Math.round(wallThickness / cs.z));
-  // Separable Chebyshev erosion: a deep cell has all cells within ±t (each axis) solid.
-  const erodeAxis = (src: Uint8Array, t: number, axis: 0 | 1 | 2): Uint8Array => {
-    const out = new Uint8Array(N * N * N);
-    for (let i = 1; i <= n; i++) {
-      for (let j = 1; j <= n; j++) {
-        for (let k = 1; k <= n; k++) {
-          if (!src[idx(i, j, k)]) continue;
-          let keep = true;
-          for (let d = -t; d <= t && keep; d++) {
-            const ii = axis === 0 ? i + d : i;
-            const jj = axis === 1 ? j + d : j;
-            const kk = axis === 2 ? k + d : k;
-            if (ii < 1 || ii > n || jj < 1 || jj > n || kk < 1 || kk > n || !src[idx(ii, jj, kk)]) keep = false;
-          }
-          if (keep) out[idx(i, j, k)] = 1;
-        }
-      }
-    }
-    return out;
-  };
-  let deep = erodeAxis(inside, tx, 0);
-  deep = erodeAxis(deep, ty, 1);
-  deep = erodeAxis(deep, tz, 2);
+  // Squared distance (mm²) from every cell center to the nearest empty cell
+  // center (the one-cell empty padding makes the outer boundary count).
+  const d2 = edtSquaredFromEmpty(inside, N, cs.x, cs.y, cs.z);
+  // Interior = farther than the wall from any empty cell; the half-cell of
+  // slack keeps the emitted wall at ≥ wall − cs_min on every axis (2 mm on
+  // 0.625 cells → 1.875 mm, not 2 − 0.625).
+  const threshold = wallThickness + Math.min(cs.x, cs.y, cs.z) / 2;
 
   const shell = new Uint8Array(N * N * N);
   let any = false;
   for (let a = 0; a < shell.length; a++) {
-    if (inside[a] && !deep[a]) { shell[a] = 1; any = true; }
+    if (inside[a] && Math.sqrt(d2[a] ?? 0) < threshold) { shell[a] = 1; any = true; }
   }
   if (!any) return null;
   const result = meshFromOccupancy(shell, N, n, lo, cs, 'Hollow');
   if (result) result.name = 'Hollow';
   return result;
+}
+
+/**
+ * Exact squared Euclidean distance transform of an occupancy cube with
+ * ANISOTROPIC cell spacing (Felzenszwalb–Huttenlocher 1D lower-envelope
+ * transform, one separable pass per axis with that axis's spacing). Result:
+ * d2[i] = squared mm distance from cell i's center to the nearest cell with
+ * occupancy 0. O(N³) time, O(N³) memory (one Float64 cube).
+ */
+function edtSquaredFromEmpty(occ: Uint8Array, N: number, sx: number, sy: number, sz: number): Float64Array {
+  const total = N * N * N;
+  // Large-finite sentinel instead of Infinity — Felzenszwalb's envelope
+  // arithmetic degenerates to NaN on Inf−Inf priors, and the one-cell empty
+  // padding guarantees every line reaches a real empty cell anyway.
+  const BIG = 1e15;
+  const d2 = new Float64Array(total);
+  for (let i = 0; i < total; i++) d2[i] = occ[i] ? BIG : 0;
+
+  // One axis pass: rescale priors by 1/s², run the unit-spacing parabola
+  // envelope down every line, write back s²·result. `lines` yields the start
+  // index of each of the N² lines running along this axis.
+  const pass = (stride: number, s: number, lines: () => number[]): void => {
+    const inv = 1 / (s * s);
+    const g = new Float64Array(N);
+    const v = new Int32Array(N);
+    const z = new Float64Array(N + 1);
+    for (const base of lines()) {
+      for (let q = 0; q < N; q++) g[q] = (d2[base + q * stride] ?? 0) * inv;
+      let k = 0;
+      v[0] = 0;
+      z[0] = -Infinity;
+      z[1] = Infinity;
+      for (let q = 1; q < N; q++) {
+        for (;;) {
+          const vk = v[k]!;
+          // Intersection of parabolas (x−vk)²+g[vk] and (x−q)²+g[q]:
+          // s = (q² − vk² + g[q] − g[vk]) / (2(q − vk)).
+          const inter = (q * q - vk * vk + g[q]! - g[vk]!) / (2 * (q - vk));
+          if (inter > z[k]!) {
+            k++;
+            v[k] = q;
+            z[k] = inter;
+            z[k + 1] = Infinity;
+            break;
+          }
+          k--;
+        }
+      }
+      let m = 0;
+      for (let q = 0; q < N; q++) {
+        while (z[m + 1]! < q) m++;
+        const vm = v[m]!;
+        d2[base + q * stride] = ((q - vm) * (q - vm) + g[vm]!) * s * s;
+      }
+    }
+  };
+
+  // Index layout: idx = (i*N + j)*N + k.
+  const linesI: number[] = []; // vary i (stride N²) over every (j, k)
+  const linesJ: number[] = []; // vary j (stride N)   over every (i, k)
+  const linesK: number[] = []; // vary k (stride 1)   over every (i, j)
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      for (let k = 0; k < N; k++) {
+        if (i === 0) linesI.push(j * N + k);
+        if (j === 0) linesJ.push(i * N * N + k);
+        if (k === 0) linesK.push((i * N + j) * N);
+      }
+    }
+  }
+  pass(N * N, sx, () => linesI);
+  pass(N, sy, () => linesJ);
+  pass(1, sz, () => linesK);
+  return d2;
 }

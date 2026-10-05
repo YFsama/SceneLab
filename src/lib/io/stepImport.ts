@@ -105,14 +105,17 @@ export function importSTEP(text: string, name = 'STEP Import'): SolidBody {
     }
   }
 
-  // EDGE_CURVE('','',#v1,#v2,#curve,.T.)
+  // EDGE_CURVE('',#v1,#v2,#curve,.T.) — the first two VERTEX_POINT refs are
+  // the edge ends in both the canonical 5-arg form and the legacy 6-arg
+  // dialect our pre-repair writer emitted (extra empty name), so scan by
+  // referenced type rather than fixed argument slots.
   const edgeCurves = new Map<number, [number, number]>();
   for (const [eid, ent] of entities) {
     if (ent.type === 'EDGE_CURVE') {
-      const a = splitArgs(ent.args);
-      const v1 = refId(a[2] ?? '');
-      const v2 = refId(a[3] ?? '');
-      if (v1 !== null && v2 !== null) edgeCurves.set(eid, [v1, v2]);
+      const vRefs = splitArgs(ent.args)
+        .map(refId)
+        .filter((r): r is number => r !== null && entities.get(r)?.type === 'VERTEX_POINT');
+      if (vRefs.length >= 2) edgeCurves.set(eid, [vRefs[0]!, vRefs[1]!]);
     }
   }
 

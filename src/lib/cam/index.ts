@@ -6,7 +6,14 @@ export type {
   ToolpathPoint,
   GCodeLine,
 } from './types';
-export { getAllTools, getTool, addCustomTool, removeCustomTool } from './toolLibrary';
+export {
+  getAllTools,
+  getTool,
+  getCustomTools,
+  clearCustomTools,
+  addCustomTool,
+  removeCustomTool,
+} from './toolLibrary';
 export {
   generatePocketToolpath,
   generateContourToolpath,

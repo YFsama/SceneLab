@@ -1482,6 +1482,259 @@ describe('ViewportCanvas CAM toolpath overlay (rendered)', () => {
   });
 });
 
+// Machine simulation (pass-29 CAM-PLUS T1): the panel dispatches
+// 'scenelab:cam-sim' window events; the viewport owns the sim in refs and
+// walks the FIRST enabled cached op. A fake rAF drives the ticks with exact
+// timestamps so speeds (rapid = 5× cut feed) are asserted deterministically.
+describe('ViewportCanvas CAM machine simulation (rendered)', () => {
+  /** Deterministic rAF: callbacks queue up and only run when flushed. */
+  function installFakeRaf() {
+    const realRaf = window.requestAnimationFrame.bind(window);
+    const realCancel = window.cancelAnimationFrame.bind(window);
+    const pending = new Map<number, FrameRequestCallback>();
+    let nextId = 1;
+    let now = 0;
+    window.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      const id = nextId++;
+      pending.set(id, cb);
+      return id;
+    }) as typeof requestAnimationFrame;
+    window.cancelAnimationFrame = ((id: number) => {
+      pending.delete(id);
+    }) as typeof cancelAnimationFrame;
+    return {
+      /** Advance the clock by `ms` and run everything scheduled. */
+      flush: (ms: number) => {
+        now += ms;
+        const cbs = [...pending.entries()];
+        pending.clear();
+        for (const [, cb] of cbs) cb(now);
+      },
+      restore: () => {
+        window.requestAnimationFrame = realRaf;
+        window.cancelAnimationFrame = realCancel;
+      },
+    };
+  }
+
+  function seedCamOperation(): string {
+    const box = createBox(20, 15, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], objectIds: [box.id] });
+    return useStore.getState().addCamOperation({
+      name: 'Pocket — Box',
+      enabled: true,
+      type: 'pocket',
+      bodyId: box.id,
+      toolId: 'em-6mm',
+      params: { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 10, stockBottom: -5 },
+    });
+  }
+
+  function lastScene(): THREE.Scene {
+    const scene = recordedScenes[recordedScenes.length - 1];
+    expect(scene).toBeDefined();
+    return scene as THREE.Scene;
+  }
+
+  function simGroup(): THREE.Group {
+    const group = lastScene().getObjectByName('cam-sim-group');
+    expect(group).toBeDefined();
+    return group as THREE.Group;
+  }
+
+  function simTool(): THREE.Object3D {
+    const tool = simGroup().children[0]!;
+    expect(tool).toBeDefined();
+    expect(tool.name).toBe('cam-sim-tool');
+    return tool;
+  }
+
+  function camCutLines(): THREE.Line[] {
+    const group = lastScene().getObjectByName('cam-toolpaths') as THREE.Group;
+    return group.children.filter(
+      (c): c is THREE.Line => c instanceof THREE.Line && c.name === 'cam-cut',
+    );
+  }
+
+  const dispatchSim = (detail: Record<string, unknown>) => {
+    act(() => {
+      window.dispatchEvent(new CustomEvent('scenelab:cam-sim', { detail }));
+    });
+  };
+
+  beforeEach(() => {
+    clearToasts();
+    recordedControls.length = 0;
+    recordedScenes.length = 0;
+    useStore.setState({
+      locale: 'en',
+      workspace: 'cam',
+      sketchActive: false,
+      sketchTool: 'select',
+      sketchPlaneId: 'xy',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      selectedEdgeIds: [],
+      selectedFaceIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'iso',
+      projection: 'perspective',
+      measureActive: false,
+      visionSelectActive: false,
+      numericPrompt: null,
+      camSetup: defaultCamSetup(),
+      camToolpaths: {},
+      undoStack: [],
+      redoStack: [],
+    });
+  });
+
+  it('play creates the tool mesh and rAF ticks advance it along the path', async () => {
+    const id = seedCamOperation();
+    const cache = useStore.getState().camToolpaths[id]!;
+    const start = cache.toolpath.points[0]!;
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      // No sim yet: the group is empty and hidden.
+      expect(simGroup().children).toHaveLength(0);
+
+      dispatchSim({ action: 'play' });
+      raf.flush(16); // arms the dt clock (lastT)
+      const afterArm = simTool().position.clone();
+      expect(afterArm.x).toBeCloseTo(start.x, 5);
+      expect(afterArm.y).toBeCloseTo(start.y, 5);
+      expect(afterArm.z).toBeCloseTo(start.z, 5);
+
+      // 100 ms at rapid speed (5×1000 mm/min ≈ 83 mm/s) ≈ 8.3 mm of travel.
+      raf.flush(100);
+      const pos = simTool().position.clone();
+      expect(pos.distanceTo(new THREE.Vector3(start.x, start.y, start.z))).toBeGreaterThan(3);
+      // Descending towards the feed plane (first moves are vertical drops).
+      expect(pos.y).toBeLessThan(start.y);
+      // Further ticks keep moving the tool.
+      raf.flush(100);
+      expect(simTool().position.distanceTo(pos)).toBeGreaterThan(0.01);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('pause freezes the tool; reset returns it to the path start', async () => {
+    seedCamOperation();
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'play' });
+      raf.flush(16);
+      raf.flush(100);
+      const moving = simTool().position.clone();
+
+      dispatchSim({ action: 'pause' });
+      raf.flush(100);
+      raf.flush(100);
+      expect(simTool().position.equals(moving)).toBe(true);
+
+      const cache = useStore.getState().camToolpaths[Object.keys(useStore.getState().camToolpaths)[0]!]!;
+      const start = cache.toolpath.points[0]!;
+      dispatchSim({ action: 'reset' });
+      raf.flush(16); // paused: the position must not run away
+      expect(simTool().position.x).toBeCloseTo(start.x, 5);
+      expect(simTool().position.y).toBeCloseTo(start.y, 5);
+      expect(simTool().position.z).toBeCloseTo(start.z, 5);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('seek lands the tool at the exact fraction of total path length', async () => {
+    const id = seedCamOperation();
+    const pts = useStore.getState().camToolpaths[id]!.toolpath.points;
+    // Expected position at half the cumulative length (test-side walk).
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      cum.push(cum[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z));
+    }
+    const total = cum[cum.length - 1]!;
+    const D = total / 2;
+    let seg = 1;
+    while (seg < cum.length && cum[seg]! < D) seg++;
+    const segLen = cum[seg]! - cum[seg - 1]!;
+    const k = (D - cum[seg - 1]!) / segLen;
+    const a = pts[seg - 1]!;
+    const b = pts[seg]!;
+    const expected = new THREE.Vector3(
+      a.x + (b.x - a.x) * k,
+      a.y + (b.y - a.y) * k,
+      a.z + (b.z - a.z) * k,
+    );
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'seek', t: 0.5 });
+      const pos = simTool().position;
+      expect(pos.x).toBeCloseTo(expected.x, 4);
+      expect(pos.y).toBeCloseTo(expected.y, 4);
+      expect(pos.z).toBeCloseTo(expected.z, 4);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('dims the uncut remainder and re-brightens it as the walk passes', async () => {
+    seedCamOperation();
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const opacity = (l: THREE.Line) => (l.material as THREE.LineBasicMaterial).opacity;
+      // Before any sim: all cut lines bright (0.9).
+      for (const l of camCutLines()) expect(opacity(l)).toBeCloseTo(0.9, 5);
+
+      // Reset to the start: nothing walked → everything dim (0.25).
+      dispatchSim({ action: 'reset' });
+      for (const l of camCutLines()) expect(opacity(l)).toBeCloseTo(0.25, 5);
+
+      // Seek to the very end: everything bright again.
+      dispatchSim({ action: 'seek', t: 1 });
+      for (const l of camCutLines()) expect(opacity(l)).toBeCloseTo(0.9, 5);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('sizes the tool mesh from the op tool diameter (cylinder + cone)', async () => {
+    seedCamOperation(); // em-6mm → ⌀6
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'play' });
+      const tool = simTool();
+      const meshes = tool.children.filter((c): c is THREE.Mesh => c instanceof THREE.Mesh);
+      expect(meshes.length).toBe(2);
+      const radii = meshes
+        .map((mesh) => mesh.geometry as THREE.CylinderGeometry)
+        .map((g) => g.parameters.radiusTop)
+        .sort((a, b) => a - b);
+      expect(radii[0]).toBeCloseTo(3, 5); // ⌀6/2
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+});
+
 // Camera sync regression (pre-v0.23 bug): renderScene used to copy the
 // INACTIVE camera's transform ONTO the active one, silently reverting every
 // orbit/zoom gesture on each rendered frame. The active camera (the one
