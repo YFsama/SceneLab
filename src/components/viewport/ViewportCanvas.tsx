@@ -1472,12 +1472,16 @@ export function ViewportCanvas() {
   }, [currentSketch, sketchActive, selectedSketchId, selectedSketchIds, sketchPlaneId]);
 
   // CAM toolpath overlay (the sketch-group pattern, cam workspace only). One
-  // THREE.Line per CONTIGUOUS CUTTING POLYLINE — rapid and plunge moves break
-  // the runs and draw as thin dashed segments (computeLineDistances) so the
-  // individual cut layers stay readable. Toolpath points are already SCENE
+  // THREE.Line PER CUT SEGMENT (not per contiguous run) — rapid and plunge
+  // moves break the runs and draw as thin dashed segments
+  // (computeLineDistances) so the individual cut layers stay readable. The
+  // per-segment split is what lets the simulation highlight progress exactly:
+  // a single polyline could only dim/truncate at whole vertices
+  // (setDrawRange), losing the in-progress segment. Tradeoff: hundreds of
+  // small draw calls per op instead of a handful — fine for a viz overlay;
+  // the two materials stay shared. Toolpath points are already SCENE
   // coordinates (x/z plan, y = height) per the generator contract — they are
-  // used verbatim, with no remap. Geometry-only disposal: the two materials
-  // above are shared across rebuilds.
+  // used verbatim, with no remap. Geometry-only disposal.
   useEffect(() => {
     const camGroup = camGroupRef.current;
     if (!camGroup) return;
@@ -1504,45 +1508,39 @@ export function ViewportCanvas() {
     for (const op of camSetup.operations) {
       const cache = camToolpaths[op.id];
       if (!cache) continue;
+      const opId = op.id;
       const plungeRate = cache.toolpath.params.plungeRate;
-      // simMarks records, per cut-run vertex, the toolpath point index it
-      // came from — the sim maps walked distance → per-line progress.
-      const addRun = (pts: THREE.Vector3[], marks: number[], opId: string) => {
-        if (pts.length < 2) return;
-        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cutMat);
+      // simMarks records the toolpath point indices of the segment's two
+      // endpoints — the sim maps walked distance → per-segment progress.
+      const addCutSegment = (a: THREE.Vector3, b: THREE.Vector3, markA: number, markB: number) => {
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), cutMat);
         line.name = 'cam-cut';
-        line.userData.simMarks = marks;
+        line.userData.simMarks = [markA, markB];
         line.userData.opId = opId;
+        // Pristine endpoints for the sim's truncation/restore (the attribute
+        // itself holds Float32 copies).
+        line.userData.segStart = a.clone();
+        line.userData.segEnd = b.clone();
         camGroup.add(line);
       };
-      let run: THREE.Vector3[] = [];
-      let runMarks: number[] = [];
       let prev: THREE.Vector3 | null = null;
-      const flush = () => { addRun(run, runMarks, op.id); run = []; runMarks = []; };
       for (let i = 0; i < cache.toolpath.points.length; i++) {
         const p = cache.toolpath.points[i]!;
         const v = new THREE.Vector3(p.x, p.y, p.z);
         // A move's kind comes from the point being moved TO: rapids are
         // flagged; plunges are cuts carrying the plunge feed rate.
         if (p.rapid || (p.feedRate !== undefined && p.feedRate === plungeRate)) {
-          flush();
           if (prev) {
             const seg = new THREE.Line(new THREE.BufferGeometry().setFromPoints([prev, v]), rapidMat);
             seg.computeLineDistances(); // dashes
             seg.name = 'cam-move';
             camGroup.add(seg);
           }
-        } else {
-          if (run.length === 0 && prev) {
-            run.push(prev); // connect to the last point
-            runMarks.push(i - 1);
-          }
-          run.push(v);
-          runMarks.push(i);
+        } else if (prev) {
+          addCutSegment(prev, v, i - 1, i);
         }
         prev = v;
       }
-      flush();
     }
     dirtyRef.current = true;
   }, [camWorkspace, camSetup, camToolpaths]);
@@ -1585,9 +1583,13 @@ export function ViewportCanvas() {
       }
     };
 
-    /** Dim everything not yet walked: per cut line of the sim op, the
-     * vertices whose cumulative distance ≤ D are "done" (bright + drawRange
-     * truncation), the rest dim. */
+    /** Highlight exactly what has been walked. Cut overlay lines are one
+     * THREE.Line per segment, so each switches material on its own; the
+     * in-progress segment additionally moves its far endpoint onto the tool
+     * position (restored afterwards from userData) — setDrawRange could only
+     * truncate at whole vertices and hid the segment until it was complete.
+     * Cross-op residue: lines of OTHER ops reset to dim here too, so playing
+     * op B clears what op A's finished walk left bright. */
     const updateHighlight = (opId: string, cum: number[], walked: number): void => {
       const group = camGroupRef.current;
       const bright = camCutMatRef.current;
@@ -1595,13 +1597,38 @@ export function ViewportCanvas() {
       if (!group) return;
       for (const child of group.children) {
         if (!(child instanceof THREE.Line) || child.name !== 'cam-cut') continue;
-        if (child.userData.opId !== opId) continue;
-        const marks = child.userData.simMarks as number[] | undefined;
+        const marks = child.userData.simMarks as [number, number] | undefined;
         if (!marks) continue;
-        let done = 0;
-        while (done < marks.length && cum[marks[done]!]! <= walked) done++;
-        child.material = done > 0 ? bright : dim;
-        child.geometry.setDrawRange(0, done > 0 ? done : Infinity);
+        const attr = child.geometry.getAttribute('position') as THREE.BufferAttribute;
+        const end = child.userData.segEnd as THREE.Vector3 | undefined;
+        const restoreEnd = (): void => {
+          if (end) attr.setXYZ(1, end.x, end.y, end.z);
+          attr.needsUpdate = true;
+        };
+        if (child.userData.opId !== opId) {
+          child.material = dim;
+          restoreEnd();
+          continue;
+        }
+        const cumA = cum[marks[0]] ?? 0;
+        const cumB = cum[marks[1]] ?? 0;
+        if (walked >= cumB) {
+          child.material = bright;
+          restoreEnd();
+        } else if (walked <= cumA || cumB - cumA <= 1e-12) {
+          child.material = dim;
+          restoreEnd();
+        } else {
+          // In progress: bright, with the far endpoint pulled back to where
+          // the tool actually is along this segment.
+          child.material = bright;
+          const start = child.userData.segStart as THREE.Vector3 | undefined;
+          if (start && end) {
+            const t = (walked - cumA) / (cumB - cumA);
+            attr.setXYZ(1, start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t, start.z + (end.z - start.z) * t);
+            attr.needsUpdate = true;
+          }
+        }
       }
     };
 

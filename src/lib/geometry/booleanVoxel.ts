@@ -170,6 +170,60 @@ export function splitByPlaneVoxel(
  */
 export function hollowBodyVoxel(body: SolidBody, wallThickness: number, resolution = 40): SolidBody | null {
   if (!(wallThickness > 0)) throw new Error('Wall thickness must be positive');
+  const grid = sampleInsideAndDistance(body, resolution);
+  if (!grid) return null;
+  const { inside, d2, N, n, lo, cs } = grid;
+  // Interior = farther than the wall from any empty cell; the half-cell of
+  // slack keeps the emitted wall at ≥ wall − cs_min on every axis (2 mm on
+  // 0.625 cells → 1.875 mm, not 2 − 0.625).
+  const threshold = wallThickness + Math.min(cs.x, cs.y, cs.z) / 2;
+
+  const shell = new Uint8Array(N * N * N);
+  let any = false;
+  for (let a = 0; a < shell.length; a++) {
+    if (inside[a] && Math.sqrt(d2[a] ?? 0) < threshold) { shell[a] = 1; any = true; }
+  }
+  if (!any) return null;
+  const result = meshFromOccupancy(shell, N, n, lo, cs, 'Hollow');
+  if (result) result.name = 'Hollow';
+  return result;
+}
+
+/**
+ * The ERODED INTERIOR of a body as its own (blocky, watertight) solid: the
+ * cells whose centers are inside the body AND at least `wallThickness` (true
+ * Euclidean mm, via the same anisotropic EDT as hollowBodyVoxel) from the
+ * nearest empty cell. The exact shell (operations.applyShell) subtracts this
+ * from the body through the Manifold engine, so the outer surface stays exact
+ * and only the inner cavity walls carry the grid's quantization (wall
+ * thickness lands in [t − cell, t + cell]). Returns null when the erosion
+ * consumes the whole interior (walls ≥ half the body everywhere).
+ */
+export function erodedInteriorVoxel(body: SolidBody, wallThickness: number, resolution = 40): SolidBody | null {
+  if (!(wallThickness > 0)) throw new Error('Wall thickness must be positive');
+  const grid = sampleInsideAndDistance(body, resolution);
+  if (!grid) return null;
+  const { inside, d2, N, n, lo, cs } = grid;
+  const interior = new Uint8Array(N * N * N);
+  let any = false;
+  for (let a = 0; a < interior.length; a++) {
+    if (inside[a] && Math.sqrt(d2[a] ?? 0) >= wallThickness) { interior[a] = 1; any = true; }
+  }
+  if (!any) return null;
+  const result = meshFromOccupancy(interior, N, n, lo, cs, 'Eroded interior');
+  if (result) result.name = 'Eroded interior';
+  return result;
+}
+
+/** Occupancy + squared-distance-to-empty of a body on a padded grid — the
+ *  shared core of hollowBodyVoxel and erodedInteriorVoxel. Cell centers are
+ *  jittered by a tiny fixed offset (see hollowBodyVoxel's history: unjittered
+ *  lattice-aligned samples systematically graze target edges and flip the
+ *  ray parity). */
+function sampleInsideAndDistance(
+  body: SolidBody,
+  resolution: number,
+): { inside: Uint8Array; d2: Float64Array; N: number; n: number; lo: Vec3; cs: Vec3 } | null {
   const bb = aabb(body);
   const lo = { ...bb.min };
   const dim = { x: bb.max.x - lo.x, y: bb.max.y - lo.y, z: bb.max.z - lo.z };
@@ -196,24 +250,10 @@ export function hollowBodyVoxel(body: SolidBody, wallThickness: number, resoluti
       }
     }
   }
-
   // Squared distance (mm²) from every cell center to the nearest empty cell
   // center (the one-cell empty padding makes the outer boundary count).
   const d2 = edtSquaredFromEmpty(inside, N, cs.x, cs.y, cs.z);
-  // Interior = farther than the wall from any empty cell; the half-cell of
-  // slack keeps the emitted wall at ≥ wall − cs_min on every axis (2 mm on
-  // 0.625 cells → 1.875 mm, not 2 − 0.625).
-  const threshold = wallThickness + Math.min(cs.x, cs.y, cs.z) / 2;
-
-  const shell = new Uint8Array(N * N * N);
-  let any = false;
-  for (let a = 0; a < shell.length; a++) {
-    if (inside[a] && Math.sqrt(d2[a] ?? 0) < threshold) { shell[a] = 1; any = true; }
-  }
-  if (!any) return null;
-  const result = meshFromOccupancy(shell, N, n, lo, cs, 'Hollow');
-  if (result) result.name = 'Hollow';
-  return result;
+  return { inside, d2, N, n, lo, cs };
 }
 
 /**

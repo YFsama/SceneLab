@@ -1,9 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { exportSTEP } from './step';
 import { importSTEP } from './stepImport';
-import { occtMeshToSolidBody } from './stepOCCT';
-import { createBox, createCylinder, createSphere, computeVolume } from '../geometry/brep';
+import { occtMeshToSolidBody, stepNeedsExactKernel } from './stepOCCT';
+import {
+  createBox,
+  createCylinder,
+  createSphere,
+  computeVolume,
+  buildEdgesFromFaces,
+  adaptiveSegments,
+} from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
+import { warmUpBooleanEngine, booleanOpManifold } from '../geometry/booleanManifold';
+import type { Face, SolidBody, Vec3 } from '../geometry/types';
 import type { OcctImportApi } from 'occt-import-js';
 
 /**
@@ -223,6 +232,167 @@ describe('STEP export → our importer round trip', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Analytic cylinders (Face.source — see step.test.ts for the double
+// builders' rationale; they are duplicated here because test files cannot
+// import each other without double-registering their suites).
+
+/** Local widening of Face carrying the documented `source` tag. */
+type TaggedFace = Face & { source?: { kind: 'cylinder'; origin: Vec3; axis: Vec3; radius: number } };
+
+function ringPoints(radius: number, y: number, count: number): Vec3[] {
+  const pts: Vec3[] = [];
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    pts.push({ x: Math.cos(a) * radius, y, z: Math.sin(a) * radius });
+  }
+  return pts;
+}
+
+const bodyOf = (name: string, faces: Face[]): SolidBody => ({
+  id: `body_${name}`,
+  name,
+  vertices: faces.flatMap((f) => f.vertices),
+  faces,
+  edges: buildEdgesFromFaces(faces),
+});
+
+/** An ISOLATED ⌀6 wall band (no face shares its rims) → canonical tube form. */
+function isolatedBand(radius = 3, height = 20): SolidBody {
+  const n = adaptiveSegments(radius * 2);
+  const wall: TaggedFace = {
+    id: 'wall',
+    vertices: [...ringPoints(radius, 0, n), ...ringPoints(radius, height, n)],
+    normal: { x: 1, y: 0, z: 0 },
+    source: { kind: 'cylinder', origin: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, radius },
+  };
+  return bodyOf('Band', [wall]);
+}
+
+/** A tube the way the landed classifier shapes it: 55 tagged wall facets + 2 caps. */
+function facetedTube(radius = 3, height = 20): SolidBody {
+  const n = adaptiveSegments(radius * 2);
+  const p = (a: number, y: number): Vec3 => ({ x: Math.cos(a) * radius, y, z: Math.sin(a) * radius });
+  const wall: TaggedFace[] = [];
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const a1 = ((i + 1) / n) * Math.PI * 2;
+    const mid = (a0 + a1) / 2;
+    wall.push({
+      id: `facet_${i}`,
+      vertices: [p(a0, 0), p(a1, 0), p(a1, height), p(a0, height)],
+      normal: { x: Math.cos(mid), y: 0, z: Math.sin(mid) },
+      source: { kind: 'cylinder', origin: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, radius },
+    });
+  }
+  const bottom = ringPoints(radius, 0, n);
+  const top = ringPoints(radius, height, n);
+  const capB: TaggedFace = { id: 'capB', vertices: [...bottom].reverse(), normal: { x: 0, y: -1, z: 0 } };
+  const capT: TaggedFace = { id: 'capT', vertices: top, normal: { x: 0, y: 1, z: 0 } };
+  return bodyOf('Tube', [...wall, capB, capT]);
+}
+
+/**
+ * A real Manifold drilled box with the wall tags applied by hand — the
+ * production classifier tags these in fromManifold now, but the explicit
+ * tags keep this writer test independent of classifier changes. Box spans
+ * y∈[0,20] (createExtrude is 0-based along +Y), so the un-translated ⌀6
+ * cylinder spanning y∈[0,22] cuts fully through.
+ */
+function manifoldDrilledBox(): SolidBody {
+  const raw = booleanOpManifold(createBox(20, 20, 20), createCylinder(3, 22), 'difference');
+  expect(raw).not.toBeNull();
+  for (const f of raw!.faces) {
+    if (Math.abs(f.normal.y) < 0.1 && f.vertices.every((v) => Math.abs(Math.hypot(v.x, v.z) - 3) < 0.01)) {
+      (f as TaggedFace).source = { kind: 'cylinder', origin: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, radius: 3 };
+    }
+  }
+  return raw!;
+}
+
+describe('STEP export: analytic cylinder structural contract', () => {
+  const text = exportSTEP(isolatedBand());
+  const ents = parseEntities(text);
+
+  it('every EDGE_CURVE — closed CIRCLEs included — carries VERTEX_POINT refs', () => {
+    // This is the shape our faceted importer walks; the closed circle edges
+    // (start = end vertex) keep it parsing without touching curve geometry.
+    const edges = [...ents.values()].filter((e) => e.type === 'EDGE_CURVE');
+    expect(edges).toHaveLength(3); // 2 circles + 1 seam
+    for (const e of edges) {
+      expect(ents.get(refId(e.args[1]!)!)?.type).toBe('VERTEX_POINT');
+      expect(ents.get(refId(e.args[2]!)!)?.type).toBe('VERTEX_POINT');
+    }
+  });
+
+  it('all DIRECTIONs are unit length on analytic exports too', () => {
+    const dirs = [...ents.values()].filter((e) => e.type === 'DIRECTION');
+    expect(dirs.length).toBeGreaterThan(0);
+    for (const d of dirs) {
+      const coords = d.args[1]!.replace(/^\(|\)$/g, '').split(',').map(Number);
+      expect(Math.hypot(coords[0]!, coords[1]!, coords[2]!)).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('every EDGE_LOOP closes — the seam/circle cycle chains like any other', () => {
+    const edgeVerts = new Map<number, [number, number]>();
+    for (const [eid, e] of ents) {
+      if (e.type === 'EDGE_CURVE') {
+        edgeVerts.set(eid, [refId(e.args[1]!)!, refId(e.args[2]!)!]);
+      }
+    }
+    const loops = [...ents.values()].filter((e) => e.type === 'EDGE_LOOP');
+    expect(loops.length).toBe(1);
+    for (const loop of loops) {
+      const oes = refList(loop.args[1]!);
+      expect(oes).toHaveLength(4); // circle, seam, circle, seam
+      let prevEnd: number | null = null;
+      let firstStart = 0;
+      for (const oeId of oes) {
+        const oe = ents.get(oeId!)!;
+        const [a, b] = edgeVerts.get(refId(oe.args[3]!)!)!;
+        const forward = oe.args[4] !== '.F.';
+        const start = forward ? a : b;
+        const end = forward ? b : a;
+        if (prevEnd !== null) expect(start).toBe(prevEnd);
+        if (prevEnd === null) firstStart = start;
+        prevEnd = end;
+      }
+      expect(prevEnd).toBe(firstStart);
+    }
+  });
+});
+
+describe('STEP export → our importer round trip (analytic cylinders)', () => {
+  it('drilled tube: faceted wall facets + caps round-trip exactly', () => {
+    // Shared rims keep the chord boundary, so the whole body stays LINE
+    // edges and our polygon importer recovers it one-to-one.
+    const tube = facetedTube();
+    const text = exportSTEP(tube);
+    expect(stepNeedsExactKernel(text)).toBe(true); // CYLINDRICAL_SURFACE routes the UI import through OCCT
+    const back = importSTEP(text);
+    expect(back.name).toBe('Tube');
+    expect(back.faces).toHaveLength(tube.faces.length);
+    expect(computeVolume(back)).toBeCloseTo(computeVolume(tube), 3);
+  });
+
+  it('an isolated band export has no polygon for the faceted parser (exact-kernel only)', () => {
+    const text = exportSTEP(isolatedBand());
+    expect(stepNeedsExactKernel(text)).toBe(true);
+    // The band's only loop is the two closed circles; their two seam
+    // vertices collapse below the 3-point polygon minimum.
+    expect(() => importSTEP(text)).toThrow(/No faceted faces/);
+  });
+
+  it('the same tube stripped of tags round-trips fully faceted (control)', () => {
+    const tube = facetedTube();
+    for (const f of tube.faces) delete (f as TaggedFace).source;
+    const back = importSTEP(exportSTEP(tube));
+    expect(back.faces).toHaveLength(tube.faces.length);
+    expect(computeVolume(back)).toBeCloseTo(computeVolume(tube), 3);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Opt-in: the REAL occt-import-js kernel (the same WASM the browser loads on
 // curved STEP imports). Skipped unless SCENELAB_OCCT_UNIT is set:
 //
@@ -267,5 +437,49 @@ describe.skipIf(!RUN_REAL_OCCT)('STEP export → real OCCT kernel (opt-in)', () 
         expect(computeVolume(solid)).toBeCloseTo(computeVolume(body), 1);
       }
     }
+  }, 120_000);
+
+  it('occt-import-js parses the ANALYTIC cylinder exports as single exact solids', async () => {
+    const { createRequire } = await import('node:module');
+    const { readFileSync } = await import('node:fs');
+    const nodeRequire = createRequire(import.meta.url);
+    type OcctFactory = (opts: { wasmBinary: Uint8Array }) => Promise<OcctImportApi>;
+    const factory = nodeRequire('occt-import-js') as OcctFactory;
+    const wasmPath = nodeRequire.resolve('occt-import-js/dist/occt-import-js.wasm');
+    const occt = await factory({ wasmBinary: new Uint8Array(readFileSync(wasmPath)) });
+
+    const read = (text: string) => {
+      const result = occt.ReadStepFile(new TextEncoder().encode(text), {
+        linearUnit: 'millimeter',
+        linearDeflectionType: 'absolute_value',
+        linearDeflection: 0.01,
+        angularDeflection: 0.3,
+      });
+      expect(result.success).toBe(true);
+      return result.meshes
+        .filter((m) => (m.index?.array?.length ?? 0) >= 3)
+        .map((m) =>
+          occtMeshToSolidBody({ positions: m.attributes.position.array, indices: m.index.array }, 'analytic'),
+        );
+    };
+
+    // (a) Shared-rim form (the real drilled-solid path): facets on one
+    // shared CYLINDRICAL_SURFACE with the caps' chord edges. Must come back
+    // as ONE solid with the exact faceted volume — the CIRCLE form would
+    // split the shell here (measured: 3 solids, +11.8% volume).
+    await warmUpBooleanEngine();
+    const drilled = manifoldDrilledBox();
+    const drilledText = exportSTEP(drilled);
+    expect((drilledText.match(/CYLINDRICAL_SURFACE/g) ?? []).length).toBe(1);
+    expect((drilledText.match(/CIRCLE\(/g) ?? []).length).toBe(0);
+    const solids = read(drilledText);
+    expect(solids).toHaveLength(1);
+    expect(computeVolume(solids[0]!)).toBeCloseTo(computeVolume(drilled), 1);
+
+    // (b) Isolated band (the CIRCLE tube form): the real kernel parses the
+    // closed CIRCLE edge curves and tessellates the true cylinder.
+    const bandSolids = read(exportSTEP(isolatedBand()));
+    expect(bandSolids.length).toBeGreaterThanOrEqual(1);
+    expect(bandSolids[0]!.faces.length).toBeGreaterThan(0);
   }, 120_000);
 });

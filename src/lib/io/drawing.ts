@@ -63,7 +63,58 @@ export interface DrawingView {
    * (it exports raw body edges) and is deliberately left without marks.
    */
   centers?: DrawingCenterMark[];
+  /**
+   * Sheet placement metadata (B6+B8): how the view sits in its grid cell —
+   * drag offsets, an explicit scale and visibility. Pure metadata: the
+   * geometry above stays in view coords; consumers that place the view
+   * (viewTransform, the canvas, the sheet exporters) read it. Views without
+   * one keep the legacy auto-fit behaviour exactly.
+   */
+  placement?: SheetViewPlacement;
 }
+
+/** The four standard base views of the sheet grid, in order. */
+export type DrawingViewKey = 'front' | 'top' | 'right' | 'iso';
+
+/**
+ * How one view is placed in its grid cell (B6+B8). Offsets are a sheet-px
+ * translation from the auto-centred position (+x right, +y DOWN the sheet,
+ * matching screen intuition for drags). `scale` is sheet px per VIEW unit —
+ * callers that think in px-per-model-mm (the store's scaleOverride) divide
+ * by their projection scale before attaching it, and format the honest ratio
+ * label themselves (formatViewScaleRatio), because only the caller knows
+ * how view units relate to mm.
+ */
+export interface SheetViewPlacement {
+  viewKey?: DrawingViewKey;
+  /** false = the view is hidden: writers skip it (and its detail panels). */
+  visible?: boolean;
+  offsetX?: number;
+  offsetY?: number;
+  /** Sheet px per view unit; null/omitted = auto-fit into the cell. */
+  scale?: number | null;
+  /** Caption drawn under the view title, e.g. "2:1" (caller-formatted). */
+  scaleLabel?: string;
+}
+
+/**
+ * Format a drawing-scale ratio from sheet px per model mm: 2 → "2:1",
+ * 0.4255 → "1:2.35", 1 → "1:1". Rounded to ≤2 decimals for display; the
+ * exact value stays available to the caller (the canvas puts it in the
+ * scale control's tooltip).
+ */
+export function formatViewScaleRatio(pxPerMm: number): string {
+  const clean = (n: number): string => {
+    if (!Number.isFinite(n) || n <= 0) return '?';
+    return String(n >= 100 ? Math.round(n) : Math.round(n * 100) / 100);
+  };
+  return pxPerMm >= 1 ? `${clean(pxPerMm)}:1` : `1:${clean(1 / pxPerMm)}`;
+}
+
+/** Title-block scale value when the visible views disagree (B6+B8). */
+export const SHEET_SCALE_VARIES = 'VARIES';
+/** Title-block scale value when no view is visible at all. */
+export const SHEET_SCALE_NONE = '—';
 
 /** Half-space section clip: keep the geometry on the negative side of the plane. */
 export interface SectionPlane {
@@ -131,6 +182,14 @@ export function clipViewToCircle(view: DrawingView, circle: ClipCircle): Drawing
  * (minus padding and the 20px title strip) and centre, with model +y mapped
  * to sheet-up. `toModel` is the exact inverse of `toSheet` (used to turn a
  * sheet click on a view into model coords, e.g. placing a detail view).
+ *
+ * B6+B8: an optional `placement` overrides the auto-fit — an explicit scale
+ * (sheet px per view unit) replaces the fit scale, and offsetX/offsetY
+ * translate the whole view from its centred position (+x right, +y DOWN the
+ * sheet, so a downward drag is a +offsetY). When the parameter is omitted
+ * the view's own attached `placement` (DrawingView.placement) applies — that
+ * is how the DXF sheet writer honours placements without its own knowledge
+ * of them. The parameter wins when both are present.
  */
 export interface ViewTransform {
   /** px per model unit. */
@@ -144,26 +203,35 @@ export function viewTransform(
   view: DrawingView,
   cell: { x: number; y: number; w: number; h: number },
   padding = 40,
+  placement?: SheetViewPlacement,
 ): ViewTransform {
+  const place = placement ?? view.placement;
   const viewW = view.bounds.max.x - view.bounds.min.x;
   const viewH = view.bounds.max.y - view.bounds.min.y;
   const scaleX = (cell.w - padding * 2) / (viewW || 1);
   const scaleY = (cell.h - padding * 2 - 20) / (viewH || 1);
-  const scale = Math.min(scaleX, scaleY);
-  const offsetX = cell.x + padding + (cell.w - padding * 2 - viewW * scale) / 2;
-  const offsetY = cell.y + 20 + padding + (cell.h - padding * 2 - 20 - viewH * scale) / 2;
+  const override = place?.scale;
+  const scale =
+    typeof override === 'number' && override > 0 ? override : Math.min(scaleX, scaleY);
+  // offsetX is a sheet coordinate; offsetY is LOCAL to the cell (the flip
+  // below re-bases it). The old formula added cell.y here too, which the
+  // `+ cell.y` in toSheet then cancelled — every row ≥ 1 cell rendered on
+  // top of row 0 (Right/Iso overlapped Front/Top). Local is what survives.
+  const offsetX = cell.x + padding + (cell.w - padding * 2 - viewW * scale) / 2 + (place?.offsetX ?? 0);
+  const offsetY = 20 + padding + (cell.h - padding * 2 - 20 - viewH * scale) / 2;
+  const shiftY = place?.offsetY ?? 0; // +y down on the sheet (screen intuition)
   return {
     scale,
     toSheet(p) {
       return {
         x: (p.x - view.bounds.min.x) * scale + offsetX,
-        y: cell.h - ((p.y - view.bounds.min.y) * scale + offsetY) + cell.y,
+        y: cell.y + cell.h - ((p.y - view.bounds.min.y) * scale + offsetY) + shiftY,
       };
     },
     toModel(p) {
       return {
         x: view.bounds.min.x + (p.x - offsetX) / scale,
-        y: view.bounds.min.y + (cell.h + cell.y - offsetY - p.y) / scale,
+        y: view.bounds.min.y + (cell.y + cell.h + shiftY - offsetY - p.y) / scale,
       };
     },
   };
@@ -831,13 +899,17 @@ export function exportDrawingSVG(
 
   // Detail panels live in a strip below the base sheet, sized off the
   // first-view grid cells (the canvas uses the same math). Details whose
-  // viewIndex is stale (no source view) get sourceScale 0 and are skipped.
+  // viewIndex is stale (no source view) get sourceScale 0 and are skipped —
+  // as do details of a HIDDEN base view (B6+B8: hiding a base view hides its
+  // details; the positional link is that the source circle follows the
+  // base view's transform, which the placement overrides drive).
   const detailInputs: DetailPanelInput[] = (extras.details ?? []).map((d) => {
     const source = d.viewIndex >= 0 && d.viewIndex < list.length ? list[d.viewIndex]! : undefined;
+    const hidden = source?.placement?.visible === false;
     return {
       scale: d.scale,
       radius: d.radius,
-      sourceScale: source ? viewTransform(source, { x: 0, y: 0, w: cellW, h: cellH }, padding).scale : 0,
+      sourceScale: source && !hidden ? viewTransform(source, { x: 0, y: 0, w: cellW, h: cellH }, padding).scale : 0,
     };
   });
   const { panels, stripHeight } = layoutDetailPanels(detailInputs, width, height, cellW, cellH);
@@ -862,6 +934,9 @@ export function exportDrawingSVG(
   }));
 
   for (const { view, viewIndex, ox, oy, transform } of placements) {
+    // Hidden views (B6+B8) paint nothing — no geometry, no annotations, no
+    // title. Their detail panels were already dropped via sourceScale 0.
+    if (view.placement?.visible === false) continue;
     svg += `  <g stroke="black" stroke-width="1" fill="none">\n`;
     for (const line of view.lines) {
       const p1 = transform.toSheet(line.start);
@@ -938,8 +1013,13 @@ export function exportDrawingSVG(
       svg += `  </g>\n`;
     }
 
-    // View title (top-centre of the cell)
+    // View title (top-centre of the cell) + the honest per-view scale
+    // caption (B6+B8): every view discloses the scale it is drawn at, auto
+    // -fit included — the caller formats the ratio (formatViewScaleRatio).
     svg += `  <text x="${ox + cellW / 2}" y="${oy + 20}" text-anchor="middle" font-size="14" font-weight="bold">${escapeXml(view.name)}</text>\n`;
+    if (view.placement?.scaleLabel) {
+      svg += `  <text x="${ox + cellW / 2}" y="${oy + 34}" text-anchor="middle" font-size="10" fill="#333">${escapeXml(view.placement.scaleLabel)}</text>\n`;
+    }
   }
 
   // Detail views: thin source circle on the parent view + magnified panel.

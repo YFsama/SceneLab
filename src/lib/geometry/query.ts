@@ -72,7 +72,10 @@ export interface CircularHole {
  * quads, so face count is 2× the facets there. 12 keeps genuine tessellations
  * (and the 55-gon a ⌀6 hole now gets) while rejecting deliberate 8-gon sketch
  * extrusions that used to masquerade as ⌀-quoted circles; hexagon bosses were
- * already below the old threshold of 8.
+ * already below the old threshold of 8. Residual blind spot: at the default
+ * chord tolerance adaptiveSegments drops below 12 facets once ⌀ < ~0.25 mm
+ * (8–11-gons, hitting the hard 8-gon floor at ⌀ ≤ 0.13 mm), so holes that
+ * tiny pass undetected.
  */
 const MIN_HOLE_FACES = 12;
 
@@ -205,7 +208,11 @@ export function detectCircularHoles(body: SolidBody): CircularHole[] {
     // chord tolerance (any tessellation adaptiveSegments produced — e.g. the
     // 55-gon a ⌀6 hole now gets), the polygon IS the circle for practical
     // purposes and the nominal circumdiameter is quoted unchanged; a coarser,
-    // deliberate n-gon (12- to 54-gon) is quoted across flats.
+    // deliberate n-gon (12- to 54-gon) is quoted across flats. The gate is
+    // ABSOLUTE (mm) here because CAM drilling needs the pin-that-fits truth in
+    // part units, whereas drawingCircles' sagitta gate is RELATIVE (0.5% of
+    // radius) because a drawing only needs the loop to look circular at sheet
+    // scale — see RADIAL_TOL_RATIO in io/drawingCircles.ts.
     const sagitta = meanR * (1 - Math.cos(Math.PI / n));
     const diameter = sagitta > DEFAULT_CHORD_TOLERANCE ? 2 * meanR * Math.cos(Math.PI / n) : 2 * meanR;
 

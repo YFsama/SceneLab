@@ -1,15 +1,45 @@
 import type { Vec3, SolidBody, Face, Edge } from './types';
 import { computeConvexHull } from './convexHull';
 import { localToWorld, type CoordinateSystemDefinition } from './referenceGeometry';
+import { filletManifold, chamferManifold, shellManifold } from './booleanManifold';
+import { erodedInteriorVoxel } from './booleanVoxel';
 
 let nextId = 1;
 function genId(prefix: string): string {
   return `${prefix}_${nextId++}`;
 }
 
+/** Occupancy resolution for applyShell's non-convex (voxel-eroded) interior. */
+const SHELL_VOXEL_RESOLUTION = 40;
+
+/** Largest voxel cell edge applyShell's interior sampling would produce —
+ *  the slack the opening prisms need to break through a blocky inner wall. */
+function shellVoxelCellSize(body: SolidBody): number {
+  let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const v of body.vertices) {
+    if (v.x < minX) minX = v.x; if (v.y < minY) minY = v.y; if (v.z < minZ) minZ = v.z;
+    if (v.x > maxX) maxX = v.x; if (v.y > maxY) maxY = v.y; if (v.z > maxZ) maxZ = v.z;
+  }
+  const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+  return extent / SHELL_VOXEL_RESOLUTION;
+}
+
 /**
- * Fillet: round convex edges by overlaying a closed subtractive "sliver"
- * shell per edge (arc facets + wall quads + end-cap fans).
+ * Fillet: round convex edges.
+ *
+ * EXACT PATH (engine warm, manifold-convertible body, only convex selected
+ * edges): body − ⋃(analytic cylinder of `radius` along each selected edge),
+ * computed by the Manifold engine (see filletManifold). This is the true
+ * subtractive fillet: watertight, corner-correct within ~0.6% (at 3-edge
+ * corners the prismatic union keeps slightly more than the true rolling
+ * ball's ball-octant — see filletManifold's doc), and every downstream
+ * boolean stays on the fast exact path. The cylinder facets land within
+ * ~0.15% of the true arc (96-gon).
+ *
+ * OVERLAY FALLBACK (engine cold, non-manifold body, reflex/concave selected
+ * edges, or the exact op fails): the pass-30 stopgap below — round convex
+ * edges by overlaying a closed subtractive "sliver" shell per edge (arc
+ * facets + wall quads + end-cap fans).
  *
  * Geometry (per filleted edge, ARC_SEGMENTS = 8 facets):
  * - The arc center sits INSIDE the corner, at `radius / cos(halfAngle)` from
@@ -25,7 +55,7 @@ function genId(prefix: string): string {
  *   each adjacent face. 8 facets over the 90° quarter of a box edge means
  *   11.25° steps (the old 180° sweep over 8 segments kinked 49.6°).
  *
- * Overlay semantics (deliberate stopgap, kept honest):
+ * Overlay semantics (deliberate stopgap, kept as the fallback/preview):
  * - The original faces are kept, NOT trimmed — the viewport still shows the
  *   flat faces under the fillet. What is added per edge is a *closed,
  *   inward-wound shell* covering exactly the material a true fillet removes
@@ -35,18 +65,20 @@ function genId(prefix: string): string {
  *     ((1 − π/4)·r²·edgeLength per 90° edge) — the shells of edges meeting
  *     at a corner overlap, so a full-box fillet over-counts removal by
  *     8·r³·D with D ≈ 0.23 (≈5% at r=1 and ≈20% at r = half the narrow
- *     face; see the golden tests for the analytic corner formula).
+ *     face; see the golden tests for the analytic corner formula). The
+ *     exact path nails this union instead of over-counting it.
  *   • parity/raycast point-in-mesh tests (voxel fallback) now see the
  *     sliver regions as removed rather than gaining arbitrary
  *     double-crossings — the voxel result is blocky but corner-correct.
- * - The body remains deliberately NON-manifold: each filleted spine edge
- *   carries 4 faces (the two kept originals + the two shell walls), so
+ * - The overlay body remains deliberately NON-manifold: each filleted spine
+ *   edge carries 4 faces (the two kept originals + the two shell walls), so
  *   checkManifold/isBodyManifoldCompatible report it and the boolean
  *   guardrails in boolean.ts surface every post-fillet voxel fallback
- *   instead of silently eating the 15–19 s voxel cliff.
- * - Convex edges only: a concave (reflex) edge would need material ADDed
- *   outside the body; bodies this app builds today (boxes, prisms, extrudes,
- *   voxels) only have convex edges.
+ *   instead of silently eating the 15–19 s voxel cliff. The exact path
+ *   removes this wart entirely.
+ * - Convex edges only (both paths): a concave (reflex) edge would need
+ *   material ADDed outside the body; the exact path refuses it (overlay
+ *   fallback) and the overlay applies its convex-symmetric sliver.
  *
  * `edgeIds` semantics: an empty list means EVERY edge (whole-body fillet);
  * ids that do not exist match nothing. Edges with fewer than two adjacent
@@ -55,6 +87,8 @@ function genId(prefix: string): string {
  */
 export function applyFillet(body: SolidBody, edgeIds: string[], radius: number): SolidBody {
   if (radius <= 0) return body;
+  const exact = filletManifold(body, edgeIds, radius);
+  if (exact) return exact;
   const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
   const ARC_SEGMENTS = 8; // arc facets per fillet — 11.25° steps over a 90° corner
 
@@ -168,8 +202,18 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
 }
 
 /**
- * Chamfer: bevel convex edges with an equal-leg `distance` cut, overlaid as
- * a closed subtractive wedge shell per edge.
+ * Chamfer: bevel convex edges with an equal-leg `distance` cut.
+ *
+ * EXACT PATH (engine warm, manifold-convertible body, only convex selected
+ * edges): body − ⋃(per-edge wedge cutters) via the Manifold engine (see
+ * chamferManifold). Each wedge is the intersection of half-spaces that carves
+ * exactly the equal-leg chamfer region, and the cutters' union is EXACTLY the
+ * true chamfer removal — including at corners where chamfered edges meet (the
+ * overlay over-counts those by 8·D_w·d³).
+ *
+ * OVERLAY FALLBACK (engine cold / non-manifold body / the exact op fails):
+ * the pass-30 stopgap — bevel convex edges by overlaying a closed
+ * subtractive wedge shell per edge.
  *
  * Geometry: on each adjacent face, the chamfer leg runs in-plane, `distance`
  * away from the edge (directions u1/u2 point from the edge INTO each face,
@@ -187,12 +231,14 @@ export function applyFillet(body: SolidBody, edgeIds: string[], radius: number):
  * computeVolume therefore decreases by exactly d²·edgeLength/2 per 90° edge;
  * wedges of edges meeting at a corner overlap, over-counting removal by
  * 8·d³·D_w with D_w ≈ 0.75 (≈5% at d=1, ≈25% at d = half the narrow face;
- * see the golden tests). Like applyFillet the body stays non-manifold (each
- * chamfered spine edge carries 4 faces) so boolean guardrails fire. Convex
- * edges only, same as applyFillet.
+ * see the golden tests). Like applyFillet the overlay body stays
+ * non-manifold (each chamfered spine edge carries 4 faces) so boolean
+ * guardrails fire. Convex edges only, same as applyFillet.
  */
 export function applyChamfer(body: SolidBody, edgeIds: string[], distance: number): SolidBody {
   if (distance <= 0) return body;
+  const exact = chamferManifold(body, edgeIds, distance);
+  if (exact) return exact;
   // Empty selection means every edge (see applyFillet).
   const edgeSet = new Set(edgeIds.length > 0 ? edgeIds : body.edges.map((e) => e.id));
 
@@ -390,10 +436,42 @@ function faceDepthFromEdge(face: Face, edge: Edge): number {
   return depth;
 }
 
-/** Shell: hollow out a body by removing faces and offsetting inward */
+/**
+ * Shell: hollow out a body, optionally removing (opening) selected faces.
+ *
+ * EXACT PATH (engine warm, manifold-convertible body): body − eroded-body,
+ * the audit's spec for a real shell. The erosion inward by `thickness` is
+ * EXACT for convex bodies (intersection of the inward-shifted face
+ * half-spaces) and voxel-approximated for the rest (booleanVoxel's
+ * Euclidean-distance erosion of the occupancy grid, meshed and subtracted
+ * through Manifold: outer surfaces exact, inner cavity walls quantized to
+ * the grid, wall thickness within ±1 cell). Selected faces are opened by
+ * subtracting the prism of each face's own footprint extruded inward past
+ * the inner wall. The result is a watertight thin-wall solid — a SHELL, not
+ * the pocket below. Synchronous and instantaneous on the convex path; the
+ * voxel path costs one occupancy pass (~the same as hollowBody).
+ *
+ * POCKET FALLBACK (engine cold / non-convertible body / exact op fails):
+ * the pass-30 placeholder — selected faces are dropped and replaced by
+ * faces offset inward by `thickness`, with side faces stitched around them.
+ * This is NOT a hollow shell: the body stays solid everywhere else (a
+ * surface pocket), which is why the audit scheduled this rework.
+ */
 export function applyShell(body: SolidBody, faceIds: string[], thickness: number): SolidBody {
   if (thickness <= 0) return body;
   const faceSet = new Set(faceIds);
+
+  const exact = shellManifold(
+    body,
+    faceIds,
+    thickness,
+    // Non-convex interiors: the voxel EDT erosion, as its own mesh body.
+    () => erodedInteriorVoxel(body, thickness, SHELL_VOXEL_RESOLUTION),
+    // The blocky inner wall can sit up to a cell outside the nominal depth —
+    // open 2 cells past it so the prism always breaks through.
+    thickness + 2 * shellVoxelCellSize(body),
+  );
+  if (exact) return exact;
 
   const newFaces: Face[] = [];
   const shellFaces: Face[] = [];

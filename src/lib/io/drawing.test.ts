@@ -7,7 +7,9 @@ import {
   clipViewToCircle,
   viewTransform,
   dimensionSheetGeometry,
+  calloutSheetGeometry,
   formatDimValue,
+  formatViewScaleRatio,
   DIM_OFFSET_PX,
   DIM_EXT_GAP_PX,
   DIM_EXT_OVERSHOOT_PX,
@@ -17,8 +19,11 @@ import {
   cutPlaneSheetTrace,
   sectionScreenMapping,
   titleBlockLayout,
+  type DrawingDimension,
   type DrawingView,
+  type SheetViewPlacement,
 } from './drawing';
+import { exportSheetDXF } from './dxf';
 import { createBox, createCylinder } from '../geometry/brep';
 import { translateBody } from '../geometry/operations';
 import { detailPointToSheet } from './drawingNotes';
@@ -666,5 +671,246 @@ describe('exportDrawingSVG section views (B10)', () => {
       sectionCuts: [{ viewIndex: 1, coord: 0, screen: 'x', arrow: { x: -1, y: 0 }, label: 'A' }],
     });
     expect((svg.match(/<text[^>]*>A<\/text>/g) ?? []).length).toBe(2); // only view B's trace
+  });
+});
+
+// ---------------------------------------------------------------------------
+// View placement overrides (B6+B8): per-view offsets, scale and visibility.
+// ---------------------------------------------------------------------------
+
+describe('formatViewScaleRatio', () => {
+  it('formats px-per-mm as a drawing ratio both sides of 1', () => {
+    expect(formatViewScaleRatio(2)).toBe('2:1');
+    expect(formatViewScaleRatio(1)).toBe('1:1');
+    expect(formatViewScaleRatio(0.4255)).toBe('1:2.35');
+    expect(formatViewScaleRatio(0.5)).toBe('1:2');
+    expect(formatViewScaleRatio(150)).toBe('150:1');
+  });
+
+  it('degrades non-finite input to a placeholder instead of throwing', () => {
+    expect(formatViewScaleRatio(Number.NaN)).toBe('1:?');
+    expect(formatViewScaleRatio(0)).toBe('1:?');
+  });
+});
+
+describe('viewTransform placement overrides (B6+B8)', () => {
+  const view: DrawingView = {
+    name: 'Front',
+    lines: [
+      { start: { x: -100, y: -50 }, end: { x: 100, y: -50 } },
+      { start: { x: -100, y: -50 }, end: { x: -100, y: 50 } },
+    ],
+    arcs: [],
+    dimensions: [],
+    bounds: { min: { x: -100, y: -50 }, max: { x: 100, y: 50 } },
+  };
+  const cell = { x: 100, y: 50, w: 400, h: 300 };
+
+  it('offsets translate toSheet by (offsetX, offsetY) and toModel inverts it', () => {
+    const base = viewTransform(view, cell);
+    const moved = viewTransform(view, cell, 40, { offsetX: 30, offsetY: 20 });
+    for (const p of [{ x: -100, y: -50 }, { x: 0, y: 0 }, { x: 100, y: 50 }]) {
+      const a = base.toSheet(p);
+      const b = moved.toSheet(p);
+      expect(b.x - a.x).toBeCloseTo(30, 9);
+      expect(b.y - a.y).toBeCloseTo(20, 9); // +offsetY moves DOWN the sheet
+      const back = moved.toModel(b);
+      expect(back.x).toBeCloseTo(p.x, 6);
+      expect(back.y).toBeCloseTo(p.y, 6);
+    }
+  });
+
+  it('an explicit scale replaces the auto-fit scale', () => {
+    const fit = viewTransform(view, cell);
+    const doubled = viewTransform(view, cell, 40, { scale: fit.scale * 2 });
+    expect(doubled.scale).toBeCloseTo(fit.scale * 2, 9);
+    const a = fit.toSheet({ x: view.bounds.min.x, y: 0 });
+    const b = fit.toSheet({ x: view.bounds.max.x, y: 0 });
+    const c = doubled.toSheet({ x: view.bounds.min.x, y: 0 });
+    const d = doubled.toSheet({ x: view.bounds.max.x, y: 0 });
+    expect(d.x - c.x).toBeCloseTo((b.x - a.x) * 2, 6);
+  });
+
+  it('row-1 grid cells place the view in their own row (cell.y regression)', () => {
+    // The old formula cancelled cell.y out (offsetY carried it into the
+    // flip), so the Right/Iso views of the 2×2 sheet rendered on top of
+    // Front/Top. A row-1 cell must map the view into [cell.y, cell.y+h].
+    const row0 = viewTransform(view, { x: 0, y: 0, w: 400, h: 300 });
+    const row1 = viewTransform(view, { x: 0, y: 300, w: 400, h: 300 });
+    for (const p of [{ x: -100, y: -50 }, { x: 0, y: 0 }, { x: 100, y: 50 }]) {
+      const a = row0.toSheet(p);
+      const b = row1.toSheet(p);
+      expect(b.x).toBeCloseTo(a.x, 9); // same column
+      expect(b.y - a.y).toBeCloseTo(300, 9); // exactly one row down
+      expect(b.y).toBeGreaterThanOrEqual(300 - 1e-6);
+      expect(b.y).toBeLessThanOrEqual(600 + 1e-6);
+      const back = row1.toModel(b);
+      expect(back.x).toBeCloseTo(p.x, 6);
+      expect(back.y).toBeCloseTo(p.y, 6);
+    }
+  });
+
+  it('non-positive or absent scale falls back to auto-fit; an attached view.placement applies when the parameter is omitted', () => {
+    const fit = viewTransform(view, cell);
+    expect(viewTransform(view, cell, 40, { scale: 0 }).scale).toBeCloseTo(fit.scale, 12);
+    expect(viewTransform(view, cell, 40, { scale: -3 }).scale).toBeCloseTo(fit.scale, 12);
+    // Attached placement (the channel the DXF sheet writer rides): honoured
+    // by default…
+    const attached: DrawingView = { ...view, placement: { viewKey: 'front', offsetX: 11, offsetY: -7 } };
+    const viaAttachment = viewTransform(attached, cell);
+    const p = { x: 0, y: 0 };
+    expect(viaAttachment.toSheet(p).x - viewTransform(view, cell).toSheet(p).x).toBeCloseTo(11, 9);
+    expect(viaAttachment.toSheet(p).y - viewTransform(view, cell).toSheet(p).y).toBeCloseTo(-7, 9);
+    // …but an explicit parameter wins over the attachment.
+    const viaParam = viewTransform(attached, cell, 40, { offsetX: 0, offsetY: 0 });
+    expect(viaParam.toSheet(p).x).toBeCloseTo(viewTransform(view, cell).toSheet(p).x, 9);
+  });
+
+  it('T3: dimensions, callouts and center marks ride the same transform (translation covariance)', () => {
+    // Everything on the sheet is placed through toSheet; an offset
+    // translation therefore moves the WHOLE annotation stack rigidly.
+    const base = viewTransform(view, cell);
+    const moved = viewTransform(view, cell, 40, { offsetX: 25, offsetY: -15 });
+    const dim: DrawingDimension = {
+      type: 'linear',
+      start: { x: -100, y: -50 },
+      end: { x: 100, y: -50 },
+      value: 200,
+      offset: 8,
+    };
+    const g0 = dimensionSheetGeometry(dim, base.toSheet);
+    const g1 = dimensionSheetGeometry(dim, moved.toSheet);
+    const shift = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+      expect(b.x - a.x).toBeCloseTo(25, 9);
+      expect(b.y - a.y).toBeCloseTo(-15, 9);
+    };
+    shift(g0.dim.start, g1.dim.start);
+    shift(g0.dim.end, g1.dim.end);
+    shift(g0.text, g1.text);
+    for (let i = 0; i < g0.ext.length; i++) {
+      shift(g0.ext[i]!.start, g1.ext[i]!.start);
+      shift(g0.ext[i]!.end, g1.ext[i]!.end);
+    }
+    // Callouts: the leader is built from the projected centre + radius.
+    const c0 = calloutSheetGeometry(base.toSheet({ x: 0, y: 0 }), 10 * base.scale);
+    const c1 = calloutSheetGeometry(moved.toSheet({ x: 0, y: 0 }), 10 * moved.scale);
+    for (let i = 0; i < c0.leader.length; i++) shift(c0.leader[i]!, c1.leader[i]!);
+    shift(c0.text, c1.text);
+    // Center marks: centre derives from toSheet, arms from transform.scale.
+    shift(base.toSheet({ x: 0, y: 0 }), moved.toSheet({ x: 0, y: 0 }));
+    expect(10 * moved.scale).toBeCloseTo(10 * base.scale, 9);
+  });
+
+  it('T3: a scale override keeps the fixed sheet-px dimension standoff', () => {
+    const view2 = projectBody(createBox(10, 10, 10), { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 1);
+    const dim = view2.dimensions[0]!;
+    for (const placement of [{}, { scale: 0.02 }, { offsetX: 40, offsetY: 30 }] as SheetViewPlacement[]) {
+      const tr = viewTransform(view2, { x: 0, y: 0, w: 400, h: 300 }, 40, placement);
+      const g = dimensionSheetGeometry(dim, tr.toSheet);
+      // Perpendicular distance from the measured point to the dim line is
+      // DIM_OFFSET_PX at ANY view scale — the gap cannot collapse.
+      const a = tr.toSheet(dim.start);
+      const ux = g.dim.end.x - g.dim.start.x;
+      const uy = g.dim.end.y - g.dim.start.y;
+      const len = Math.hypot(ux, uy) || 1;
+      const dist = Math.abs((a.x - g.dim.start.x) * uy - (a.y - g.dim.start.y) * ux) / len;
+      expect(dist).toBeCloseTo(DIM_OFFSET_PX, 6);
+    }
+  });
+});
+
+describe('exportDrawingSVG with placements (B6+B8)', () => {
+  // Projection scale 1: view units ARE mm, so a placement scale of 2 px/mm
+  // is literally the "2:1" on the sheet.
+  const front = projectBodies([createBox(10, 10, 10)], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 1, 'Alpha');
+  const cell = { x: 0, y: 0, w: 800, h: 600 };
+
+  it('a 2:1 front view carries the scale caption and scaled geometry', () => {
+    const placed: DrawingView = {
+      ...front,
+      placement: { viewKey: 'front', scale: 2, scaleLabel: '2:1' },
+    };
+    const svg = exportDrawingSVG([placed], 800, 600);
+    // Caption under the view title.
+    expect(svg).toMatch(/<text x="400" y="34" text-anchor="middle" font-size="10" fill="#333">2:1<\/text>/);
+    // Geometry scaled: the first exported line equals the placed transform.
+    const tr = viewTransform(placed, cell, 40);
+    const line = placed.lines[0]!;
+    const p1 = tr.toSheet(line.start);
+    const p2 = tr.toSheet(line.end);
+    const m = /<line x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)" \/>/.exec(svg);
+    expect(m).not.toBeNull();
+    expect(Math.abs(Number(m![1]) - p1.x)).toBeLessThan(0.01);
+    expect(Math.abs(Number(m![2]) - p1.y)).toBeLessThan(0.01);
+    expect(Math.abs(Number(m![3]) - p2.x)).toBeLessThan(0.01);
+    expect(Math.abs(Number(m![4]) - p2.y)).toBeLessThan(0.01);
+    // …and a 10 mm edge now spans exactly 20 sheet px.
+    const a = tr.toSheet({ x: front.bounds.min.x, y: 0 });
+    const b = tr.toSheet({ x: front.bounds.max.x, y: 0 });
+    expect(b.x - a.x).toBeCloseTo(20, 6);
+  });
+
+  it('offsets move the exported geometry by exactly (offsetX, offsetY)', () => {
+    const plain = exportDrawingSVG([front], 800, 600);
+    const placed: DrawingView = { ...front, placement: { viewKey: 'front', offsetX: 30, offsetY: 20 } };
+    const svg = exportDrawingSVG([placed], 800, 600);
+    const coord = (s: string) => {
+      const m = /<line x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)" \/>/.exec(s);
+      return m ? { x1: Number(m[1]), y1: Number(m[2]) } : null;
+    };
+    const a = coord(plain);
+    const b = coord(svg);
+    expect(a && b).toBeTruthy();
+    expect(b!.x1 - a!.x1).toBeCloseTo(30, 4);
+    expect(b!.y1 - a!.y1).toBeCloseTo(20, 4);
+  });
+
+  it('hidden views export nothing — no title, no geometry — and their details drop', () => {
+    const beta = projectBodies([createBox(10, 10, 10)], { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: -1 }, 1, 'Beta');
+    const hidden: DrawingView = { ...front, placement: { viewKey: 'front', visible: false } };
+    const svg = exportDrawingSVG([hidden, beta], 800, 600, {
+      details: [{ id: 'd1', viewIndex: 0, center: { x: 0, y: 0 }, radius: 25, scale: 2 }],
+    });
+    expect(svg).not.toContain('>Alpha<');
+    expect(svg).toContain('>Beta<');
+    // The detail of the hidden base view is gone (source circle + panel).
+    expect(svg).not.toContain('DETAIL A');
+    expect(svg).not.toMatch(/<circle cx="[\d.]+" cy="[\d.]+" r="[\d.]+" fill="none" stroke="#555"/);
+  });
+});
+
+describe('exportSheetDXF honours view placements (B6+B8, via viewTransform)', () => {
+  const front = projectBodies([createBox(10, 10, 10)], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 1, 'Alpha');
+  const cell = { x: 0, y: 0, w: 800, h: 600 };
+
+  /** First OUTLINE LINE entity as numbers (CAD coords, y already flipped). */
+  function firstOutlineLine(dxf: string): { x1: number; y1: number } | null {
+    const m = /0\r\nLINE\r\n8\r\nOUTLINE\r\n10\r\n([\d.-]+)\r\n20\r\n([\d.-]+)\r\n/.exec(dxf);
+    return m ? { x1: Number(m[1]), y1: Number(m[2]) } : null;
+  }
+
+  it('entities move with the placement offsets (CAD y is sheet-y flipped)', () => {
+    const plain = firstOutlineLine(exportSheetDXF([front], 800, 600));
+    const placed: DrawingView = { ...front, placement: { viewKey: 'front', offsetX: 25, offsetY: 20 } };
+    const moved = firstOutlineLine(exportSheetDXF([placed], 800, 600));
+    expect(plain && moved).toBeTruthy();
+    expect(moved!.x1 - plain!.x1).toBeCloseTo(25, 4); // +x right, unchanged
+    expect(moved!.y1 - plain!.y1).toBeCloseTo(-20, 4); // sheet +y down = CAD −y
+  });
+
+  it('a scale override scales the emitted entities (first line = placed transform)', () => {
+    const placed: DrawingView = { ...front, placement: { viewKey: 'front', offsetX: 25, offsetY: 20, scale: 0.5 } };
+    const got = firstOutlineLine(exportSheetDXF([placed], 800, 600));
+    expect(got).toBeTruthy();
+    // The writer's own placement math, replicated: viewTransform with the
+    // attached placement, then the CAD y flip (fy = height − sheet y).
+    const tr = viewTransform(placed, cell, 40);
+    const p1 = tr.toSheet(front.lines[0]!.start);
+    expect(got!.x1).toBeCloseTo(p1.x, 3);
+    expect(got!.y1).toBeCloseTo(600 - p1.y, 3);
+    // 10 mm at 0.5 px/mm = 5 sheet px of projected width.
+    const a = tr.toSheet({ x: front.bounds.min.x, y: 0 });
+    const b = tr.toSheet({ x: front.bounds.max.x, y: 0 });
+    expect(b.x - a.x).toBeCloseTo(5, 6);
   });
 });

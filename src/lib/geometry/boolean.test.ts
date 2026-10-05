@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import {
   booleanOp,
   asyncBooleanOp,
@@ -9,11 +9,12 @@ import {
   lastBooleanFallbackReason,
   setBooleanFallbackNotifier,
   isManifoldEngineReady,
+  warmUpBooleanEngine,
 } from './boolean';
 import { booleanOpVoxel } from './booleanVoxel';
 import { createBox, createCylinder, createSphere, checkManifold, computeVolume } from './brep';
 import { isPointInsideBody } from './measure';
-import { translateBody, applyFillet } from './operations';
+import { translateBody, applyFillet, applyChamfer, applyShell } from './operations';
 import { makePlane } from './referenceGeometry';
 import { getToasts, clearToasts } from '../toast';
 import type { SolidBody, Vec3 } from './types';
@@ -553,5 +554,45 @@ describe('hollowBody isotropic erosion (anisotropic-cell fix)', () => {
     const h = hollowBody(createBox(40, 40, 40), 2, 40)!;
     expect(h.faces.length).toBeGreaterThan(5000);
     expect(checkManifold(h).boundaryEdges).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Warm-engine guardrails: the exact fillet/chamfer/shell paths produce
+// MANIFOLD results, so booleans after them stay on the exact path — the
+// pass-30 overlay (cold) was non-manifold and forced the voxel cliff.
+// Appended after the cold tests so their ordering stays deterministic.
+// ---------------------------------------------------------------------------
+
+describe('fillet/chamfer/shell warm keep the exact boolean path', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  it('a warm fillet result is manifold-compatible (the overlay was not)', () => {
+    const filleted = applyFillet(createBox(30, 10, 30), [], 1);
+    expect(isBodyManifoldCompatible(filleted)).toBe(true);
+  });
+
+  it('a warm chamfer and shell result are manifold-compatible too', () => {
+    expect(isBodyManifoldCompatible(applyChamfer(createBox(30, 10, 30), [], 1))).toBe(true);
+    expect(isBodyManifoldCompatible(applyShell(createBox(20, 20, 20), [], 1))).toBe(true);
+  });
+
+  it('a 16-op drill chain on a warm filleted body never touches the voxel path', () => {
+    const filleted = applyFillet(createBox(30, 10, 30), [], 1);
+    const cutter = translateBody(createBox(2, 2, 12), { x: 0, y: 4, z: 0 });
+    for (let i = 0; i < 16; i++) {
+      const hole = translateBody(cutter, { x: (i - 8) * 1.1, y: 0, z: 0 });
+      expect(booleanOp(filleted, hole, 'difference', 8)).not.toBeNull();
+    }
+    expect(lastBooleanFallbackReason()).toBeNull();
+  });
+
+  it('cold engine flips back to the overlay (non-manifold) — the fallback seam', async () => {
+    const { __resetManifoldEngineForTests } = await import('./booleanManifold');
+    __resetManifoldEngineForTests();
+    expect(isBodyManifoldCompatible(applyFillet(createBox(30, 10, 30), [], 1))).toBe(false);
+    await warmUpBooleanEngine();
   });
 });

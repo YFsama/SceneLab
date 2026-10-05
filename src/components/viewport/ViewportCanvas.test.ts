@@ -7,10 +7,11 @@ import { useViewBookmarks } from '../../store/viewBookmarks';
 import { createSketch, addLine, addArc } from '../../lib/sketch/engine';
 import { createBox, translateBody, type SolidBody } from '../../lib/geometry';
 import { translations } from '../../lib/i18n';
-import { clearToasts, getToasts } from '../../lib/toast';
+import { clearToasts, getToasts, showToast } from '../../lib/toast';
 import { captureFreshCanvas } from '../../lib/render/capture';
 import { defaultCamSetup } from '../../lib/cam';
 import { ViewportCanvas } from './ViewportCanvas';
+import { ToastHost } from '../ui/ToastHost';
 
 // ViewportCanvas is a WebGL component; jsdom has neither WebGL nor a canvas
 // rasterizer. Mount the REAL component with only the two GPU-bound classes
@@ -1714,6 +1715,120 @@ describe('ViewportCanvas CAM machine simulation (rendered)', () => {
     }
   });
 
+  it('truncates the in-progress segment at the tool position and rewinds it on reset', async () => {
+    const id = seedCamOperation();
+    const cache = useStore.getState().camToolpaths[id]!;
+    const pts = cache.toolpath.points;
+    const plunge = cache.toolpath.params.plungeRate;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      cum.push(cum[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z));
+    }
+    const total = cum[cum.length - 1]!;
+    // A real CUT segment (not a rapid, not a plunge-feed move) well past the
+    // entry zigzag, long enough for float32-exact assertions.
+    let k = -1;
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i]!;
+      if (p.rapid) continue;
+      if (p.feedRate !== undefined && p.feedRate === plunge) continue;
+      if (cum[i]! - cum[i - 1]! > 2 && cum[i - 1]! > total * 0.25) { k = i; break; }
+    }
+    expect(k).toBeGreaterThan(0);
+    const t = 0.4;
+    const D = cum[k - 1]! + t * (cum[k]! - cum[k - 1]!);
+    const a = pts[k - 1]!;
+    const b = pts[k]!;
+    const ex = {
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t,
+      z: a.z + (b.z - a.z) * t,
+    };
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'seek', t: D / total });
+      // The tool sits inside segment k…
+      expect(simTool().position.x).toBeCloseTo(ex.x, 4);
+      expect(simTool().position.y).toBeCloseTo(ex.y, 4);
+      expect(simTool().position.z).toBeCloseTo(ex.z, 4);
+      // …and that segment's line is the in-progress one: bright, far endpoint
+      // pulled back onto the tool (the old whole-vertex drawRange truncation
+      // hid this segment until the walk crossed it entirely).
+      const inProgress = camCutLines().find((l) => {
+        const marks = l.userData.simMarks as [number, number];
+        return marks[0] === k - 1 && marks[1] === k;
+      });
+      expect(inProgress).toBeDefined();
+      const attr = inProgress!.geometry.getAttribute('position') as THREE.BufferAttribute;
+      expect(attr.getX(1)).toBeCloseTo(ex.x, 4);
+      expect(attr.getY(1)).toBeCloseTo(ex.y, 4);
+      expect(attr.getZ(1)).toBeCloseTo(ex.z, 4);
+      expect((inProgress!.material as THREE.LineBasicMaterial).opacity).toBeCloseTo(0.9, 5);
+      // Segments fully past are bright with untouched endpoints; segments not
+      // yet reached are dim.
+      for (const l of camCutLines()) {
+        const marks = l.userData.simMarks as [number, number];
+        if (marks === inProgress!.userData.simMarks) continue;
+        if (cum[marks[1]]! <= D) expect((l.material as THREE.LineBasicMaterial).opacity).toBeCloseTo(0.9, 5);
+        else if (cum[marks[0]]! >= D) expect((l.material as THREE.LineBasicMaterial).opacity).toBeCloseTo(0.25, 5);
+      }
+      // Rewind: the truncated endpoint is restored to its original position
+      // and the segment dims again.
+      dispatchSim({ action: 'seek', t: 0 });
+      expect(attr.getX(1)).toBeCloseTo(b.x, 4);
+      expect(attr.getY(1)).toBeCloseTo(b.y, 4);
+      expect(attr.getZ(1)).toBeCloseTo(b.z, 4);
+      expect((inProgress!.material as THREE.LineBasicMaterial).opacity).toBeCloseTo(0.25, 5);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('playing another op dims the previous op’s finished highlight (no cross-op residue)', async () => {
+    const box = createBox(20, 15, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], objectIds: [box.id] });
+    const add = (name: string, stepover: number) =>
+      useStore.getState().addCamOperation({
+        name,
+        enabled: true,
+        type: 'pocket',
+        bodyId: box.id,
+        toolId: 'em-6mm',
+        params: { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover, stockTop: 10, stockBottom: -5 },
+      });
+    const idA = add('Pocket A', 3);
+    const idB = add('Pocket B', 2);
+    const cacheB = useStore.getState().camToolpaths[idB]!;
+    expect(cacheB).toBeDefined();
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const opacity = (l: THREE.Line) => (l.material as THREE.LineBasicMaterial).opacity;
+      const linesOf = (opId: string) => camCutLines().filter((l) => l.userData.opId === opId);
+      expect(linesOf(idA).length).toBeGreaterThan(0);
+      expect(linesOf(idB).length).toBeGreaterThan(0);
+
+      // Finish op A: all of A's segments bright.
+      dispatchSim({ action: 'seek', opId: idA, t: 1 });
+      for (const l of linesOf(idA)) expect(opacity(l)).toBeCloseTo(0.9, 5);
+
+      // Start op B: A's residue is cleared — the update must dim EVERY cut
+      // line, not only the active op's (the old filter left A bright).
+      dispatchSim({ action: 'reset', opId: idB });
+      for (const l of linesOf(idA)) expect(opacity(l)).toBeCloseTo(0.25, 5);
+      for (const l of linesOf(idB)) expect(opacity(l)).toBeCloseTo(0.25, 5);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
   it('sizes the tool mesh from the op tool diameter (cylinder + cone)', async () => {
     seedCamOperation(); // em-6mm → ⌀6
     const raf = installFakeRaf();
@@ -1833,3 +1948,73 @@ describe('ViewportCanvas camera sync — active camera persists (rendered)', () 
   });
 });
 
+
+// Long-soak listener audit (pass-30 perf audit: "JSEventListeners +0.5/edit,
+// unattributed"). jsdom has no getEventListeners, so the count is taken by
+// patching window/document add/removeEventListener directly: after a soak of
+// toast cycles, context-menu open/close cycles and store-driven re-renders,
+// unmounting must bring the live-listener count back to zero — re-subscribing
+// effects (remove+add) are fine, anything that only adds shows up as a net
+// positive.
+describe('ViewportCanvas listener hygiene (long-soak audit)', () => {
+  it('200 toast cycles, 50 context-menu open/close cycles and 50 store edits net zero listeners', async () => {
+    const winAdd = window.addEventListener.bind(window);
+    const winRemove = window.removeEventListener.bind(window);
+    const docAdd = document.addEventListener.bind(document);
+    const docRemove = document.removeEventListener.bind(document);
+    let live = 0;
+    let added = 0;
+    window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, opts?: AddEventListenerOptions | boolean) => {
+      live++; added++;
+      return winAdd(type, listener, opts);
+    }) as typeof window.addEventListener;
+    window.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, opts?: EventListenerOptions | boolean) => {
+      live--;
+      return winRemove(type, listener, opts);
+    }) as typeof window.removeEventListener;
+    document.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, opts?: AddEventListenerOptions | boolean) => {
+      live++; added++;
+      return docAdd(type, listener, opts);
+    }) as typeof document.addEventListener;
+    document.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, opts?: EventListenerOptions | boolean) => {
+      live--;
+      return docRemove(type, listener, opts);
+    }) as typeof document.removeEventListener;
+
+    const sketch = createSketch('xy');
+    addLine(sketch, 0, 0, 10, 0);
+    useStore.setState({ sketchActive: true, currentSketch: sketch });
+
+    const m = await mount(createElement(ViewportCanvas));
+    const t = await mount(createElement(ToastHost));
+    try {
+      // 200 toast cycles (show + self-expire with a 1 ms duration so the
+      // timers retire inside the test).
+      for (let i = 0; i < 200; i++) showToast(`soak ${i}`, 'info', 1);
+      expect(getToasts().length).toBeGreaterThan(0);
+
+      // 50 context-menu open/close cycles interleaved with 50 store edits
+      // (each edit re-renders the viewport and may re-subscribe effects).
+      for (let i = 0; i < 50; i++) {
+        await openSketchMenu(m);
+        await act(async () => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        });
+        await act(async () => {
+          useStore.setState({ viewDirection: i % 2 === 0 ? 'top' : 'iso' });
+        });
+      }
+      // The soak really exercised the paths (listeners came and went).
+      expect(added).toBeGreaterThan(0);
+    } finally {
+      await unmount(t);
+      await unmount(m);
+      window.addEventListener = winAdd;
+      window.removeEventListener = winRemove;
+      document.addEventListener = docAdd;
+      document.removeEventListener = docRemove;
+      clearToasts();
+    }
+    expect(live).toBe(0);
+  });
+});

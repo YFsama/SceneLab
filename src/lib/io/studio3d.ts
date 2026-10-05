@@ -19,6 +19,7 @@ import type { SketchEntity, SketchConstraint } from '../sketch/types';
 import type { PlaneDefinition } from '../geometry/types';
 import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition, AnnotationDefinition } from '../geometry/referenceGeometry';
 import type { DrawingDetail, DrawingNote, DrawingSectionAxis } from './drawingNotes';
+import type { DrawingViewKey } from './drawing';
 // Type-only imports: erased at runtime, so the io layer never pulls in the CAM
 // generator stack — the shapes are the contract shared with lib/cam/setup.
 import type { CAMSetup, CAMOperation } from '../cam/setup';
@@ -33,11 +34,79 @@ export interface SerializedReferenceGeometry {
   annotations: AnnotationDefinition[];
 }
 
+/**
+ * One base view's stored placement on the drawing sheet (B6+B8): where the
+ * view sits, whether it is shown, and its explicit scale. `offsetX/offsetY`
+ * are a sheet-px translation from the auto-centred grid position (+x right,
+ * +y DOWN the sheet). `scaleOverride` is sheet px per model mm (the honest
+ * "2:1" semantics — the canvas divides by its PROJECTION_SCALE to get the
+ * view-unit scale its transforms consume); null = auto-fit into the cell.
+ */
+export interface DrawingViewPlacement {
+  id: string;
+  viewKey: DrawingViewKey;
+  visible: boolean;
+  offsetX: number;
+  offsetY: number;
+  scaleOverride: number | null;
+}
+
+/** The four standard sheet views, in grid order (Front, Top, Right, Iso). */
+export const DRAWING_VIEW_KEYS: readonly DrawingViewKey[] = ['front', 'top', 'right', 'iso'];
+
+/** Fresh placements for the four standard views: visible, centred, auto-fit. */
+export function defaultDrawingViewPlacements(): DrawingViewPlacement[] {
+  return DRAWING_VIEW_KEYS.map((viewKey) => ({
+    id: viewKey,
+    viewKey,
+    visible: true,
+    offsetX: 0,
+    offsetY: 0,
+    scaleOverride: null,
+  }));
+}
+
+/**
+ * Defensive parse of stored per-view placements: junk entries are dropped,
+ * finite-number violations fall back per-field (offsets 0, scaleOverride
+ * null), and the result is ALWAYS the four standard views in canonical
+ * order — missing/hidden-behind-corruption keys get their defaults. Duplicates
+ * on one viewKey keep the last valid entry.
+ */
+export function sanitizeDrawingViewPlacements(raw: unknown): DrawingViewPlacement[] {
+  const byKey = new Map<DrawingViewKey, DrawingViewPlacement>();
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const e = entry as Record<string, unknown>;
+      const viewKey = e.viewKey;
+      if (typeof e.id !== 'string' || typeof viewKey !== 'string') continue;
+      if (!DRAWING_VIEW_KEYS.includes(viewKey as DrawingViewKey)) continue;
+      const finite = (v: unknown): number | null =>
+        typeof v === 'number' && Number.isFinite(v) ? v : null;
+      const offsetX = finite(e.offsetX);
+      const offsetY = finite(e.offsetY);
+      const scaleOverride = finite(e.scaleOverride);
+      byKey.set(viewKey as DrawingViewKey, {
+        id: e.id,
+        viewKey: viewKey as DrawingViewKey,
+        visible: e.visible !== false, // only an explicit false hides
+        offsetX: offsetX ?? 0,
+        offsetY: offsetY ?? 0,
+        scaleOverride: scaleOverride !== null && scaleOverride > 0 ? scaleOverride : null,
+      });
+    }
+  }
+  return defaultDrawingViewPlacements().map((d) => byKey.get(d.viewKey) ?? d);
+}
+
 /** Drawing-sheet state (drawing workspace): section axis, detail views, notes. */
 export interface SerializedDrawing {
   sectionAxis: DrawingSectionAxis;
   details: DrawingDetail[];
   notes: DrawingNote[];
+  /** Per-view placements (optional: files from before B6/B8 predate it). */
+  viewPlacements?: DrawingViewPlacement[];
 }
 
 /**
@@ -179,6 +248,8 @@ export function deserializeDrawing(project: ProjectFile): SerializedDrawing {
     sectionAxis: axis,
     details: Array.isArray(d?.details) ? d.details : [],
     notes: Array.isArray(d?.notes) ? d.notes : [],
+    // Defensive: always the four standard views, junk filtered per entry.
+    viewPlacements: sanitizeDrawingViewPlacements(d?.viewPlacements),
   };
 }
 

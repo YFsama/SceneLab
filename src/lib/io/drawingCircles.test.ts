@@ -178,17 +178,26 @@ describe('detectCircles — boolean-processed bodies (QA F7)', () => {
     expect(ringDegrees.length).toBeGreaterThanOrEqual(16); // a real tessellated ring
     expect(Math.max(...ringDegrees)).toBeGreaterThanOrEqual(4); // seam spokes present
 
-    // Detection must find it anyway (pre-fix this found NOTHING: the walk took
-    // the first unused incident edge and never closed the ring). The turning-
-    // angle continuation walks the ~11° chords; the length-consistency band
-    // keeps long seam spokes and near-tangential corner spokes out.
+    // Detection must find the ⌀6 hole (pre-fix this found NOTHING: the walk
+    // took the first unused incident edge and never closed the ring). The
+    // turning-angle continuation walks the ~11° chords; the length-consistency
+    // band keeps long seam spokes and near-tangential corner spokes out.
+    // Pass-30 recorded the ⌀20 pocket MOUTH ring as "defeats the walker"
+    // (skip-diagonals interleaved with the 98-unit chords); with the committed
+    // length-band + start-closure rules that ring now closes too — and it is a
+    // TRUE circle of the front view (the mouth on the viewed face), so the
+    // correct expectation is two centers: the mouth (r = 10·SCALE) and the
+    // drilled hole (r = 3·SCALE), concentric at the pocket axis.
     const centers = view.centers ?? [];
-    expect(centers).toHaveLength(1);
-    expect(centers[0]!.x).toBeCloseTo(0, 3);
-    expect(centers[0]!.y).toBeCloseTo(10 * SCALE, 3);
-    // 32-gon at the default tessellation: relative sagitta 0.48% ≤ 0.5% → the
-    // nominal ⌀6 radius is quoted.
-    expect(centers[0]!.radius).toBeCloseTo(3 * SCALE, 2);
+    expect(centers).toHaveLength(2);
+    const sortByR = (a: { radius: number }, b: { radius: number }) => a.radius - b.radius;
+    const sorted = [...centers].sort(sortByR);
+    for (const c of sorted) {
+      expect(c.x).toBeCloseTo(0, 3);
+      expect(c.y).toBeCloseTo(10 * SCALE, 3);
+    }
+    expect(sorted[0]!.radius).toBeCloseTo(3 * SCALE, 2);
+    expect(sorted[1]!.radius).toBeCloseTo(10 * SCALE, 2);
   });
 
   it('a deliberately spoked ring (a radial line on every chord vertex) still chains', () => {

@@ -1,4 +1,5 @@
 import type { SolidBody } from '../geometry/types';
+import { triangulateFace } from '../geometry/brep';
 
 export interface MeshArrays {
   /** Flat XYZ positions, 3 numbers per vertex. */
@@ -11,10 +12,13 @@ export interface MeshArrays {
 
 /**
  * Build flat position/index arrays for a body's render mesh. Each face is
- * fan-triangulated and contributes its own copy of its vertices, so adjacent
- * faces don't share vertices — giving correct flat (faceted) shading once
- * normals are derived from the winding. Pure (no Three.js), so it is unit
- * testable and reusable for export/screenshot paths.
+ * triangulated (concave-safe ear-clip — the Manifold decimation can emit
+ * concave polygonal faces a naive fan would wind inside-out, inverting one
+ * triangle over the pocket in the viewport and picking) and contributes its
+ * own copy of its vertices, so adjacent faces don't share vertices — giving
+ * correct flat (faceted) shading once normals are derived from the winding.
+ * Pure (no Three.js), so it is unit testable and reusable for
+ * export/screenshot paths.
  */
 export function buildBodyMeshArrays(body: SolidBody): MeshArrays {
   const positions: number[] = [];
@@ -27,8 +31,16 @@ export function buildBodyMeshArrays(body: SolidBody): MeshArrays {
     for (const v of face.vertices) {
       positions.push(v.x, v.y, v.z);
     }
-    for (let i = 1; i < face.vertices.length - 1; i++) {
-      indices.push(baseIdx, baseIdx + i, baseIdx + i + 1);
+    // Concave-safe ear-clip (decimated bodies carry concave polygonal faces
+    // a naive fan would wind inside-out). triangulateFace yields vertex
+    // references from the same array — map them back to local indices.
+    const localIndexOf = new Map(face.vertices.map((v, i) => [v, i] as const));
+    for (const tri of triangulateFace(face.vertices)) {
+      const a = localIndexOf.get(tri[0]);
+      const b = localIndexOf.get(tri[1]);
+      const c = localIndexOf.get(tri[2]);
+      if (a === undefined || b === undefined || c === undefined) continue; // defensive: clone drift
+      indices.push(baseIdx + a, baseIdx + b, baseIdx + c);
       triFaceIds.push(face.id);
     }
   }

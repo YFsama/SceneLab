@@ -22,6 +22,7 @@ import { isTauri, callNative } from '../lib/runtime';
 import { translations } from '../lib/i18n';
 import { showToast } from '../lib/toast';
 import type { DrawingDetail, DrawingNote, DrawingSectionAxis } from '../lib/io/drawingNotes';
+import { defaultDrawingViewPlacements, sanitizeDrawingViewPlacements, type DrawingViewPlacement } from '../lib/io/studio3d';
 
 const AUTOSAVE_KEY = 'scenelab.autosave';
 
@@ -141,6 +142,8 @@ interface HistorySnapshot {
   drawingSectionAxis: DrawingSectionAxis;
   drawingDetails: DrawingDetail[];
   drawingNotes: DrawingNote[];
+  /** Per-view sheet placements (B6+B8) — restored with the rest of the sheet. */
+  drawingViewPlacements: DrawingViewPlacement[];
   /** CAM setup + the derived toolpath cache (restored together so undo of an
    * op edit also rewinds its generated toolpath to the pre-edit generation). */
   camSetup: CAMSetup;
@@ -520,6 +523,18 @@ interface AppState {
   addDrawingNote: (n: DrawingNote) => void;
   updateDrawingNote: (id: string, text: string) => void;
   removeDrawingNote: (id: string) => void;
+  /**
+   * Stored per-view placements of the 2×2 base views (B6+B8): drag offsets,
+   * visibility and per-view scale overrides — undoable, serialized with the
+   * project (SerializedDrawing.viewPlacements). Detail views keep their own
+   * state (drawingDetails); they follow their base view's placement at
+   * render time and hide with it.
+   */
+  drawingViewPlacements: DrawingViewPlacement[];
+  /** Patch one placement by id (identity fields id/viewKey are immutable). */
+  updateDrawingViewPlacement: (id: string, patch: Partial<Omit<DrawingViewPlacement, 'id' | 'viewKey'>>) => void;
+  /** Restore the default placements (all views visible, centred, auto-fit). */
+  resetDrawingViewPlacements: () => void;
 
   // CAM setup state (cam workspace): stock + ordered operations, covered by
   // undo/redo and serialized with the project (see deserializeCam). The
@@ -798,6 +813,7 @@ export const useStore = create<AppState>((set, get) => {
         drawingSectionAxis: s.drawingSectionAxis,
         drawingDetails: s.drawingDetails,
         drawingNotes: s.drawingNotes,
+        drawingViewPlacements: s.drawingViewPlacements,
         camSetup: s.camSetup,
         camToolpaths: s.camToolpaths,
         currentSketch: s.currentSketch ? cloneSketch(s.currentSketch) : null,
@@ -825,6 +841,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: snap.drawingSectionAxis,
       drawingDetails: snap.drawingDetails,
       drawingNotes: snap.drawingNotes,
+      drawingViewPlacements: snap.drawingViewPlacements,
       camSetup: snap.camSetup,
       camToolpaths: snap.camToolpaths,
       currentSketch: snap.currentSketch,
@@ -960,6 +977,7 @@ export const useStore = create<AppState>((set, get) => {
     drawingSectionAxis: DrawingSectionAxis;
     drawingDetails: DrawingDetail[];
     drawingNotes: DrawingNote[];
+    drawingViewPlacements: DrawingViewPlacement[];
     camSetup: CAMSetup;
   };
   let fingerprintMemo: { keys: FingerprintKeys; value: string } | null = null;
@@ -994,6 +1012,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: s.drawingSectionAxis,
       drawingDetails: s.drawingDetails,
       drawingNotes: s.drawingNotes,
+      drawingViewPlacements: s.drawingViewPlacements,
       camSetup: s.camSetup,
     };
     const prev = fingerprintMemo;
@@ -1013,13 +1032,14 @@ export const useStore = create<AppState>((set, get) => {
       prev.keys.drawingSectionAxis === keys.drawingSectionAxis &&
       prev.keys.drawingDetails === keys.drawingDetails &&
       prev.keys.drawingNotes === keys.drawingNotes &&
+      prev.keys.drawingViewPlacements === keys.drawingViewPlacements &&
       prev.keys.camSetup === keys.camSetup
     ) {
       return prev.value;
     }
     const p = serializeProject(s.projectName, features, [], s.directBodies, {
       planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
-    }, { sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes }, s.camSetup);
+    }, { sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes, viewPlacements: s.drawingViewPlacements }, s.camSetup);
     const value = JSON.stringify({ ...p, metadata: undefined });
     fingerprintMemo = { keys, value };
     return value;
@@ -2406,7 +2426,7 @@ export const useStore = create<AppState>((set, get) => {
   undoStack: [],
   redoStack: [],
   undo: () => {
-    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, camSetup, camToolpaths, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
+    const { undoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, drawingViewPlacements, camSetup, camToolpaths, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
     if (undoStack.length === 0) return false;
     const prev = undoStack[undoStack.length - 1]!;
     // Capture the current state BEFORE restoring — applyUndoSnapshot clears
@@ -2418,6 +2438,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis,
       drawingDetails,
       drawingNotes,
+      drawingViewPlacements,
       camSetup,
       camToolpaths,
       currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
@@ -2443,7 +2464,7 @@ export const useStore = create<AppState>((set, get) => {
     return true;
   },
   redo: () => {
-    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, camSetup, camToolpaths, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
+    const { redoStack, directBodies, hiddenIds, featureTree, drawingSectionAxis, drawingDetails, drawingNotes, drawingViewPlacements, camSetup, camToolpaths, currentSketch, sketchUndoStack, sketchRedoStack, sketchActive, workspace, sketchPlaneId } = get();
     if (redoStack.length === 0) return false;
     const next = redoStack[redoStack.length - 1]!;
     const current: HistorySnapshot = {
@@ -2453,6 +2474,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis,
       drawingDetails,
       drawingNotes,
+      drawingViewPlacements,
       camSetup,
       camToolpaths,
       currentSketch: currentSketch ? cloneSketch(currentSketch) : null,
@@ -2494,6 +2516,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: 'off',
       drawingDetails: [],
       drawingNotes: [],
+      drawingViewPlacements: defaultDrawingViewPlacements(),
       camSetup: defaultCamSetup(),
       camToolpaths: {},
       undoStack: [],
@@ -2526,6 +2549,7 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: 'off',
       drawingDetails: [],
       drawingNotes: [],
+      drawingViewPlacements: defaultDrawingViewPlacements(),
       camSetup: defaultCamSetup(),
       camToolpaths: {},
       currentSketch: null,
@@ -2562,6 +2586,8 @@ export const useStore = create<AppState>((set, get) => {
       drawingSectionAxis: drawing?.sectionAxis ?? 'off',
       drawingDetails: drawing?.details ?? [],
       drawingNotes: drawing?.notes ?? [],
+      // Defensive: always the four standard views, junk filtered (B6+B8).
+      drawingViewPlacements: sanitizeDrawingViewPlacements(drawing?.viewPlacements),
       camSetup: cam ?? defaultCamSetup(),
       undoStack: [],
       redoStack: [],
@@ -2712,6 +2738,22 @@ export const useStore = create<AppState>((set, get) => {
   removeDrawingNote: (id) => {
     pushUndo();
     set((s) => ({ drawingNotes: s.drawingNotes.filter((n) => n.id !== id), projectDirty: true }));
+  },
+  drawingViewPlacements: defaultDrawingViewPlacements(),
+  updateDrawingViewPlacement: (id, patch) => {
+    // Unknown id → refuse without the no-op undo entry (the removeDirectBody
+    // hygiene rule). One call = one undo entry: the canvas commits a whole
+    // drag as a single patch on pointer-up.
+    if (!get().drawingViewPlacements.some((p) => p.id === id)) return;
+    pushUndo();
+    set((s) => ({
+      drawingViewPlacements: s.drawingViewPlacements.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+      projectDirty: true,
+    }));
+  },
+  resetDrawingViewPlacements: () => {
+    pushUndo();
+    set({ drawingViewPlacements: defaultDrawingViewPlacements(), projectDirty: true });
   },
 
   // --- CAM setup ---------------------------------------------------------------
@@ -3467,7 +3509,7 @@ export const useStore = create<AppState>((set, get) => {
     // serialize+zip entirely when nothing changed.
     const fingerprint = projectFingerprint();
     if (lastAutosaveFingerprint !== null && fingerprint === lastAutosaveFingerprint) return false;
-    const { projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes, camSetup } = get();
+    const { projectName, featureTree, directBodies, planes, axes, points, coordSystems, annotations, drawingSectionAxis, drawingDetails, drawingNotes, drawingViewPlacements, camSetup } = get();
     try {
       const project = serializeProject(
         projectName,
@@ -3475,7 +3517,7 @@ export const useStore = create<AppState>((set, get) => {
         [],
         directBodies,
         { planes, axes, points, coordSystems, annotations },
-        { sectionAxis: drawingSectionAxis, details: drawingDetails, notes: drawingNotes },
+        { sectionAxis: drawingSectionAxis, details: drawingDetails, notes: drawingNotes, viewPlacements: drawingViewPlacements },
         camSetup,
       );
       const json = saveToFile(project);

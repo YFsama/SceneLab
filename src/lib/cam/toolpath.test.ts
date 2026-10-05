@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
   generatePocketToolpath,
   generateContourToolpath,
@@ -6,7 +6,9 @@ import {
   generateFaceToolpath,
 } from './toolpath';
 import { estimateMachiningTime } from './gcode';
-import { createBox, createCylinder, createTube } from '../geometry/brep';
+import { createBox, createCylinder, createTube, createExtrude } from '../geometry/brep';
+import { booleanOpManifold, warmUpBooleanEngine } from '../geometry/booleanManifold';
+import { translateBody } from '../geometry/operations';
 import type { ToolDefinition, CAMParameters, Toolpath, ToolpathPoint } from './types';
 
 const tool: ToolDefinition = {
@@ -78,6 +80,10 @@ function assertPlungeFeeds(tp: Toolpath, plungeRate: number): void {
 
 describe('generatePocketToolpath', () => {
   const pocketBounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 50, y: 0, z: 10 } };
+
+  beforeAll(async () => {
+    await warmUpBooleanEngine(); // the narrow-island test pockets a boolean body
+  });
 
   // The audit's case: 10 mm-wide pocket, 6 mm cutter. Tool-centre rows must
   // span [3, 7] with the final row clamped ON 7, leaving no standing strip.
@@ -245,6 +251,74 @@ describe('generatePocketToolpath', () => {
       expect(dist).toBeGreaterThanOrEqual(6 + r - 0.05);
       expect(dist).toBeLessThanOrEqual(15 - r + 0.05);
     }
+  });
+
+  it('never links across a NARROW island — the segment×AABB guard catches what the quarter samples missed', () => {
+    // A 0.6 mm-wide through-slot island in a 50×10 plate, pocketed with a
+    // ⌀3 cutter: the grown keep-out is u∈[22.5,26.1]. When a row splits into
+    // [3·,22.5] and [26.1,·] the interval directions alternate, so the link
+    // chord runs from one interval's far end (u=48.5) BACK ACROSS the slot —
+    // the island sits in the first tenth of the chord where the t=.25/.5/.75
+    // samples never look, and the cutter gouged straight through the wall
+    // (pass-30 P3 T2).
+    const plate = createExtrude({
+      profile: [
+        { x: 0, y: 0, z: 0 }, { x: 50, y: 0, z: 0 }, { x: 50, y: 0, z: 10 }, { x: 0, y: 0, z: 10 },
+      ],
+      direction: { x: 0, y: 1, z: 0 }, distance: 10, symmetric: false,
+    });
+    const slot = translateBody(
+      createExtrude({
+        profile: [
+          { x: -0.3, y: 0, z: -3 }, { x: 0.3, y: 0, z: -3 }, { x: 0.3, y: 0, z: 3 }, { x: -0.3, y: 0, z: 3 },
+        ],
+        direction: { x: 0, y: 1, z: 0 }, distance: 12, symmetric: false,
+      }),
+      { x: 24.3, y: -1, z: 5 },
+    );
+    const body = booleanOpManifold(plate, slot, 'difference');
+    expect(body).not.toBeNull();
+    const tp = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 50, y: 10, z: 10 } },
+      { ...tool, diameter: 3, fluteLength: 12 },
+      { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 },
+      { body: body! },
+    );
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+
+    // Keep-out interior (grown island shrunk 0.01 so rows ENDING exactly on
+    // its boundary — the legitimate scanline edge — do not count as entry).
+    const box = { minU: 22.51, maxU: 26.09, minV: 0.51, maxV: 9.49 };
+    const segEntersBox = (a: { x: number; z: number }, b: { x: number; z: number }): boolean => {
+      let t0 = 0;
+      let t1 = 1;
+      const clip = (p: number, d: number, lo: number, hi: number): boolean => {
+        if (Math.abs(d) < 1e-12) return p > lo && p < hi;
+        let tn = (lo - p) / d;
+        let tf = (hi - p) / d;
+        if (tn > tf) { const tmp = tn; tn = tf; tf = tmp; }
+        t0 = Math.max(t0, tn);
+        t1 = Math.min(t1, tf);
+        return t0 <= t1;
+      };
+      return clip(a.x, b.x - a.x, box.minU, box.maxU) && clip(a.z, b.z - a.z, box.minV, box.maxV);
+    };
+    for (let i = 1; i < tp.points.length; i++) {
+      const a = tp.points[i - 1]!;
+      const b = tp.points[i]!;
+      if (b.rapid) continue;
+      if (a.y > 0.5 || b.y > 0.5) continue; // depth cuts only
+      expect(
+        segEntersBox(a, b),
+        `gouging link (${a.x.toFixed(2)},${a.z.toFixed(2)}) → (${b.x.toFixed(2)},${b.z.toFixed(2)}) crosses the island keep-out`,
+      ).toBe(false);
+    }
+    // The detour actually happens: crossing rows retract (the unlinked path
+    // has strictly more rapids than the same pocket without the slot).
+    const plain = generatePocketToolpath(pocketBounds, { ...tool, diameter: 3, fluteLength: 12 }, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0,
+    });
+    expect(tp.rapidMoves.length).toBeGreaterThan(plain.rapidMoves.length);
   });
 
   it('keeps every rapid that starts below safe height vertical (linking version)', () => {

@@ -1,8 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyXYZ, scaleBodyToTarget, resizeBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame, sweepBody, maxFilletRadius, maxChamferDistance } from './operations';
-import { createBox, createCylinder } from './brep';
+import { createBox, createCylinder, createExtrude } from './brep';
 import { computeBoundingBox, computeVolume, checkManifold } from './brep';
 import { makeCoordinateSystem } from './referenceGeometry';
+import { warmUpBooleanEngine, isManifoldEngineReady, __resetManifoldEngineForTests } from './booleanManifold';
+import { booleanOp, lastBooleanFallbackReason } from './boolean';
+import { isPointInsideBody } from './measure';
 import type { SolidBody, Vec3, Edge, Face } from './types';
 
 describe('translateBody', () => {
@@ -137,6 +140,10 @@ describe('scaleBody', () => {
 });
 
 describe('applyFillet', () => {
+  // The overlay semantics these tests assert are the COLD-engine fallback —
+  // pin it (a warm engine would take the exact subtractive path below).
+  beforeAll(() => __resetManifoldEngineForTests());
+
   it('should return same body when radius is 0', () => {
     const body = createBox(2, 2, 2);
     const result = applyFillet(body, [], 0);
@@ -153,6 +160,9 @@ describe('applyFillet', () => {
 });
 
 describe('applyChamfer', () => {
+  // Overlay semantics = the cold fallback (see applyFillet).
+  beforeAll(() => __resetManifoldEngineForTests());
+
   it('should return same body when distance is 0', () => {
     const body = createBox(2, 2, 2);
     const result = applyChamfer(body, [], 0);
@@ -207,6 +217,10 @@ function protrusionBeyond(body: SolidBody, bb: ReturnType<typeof computeBounding
 }
 
 describe('applyFillet golden geometry (30×10×30 plate)', () => {
+  // Overlay goldens: pinned COLD so the exact (warm) path does not change
+  // what is being measured — the overlay is the fallback/preview semantics.
+  beforeAll(() => __resetManifoldEngineForTests());
+
   const box = createBox(30, 10, 30); // 9000 mm³, 280 mm of edges
   const bb = computeBoundingBox(box);
   const sumL = 4 * (30 + 10 + 30);
@@ -363,6 +377,9 @@ describe('applyFillet golden geometry (30×10×30 plate)', () => {
 });
 
 describe('applyChamfer golden geometry (30×10×30 plate)', () => {
+  // Overlay goldens: pinned COLD (see the fillet goldens above).
+  beforeAll(() => __resetManifoldEngineForTests());
+
   const box = createBox(30, 10, 30);
   const bb = computeBoundingBox(box);
   const sumL = 4 * (30 + 10 + 30);
@@ -546,6 +563,10 @@ describe('maxFilletRadius / maxChamferDistance', () => {
 });
 
 describe('applyShell', () => {
+  // The pocket is the COLD fallback (the warm engine produces a real shell —
+  // exact-path goldens live at the end of this file).
+  beforeAll(() => __resetManifoldEngineForTests());
+
   it('should return same body when thickness is 0', () => {
     const body = createBox(2, 2, 2);
     const result = applyShell(body, [], 0);
@@ -896,5 +917,229 @@ describe('sweepBody', () => {
   it('throws for invalid inputs', () => {
     expect(() => sweepBody([{ x: 0, y: 0 }], [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }])).toThrow('≥3');
     expect(() => sweepBody([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], [{ x: 0, y: 0, z: 0 }])).toThrow('≥2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EXACT (Manifold) feature paths — audit roadmap #1+#2. With the engine warm
+// (as the running app keeps it), applyFillet/applyChamfer/applyShell cut the
+// real geometry: watertight results, corner-correct volumes, booleans after a
+// fillet stay on the exact path. The overlay tests above are pinned cold.
+// ---------------------------------------------------------------------------
+
+/** Corner double-count D for the full-box fillet union (quadrature, as the
+ *  cold goldens compute it): D = 3(1−π/4) − U where U is the measure of the
+ *  union of the three quarter-cylinders inside one r-cube at a corner. */
+function filletCornerD(): number {
+  const NQ = 100;
+  let hits = 0;
+  for (let i = 0; i < NQ; i++) for (let j = 0; j < NQ; j++) for (let k = 0; k < NQ; k++) {
+    const x = (i + 0.5) / NQ, y = (j + 0.5) / NQ, z = (k + 0.5) / NQ;
+    if (y * y + z * z > 1 || x * x + z * z > 1 || x * x + y * y > 1) hits++;
+  }
+  return 3 * (1 - Math.PI / 4) - hits / NQ ** 3;
+}
+
+/** Corner double-count D_w for the full-box chamfer wedge union. */
+function chamferCornerDw(): number {
+  const NQ = 100;
+  let hits = 0;
+  for (let i = 0; i < NQ; i++) for (let j = 0; j < NQ; j++) for (let k = 0; k < NQ; k++) {
+    const x = (i + 0.5) / NQ, y = (j + 0.5) / NQ, z = (k + 0.5) / NQ;
+    if (y + z <= 1 || x + z <= 1 || x + y <= 1) hits++;
+  }
+  return 1.5 - hits / NQ ** 3;
+}
+
+describe('applyFillet exact Manifold path (engine warm)', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+    expect(isManifoldEngineReady()).toBe(true);
+  });
+
+  const box = createBox(30, 10, 30); // 9000 mm³, 280 mm of edges
+  const sumL = 4 * (30 + 10 + 30);
+  const SLIVER = 1 - Math.PI / 4;
+  const D = filletCornerD();
+
+  it('the result is WATERTIGHT (the overlay was honestly non-manifold)', () => {
+    const f = applyFillet(box, [], 1);
+    const mc = checkManifold(f);
+    expect(mc.isManifold).toBe(true);
+    expect(mc.boundaryEdges).toBe(0);
+    expect(mc.nonManifoldEdges).toBe(0);
+    // Identity is preserved like the overlay ({ id: body.id, … }).
+    expect(f.id).toBe(box.id);
+    expect(f.name).toBe(box.name);
+  });
+
+  it('removal is within 2% of the corner-corrected analytic union at r=1/2 (overlay: +5…20%)', () => {
+    for (const r of [1, 2]) {
+      const removed = computeVolume(box) - computeVolume(applyFillet(box, [], r));
+      const truth = SLIVER * r * r * sumL - 8 * D * r ** 3;
+      expect(Math.abs(removed - truth) / truth).toBeLessThan(0.02);
+    }
+  });
+
+  it('a single edge removes exactly its own sliver (within 1%)', () => {
+    const edge = box.edges[0]!; // L = 30
+    const removed = computeVolume(box) - computeVolume(applyFillet(box, [edge.id], 2));
+    expect(Math.abs(removed - SLIVER * 4 * 30) / (SLIVER * 4 * 30)).toBeLessThan(0.01);
+  });
+
+  it('booleans after a fillet stay on the exact path (no voxel fallback)', () => {
+    const filleted = applyFillet(box, [], 1);
+    const cutter = translateBody(createBox(4, 4, 12), { x: 0, y: 3, z: 0 });
+    const cut = booleanOp(filleted, cutter, 'difference', 8);
+    expect(cut).not.toBeNull();
+    expect(lastBooleanFallbackReason()).toBeNull();
+  });
+
+  // Non-90° dihedrals (independent-review P1: the tangent-leg formula's sign
+  // flip gouged obtuse edges 38× and ledged acute ones — every golden above
+  // is a box, so only 90° was ever checked). Cross-section truth per edge:
+  // A(φ) = r²·(cot(φ/2) − (π−φ)/2) — the tangent kite minus the arc sector.
+  it('hexagonal prism 120° edges remove their true sliver (was 38× over-cut)', () => {
+    // Profile in the XZ plane (y=0), extruded along +Y — the same shape the
+    // plane-aware evaluator produces after sketchToWorld (profile is Vec3[]).
+    const hex = createExtrude({
+      profile: Array.from({ length: 6 }, (_, i) => {
+        const a = (i / 6) * Math.PI * 2;
+        return { x: Math.cos(a) * 10, y: 0, z: Math.sin(a) * 10 };
+      }),
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 20,
+    });
+    const L = 20, r = 1;
+    const phi = (120 * Math.PI) / 180;
+    const A = r * r * (1 / Math.tan(phi / 2) - (Math.PI - phi) / 2);
+    // The six vertical seam edges run exactly along ±Y for the full length
+    // (triangulation diagonals of the side quads also carry y-delta).
+    const vertical = hex.edges.filter((e) =>
+      Math.abs(e.end.x - e.start.x) < 1e-9 && Math.abs(e.end.z - e.start.z) < 1e-9
+      && Math.abs(Math.abs(e.end.y - e.start.y) - L) < 1e-9,
+    ).map((e) => e.id);
+    expect(vertical).toHaveLength(6);
+    const removed = computeVolume(hex) - computeVolume(applyFillet(hex, vertical, r));
+    // Six scoped edges: total = 6 × A × L.
+    expect(removed).toBeGreaterThan(6 * A * L * 0.9);
+    expect(removed).toBeLessThan(6 * A * L * 1.1);
+    // Sanity: the flipped-sign formula produced ~41 mm³ per edge here (38× truth).
+    expect(removed).toBeLessThan(6 * A * L * 2);
+  });
+
+  it('triangular prism 60° edges remove their true sliver (was 3.6× under-cut)', () => {
+    const tri = createExtrude({
+      profile: Array.from({ length: 3 }, (_, i) => {
+        const a = (i / 3) * Math.PI * 2;
+        return { x: Math.cos(a) * 10, y: 0, z: Math.sin(a) * 10 };
+      }),
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 10,
+    });
+    const L = 10, r = 0.5;
+    const phi = (60 * Math.PI) / 180;
+    const A = r * r * (1 / Math.tan(phi / 2) - (Math.PI - phi) / 2);
+    const vertical = tri.edges.filter((e) =>
+      Math.abs(e.end.x - e.start.x) < 1e-9 && Math.abs(e.end.z - e.start.z) < 1e-9
+      && Math.abs(Math.abs(e.end.y - e.start.y) - L) < 1e-9,
+    ).map((e) => e.id);
+    expect(vertical).toHaveLength(3);
+    const removed = computeVolume(tri) - computeVolume(applyFillet(tri, vertical, r));
+    expect(removed).toBeGreaterThan(3 * A * L * 0.9);
+    expect(removed).toBeLessThan(3 * A * L * 1.1);
+  });
+});
+
+describe('applyChamfer exact Manifold path (engine warm)', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  const box = createBox(30, 10, 30);
+  const sumL = 4 * (30 + 10 + 30);
+  const Dw = chamferCornerDw();
+
+  it('the result is WATERTIGHT', () => {
+    const c = applyChamfer(box, [], 1);
+    const mc = checkManifold(c);
+    expect(mc.isManifold).toBe(true);
+    expect(mc.boundaryEdges).toBe(0);
+    expect(mc.nonManifoldEdges).toBe(0);
+    expect(c.id).toBe(box.id);
+  });
+
+  it('removal is within 0.5% of the corner-corrected wedge union at d=1/2 (overlay: +5…25%)', () => {
+    for (const d of [1, 2]) {
+      const removed = computeVolume(box) - computeVolume(applyChamfer(box, [], d));
+      const truth = 0.5 * d * d * sumL - 8 * Dw * d ** 3;
+      expect(Math.abs(removed - truth) / truth).toBeLessThan(0.005);
+    }
+  });
+
+  it('a single edge removes exactly its wedge d²L/2 (within 0.1%)', () => {
+    const edge = box.edges[0]!;
+    const removed = computeVolume(box) - computeVolume(applyChamfer(box, [edge.id], 2));
+    expect(Math.abs(removed - 0.5 * 4 * 30) / (0.5 * 4 * 30)).toBeLessThan(0.001);
+  });
+});
+
+describe('applyShell exact Manifold path (engine warm)', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  it('sealed shell: 20³ box at t=1 keeps exactly 20³ − 18³ = 2168 mm³, watertight', () => {
+    const box = createBox(20, 20, 20);
+    const sh = applyShell(box, [], 1);
+    expect(checkManifold(sh).isManifold).toBe(true);
+    expect(computeVolume(sh)).toBeCloseTo(20 ** 3 - 18 ** 3, 4);
+    expect(sh.id).toBe(box.id);
+  });
+
+  it('opening one face removes exactly its wall slab: 2168 − 400 = 1768 mm³, watertight', () => {
+    const box = createBox(20, 20, 20);
+    const sh = applyShell(box, [box.faces[0]!.id], 1);
+    expect(checkManifold(sh).isManifold).toBe(true);
+    expect(computeVolume(sh)).toBeCloseTo(20 ** 3 - 18 ** 3 - 400, 4);
+    // The opening is real: a probe just inside the removed face is outside
+    // the material, while the opposite wall still has its full thickness.
+    expect(isPointInsideBody(sh, { x: 0, y: 0.5, z: 0 })).toBe(false);
+    expect(isPointInsideBody(sh, { x: 0, y: 19.5, z: 0 })).toBe(true);
+    expect(isPointInsideBody(sh, { x: 9.5, y: 10, z: 0 })).toBe(true);
+  });
+
+  it('a non-convex L-extrude shells via the voxel-eroded interior (blocky walls, watertight)', () => {
+    const L = createExtrude({
+      profile: [
+        { x: 0, y: 0, z: 0 }, { x: 20, y: 0, z: 0 }, { x: 20, y: 0, z: 6 },
+        { x: 6, y: 0, z: 6 }, { x: 6, y: 0, z: 20 }, { x: 0, y: 0, z: 20 },
+      ],
+      direction: { x: 0, y: 1, z: 0 },
+      distance: 20,
+      symmetric: false,
+    });
+    const solid = computeVolume(L);
+    expect(solid).toBeCloseTo(4080, 1);
+    const sh = applyShell(L, [], 1.5);
+    const mc = checkManifold(sh);
+    expect(mc.isManifold).toBe(true);
+    expect(mc.boundaryEdges).toBe(0);
+    const v = computeVolume(sh);
+    expect(v).toBeGreaterThan(solid * 0.2); // material remains
+    expect(v).toBeLessThan(solid * 0.75); // …but hollowed
+    // Outer surfaces stay exact (convex hull corners of the L are untouched).
+    expect(isPointInsideBody(sh, { x: 0.4, y: 10, z: 0.4 })).toBe(true);
+    expect(isPointInsideBody(sh, { x: 10, y: 10, z: 3 })).toBe(false); // cavity (arm center, depth 6 ≥ 2·1.5)
+  });
+
+  it('cold engine falls back to the pocket overlay (faces added, solid stays)', () => {
+    __resetManifoldEngineForTests();
+    const box = createBox(2, 2, 2);
+    const pocket = applyShell(box, [box.faces[0]!.id], 0.2);
+    expect(pocket.faces.length).toBeGreaterThan(box.faces.length);
+    // The pocket keeps the solid body (no cavity): still full volume inside
+    // away from the opened face — the stopgap the exact path replaces.
+    expect(computeVolume(pocket)).toBeGreaterThan(0);
   });
 });

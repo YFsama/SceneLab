@@ -199,15 +199,52 @@ export function generatePocketToolpath(
   const levels = depthLevels(params);
   const linkRows = options.linkRows !== false;
 
+  // Axis-aligned bounding boxes of the (already cutter-grown) islands, for the
+  // exact link rejection below.
+  const islandBoxes = islands.map((poly) => {
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (const p of poly) {
+      minU = Math.min(minU, p.u); maxU = Math.max(maxU, p.u);
+      minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v);
+    }
+    return { minU, maxU, minV, maxV };
+  });
+
+  /** True when segment a→b intersects the axis-aligned box (slab clip): a
+   * chord grazing the box's boundary counts as intersecting — conservative. */
+  const segmentHitsBox = (
+    a: Point2,
+    b: Point2,
+    box: { minU: number; maxU: number; minV: number; maxV: number },
+  ): boolean => {
+    let t0 = 0;
+    let t1 = 1;
+    const clip = (p: number, d: number, lo: number, hi: number): boolean => {
+      if (Math.abs(d) < 1e-12) return p >= lo && p <= hi; // parallel slab
+      let tn = (lo - p) / d;
+      let tf = (hi - p) / d;
+      if (tn > tf) { const tmp = tn; tn = tf; tf = tmp; }
+      t0 = Math.max(t0, tn);
+      t1 = Math.min(t1, tf);
+      return t0 <= t1;
+    };
+    return clip(a.u, b.u - a.u, box.minU, box.maxU) && clip(a.v, b.v - a.v, box.minV, box.maxV);
+  };
+
   /** True when the straight chord a→b stays inside the raster region (outer
-   * minus islands). Sampled at the quarter/mid points: a strongly concave
-   * outline can push a chord outside between samples, so this is a
-   * conservative guard — anything doubtful falls back to the retract detour. */
+   * minus islands). Islands are rejected EXACTLY: every island's AABB is
+   * tested against the chord segment, so a narrow island parked at the chord's
+   * start (before the first quarter-sample) can no longer slip through — the
+   * old 3-point sample (t=.25/.5/.75) gouged exactly there when a row's
+   * intervals alternate direction across a narrow slot. The outer boundary is
+   * still only sampled at the quarter/mid points: a strongly concave outline
+   * can push a chord outside between samples, so this stays a conservative
+   * guard — anything doubtful falls back to the retract detour. */
   const canLink = (a: Point2, b: Point2): boolean => {
+    for (const box of islandBoxes) if (segmentHitsBox(a, b, box)) return false;
     for (const t of [0.25, 0.5, 0.75]) {
       const p = { u: a.u + (b.u - a.u) * t, v: a.v + (b.v - a.v) * t };
       if (!pointInPolygon(p, outer)) return false;
-      for (const island of islands) if (pointInPolygon(p, island)) return false;
     }
     return true;
   };

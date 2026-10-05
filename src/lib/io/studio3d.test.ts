@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, saveToFile, loadFromFile, type SerializedDrawing, type SerializedCam } from './studio3d';
+import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, saveToFile, loadFromFile, defaultDrawingViewPlacements, sanitizeDrawingViewPlacements, type SerializedDrawing, type SerializedCam } from './studio3d';
 import { createBox, computeVolume } from '../geometry/brep';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
@@ -346,8 +346,15 @@ describe('drawing sheet serialization', () => {
   it('omits the drawing block entirely when none is provided', () => {
     const project = serializeProject('no-drawing', [], []);
     expect(project.drawing).toBeUndefined();
-    // Old files (no drawing key) load with safe defaults.
-    expect(deserializeDrawing(project)).toEqual({ sectionAxis: 'off', details: [], notes: [] });
+    // Old files (no drawing key) load with safe defaults — view placements
+    // were added in B6/B8, so absent placements deserialize to the four
+    // standard defaults.
+    expect(deserializeDrawing(project)).toEqual({
+      sectionAxis: 'off',
+      details: [],
+      notes: [],
+      viewPlacements: defaultDrawingViewPlacements(),
+    });
   });
 
   it('rejects a corrupt section axis and non-array fields defensively', () => {
@@ -357,6 +364,56 @@ describe('drawing sheet serialization', () => {
     expect(back.sectionAxis).toBe('off');
     expect(back.details).toEqual([]);
     expect(back.notes).toEqual([]);
+    expect(back.viewPlacements).toEqual(defaultDrawingViewPlacements());
+  });
+
+  it('round-trips per-view placements (B6+B8)', () => {
+    const drawing: SerializedDrawing = {
+      sectionAxis: 'off',
+      details: [],
+      notes: [],
+      viewPlacements: [
+        { id: 'front', viewKey: 'front', visible: true, offsetX: 42, offsetY: -13, scaleOverride: 2 },
+        { id: 'iso', viewKey: 'iso', visible: false, offsetX: 0, offsetY: 0, scaleOverride: null },
+      ],
+    };
+    const project = serializeProject('placed', [], [], [], undefined, drawing);
+    const back = deserializeDrawing(loadFromFile(saveToFile(project)));
+    expect(back.viewPlacements).toEqual([
+      { id: 'front', viewKey: 'front', visible: true, offsetX: 42, offsetY: -13, scaleOverride: 2 },
+      ...defaultDrawingViewPlacements().filter((p) => p.viewKey !== 'front' && p.viewKey !== 'iso'),
+      { id: 'iso', viewKey: 'iso', visible: false, offsetX: 0, offsetY: 0, scaleOverride: null },
+    ]);
+    // The hidden iso placement survived…
+    const iso = back.viewPlacements!.find((p) => p.viewKey === 'iso')!;
+    expect(iso.visible).toBe(false);
+  });
+
+  it('sanitizes junk placement entries per field and drops unknown view keys', () => {
+    const junk = sanitizeDrawingViewPlacements([
+      'nope',
+      null,
+      { id: 'front', viewKey: 'front', visible: false, offsetX: 10, offsetY: Number.NaN, scaleOverride: -3 },
+      { id: 'x1', viewKey: 'diagonal', visible: true, offsetX: 1, offsetY: 2, scaleOverride: 1 },
+      { viewKey: 'top' }, // no id — dropped
+      { id: 'right', viewKey: 'right', visible: 0, offsetX: '5', offsetY: 2, scaleOverride: '2' },
+    ]);
+    // Canonical four, in order, defaults for everything invalid.
+    expect(junk.map((p) => p.viewKey)).toEqual(['front', 'top', 'right', 'iso']);
+    const front = junk[0]!;
+    expect(front.visible).toBe(false); // explicit false kept
+    expect(front.offsetX).toBe(10); // finite kept
+    expect(front.offsetY).toBe(0); // NaN → 0
+    expect(front.scaleOverride).toBeNull(); // non-positive → auto-fit
+    const top = junk[1]!;
+    expect(top).toEqual({ id: 'top', viewKey: 'top', visible: true, offsetX: 0, offsetY: 0, scaleOverride: null });
+    const right = junk[2]!;
+    expect(right.visible).toBe(true); // only an explicit false hides
+    expect(right.offsetX).toBe(0); // non-number → 0
+    expect(right.scaleOverride).toBeNull(); // non-number → null
+    // Non-array input is just the defaults.
+    expect(sanitizeDrawingViewPlacements(undefined)).toEqual(defaultDrawingViewPlacements());
+    expect(sanitizeDrawingViewPlacements(42)).toEqual(defaultDrawingViewPlacements());
   });
 });
 

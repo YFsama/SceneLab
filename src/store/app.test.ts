@@ -8,6 +8,7 @@ import { createSketch, addRectangle, addLine, addCircle, addConstraint, addPoint
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing, deserializeCam } from '../lib/io';
 import { defaultCamSetup } from '../lib/cam';
 import { makeDetailId, makeNoteId } from '../lib/io/drawingNotes';
+import { defaultDrawingViewPlacements } from '../lib/io/studio3d';
 
 describe('uniqueBodyName', () => {
   it('returns the name unchanged when free', () => {
@@ -2287,6 +2288,114 @@ describe('app store — direct bodies', () => {
       expect(useStore.getState().drawingNotes).toEqual([note]);
       expect(useStore.getState().drawingDetails).toEqual([detail]);
       expect(useStore.getState().drawingSectionAxis).toBe('x');
+    });
+  });
+
+  describe('drawing view placements (B6+B8)', () => {
+    beforeEach(() => {
+      useStore.setState({
+        drawingViewPlacements: defaultDrawingViewPlacements(),
+        undoStack: [],
+        redoStack: [],
+      });
+    });
+
+    it('defaults to the four standard views, visible, centred, auto-fit', () => {
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
+      expect(useStore.getState().drawingViewPlacements.map((p) => p.viewKey)).toEqual(['front', 'top', 'right', 'iso']);
+      for (const p of useStore.getState().drawingViewPlacements) {
+        expect(p.visible).toBe(true);
+        expect(p.offsetX).toBe(0);
+        expect(p.offsetY).toBe(0);
+        expect(p.scaleOverride).toBeNull();
+      }
+    });
+
+    it('updateDrawingViewPlacement patches by id and leaves siblings alone', () => {
+      useStore.getState().updateDrawingViewPlacement('front', { offsetX: 30, offsetY: 15 });
+      useStore.getState().updateDrawingViewPlacement('front', { scaleOverride: 2 });
+      useStore.getState().updateDrawingViewPlacement('iso', { visible: false });
+      const byKey = Object.fromEntries(useStore.getState().drawingViewPlacements.map((p) => [p.viewKey, p]));
+      expect(byKey.front).toMatchObject({ offsetX: 30, offsetY: 15, scaleOverride: 2, visible: true });
+      expect(byKey.iso).toMatchObject({ visible: false });
+      expect(byKey.top).toEqual(defaultDrawingViewPlacements()[1]);
+      expect(useStore.getState().projectDirty).toBe(true);
+    });
+
+    it('an unknown id is refused without pushing a no-op undo entry', () => {
+      useStore.getState().updateDrawingViewPlacement('nope', { offsetX: 5 });
+      expect(useStore.getState().undoStack).toHaveLength(0);
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
+    });
+
+    it('each change is one undo entry; undo/redo restore the placements (drag-commit pattern)', () => {
+      useStore.getState().updateDrawingViewPlacement('front', { offsetX: 30, offsetY: 15 });
+      expect(useStore.getState().undoStack).toHaveLength(1);
+      // A second, later edit is a second entry — a drag commits ONCE, here.
+      useStore.getState().updateDrawingViewPlacement('front', { offsetX: 60 });
+      expect(useStore.getState().undoStack).toHaveLength(2);
+      useStore.getState().undo();
+      expect(useStore.getState().drawingViewPlacements.find((p) => p.viewKey === 'front')!.offsetX).toBe(30);
+      useStore.getState().undo();
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
+      useStore.getState().redo();
+      expect(useStore.getState().drawingViewPlacements.find((p) => p.viewKey === 'front')).toMatchObject({
+        offsetX: 30,
+        offsetY: 15,
+      });
+    });
+
+    it('resetDrawingViewPlacements restores the defaults (undoable)', () => {
+      useStore.getState().updateDrawingViewPlacement('top', { visible: false, scaleOverride: 4 });
+      useStore.getState().resetDrawingViewPlacements();
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
+      useStore.getState().undo();
+      expect(useStore.getState().drawingViewPlacements.find((p) => p.viewKey === 'top')).toMatchObject({
+        visible: false,
+        scaleOverride: 4,
+      });
+    });
+
+    it('clearScene resets the placements to the defaults', () => {
+      useStore.getState().updateDrawingViewPlacement('front', { offsetX: 9 });
+      useStore.getState().clearScene();
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
+    });
+
+    it('a saved project round-trips placements; junk in the file sanitizes', () => {
+      useStore.getState().updateDrawingViewPlacement('front', { offsetX: 42, offsetY: -13, scaleOverride: 2 });
+      useStore.getState().updateDrawingViewPlacement('iso', { visible: false });
+      const s = useStore.getState();
+      const project = serializeProject('placed', s.featureTree.features, s.bodies, s.directBodies, undefined, {
+        sectionAxis: s.drawingSectionAxis,
+        details: s.drawingDetails,
+        notes: s.drawingNotes,
+        viewPlacements: s.drawingViewPlacements,
+      });
+      const loaded = loadFromFile(saveToFile(project));
+      useStore.getState().loadProject(
+        deserializeFeatures(loaded), loaded.name, deserializeDirectBodies(loaded), undefined, deserializeDrawing(loaded),
+      );
+      expect(useStore.getState().drawingViewPlacements.find((p) => p.viewKey === 'front')).toMatchObject({
+        offsetX: 42,
+        offsetY: -13,
+        scaleOverride: 2,
+      });
+      expect(useStore.getState().drawingViewPlacements.find((p) => p.viewKey === 'iso')!.visible).toBe(false);
+
+      // A file with junk placements loads the defensive defaults instead.
+      const corrupt = serializeProject('junk', [], []);
+      (corrupt as { drawing?: unknown }).drawing = { sectionAxis: 'off', details: [], notes: [], viewPlacements: 'junk' };
+      useStore.getState().loadProject(
+        deserializeFeatures(corrupt), corrupt.name, deserializeDirectBodies(corrupt), undefined, deserializeDrawing(corrupt),
+      );
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
+    });
+
+    it('a loadProject without a drawing block resets placements (no leakage)', () => {
+      useStore.getState().updateDrawingViewPlacement('right', { offsetX: 5, visible: false });
+      useStore.getState().loadProject([]);
+      expect(useStore.getState().drawingViewPlacements).toEqual(defaultDrawingViewPlacements());
     });
   });
 });

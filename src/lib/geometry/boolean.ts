@@ -243,8 +243,9 @@ export function asyncSplitByPlane(
 
 /**
  * Hollow a solid into a closed shell of approximately `wallThickness` — a true
- * lightweighting hollow (unlike the placeholder applyShell). Voxel-only (no
- * exact path yet), so the async variant is the one UI paths should prefer.
+ * lightweighting hollow. Voxel-only (applyShell's exact path handles the
+ * openable shell feature; this one is always sealed), so the async variant is
+ * the one UI paths should prefer.
  */
 export function hollowBody(body: SolidBody, wallThickness: number, resolution = 40): SolidBody | null {
   return hollowBodyVoxel(body, wallThickness, resolution);

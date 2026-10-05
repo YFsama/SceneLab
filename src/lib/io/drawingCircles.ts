@@ -42,7 +42,13 @@ const KEY_DECIMALS = 6;
 const MIN_CIRCLE_SEGMENTS = 8;
 /** An open arc needs at least this many points (≥ 3 turning angles). */
 const MIN_ARC_POINTS = 5;
-/** Radial-fit tolerance: 0.5% of the radius, with an absolute floor. */
+/**
+ * Radial-fit tolerance: 0.5% of the radius, with an absolute floor. RELATIVE
+ * on purpose, unlike the absolute (0.005 mm) sagitta gate of
+ * detectCircularHoles in geometry/query.ts: a drawing only needs the loop to
+ * look circular at sheet scale, whatever the part size, while CAM drilling
+ * must quote the pin-that-fits truth in millimetres.
+ */
 const RADIAL_TOL_RATIO = 0.005;
 const RADIAL_TOL_FLOOR = 1e-4;
 /** |Σturning − 2π| below this accepts a loop as a full convex circle. */

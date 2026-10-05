@@ -6,6 +6,7 @@ import { createBox } from '../../lib/geometry';
 import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts } from '../../lib/toast';
 import { FeatureTree, createHoleFeature } from '../../lib/features/tree';
+import { defaultDrawingViewPlacements } from '../../lib/io/studio3d';
 import { CUT_PLANE_ARROW_LEN_PX, CUT_PLANE_DASH, CUT_PLANE_EXTEND_PX, CUT_PLANE_LABEL_GAP_PX, projectBodies, viewTransform } from '../../lib/io/drawing';
 import { DrawingCanvas } from './DrawingCanvas';
 
@@ -407,6 +408,283 @@ describe('DrawingCanvas section cutting-plane annotation (B10)', () => {
     } finally {
       await unmount(m);
       (URL as unknown as Record<string, unknown>).createObjectURL = realCreateObjectURL;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stored per-view placements (B6+B8): drag a view (one undo entry on
+// release), set a per-view scale via the hover mini toolbar, hide/restore a
+// view, and the honest title-block scale field. jsdom gives the canvas a
+// zero-size rect, so each test stubs getBoundingClientRect to an identity
+// 800×600 mapping (the logical sheet size) before dispatching mouse events.
+// ---------------------------------------------------------------------------
+
+/** Identity rect: logical sheet px === client px. */
+function sheetRect(): DOMRect {
+  return { x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, toJSON: () => {} } as DOMRect;
+}
+
+function fireMouse(el: Element, type: string, x: number, y: number, buttons: number): void {
+  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons }));
+}
+
+/** Front-view centre on the sheet, from the same primitives the canvas uses. */
+function frontViewCenter(): { x: number; y: number } {
+  const front = projectBodies([createBox(10, 10, 10)], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50, 'Front');
+  return viewTransform(front, { x: 0, y: 0, w: 400, h: 300 }, 40).toSheet({ x: 0, y: 0 });
+}
+
+describe('DrawingCanvas view placements (B6+B8)', () => {
+  beforeEach(() => {
+    clearToasts();
+    useStore.setState({
+      locale: 'en',
+      bodies: [createBox(10, 10, 10)],
+      selectedIds: [],
+      drawingDetails: [],
+      drawingNotes: [],
+      drawingSectionAxis: 'off',
+      drawingViewPlacements: defaultDrawingViewPlacements(),
+      undoStack: [],
+      redoStack: [],
+      numericPrompt: null,
+      featureTree: new FeatureTree(),
+      featureVersion: 1,
+    });
+  });
+
+  afterEach(() => {
+    useStore.setState({ drawingViewPlacements: defaultDrawingViewPlacements() });
+  });
+
+  const frontPlacement = () => useStore.getState().drawingViewPlacements.find((p) => p.viewKey === 'front')!;
+
+  it('dragging a view commits the offsets once, as one undo entry', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      const cv = m.container.querySelector('canvas[role="img"]')!;
+      cv.getBoundingClientRect = sheetRect;
+      const c = frontViewCenter();
+      await act(async () => {
+        fireMouse(cv, 'mousedown', c.x, c.y, 1);
+      });
+      await act(async () => {
+        fireMouse(cv, 'mousemove', c.x + 30, c.y + 15, 1);
+      });
+      // Still mid-drag: no store write yet (no undo churn while dragging).
+      expect(useStore.getState().undoStack).toHaveLength(0);
+      expect(frontPlacement().offsetX).toBe(0);
+      await act(async () => {
+        fireMouse(cv, 'mouseup', c.x + 30, c.y + 15, 0);
+      });
+      const fp = frontPlacement();
+      expect(fp.offsetX).toBeCloseTo(30, 6);
+      expect(fp.offsetY).toBeCloseTo(15, 6);
+      expect(useStore.getState().undoStack).toHaveLength(1);
+      // Undo takes the view back to its centred position.
+      await act(async () => {
+        useStore.getState().undo();
+      });
+      expect(frontPlacement()).toMatchObject({ offsetX: 0, offsetY: 0 });
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('a press without movement is a click, not a drag — nothing is committed', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      const cv = m.container.querySelector('canvas[role="img"]')!;
+      cv.getBoundingClientRect = sheetRect;
+      const c = frontViewCenter();
+      await act(async () => {
+        fireMouse(cv, 'mousedown', c.x, c.y, 1);
+      });
+      await act(async () => {
+        fireMouse(cv, 'mouseup', c.x, c.y, 0);
+      });
+      expect(useStore.getState().undoStack).toHaveLength(0);
+      expect(frontPlacement().offsetX).toBe(0);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('hovering a view shows the scale control; Enter commits scaleOverride', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      const cv = m.container.querySelector('canvas[role="img"]')!;
+      cv.getBoundingClientRect = sheetRect;
+      const c = frontViewCenter();
+      await act(async () => {
+        fireMouse(cv, 'mousemove', c.x, c.y, 0);
+      });
+      const input = m.container.querySelector<HTMLInputElement>(`input[aria-label="${translations.en!['drawing.viewScale']!}"]`);
+      expect(input).not.toBeNull();
+      // The current ratio is disclosed next to the field (auto-fit included).
+      expect(m.container.textContent).toMatch(/\d+:\d+/);
+      await act(async () => {
+        input!.value = '2';
+        input!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+      });
+      expect(frontPlacement().scaleOverride).toBe(2);
+      expect(useStore.getState().undoStack).toHaveLength(1);
+      // Clearing the field returns the view to auto-fit. The override shrank
+      // the front view to 2 px/mm, so re-hover at its NEW centre.
+      const shrunk = viewTransform(
+        projectBodies([createBox(10, 10, 10)], { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, 50, 'Front'),
+        { x: 0, y: 0, w: 400, h: 300 },
+        40,
+        { scale: 2 / 50 },
+      );
+      const c2 = shrunk.toSheet({ x: 0, y: 0 });
+      await act(async () => {
+        fireMouse(cv, 'mousemove', c2.x, c2.y, 0);
+      });
+      const input3 = m.container.querySelector<HTMLInputElement>(`input[aria-label="${translations.en!['drawing.viewScale']!}"]`);
+      expect(input3).not.toBeNull();
+      await act(async () => {
+        input3!.value = '';
+        input3!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+      });
+      expect(frontPlacement().scaleOverride).toBeNull();
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('the remove button hides a view; the toolbar row restores it', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      const cv = m.container.querySelector('canvas[role="img"]')!;
+      cv.getBoundingClientRect = sheetRect;
+      const c = frontViewCenter();
+      await act(async () => {
+        fireMouse(cv, 'mousemove', c.x, c.y, 0);
+      });
+      const remove = m.container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${translations.en!['drawing.removeView']!}"]`,
+      );
+      expect(remove).not.toBeNull();
+      await act(async () => {
+        remove!.click();
+      });
+      expect(frontPlacement().visible).toBe(false);
+
+      // Restore chip: one per hidden view, named after it.
+      const restore = m.container.querySelector<HTMLButtonElement>('button[aria-label="Front"]');
+      expect(restore).not.toBeNull();
+      await act(async () => {
+        restore!.click();
+      });
+      expect(frontPlacement().visible).toBe(true);
+      expect(m.container.querySelector('button[aria-label="Front"]')).toBeNull(); // chip is gone
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('exports an SVG that omits hidden views (and their titles)', async () => {
+    useStore.getState().updateDrawingViewPlacement('front', { visible: false });
+    const prevCreateObjectURL = URL.createObjectURL;
+    let captured: Blob | null = null;
+    (URL as unknown as Record<string, unknown>).createObjectURL = (b: Blob) => {
+      captured = b;
+      return 'blob:stub';
+    };
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      await act(async () => {
+        exportButton(m.container, 'export.svg')!.click();
+      });
+      const svg = await blobText(captured!);
+      expect(svg).not.toContain('>Front<');
+      expect(svg).toContain('>Top<');
+      expect(svg).toContain('>Right<');
+    } finally {
+      await unmount(m);
+      URL.createObjectURL = prevCreateObjectURL;
+    }
+  });
+});
+
+describe('DrawingCanvas title-block scale honesty (B6+B8)', () => {
+  const realGetContext = canvasProto.getContext;
+  let calls: CtxCall[];
+
+  beforeEach(() => {
+    clearToasts();
+    calls = [];
+    canvasProto.getContext = function () {
+      return recordingContext(calls);
+    };
+    useStore.setState({
+      locale: 'en',
+      // 20×10×5: the axis views fit at different scales → VARIES.
+      bodies: [createBox(20, 10, 5)],
+      selectedIds: [],
+      drawingDetails: [],
+      drawingNotes: [],
+      drawingSectionAxis: 'off',
+      drawingViewPlacements: defaultDrawingViewPlacements(),
+      undoStack: [],
+      redoStack: [],
+      numericPrompt: null,
+      featureTree: new FeatureTree(),
+      featureVersion: 1,
+    });
+  });
+
+  afterEach(() => {
+    canvasProto.getContext = realGetContext;
+    useStore.setState({ drawingViewPlacements: defaultDrawingViewPlacements() });
+  });
+
+  it('prints VARIES when visible views disagree, the shared ratio when they agree', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      // Auto-fit views of a non-cubic box disagree → VARIES.
+      expect(calls.some((c) => c.op === 'fillText' && String(c.args[0]).includes('VARIES'))).toBe(true);
+
+      // Every visible view at override 1 px/mm → the honest shared 1:1.
+      await act(async () => {
+        useStore.setState({
+          drawingViewPlacements: defaultDrawingViewPlacements().map((p) => ({ ...p, scaleOverride: 1 })),
+        });
+      });
+      expect(calls.some((c) => c.op === 'fillText' && String(c.args[0]).includes('Scale: 1:1'))).toBe(true);
+
+      // One visible view left, at 2 px/mm → 2:1.
+      await act(async () => {
+        for (const key of ['top', 'right', 'iso']) {
+          useStore.getState().updateDrawingViewPlacement(key, { visible: false });
+        }
+        useStore.getState().updateDrawingViewPlacement('front', { scaleOverride: 2 });
+      });
+      expect(calls.some((c) => c.op === 'fillText' && String(c.args[0]).includes('Scale: 2:1'))).toBe(true);
+
+      // Nothing visible at all → the em dash.
+      await act(async () => {
+        useStore.getState().updateDrawingViewPlacement('front', { visible: false });
+      });
+      expect(calls.some((c) => c.op === 'fillText' && String(c.args[0]).includes('Scale: —'))).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('paints each visible view its own scale caption under its title', async () => {
+    useStore.getState().updateDrawingViewPlacement('front', { scaleOverride: 2 });
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      // Front at 2 px/mm gets a 2:1 caption at the title strip (+34 y).
+      const captions = calls.filter((c) => c.op === 'fillText' && c.args[0] === '2:1');
+      expect(captions.length).toBeGreaterThanOrEqual(1);
+      expect((captions[0]!.args[2] as number)).toBeCloseTo(34, 6);
+      expect((captions[0]!.args[1] as number)).toBeCloseTo(200, 6); // front cell centre
+    } finally {
+      await unmount(m);
     }
   });
 });

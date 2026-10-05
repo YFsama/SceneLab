@@ -306,29 +306,43 @@ export function createRevolve(params: RevolveParams): SolidBody {
   // For a partial revolution the two ends are open — cap them with the profile
   // polygon at the start and end rings (a full turn wraps and needs no caps).
   if (!fullTurn && n >= 3) {
-    const center = { x: 0, y: 0, z: 0 };
-    for (const v of vertices) {
-      center.x += v.x / vertices.length;
-      center.y += v.y / vertices.length;
-      center.z += v.z / vertices.length;
-    }
-    const capFace = (ringOffset: number) => {
-      const loop = vertices.slice(ringOffset, ringOffset + n);
-      const gn = computeFaceNormal(loop[0]!, loop[1]!, loop[2]!);
-      const fc = { x: 0, y: 0, z: 0 };
-      for (const v of loop) {
-        fc.x += v.x / n;
-        fc.y += v.y / n;
-        fc.z += v.z / n;
+    // Cap plane normal: the FULL-loop Newell normal — the profile's own
+    // winding normal mapped through the revolve to this ring. The old
+    // first-3-vertices cross degenerates to a hardcoded (0,0,1) fallback when
+    // the leading triple is collinear (mid-edge sketch vertices), which is
+    // wrong for any profile not in the XY plane and zeroed the revolve volume.
+    // Orientation (the ±, by sweep side): the outward direction points AWAY
+    // from the adjacent ring, measured at the profile vertex farthest from the
+    // axis. The old whole-body-centroid flip could not see this for concave
+    // profiles — an L-profile's vertex average is pulled into the notch, and a
+    // centroid on the axis (symmetric profile) leaves the test exactly 0.
+    const capFace = (ring: number, neighbor: number) => {
+      const loop = vertices.slice(ring * n, ring * n + n);
+      const nn = newellNormal(loop);
+      let m = 0;
+      let best = -1;
+      for (let i = 0; i < n; i++) {
+        const p = loop[i]!;
+        const rel = { x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z };
+        const perp = rel.x * dir.x + rel.y * dir.y + rel.z * dir.z;
+        const r2 =
+          (rel.x - dir.x * perp) ** 2 + (rel.y - dir.y * perp) ** 2 + (rel.z - dir.z * perp) ** 2;
+        if (r2 > best) {
+          best = r2;
+          m = i;
+        }
       }
+      const a = loop[m]!;
+      const b = vertices[neighbor * n + m]!;
+      const away = { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
       const outward =
-        gn.x * (fc.x - center.x) + gn.y * (fc.y - center.y) + gn.z * (fc.z - center.z) < 0
-          ? { x: -gn.x, y: -gn.y, z: -gn.z }
-          : gn;
-      faces.push({ id: genId('face'), vertices: loop, normal: outward });
+        nn.x * away.x + nn.y * away.y + nn.z * away.z < 0
+          ? { x: -nn.x, y: -nn.y, z: -nn.z }
+          : nn;
+      faces.push({ id: genId('face'), vertices: loop, normal: normalize(outward) });
     };
-    capFace(0);
-    capFace(segments * n);
+    capFace(0, 1);
+    capFace(segments, segments - 1);
   }
 
   alignWindingToNormal(faces);

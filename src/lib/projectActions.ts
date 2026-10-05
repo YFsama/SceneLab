@@ -60,6 +60,7 @@ export async function saveProjectToFile(): Promise<void> {
         planes: s.planes, axes: s.axes, points: s.points, coordSystems: s.coordSystems, annotations: s.annotations,
       }, {
         sectionAxis: s.drawingSectionAxis, details: s.drawingDetails, notes: s.drawingNotes,
+        viewPlacements: s.drawingViewPlacements,
       }, s.camSetup);
       // Pretty for the deliberate file export — a human may open it; the
       // autosave path stays compact (3× smaller).

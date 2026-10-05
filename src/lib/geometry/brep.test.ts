@@ -1699,6 +1699,76 @@ describe('createRevolve solid', () => {
   });
 });
 
+// Pass-30 P3 T3: concave-profile cap orientation. The old cap code took the
+// plane normal from the FIRST THREE vertices (whose zero-cross fallback is a
+// hardcoded (0,0,1)) and oriented it against the whole-body vertex centroid —
+// a concave profile's vertex average sits in the notch, so the flip is not a
+// reliable sweep-side oracle, and profiles outside the XY plane got normals
+// that were not even perpendicular to the cap.
+describe('createRevolve concave caps', () => {
+  const axisY = { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } };
+  // L-shaped closed profile, CCW in the XY plane: rect [2,6]×[0,4] with the
+  // [4,6]×[2,4] notch removed. Area 12, centroid radius 11/3.
+  const L: Vec3[] = [
+    { x: 2, y: 0, z: 0 },
+    { x: 6, y: 0, z: 0 },
+    { x: 6, y: 2, z: 0 },
+    { x: 4, y: 2, z: 0 },
+    { x: 4, y: 4, z: 0 },
+    { x: 2, y: 4, z: 0 },
+  ];
+
+  it('an L-shaped profile revolved 360° is watertight within 1% of the Pappus volume', () => {
+    const body = createRevolve({ profile: L, axis: axisY, angle: Math.PI * 2 });
+    // Pappus: V = 2π·r̄·A = 2π·(11/3)·12 = 88π ≈ 276.46 (the ~0.6% deficit is
+    // the 32-segment inscribed tessellation).
+    const ideal = 88 * Math.PI;
+    const vol = Math.abs(computeVolume(body));
+    expect(vol).toBeGreaterThan(ideal * 0.99);
+    expect(vol).toBeLessThanOrEqual(ideal * 1.001);
+    expect(findBoundaryLoops(body).holeCount).toBe(0);
+    expect(checkManifold(body).isManifold).toBe(true);
+  });
+
+  it('a partial 180° L-revolve keeps the fractional Pappus volume and closed caps', () => {
+    const body = createRevolve({ profile: L, axis: axisY, angle: Math.PI });
+    const ideal = 44 * Math.PI; // θ·r̄·A = π·(11/3)·12
+    const vol = Math.abs(computeVolume(body));
+    expect(vol).toBeGreaterThan(ideal * 0.99);
+    expect(vol).toBeLessThanOrEqual(ideal * 1.001);
+    expect(findBoundaryLoops(body).holeCount).toBe(0);
+  });
+
+  it('caps of a profile outside the XY plane with a collinear leading triple get true plane normals', () => {
+    // The same L in the YZ plane (which contains the axis), with a mid-edge
+    // vertex making the first THREE points collinear. The cap plane normal is
+    // ±X; the old first-3 fallback returned ±Z — inside the cap plane.
+    const LYz: Vec3[] = [
+      { x: 0, y: 0, z: 2 },
+      { x: 0, y: 0, z: 4 },
+      { x: 0, y: 0, z: 6 },
+      { x: 0, y: 2, z: 6 },
+      { x: 0, y: 2, z: 4 },
+      { x: 0, y: 4, z: 4 },
+      { x: 0, y: 4, z: 2 },
+    ];
+    const body = createRevolve({ profile: LYz, axis: axisY, angle: Math.PI });
+    // Both caps face −X: the sweep (about +Y, +Z→+X) puts the material at
+    // x ≥ 0, so each cap's outward side is the −X side of the x=0 plane.
+    const caps = body.faces.filter((f) => f.vertices.length === LYz.length);
+    expect(caps).toHaveLength(2);
+    for (const cap of caps) {
+      expect(Math.abs(cap.normal.x)).toBeCloseTo(1, 6);
+      expect(cap.normal.x).toBeLessThan(0);
+    }
+    // Watertight and the right volume (same 12/(11/3) L section).
+    expect(findBoundaryLoops(body).holeCount).toBe(0);
+    const ideal = 44 * Math.PI;
+    expect(Math.abs(computeVolume(body))).toBeGreaterThan(ideal * 0.99);
+    expect(Math.abs(computeVolume(body))).toBeLessThanOrEqual(ideal * 1.001);
+  });
+});
+
 describe('primitives are watertight', () => {
   const rect = [
     { x: 2, y: 0, z: 0 },

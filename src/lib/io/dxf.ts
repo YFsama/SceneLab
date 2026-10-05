@@ -396,8 +396,15 @@ export function exportSheetDXF(
   }));
 
   for (const { view, viewIndex, ox, oy, transform } of placements) {
+    // Hidden views (per-view placement) are skipped exactly like the SVG
+    // writer — the sheet shows only what the canvas shows.
+    if (view.placement?.visible === false) continue;
     // View name: the canvas title position (top-centre, baseline +20).
     emitText(out, 'NOTES', ox + cellW / 2, fy(oy + 20), SHEET_TEXT_HEIGHT, view.name, 'center');
+    // Scale caption under the title, mirroring the canvas/SVG ratio label.
+    if (view.placement?.scaleLabel) {
+      emitText(out, 'NOTES', ox + cellW / 2, fy(oy + 34), SHEET_TEXT_HEIGHT * 0.8, view.placement.scaleLabel, 'center');
+    }
 
     for (const line of view.lines) {
       const p1 = transform.toSheet(line.start);
