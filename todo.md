@@ -1335,3 +1335,73 @@ Future work: true B-rep kernel (OCCT), STEP import, loft feature, VLM vision ref
     tool-library persistence/editor; B-side: bookmark rename, loft AI tool,
     read_model_file.
   - **v0.23.0**: version synced across the four manifests; CHANGELOG entry.
+- `2026-10-03`: Pass #30 — deepest round: 3 measuring audits → 12 implementers → independent review + browser acceptance, v0.24.0 (2559 tests / 149 files green; lint/tsc/build/E2E 25/25 OK).
+  - **Method**: kernel-limits audit (measured: 32-gon sagitta tables, fillet overlay
+    protrusion, boolean C0/C1, STEP OCCT-rejection, zero parametric drift), a
+    cross-feature QA walkthrough (real UI, 9 findings + a CLEAN list), a perf
+    re-measure (silhouette quadratic, CAM regen thrash, chunk +17%, memory
+    curves) — then CAMPLUS/DXFPKG/STEP/FILLET/ADAPTIVE/PERFFIX/QAFIX-STORE/
+    QAFIX-GEOM + coordinator fixes + a final center-mark fix from the browser
+    acceptance. Independent review verified every headline by RUNNING code
+    (incl. real wasm); browser walkthrough: 6 PASS + 1 defect fixed same-day.
+  - **STEP P0 closed** (kernel audit): OCCT rejected every export ("Incorrect
+    Syntax"); true root cause a 6-arg EDGE_CURVE (found by mutation experiment,
+    beyond the audit's list) + missing canonical chain/FACE_OUTER_BOUND/unit
+    DIRECTIONs/MANIFOLD_SOLID_BREP/units. Four-layer oracle: structural unit
+    tests, referential round-trip proofs, opt-in real-wasm volume assertions,
+    browser E2E (export → in-page OCCT import → 0.01% volume → file re-import).
+    Analytic CYLINDRICAL_SURFACE for holes spec'd for next pass (Face tagging).
+  - **Concave volume honest** (QA P1; true root cause deeper than the fan
+    hypothesis): extrude side normals flipped when the vertex-average centroid
+    lands in a concavity; first-triple cross also concave-blind. Newell normal
+    + winding-derived extrude normals + ear-clip triangulation (convex fan
+    fast path bit-identical) wired through volume/centroid/mass/area/thickness.
+    L-profile 0.000% error; tessellated-cylinder goldens unchanged.
+  - **Fillet/chamfer stopgap** (kernel audit measured: +volume sign, r·√2
+    protrusion, always non-manifold): bisector sign corrected (task spec had
+    r/sin — the implementer derived r/cos and 2·halfAngle sweep), closed-shell
+    emission (origin-independent divergence), interior quarter-arc. Chamfer
+    removal exact to d²·ΣL/2. Coplanar-seam skip added by coordinator (fires
+    on voxel-union flat seams — 11708 measured — not overlay walls as first
+    commented; review-corrected attribution). Real Manifold-based fillet is
+    the next-pass roadmap item; guardrails: non-manifold voxel-cliff warnings
+    (throttled) + FH distance-transform isotropic erosion (min wall 0.208→
+    1.875+) + ray-grazing jitter fix (182 spurious holes on a perfect cube).
+  - **Adaptive tessellation** (kernel audit): adaptiveSegments N(⌀, 0.005mm
+    chord tol) threaded via primitive-builder defaults (⌀2 stays 32);
+    inscribed-⌀ reporting in hole detection (8/12-gon misclassification dead)
+    + drawing circles (relative gate); −0.000000 closure-key fix.
+  - **Perf** (re-audit): topSilhouette BVH coverage index 6.4× at 6k faces
+    (uniform grid REJECTED — fan slivers flood it, measured); CAM auto-regen
+    debounce+fingerprint (5→1 under bursts; fingerprint now includes resolved
+    TOOLS too — review catch); main chunk −49% gz (io manualChunks pin);
+    autosave compact 3.3× (file export stays pretty — review catch); perf
+    canary CI-safe 25ms.
+  - **CAM**: machine simulation (event-decoupled rAF, per-move feeds, segment
+    highlight); op identity = feature-id binding with repoint-in-regenerate
+    (QA P1: param edits killed ops permanently); drill no-holes honest throw
+    → stale flag; safeZAboveStock wired end-to-end; tool library persisted +
+    editor; pocket row linking with region guard.
+  - **QA fixes**: findFeatureIdForBody LAST-producer (hole-after-fillet
+    duplication root; fixes cut-target + dim write-back same-cause); tree-body
+    copy supported (baked snapshots); AI panel auto-collapses in cam/drawing;
+    drawing circle detection on REAL extrude+drill paths (browser-acceptance
+    defect, fixed same-day: speculative start-closure + loop carving rules,
+    failing-first real-kernel test).
+  - **sheet-DXF** (landed report-less, review-verified): CIRCLE/ARC/TEXT(%%c)
+    /SOLID arrows/LTYPE+LAYER tables; shared title-block + cutting-plane
+    layouts across canvas/SVG/DXF; DrawingCanvas DXF button exports the sheet.
+  - **Review verdict**: fit for release, no P0s; coplanar-skip census, BVH
+    identity proof, DXF y-flip argument, WeakMap soundness all independently
+    verified; 5 one-liner findings fixed pre-release.
+  - **Remaining open (next pass)**: Manifold-based real fillet/chamfer/shell
+    (Face provenance tagging → analytic STEP cylinders rides along); sim
+    cross-op highlight residue + whole-vertex drawRange; pocket canLink
+    densification; inscribed-⌀ gate cross-doc; STEP dedup threshold asymmetry;
+    MIN_HOLE_FACES <12 note; hidden-line removal; per-view scale/placement;
+    dimension arrowheads/tolerances (spec 3); pocket-mouth ring fragmentation
+    (degree-35, 2-step-lookahead walker); computeRevolve concave caps;
+    2000-edit soak + listener-creak diff (perf audit watch items); the
+    recurring "external watcher reverting sibling writes" phenomenon (seen by
+    3 agents across 2 passes — unattributed, final states always verified).
+  - **v0.24.0**: version synced across the four manifests; CHANGELOG entry.
