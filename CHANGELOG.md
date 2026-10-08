@@ -2,6 +2,57 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.26.0] — 2026-10-09
+
+平台适配与可靠性轮：错误记录/复制/上报全链路 + 跨显示器 DPR 变更 + 窄窗
+响应式布局 + 帮助/About + 启动画面 + 安装器完善（4 实现者 + 独立审查
+2×P1 修复 + 浏览器走查）。
+
+### 错误记录与上报 (Diagnostics & Reporting)
+
+- **错误基础设施**：`window.onerror` + `unhandledrejection` 全局捕获 →
+  环形日志（内存 100 条 / localStorage 持久 30 条，损坏数据降级）；
+  React ErrorBoundary 崩溃页（重载 / 复制报告 / 尝试继续恢复语义）。
+- **诊断对话框**（命令面板 "Diagnostics…" / 欢迎卡 / About）：环境
+  （版本/平台/语言/视口@DPR）+ 最近错误（逐条复制）+ 最近命令；四动作：
+  复制报告 / 保存报告（桌面端原生保存对话框，取消不误报）/ 打开反馈页
+  （预填 GitHub issue，shell.open 优先 + window.open 回退）/ 清空。
+- **错误 toast 复制按钮**；报告内容与隐私清单文档化
+  （`docs/error-reporting.md`：五方案对比，明确不含模型数据、绝不自动
+  上报）。
+
+### 平台适配 (Cross-platform)
+
+- 平台检测 `getOS()/getPlatform()`（userAgentData 优先）；快捷键帮助按
+  macOS ⌘/⌥ 显示；修复 ⌘+点击面选择误启动本体拖拽（metaKey 缺失）。
+- 视口三画布（Viewport/ViewCube/Drawing）响应 DPR 变更：跨显示器拖动
+  或缩放后重新应用像素比；**工程图画布补齐容器 resize 处理**并按物理
+  像素栅格化（高 DPI 不再模糊；导出分辨率随窗口，已记录为行为升级）。
+
+### 窗口与布局 (Responsive)
+
+- <960px compact 断点：侧面板渲染层抑制（持久化偏好不动，放宽即恢复）、
+  CAM 栏收窄、AI 面板视口钳制；800×600 最小窗无横向溢出、视口 ≥400px，
+  E2E 固化（含窄窗内建模全流程）。
+
+### 帮助与美化 (Help & Polish)
+
+- About 对话框（版本/平台/语言 + 快捷键/诊断/反馈入口）；工具栏 Help
+  按钮；欢迎卡帮助页脚与视觉打磨；`:focus-visible` 统一焦点环 +
+  `prefers-reduced-motion` 适配；诊断 DPR 显示取整。
+
+### 安装与启动 (Install & Startup)
+
+- 启动画面消灭 WASM 大包首帧白屏（深色 splash + CSS spinner，React
+  挂载自动替换——像素级验证）；窗口居中；NSIS 每用户安装 + 中英双语 +
+  语言选择器；Rust `save_text_file` 命令；`plugins.shell.open` 白名单
+  收紧至 github.com；README 安装行为章节。
+
+### 测试 (Tests)
+
+- 2640 → 2733（158 文件）；E2E 25 → 30（canvas-resize ×2、responsive
+  ×3）；cargo 4 → 6；独立审查探针 14/14。
+
 ## [0.25.0] — 2026-10-03
 
 内核路线图落地轮：真 Manifold 圆角/倒角/抽壳 + Face 溯源 → 解析 STEP

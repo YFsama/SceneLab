@@ -1,7 +1,7 @@
 # SceneLab — Roadmap & Working Queue
 
 > AI-first 3D CAD/CAM — Web-first + Tauri desktop shell
-> **当前版本 v0.25.0** · 详见 [CHANGELOG.md](CHANGELOG.md)（用户向历史）与 git log（技术细节）。
+> **当前版本 v0.26.0** · 详见 [CHANGELOG.md](CHANGELOG.md)（用户向历史）与 git log（技术细节）。
 
 ## Project Vision
 
@@ -22,12 +22,16 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ---
 
-## Status Snapshot — v0.25.0 (2026-10-03)
+## Status Snapshot — v0.26.0 (2026-10-09)
 
 | 维度 | 状态 |
 |------|------|
-| 测试 | **2640 vitest / 149 文件**；**E2E 25/25**（含真实 OCCT 内核浏览器往返）；浏览器走查验收 19/19 |
-| 版本 | v0.18.0 → v0.25.0 共 8 个版本，31 个开发轮次（pass #1–#31） |
+| 测试 | **2733 vitest / 158 文件**；**E2E 30/30**（+canvas-resize ×2、responsive ×3）；cargo 6；浏览器走查（IAB 输入派发受限，事件级验证 + E2E 补位） |
+| 版本 | v0.18.0 → v0.26.0 共 9 个版本，32 个开发轮次（pass #1–#32） |
+| 可靠性 | 全局错误捕获（errorLog 环形 100/持久 30）+ ErrorBoundary + 诊断对话框（复制/保存/预填 issue 反馈）+ 错误 toast 复制 |
+| 平台 | getOS/getPlatform 检测；⌘/⌥ 快捷键显示；⌘+点击修复；视口三画布 DPR 变更响应；工程图画布补 resize |
+| 布局 | <960px compact：侧面板渲染层抑制（持久化偏好不动）；800×600 无横向溢出、视口 ≥400px（E2E 固化） |
+| 安装/启动 | NSIS 每用户 + 中英双语 + 语言选择器（conf 级验证，**待 CI 出包实拍**）；启动 splash；窗口居中；save_text_file；shell.open 白名单 github.com |
 | AI | ~121 个注册工具（含 undo/特征管理/文件交付）；maxIterations 16/32；诚实失败协议 |
 | 几何内核 | Manifold 精确布尔（预热后）；**真 Manifold 圆角/倒角/抽壳**（90° 圆角 +0.26%、水密）；Face 溯源标记；自适应细分；参数化往返漂移实测为零 |
 | 互操作 | STEP 导出 OCCT 可读（FreeCAD 级）；解析圆柱面（同体 16.4MB→115KB）；STL/OBJ/3MF/DXF(sheet)/SVG/PDF |
@@ -104,10 +108,12 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ### E. 基础设施 / 流程
 
+- [ ] **NSIS 安装器实机验证**（pass #32）：currentUser/SimpChinese+English/语言选择器仅 conf 级（cargo check 编译期校验）——下次 release CI 出包后人工确认安装界面与每用户安装行为
+- [ ] **工程图导出分辨率随窗口**（pass #32 行为升级）：DrawingCanvas 背衬跟随容器（原固定 800 逻辑分辨率）——小窗导出可低于旧分辨率；如需稳定输出可加导出最小分辨率钳制
 - [ ] **"外部观察者回写"现象**：3 个 Agent 跨 2 轮报告文件被回退到秒级前快照（最终态均已复验）——未归因；候选：并发 Agent 的 git 操作/测试运行重建
 - [ ] **启动冒烟门禁**：任何 pass 落地前 page-loads+#viewport-canvas 挂载检查（QA 审计建议——单测绿但模块图断曾让 dev 无法启动）
 - [ ] 2000-edit 长浸泡 + GPU 侧内存盲区（renderer.info 生产构建不可达）
-- [ ] E2E 端口 5174 被僵尸进程占据（环境问题，E2E_PORT 可绕）
+- [ ] E2E 端口 5174 被僵尸进程占据（环境问题，E2E_PORT 可绕）；vite watcher 已忽略 src-tauri/target（EBUSY 曾杀死 dev server，pass #32 根治）
 
 ---
 
@@ -142,3 +148,4 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | #29 | 10-03 | CAM 核心重写（轴向/轮廓/M2）/工程图中心标记标注/书签 | v0.23.0 |
 | #30 | 10-03 | 最深轮：STEP OCCT P0/几何诚实（凹体积/圆角停止间隙）/CAM 仿真/三审计 | v0.24.0 |
 | #31 | 10-03 | 真 Manifold 圆角倒角抽壳/Face 溯源→解析 STEP 圆柱/每视图工程图 | v0.25.0 |
+| #32 | 10-09 | 平台适配/DPR 变更/响应式布局/帮助美化/安装启动/错误记录复制上报 | v0.26.0 |
