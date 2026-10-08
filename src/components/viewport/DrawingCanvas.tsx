@@ -44,11 +44,14 @@ import { downloadFile } from '../../lib/io/studio3d';
 import { exportSheetDXF } from '../../lib/io/dxf';
 import { exportCanvasAsPDF } from '../../lib/io/pdf';
 import { showToast } from '../../lib/toast';
+import { useDprChange } from '../../lib/hooks/useDprChange';
+import { canvasBackingSize, clampedDpr, shouldApplyResize } from '../../lib/render/canvasMetrics';
 import { Download, Eye, StickyNote, X, ZoomIn } from 'lucide-react';
 
 type SectionAxis = 'off' | 'x' | 'y' | 'z';
 
-/** Base sheet: a fixed 2×2 grid of views (canvas px; CSS-stretched on screen). */
+/** Base sheet: a fixed 2×2 grid of views (sheet px; the canvas backs the
+ *  container at CSS×DPR and scales this logical system onto it). */
 const SHEET_W = 800;
 const SHEET_H = 600;
 const GRID_COLS = 2;
@@ -112,6 +115,14 @@ interface ViewDragState {
 export function DrawingCanvas() {
   const { t } = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The sheet's scrollable wrapper (owning the canvas's CSS size).
+  const sheetWrapperRef = useRef<HTMLDivElement>(null);
+  // Container CSS size + DPR the backing store was last sized for (null until
+  // the resize observer reports — the JSX width/height attributes are the
+  // pre-observer fallback). Investigated: the sheet previously rasterized at
+  // a FIXED 800×600 attribute size stretched by CSS — container resizes and
+  // DPR changes were both ignored.
+  const [backingSize, setBackingSize] = useState<{ cssW: number; cssH: number; dpr: number } | null>(null);
   const bodies = useStore((s) => s.bodies);
   const drawingDetails = useStore((s) => s.drawingDetails);
   const drawingNotes = useStore((s) => s.drawingNotes);
@@ -322,6 +333,36 @@ export function DrawingCanvas() {
     };
   }, [t, placements]);
 
+  /** Track the sheet wrapper's CSS size and the DPR for the backing store.
+   * Deduped so ResizeObserver's per-frame firing during panel drags doesn't
+   * churn state (the paint path reallocates the canvas on every change). */
+  const applyBackingSize = useCallback(() => {
+    const wrapper = sheetWrapperRef.current;
+    if (!wrapper) return;
+    // A zero client box means "not laid out / hidden" (always so under jsdom):
+    // keep the attribute-size fallback until the observer reports a real size.
+    if (wrapper.clientWidth <= 0 || wrapper.clientHeight <= 0) return;
+    const next = { cssW: wrapper.clientWidth, cssH: wrapper.clientHeight, dpr: clampedDpr(window.devicePixelRatio) };
+    setBackingSize((prev) =>
+      prev && !shouldApplyResize(
+        { w: prev.cssW, h: prev.cssH, dpr: prev.dpr },
+        { w: next.cssW, h: next.cssH, dpr: next.dpr },
+      ) ? prev : next,
+    );
+  }, []);
+  const hasBodies = bodies.length > 0;
+  useEffect(() => {
+    if (!hasBodies) return; // no sheet wrapper is mounted without bodies
+    applyBackingSize();
+    // jsdom lacks ResizeObserver; the DPR hook below still covers ratio flips.
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(applyBackingSize);
+    ro.observe(sheetWrapperRef.current!);
+    return () => ro.disconnect();
+  }, [hasBodies, applyBackingSize]);
+  // Cross-monitor drag / browser zoom keeps the CSS size — catch the ratio.
+  useDprChange(applyBackingSize);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || views.length === 0) return;
@@ -329,10 +370,25 @@ export function DrawingCanvas() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Size the backing store to the container (CSS × clamped DPR) and scale
+    // the context so every coordinate below stays in SHEET_* units — the
+    // geometry, hit targets and exporters are all sheet-space. Sizing clears
+    // the canvas, which is fine: this effect IS the repaint. Until the
+    // observer reports (first paint), draw into the attribute-sized canvas
+    // with an identity transform (the old fixed-size behaviour).
+    if (backingSize) {
+      const backing = canvasBackingSize(backingSize.cssW, backingSize.cssH, backingSize.dpr);
+      if (canvas.width !== backing.width) canvas.width = backing.width;
+      if (canvas.height !== backing.height) canvas.height = backing.height;
+      ctx.setTransform(backing.width / SHEET_W, 0, 0, backing.height / sheetHeight, 0, 0);
+    } else {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
     const dimHits: typeof dimHitsRef.current = [];
     const noteHits: typeof noteHitsRef.current = [];
 
-    const w = canvas.width;
+    const w = SHEET_W;
 
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, w, sheetHeight);
@@ -645,18 +701,20 @@ export function DrawingCanvas() {
 
     dimHitsRef.current = dimHits;
     noteHitsRef.current = noteHits;
-  }, [views, placements, viewBoxes, detailLayout, drawingDetails, drawingNotes, holeCallouts, sectionCuts, sheetHeight, hoverHit, hoverNoteId, hoverView, dragState, editingNote, buildTitleBlock, t]);
+  }, [views, placements, viewBoxes, detailLayout, drawingDetails, drawingNotes, holeCallouts, sectionCuts, sheetHeight, hoverHit, hoverNoteId, hoverView, dragState, editingNote, buildTitleBlock, t, backingSize]);
 
-  /** Client event → sheet (canvas px) coordinates (the canvas is CSS-stretched).
-   * Multiply before dividing: (x/w)*w round-trips through a non-representable
-   * fraction and loses ~1e-14 px, which accumulates into drag offsets. */
+  /** Client event → sheet coordinates. Maps through the bounding rect to the
+   * SHEET_* logical system (NOT the backing store — that is CSS × DPR physical
+   * px now). Multiply before dividing: (x/w)*w round-trips through a
+   * non-representable fraction and loses ~1e-14 px, which accumulates into
+   * drag offsets. */
   const toCanvasCoords = (e: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     return {
-      x: ((e.clientX - rect.left) * canvas.width) / rect.width,
-      y: ((e.clientY - rect.top) * canvas.height) / rect.height,
+      x: ((e.clientX - rect.left) * SHEET_W) / rect.width,
+      y: ((e.clientY - rect.top) * sheetHeight) / rect.height,
     };
   };
 
@@ -1142,6 +1200,7 @@ export function DrawingCanvas() {
         </button>
       </div>
       <div
+        ref={sheetWrapperRef}
         className="flex-1 overflow-hidden relative"
         onMouseMove={handleWrapperMove}
         onMouseDown={handleWrapperDown}

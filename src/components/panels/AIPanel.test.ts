@@ -155,3 +155,59 @@ describe('AIPanel workspace auto-collapse (F6)', () => {
     useStore.setState({ workspace: 'model' });
   });
 });
+
+// I3 — small windows (Tauri minimum 800×600) must keep the floating panel
+// inside the viewport: the expanded panel's width clamps against 100vw and its
+// height caps against 100vh (the messages column scrolls internally). jsdom
+// does not resolve Tailwind arbitrary values, so the responsive tokens are
+// asserted on the class list itself.
+describe('AIPanel viewport-safe sizing (I3)', () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+
+  const mountPanel = async (): Promise<{ container: HTMLDivElement; unmount: () => Promise<void> }> => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    await act(async () => {
+      root.render(createElement(AIPanel));
+    });
+    return {
+      container,
+      unmount: async () => {
+        await act(async () => {
+          root.unmount();
+        });
+        container.remove();
+      },
+    };
+  };
+
+  it('clamps width to the viewport and caps height with internal scrolling', async () => {
+    useStore.setState({ workspace: 'model' });
+    const { container, unmount } = await mountPanel();
+
+    const panel = container.querySelector('[role="complementary"]')!;
+    expect(panel).not.toBeNull();
+    const classes = panel.className;
+    // Fixed bottom-12 right-4 kept: the anchor is viewport-relative already.
+    expect(classes).toContain('fixed');
+    expect(classes).toContain('bottom-12');
+    expect(classes).toContain('right-4');
+    // Width: 20rem preferred, but never wider than 100vw minus both margins
+    // (right-4 offset + a matching 1rem left margin).
+    expect(classes).toContain('w-[min(20rem,calc(100vw-2rem))]');
+    // Height: h-96 preferred, hard-capped so the top edge stays in view on
+    // 600px-tall windows.
+    expect(classes).toContain('h-96');
+    expect(classes).toContain('max-h-[calc(100vh-8rem)]');
+    // The messages column owns the internal overflow for the shorter panel.
+    expect(panel.querySelector('.flex-1.overflow-y-auto')).not.toBeNull();
+
+    await unmount();
+    useStore.setState({ workspace: 'model' });
+  });
+});

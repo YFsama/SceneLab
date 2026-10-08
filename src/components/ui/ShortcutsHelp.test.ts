@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../store/app';
 import { translations } from '../../lib/i18n';
+import { platformizeShortcut } from '../../lib/runtime';
 import { ShortcutsHelp } from './ShortcutsHelp';
 
 // Mount the REAL component (open state on) and read its rendered rows — the
@@ -74,12 +75,45 @@ describe('ShortcutsHelp (rendered)', () => {
     // Enter repeats the last command; Delete in measure unpicks the last
     // point (both keys seeded in i18n since the rows were added).
     expect(pairs).toContainEqual([translations.en!['shortcuts.repeatLast']!, 'Enter']);
-    // Ctrl+Shift+A deselects all; Ctrl+Shift+Z redoes.
-    expect(pairs).toContainEqual([translations.en!['menu.deselectAll']!, 'Ctrl+Shift+A']);
-    expect(pairs).toContainEqual([translations.en!['toolbar.redo']!, 'Ctrl+Shift+Z']);
+    // Ctrl+Shift+A deselects all; Ctrl+Shift+Z redoes. Combos render through
+    // platformizeShortcut, so the expected string follows the host platform
+    // (⌘ on macOS) instead of being hard-coded.
+    expect(pairs).toContainEqual([translations.en!['menu.deselectAll']!, platformizeShortcut('Ctrl+Shift+A')]);
+    expect(pairs).toContainEqual([translations.en!['toolbar.redo']!, platformizeShortcut('Ctrl+Shift+Z')]);
     // Alt / Shift nudge modifiers reuse the nudge label.
-    expect(pairs).toContainEqual([translations.en!['shortcuts.nudge']!, 'Alt / Shift + arrows']);
+    expect(pairs).toContainEqual([translations.en!['shortcuts.nudge']!, platformizeShortcut('Alt / Shift + arrows')]);
     expect(pairs).toContainEqual([translations.en!['shortcuts.measureUnpick']!, 'Del (measure)']);
+  });
+
+  it('renders macOS modifier labels when the host sniffs as macOS', async () => {
+    // Stub the navigator BEFORE mounting so the render-time platform probe
+    // (runtime.getOS) reads a Mac user agent end to end.
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+      platform: 'MacIntel',
+    });
+    try {
+      const mac = await mountHelp();
+      try {
+        const pairs = rows(mac.container);
+        // Ctrl entries become ⌘ (they are command shortcuts bound to
+        // ctrlKey||metaKey, so ⌘ is the faithful macOS label).
+        expect(pairs).toContainEqual([translations.en!['toolbar.redo']!, '⌘+Shift+Z']);
+        expect(pairs).toContainEqual([translations.en!['menu.isolate']!, '⌘+I']);
+        expect(pairs).toContainEqual([translations.en!['shortcuts.palette']!, '⌘+K']);
+        expect(pairs).toContainEqual([translations.en!['shortcuts.panels']!, '⌘+B / ⌘+P']);
+        // The Alt-drag clone shortcut becomes ⌥; modifier-free rows unchanged.
+        expect(pairs).toContainEqual([translations.en!['shortcuts.altDragDuplicate']!, '⌥+LMB drag']);
+        expect(pairs).toContainEqual([translations.en!['sketch.polyline']!, 'Shift+L']);
+        // No leftover raw Ctrl token anywhere in the rendered combos.
+        const allKeys = pairs.map(([, k]) => k);
+        expect(allKeys.some((k) => k.includes('Ctrl') || k.includes('Alt'))).toBe(false);
+      } finally {
+        await unmountHelp(mac);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('keeps the number-key view rows 1-7 plus 0 for iso', () => {

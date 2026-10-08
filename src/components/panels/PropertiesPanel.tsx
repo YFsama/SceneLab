@@ -136,7 +136,7 @@ export function PropertiesPanel() {
 
   return (
     <aside
-      className="w-60 bg-panel border-l border-panel-border flex flex-col"
+      className="w-60 max-w-[40vw] bg-panel border-l border-panel-border flex flex-col"
       role="complementary"
       aria-label={t('panel.properties')}
     >

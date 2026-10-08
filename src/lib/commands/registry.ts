@@ -10,6 +10,7 @@ import { showToast } from '../toast';
 import { framingBodies } from '../render/fitView';
 import { downloadFile, exportOBJ, exportSTLBinary, export3MFPackage } from '../io';
 import { importMeshFile } from '../io/importFiles';
+import { openDiagnostics } from '../errorLog';
 
 /**
  * Build a midplane on the selected body (or the first body) from its two
@@ -345,7 +346,12 @@ export function initBuiltinCommands(): void {
   for (const sample of SAMPLE_PROJECTS) {
     registerCommand({ id: `sample.load.${sample.id}`, label: `Load sample: ${sample.id}`, category: 'Create', run: () => { void loadSampleProject(sample.id); } });
   }
-  registerCommand({ id: 'help.welcome', label: 'Show welcome guide (empty scene)', category: 'Help', run: () => s().showWelcome() });
+  registerCommand({ id: 'help.welcome', labelKey: 'help.welcome', label: 'Show welcome guide (empty scene)', category: 'Help', run: () => s().showWelcome() });
+  // Diagnostics / about dialogs open on window events (same decoupled pattern
+  // as the fit-view commands below); openDiagnostics lives in lib/errorLog so
+  // the palette doesn't import a component module.
+  registerCommand({ id: 'help.diagnostics', labelKey: 'errlog.command', label: 'Diagnostics…', category: 'Help', run: () => openDiagnostics() });
+  registerCommand({ id: 'help.about', labelKey: 'about.command', label: 'About SceneLab', category: 'Help', run: () => { window.dispatchEvent(new CustomEvent('scenelab:open-about')); } });
   // Fusion-style live section analysis + SolidWorks paste-in-place.
   registerCommand({ id: 'view.sectionToggle', label: 'Toggle section analysis', category: 'View', shortcut: 'X', run: () => { if (s().workspace === 'model') s().setSectionAnalysis({ active: !s().sectionAnalysis.active }); } });
   for (const ax of ['x', 'y', 'z'] as const) {

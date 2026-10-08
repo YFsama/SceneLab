@@ -21,6 +21,7 @@ import { CAMPanel } from './components/panels/CAMPanel';
 import { ParametersPanel } from './components/panels/ParametersPanel';
 import { useKeyboardShortcuts, initShortcuts } from './lib/hooks/useKeyboardShortcuts';
 import { useAutosave } from './lib/hooks/useAutosave';
+import { useResponsive } from './lib/hooks/useResponsive';
 import { SkipLink } from './components/ui/SkipLink';
 import { CommandPalette } from './components/ui/CommandPalette';
 import { PrimitiveDialog } from './components/ui/PrimitiveDialog';
@@ -34,6 +35,8 @@ import { WelcomeCard } from './components/ui/WelcomeCard';
 import { SectionPanel } from './components/ui/SectionPanel';
 import { DropZone } from './components/ui/DropZone';
 import { RestoreBanner } from './components/ui/RestoreBanner';
+import { DiagnosticsDialog } from './components/ui/DiagnosticsDialog';
+import { AboutDialog } from './components/ui/AboutDialog';
 import { initBuiltinCommands } from './lib/commands/registry';
 
 initShortcuts();
@@ -44,6 +47,17 @@ export default function App() {
   const workspace = useStore((s) => s.workspace);
   const showBrowserTree = useStore((s) => s.showBrowserTree);
   const showProperties = useStore((s) => s.showProperties);
+
+  // Compact-window layout (I3): below 960 CSS px the docked side panels
+  // (browser tree 224px + parts library 240px + properties 240px) squeeze the
+  // `flex-1 min-w-0` viewport down to a sliver at the Tauri minimum 800px.
+  // Suppression is PURELY at this render layer — showBrowserTree/showProperties
+  // are PERSISTED user preferences (scenelab.show* in localStorage) that the
+  // shortcuts/commands keep toggling; compact never writes them, so widening
+  // the window restores the saved layout immediately. data-viewport mirrors
+  // the breakpoint for E2E/visual assertions.
+  const breakpoint = useResponsive();
+  const compact = breakpoint === 'compact';
 
   // Apply theme to document
   useEffect(() => {
@@ -57,18 +71,20 @@ export default function App() {
   useAutosave();
 
   return (
-    <div className="h-screen flex flex-col" data-theme={theme}>
+    <div className="h-screen flex flex-col" data-theme={theme} data-viewport={breakpoint}>
       <SkipLink />
       {/* Main layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left toolbar */}
         <Toolbar />
 
-        {/* Browser tree */}
-        {showBrowserTree && <BrowserTree />}
+        {/* Browser tree (compact windows suppress it at the render layer;
+            see the compact note above — the store flag stays untouched) */}
+        {showBrowserTree && !compact && <BrowserTree />}
 
-        {/* Parts library (model workspace only) */}
-        {workspace === 'model' && <PartsLibrary />}
+        {/* Parts library (model workspace only; inline, not an overlay, so
+            compact hides it the same render-layer way) */}
+        {workspace === 'model' && !compact && <PartsLibrary />}
 
         {/* Viewport area */}
         <main id="main-content" className="flex-1 flex flex-col min-w-0" tabIndex={-1}>
@@ -92,13 +108,15 @@ export default function App() {
           )}
         </main>
 
-        {/* Properties panel or CAM panel */}
+        {/* Properties panel or CAM panel. CAM keeps its right column in
+            compact (it is the core CAM workspace UI) but narrows it w-72→w-64
+            so the 800px-minimum window still leaves ≥400px of viewport. */}
         {workspace === 'cam' ? (
-          <div className="w-72 bg-panel border-l border-panel-border">
+          <div className={`${compact ? 'w-64' : 'w-72'} bg-panel border-l border-panel-border shrink-0`}>
             <CAMPanel />
           </div>
         ) : (
-          showProperties && <PropertiesPanel />
+          showProperties && !compact && <PropertiesPanel />
         )}
       </div>
 
@@ -125,6 +143,10 @@ export default function App() {
       <ScaleDialog />
       <HollowDialog />
       <AIPanel />
+      {/* Diagnostics (palette "Diagnostics…" / welcome card) and About
+          (toolbar Help button / welcome card) — both open via window events. */}
+      <DiagnosticsDialog />
+      <AboutDialog />
     </div>
   );
 }

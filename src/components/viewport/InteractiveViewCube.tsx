@@ -1,6 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useT } from '../../lib/i18n';
+import { useDprChange } from '../../lib/hooks/useDprChange';
+import { clampedDpr } from '../../lib/render/canvasMetrics';
 // The 26-orientation tables and hit-classifying logic live in
 // viewcubeOrientations.ts (shared with ViewCube.test.ts).
 import { ORIENTATIONS, FACE_DIRS, classifyHit, type HitResult } from './viewcubeOrientations';
@@ -120,7 +122,7 @@ export function InteractiveViewCube() {
     if (!container) return;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(clampedDpr(window.devicePixelRatio));
     renderer.setSize(CUBE_SIZE, CUBE_SIZE);
     renderer.setClearColor(0x000000, 0); // transparent background
     container.appendChild(renderer.domElement);
@@ -196,6 +198,17 @@ export function InteractiveViewCube() {
       }
     };
   }, []);
+
+  // The cube is a fixed CSS size, so a DPR change (cross-monitor drag,
+  // browser zoom) never resizes its container — re-apply the backing-store
+  // ratio + size and mark the frame dirty so the render loop repaints.
+  useDprChange(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.setPixelRatio(clampedDpr(window.devicePixelRatio));
+    renderer.setSize(CUBE_SIZE, CUBE_SIZE);
+    dirtyRef.current = true;
+  });
 
   // Mouse move: highlight face/edge/corner
   const handleMouseMove = useCallback((e: React.MouseEvent) => {

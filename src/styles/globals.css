@@ -92,3 +92,25 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
+
+/* Unified keyboard focus ring — one visible outline for every focusable
+   element. Built on --color-accent so it adapts to all three themes
+   (dark / light / high-contrast) automatically. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Users who ask the OS for less motion get (near-)zero durations app-wide.
+   !important is deliberate: component-level transition/animation utilities
+   must not win over the accessibility preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -43,5 +43,11 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    watch: {
+      // Rust build artifacts churn on every cargo invocation; watching them
+      // spams EBUSY on Windows (file locks) and has crashed the dev server
+      // outright when a cargo check raced the watcher.
+      ignored: ['**/src-tauri/target/**'],
+    },
   },
 })

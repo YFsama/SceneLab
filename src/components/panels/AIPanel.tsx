@@ -193,7 +193,13 @@ export function AIPanel() {
 
   return (
     <div
-      className="fixed bottom-12 right-4 w-80 h-96 bg-panel border border-panel-border rounded-lg shadow-xl flex flex-col z-40"
+      // Viewport-safe sizing (I3): the fixed w-80/h-96 box could straddle the
+      // window edge on the Tauri 800×600 minimum. Width clamps to 100vw minus
+      // the right-4 offset and a matching 1rem left margin; height keeps h-96
+      // as the preferred size but caps at 100vh-8rem (status bar + breathing
+      // room) — the messages column is already flex-1 overflow-y-auto, so the
+      // shorter panel scrolls internally instead of overflowing.
+      className="fixed bottom-12 right-4 w-[min(20rem,calc(100vw-2rem))] h-96 max-h-[calc(100vh-8rem)] bg-panel border border-panel-border rounded-lg shadow-xl flex flex-col z-40"
       role="complementary"
       aria-label={t('ai.title')}
     >

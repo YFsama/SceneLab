@@ -60,12 +60,12 @@ export function WelcomeCard() {
       className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
       aria-label={t('welcome.title')}
     >
-      <div className="pointer-events-auto w-[24rem] max-w-[90%] bg-panel border border-panel-border rounded-xl shadow-2xl p-4 space-y-3">
+      <div className="pointer-events-auto w-[24rem] max-w-[90%] bg-panel border border-panel-border rounded-xl shadow-2xl p-5 space-y-3.5">
         <div className="flex items-start gap-2">
           <Sparkles size={16} className="text-accent mt-0.5" />
           <div className="flex-1">
-            <h2 className="text-sm font-semibold text-text-primary">{t('welcome.title')}</h2>
-            <p className="text-xs text-text-secondary">{t('welcome.subtitle')}</p>
+            <h2 className="text-sm font-semibold text-text-primary tracking-tight">{t('welcome.title')}</h2>
+            <p className="text-xs text-text-secondary leading-relaxed">{t('welcome.subtitle')}</p>
           </div>
           <button
             onClick={() => useStore.getState().hideWelcomeForSession()}
@@ -82,10 +82,10 @@ export function WelcomeCard() {
             <button
               key={label}
               onClick={onClick}
-              className="flex items-center gap-2 px-2 py-2 rounded-md border border-panel-border hover:border-accent hover:bg-surface-hover transition-colors text-left"
+              className="flex items-center gap-2 px-2.5 py-2 rounded-md border border-panel-border hover:border-accent hover:bg-surface-hover transition-colors text-left"
             >
               <Icon size={16} className="text-accent shrink-0" />
-              <span className="text-xs text-text-primary">{label}</span>
+              <span className="text-xs font-medium text-text-primary">{label}</span>
             </button>
           ))}
         </div>
@@ -107,7 +107,7 @@ export function WelcomeCard() {
           </div>
         </section>
 
-        <section className="border-t border-panel-border pt-2">
+        <section className="border-t border-panel-border pt-2.5">
           <h3 className="text-[10px] font-medium text-text-muted uppercase tracking-wider mb-1">
             {t('welcome.checklist')} · {onboardingSteps.filter((x) => (ONBOARDING_STEPS as readonly string[]).includes(x)).length}/{ONBOARDING_STEPS.length}
           </h3>
@@ -131,12 +131,38 @@ export function WelcomeCard() {
           </ul>
         </section>
 
-        <button
-          onClick={() => useStore.getState().dismissWelcome()}
-          className="text-[10px] text-text-muted hover:text-text-primary underline underline-offset-2"
-        >
-          {t('welcome.dismiss')}
-        </button>
+        {/* Help footer: shortcuts / diagnostics / about, kept low-key next to
+            the dismiss link. Same entry points the About dialog exposes. */}
+        <div className="flex items-center justify-between gap-2 border-t border-panel-border pt-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-text-secondary">
+            <button
+              onClick={() => useStore.getState().setShowShortcuts(true)}
+              className="hover:text-text-primary transition-colors"
+            >
+              {t('about.shortcuts')}
+            </button>
+            <span aria-hidden="true" className="text-text-muted">·</span>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('scenelab:open-diagnostics'))}
+              className="hover:text-text-primary transition-colors"
+            >
+              {t('errlog.command')}
+            </button>
+            <span aria-hidden="true" className="text-text-muted">·</span>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('scenelab:open-about'))}
+              className="hover:text-text-primary transition-colors"
+            >
+              {t('about.command')}
+            </button>
+          </div>
+          <button
+            onClick={() => useStore.getState().dismissWelcome()}
+            className="text-[10px] text-text-muted hover:text-text-primary underline underline-offset-2 shrink-0"
+          >
+            {t('welcome.dismiss')}
+          </button>
+        </div>
       </div>
     </div>
   );

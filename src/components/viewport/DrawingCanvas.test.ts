@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useStore } from '../../store/app';
@@ -273,6 +273,7 @@ function recordingContext(calls: CtxCall[]): CanvasRenderingContext2D {
     clip: mk('clip'),
     arc: mk('arc'),
     setLineDash: mk('setLineDash'),
+    setTransform: mk('setTransform'),
   } as unknown as CanvasRenderingContext2D;
 }
 
@@ -683,6 +684,121 @@ describe('DrawingCanvas title-block scale honesty (B6+B8)', () => {
       expect(captions.length).toBeGreaterThanOrEqual(1);
       expect((captions[0]!.args[2] as number)).toBeCloseTo(34, 6);
       expect((captions[0]!.args[1] as number)).toBeCloseTo(200, 6); // front cell centre
+    } finally {
+      await unmount(m);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backing-store resize: the sheet rasterizes at container CSS size × DPR
+// (fixed 800×600 attribute before). jsdom has no ResizeObserver and reports 0
+// client sizes — stub both and drive the observer callback by hand.
+// ---------------------------------------------------------------------------
+
+describe('DrawingCanvas backing-store resize', () => {
+  const realGetContext = canvasProto.getContext;
+  const g = globalThis as Record<string, unknown>;
+  const hadRO = 'ResizeObserver' in g;
+  const observers: { cb: () => void }[] = [];
+  let calls: CtxCall[];
+
+  beforeAll(() => {
+    if (!hadRO) {
+      g.ResizeObserver = class {
+        constructor(cb: () => void) { observers.push({ cb }); }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      };
+    }
+  });
+  afterAll(() => {
+    if (!hadRO) delete g.ResizeObserver;
+  });
+
+  beforeEach(() => {
+    clearToasts();
+    calls = [];
+    observers.length = 0;
+    canvasProto.getContext = function () {
+      return recordingContext(calls);
+    };
+    useStore.setState({
+      locale: 'en',
+      bodies: [createBox(10, 10, 10)],
+      selectedIds: [],
+      drawingDetails: [],
+      drawingNotes: [],
+      drawingSectionAxis: 'off',
+      numericPrompt: null,
+      featureTree: new FeatureTree(),
+      featureVersion: 1,
+    });
+  });
+  afterEach(() => {
+    canvasProto.getContext = realGetContext;
+  });
+
+  /** Give the sheet wrapper a real client box (jsdom reports 0×0). */
+  function layOutSheet(container: HTMLElement, w: number, h: number): HTMLElement {
+    const wrapper = container.querySelector('canvas')!.parentElement!;
+    Object.defineProperty(wrapper, 'clientWidth', { configurable: true, get: () => w });
+    Object.defineProperty(wrapper, 'clientHeight', { configurable: true, get: () => h });
+    return wrapper;
+  }
+
+  it('sizes the backing store to the container and repaints with a sheet-space transform', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      layOutSheet(m.container, 1000, 700);
+      // Fire the observer callback the component registered on mount.
+      expect(observers.length).toBe(1);
+      await act(async () => { observers[0]!.cb(); });
+
+      const canvas = m.container.querySelector('canvas')!;
+      expect(canvas.width).toBe(1000); // CSS × dpr 1
+      expect(canvas.height).toBe(700);
+      // The paint scaled sheet coordinates onto the backing store…
+      const transforms = calls.filter((c) => c.op === 'setTransform') as unknown as { args: number[] }[];
+      expect(transforms.length).toBeGreaterThanOrEqual(1);
+      expect(transforms.at(-1)!.args[0]).toBeCloseTo(1000 / 800, 6);
+      expect(transforms.at(-1)!.args[3]).toBeCloseTo(700 / 600, 6);
+      // …and still drew the sheet content (title-block frame at sheet scale).
+      expect(calls.some((c) => c.op === 'strokeRect')).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('re-sizes when only the DPR changes (cross-monitor drag)', async () => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      layOutSheet(m.container, 800, 600);
+      expect(observers.length).toBe(1);
+      await act(async () => { observers[0]!.cb(); });
+      const canvas = m.container.querySelector('canvas')!;
+      expect(canvas.width).toBe(1600); // 800 CSS × dpr 2
+      expect(canvas.height).toBe(1200);
+    } finally {
+      await unmount(m);
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
+    }
+  });
+
+  it('keeps the attribute fallback while the container reports no size', async () => {
+    const m = await mount(createElement(DrawingCanvas));
+    try {
+      // jsdom 0×0 wrapper: observer fires but nothing to size yet.
+      expect(observers.length).toBe(1);
+      await act(async () => { observers[0]!.cb(); });
+      const canvas = m.container.querySelector('canvas')!;
+      expect(canvas.width).toBe(800); // SHEET_W attribute fallback
+      expect(canvas.height).toBe(600);
+      // …and the paint ran with an identity transform.
+      const transforms = calls.filter((c) => c.op === 'setTransform') as unknown as { args: number[] }[];
+      expect(transforms.at(-1)!.args[0]).toBe(1);
     } finally {
       await unmount(m);
     }

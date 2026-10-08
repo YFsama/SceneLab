@@ -37,6 +37,8 @@ import { sectionPlane } from '../../lib/render/section';
 import { constraintGlyphs } from '../../lib/sketch/constraintGlyphs';
 import { setViewportCapture } from '../../lib/render/capture';
 import { buildBoundsTree, ASYNC_BVH_TRIANGLE_THRESHOLD } from '../../lib/workers/bvhWorkerClient';
+import { useDprChange } from '../../lib/hooks/useDprChange';
+import { clampedDpr, shouldApplyResize } from '../../lib/render/canvasMetrics';
 
 const VIEW_DIRECTIONS: Record<ViewDirection, { pos: THREE.Vector3; up: THREE.Vector3 }> = {
   top: { pos: new THREE.Vector3(0, 10, 0), up: new THREE.Vector3(0, 0, -1) },
@@ -451,6 +453,9 @@ export function ViewportCanvas() {
 
   const dirtyRef = useRef(true);
   const frameIdRef2 = useRef<number>(0);
+  // The mount effect's size/pixelRatio apply path (onResize), exposed so the
+  // DPR-change hook below can re-run the exact same deduped application.
+  const applyResizeRef = useRef<(() => void) | null>(null);
   // Mesh cache: maps bodyId → { body (reference), mesh, edges } for incremental rebuild.
   const meshCacheRef = useRef<Map<string, { body: typeof bodies[0]; mesh: THREE.Mesh; edges: THREE.LineSegments | null }>>(new Map());
   // Shared preview assets (rubber-band materials + live label sprite): created
@@ -570,7 +575,7 @@ export function ViewportCanvas() {
     });
     // Clamp the device pixel ratio: above 2x the extra fragments cost a lot of
     // GPU time for no visible gain on a CAD viewport.
-    const pixelRatio = Math.min(window.devicePixelRatio, 2);
+    const pixelRatio = clampedDpr(window.devicePixelRatio);
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setClearColor(0x1e1e2e);
@@ -780,8 +785,8 @@ export function ViewportCanvas() {
     const onResize = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
-      const dpr = Math.min(window.devicePixelRatio, 2);
-      if (w === lastSize.w && h === lastSize.h && dpr === lastSize.dpr) return;
+      const dpr = clampedDpr(window.devicePixelRatio);
+      if (!shouldApplyResize(lastSize, { w, h, dpr })) return;
       lastSize = { w, h, dpr };
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -798,6 +803,7 @@ export function ViewportCanvas() {
       renderer.setSize(w, h);
       dirtyRef.current = true;
     };
+    applyResizeRef.current = onResize;
     const ro = new ResizeObserver(onResize);
     ro.observe(container);
 
@@ -818,6 +824,7 @@ export function ViewportCanvas() {
       document.removeEventListener('visibilitychange', onVisibility);
       cancelAnimationFrame(frameIdRef2.current);
       ro.disconnect();
+      applyResizeRef.current = null;
       controls.dispose();
       setViewportCapture(null);
       // Dispose shared sketch materials
@@ -866,6 +873,12 @@ export function ViewportCanvas() {
       }
     };
   }, []);
+
+  // A DPR change (window dragged to a monitor with a different ratio, browser
+  // zoom) keeps the CSS size — ResizeObserver stays silent — so re-run the
+  // exact same deduped size/pixelRatio application here. Before this, only
+  // an accompanying CSS resize would re-clamp the pixel ratio.
+  useDprChange(() => { applyResizeRef.current?.(); });
 
   // ViewCube → main camera communication: snap, orbit, and state request.
   useEffect(() => {
@@ -3789,8 +3802,11 @@ export function ViewportCanvas() {
         const st0 = useStore.getState();
         if (
           dragBodyId && !measureActive && !st0.visionSelectActive &&
-          !e.ctrlKey && !e.shiftKey && !st0.bodyDragging && !pendingHoleRef.current
+          !e.ctrlKey && !e.metaKey && !e.shiftKey && !st0.bodyDragging && !pendingHoleRef.current
         ) {
+          // Ctrl/⌘/Shift-held presses are NOT body drags: Ctrl/⌘+click picks
+          // the face under the cursor and Shift+click adds to the selection,
+          // so arming the slide here would fight those click handlers.
           // Alt is dual-use: Alt+CLICK stays the edge sub-selection pick, but
           // Alt+DRAG on a body duplicates the selection and slides the copies
           // (Fusion/SolidWorks clone-drag). The duplicate is created lazily on

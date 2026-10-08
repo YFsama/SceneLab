@@ -4,10 +4,36 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>SceneLab — AI-first 3D CAD</title>
+    <style>
+      /* First-paint splash: covers the window while the WASM-heavy JS bundle
+         downloads/parses. React's createRoot().render() clears #root of all
+         pre-existing DOM on its initial commit, so the splash disappears the
+         moment the app mounts — no JS removal needed. */
+      .splash {
+        position: fixed; inset: 0; z-index: 2147483647;
+        display: flex; flex-direction: column; gap: 14px;
+        align-items: center; justify-content: center;
+        background: #1e1e2e; color: #cdd6f4;
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .splash-logo { font-size: 20px; font-weight: 600; letter-spacing: 0.06em; }
+      .splash-ring {
+        width: 22px; height: 22px; border-radius: 50%;
+        border: 2px solid #313244; border-top-color: #89b4fa;
+        animation: splash-spin 0.9s linear infinite;
+      }
+      @keyframes splash-spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="splash" aria-hidden="true">
+        <div class="splash-ring"></div>
+        <div class="splash-logo">SceneLab</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

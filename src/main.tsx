@@ -4,6 +4,8 @@ import App from './App';
 import './styles/globals.css';
 import { warmUpBooleanEngine, isManifoldEngineReady } from './lib/geometry/boolean';
 import { useStore } from './store/app';
+import { installGlobalErrorCapture } from './lib/errorLog';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 
 // Load the exact-boolean WASM engine right after the FIRST PAINTED frame. The
 // request itself is async I/O (541 kB / 208 kB gzip, ~12 ms compile) and never
@@ -31,8 +33,18 @@ if (typeof requestAnimationFrame === 'function') {
   setTimeout(warmBooleanEngine, 0);
 }
 
+// Catch uncaught window errors + unhandled promise rejections into the
+// persistent error log BEFORE anything else can throw. Capture lives at the
+// window level, so it must be installed before createRoot renders.
+installGlobalErrorCapture();
+
+// StrictMode stays the OUTERMOST component (its dev-only double-render checks
+// must wrap the whole tree); the boundary directly beneath it still catches
+// every render throw from anywhere inside <App/>.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

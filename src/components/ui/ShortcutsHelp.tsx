@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useStore } from '../../store/app';
 import { useT } from '../../lib/i18n';
+import { platformizeShortcut } from '../../lib/runtime';
 
 interface Row { keys: string; labelKey: string }
 interface Group { titleKey: string; rows: Row[] }
@@ -119,7 +120,11 @@ export function ShortcutsHelp() {
                 {g.rows.map((r) => (
                   <div key={r.keys} className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-text-secondary">{t(r.labelKey)}</span>
-                    <kbd className="px-1.5 py-0.5 rounded bg-surface border border-panel-border font-mono text-[10px] text-text-primary">{r.keys}</kbd>
+                    {/* Combos are authored with Ctrl/Alt tokens; display swaps
+                        them for the host's ⌘/⌥ (macOS) — every Ctrl entry is a
+                        command shortcut bound to ctrlKey||metaKey, so ⌘ is the
+                        faithful label there. */}
+                    <kbd className="px-1.5 py-0.5 rounded bg-surface border border-panel-border font-mono text-[10px] text-text-primary">{platformizeShortcut(r.keys)}</kbd>
                   </div>
                 ))}
               </div>

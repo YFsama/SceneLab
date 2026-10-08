@@ -244,7 +244,7 @@ export function BrowserTree() {
 
   return (
     <aside
-      className="w-56 bg-panel border-r border-panel-border flex flex-col"
+      className="w-56 max-w-[40vw] bg-panel border-r border-panel-border flex flex-col"
       role="tree"
       aria-label={t('panel.browser')}
     >

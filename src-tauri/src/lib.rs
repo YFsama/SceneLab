@@ -60,6 +60,46 @@ fn save_project_file(
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
+/// Dialog filter for a saved text report: follow the default name's extension
+/// (`.json` → "JSON file"), falling back to plain text. Returns
+/// (filter name, extensions).
+fn report_filter(default_name: &str) -> (&'static str, Vec<&'static str>) {
+    let ext = Path::new(default_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("json") => ("JSON file", vec!["json"]),
+        Some("log") => ("Log file", vec!["log"]),
+        Some("md") => ("Markdown file", vec!["md"]),
+        _ => ("Text file", vec!["txt"]),
+    }
+}
+
+/// Native save for error/diagnostic reports (plain text, JSON, log or
+/// markdown — whatever the caller formatted). Mirrors `save_project_file`:
+/// modal save dialog + fs write in Rust, so the desktop app writes real
+/// files. Returns the chosen path, or None when the user cancels.
+#[tauri::command]
+fn save_text_file(
+    app: tauri::AppHandle,
+    default_name: String,
+    contents: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (filter_name, extensions) = report_filter(&default_name);
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name(default_name)
+        .add_filter(filter_name, &extensions)
+        .blocking_save_file();
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
 /// Native Open: modal pick dialog + fs read. Returns (json, file name), or
 /// None when the user cancels.
 #[tauri::command]
@@ -145,6 +185,7 @@ pub fn run() {
             autosave_snapshot,
             save_project_file,
             open_project_file,
+            save_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -190,6 +231,27 @@ mod tests {
     fn read_missing_file_errors() {
         let result = read_project("/no/such/scenelab/file.json".into());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn report_filter_follows_extension() {
+        assert_eq!(
+            report_filter("scenelab-report.json"),
+            ("JSON file", vec!["json"])
+        );
+        assert_eq!(report_filter("error.log"), ("Log file", vec!["log"]));
+        assert_eq!(report_filter("notes.MD"), ("Markdown file", vec!["md"]));
+    }
+
+    #[test]
+    fn report_filter_defaults_to_text() {
+        // No extension, or an extension we don't special-case, saves as .txt.
+        assert_eq!(
+            report_filter("scenelab-diagnostics"),
+            ("Text file", vec!["txt"])
+        );
+        assert_eq!(report_filter("report.txt"), ("Text file", vec!["txt"]));
+        assert_eq!(report_filter("weird.xyz"), ("Text file", vec!["txt"]));
     }
 
     #[test]

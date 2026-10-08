@@ -273,6 +273,22 @@ Output bundles per platform: `.dmg`/`.app` (macOS), `.msi`/`.exe` (Windows),
 Desktop icons are generated from `src-tauri/icon-source.svg` via
 `npm run tauri icon src-tauri/icon-source.svg`.
 
+### Installer behaviour & first launch
+
+- **Windows (NSIS `.exe`)** — installs per user (no admin/UAC prompt), into the
+  user's local profile. The installer offers Simplified Chinese and English,
+  with a language selector shown at the start of setup.
+- **macOS** — `.dmg` disk image (arm64 + x64 builds from `release.yml`).
+- **Linux** — `.AppImage`, `.deb` and `.rpm` packages.
+- **Startup** — the main window opens centered (1280×800, min 800×600) and shows
+  a static dark splash inside `#root` while the JS bundle (WASM geometry engine
+  included) loads; React's first render replaces it automatically, so there is
+  no white flash on the heavy first load.
+- **Error reporting** — Welcome card → “Diagnostics…” (or the About dialog →
+  *Open diagnostics*). See [`docs/error-reporting.md`](docs/error-reporting.md)
+  for how to capture and attach a report to a GitHub issue; the About dialog's
+  *Open feedback page* button opens the issue tracker in the system browser.
+
 ## Architecture Principles
 
 - **lib/geometry/** — B-rep pure functions, zero DOM, zero React

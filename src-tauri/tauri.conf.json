@@ -1,6 +1,6 @@
 {
   "productName": "SceneLab",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "identifier": "com.scenelab.app",
   "build": {
     "frontendDist": "../dist",
@@ -17,6 +17,7 @@
         "height": 800,
         "minWidth": 800,
         "minHeight": 600,
+        "center": true,
         "resizable": true,
         "fullscreen": false
       }
@@ -25,15 +26,29 @@
       "csp": null
     }
   },
+  "plugins": {
+    "shell": {
+      "open": "^https://github\\.com/"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "shortDescription": "AI-first 3D CAD",
+    "longDescription": "SceneLab is an AI-first 3D CAD studio for modeling, drawing, CAM and 3D-print analysis. Build parametric parts with extrudes, revolves and patterns, then export STL, OBJ or 3MF for printing.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true
+      }
+    }
   }
 }

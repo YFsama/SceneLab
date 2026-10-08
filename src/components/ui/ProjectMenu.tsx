@@ -5,7 +5,7 @@ import { downloadFile, exportSTLBinary, exportOBJ, export3MFPackage } from '../.
 import { importMeshFile } from '../../lib/io/importFiles';
 import { showToast } from '../../lib/toast';
 import { confirmDiscardIfDirty, saveProjectToFile, openProjectFromFile } from '../../lib/projectActions';
-import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus } from 'lucide-react';
+import { Save, FolderOpen, Download, FileBox, Image, Upload, FilePlus, CircleHelp } from 'lucide-react';
 import { framingBodies } from '../../lib/render/fitView';
 import { captureFreshCanvas } from '../../lib/render/capture';
 
@@ -200,6 +200,18 @@ export function ProjectMenu() {
       >
         <Image size={14} />
         <span className="hidden md:inline">PNG</span>
+      </button>
+
+      <div className="w-px h-4 bg-panel-border mx-0.5" />
+
+      <button
+        onClick={() => window.dispatchEvent(new CustomEvent('scenelab:open-about'))}
+        className="flex items-center gap-1 px-2 py-1 text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover rounded transition-colors"
+        aria-label={t('about.command')}
+        title={t('about.command')}
+      >
+        <CircleHelp size={14} />
+        <span className="hidden md:inline">{t('help.command')}</span>
       </button>
 
       <input
