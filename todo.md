@@ -108,7 +108,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ### E. 基础设施 / 流程
 
-- [ ] **NSIS 安装器实机验证**（pass #32）：currentUser/SimpChinese+English/语言选择器仅 conf 级（cargo check 编译期校验）——下次 release CI 出包后人工确认安装界面与每用户安装行为
+- [ ] **NSIS 安装器实机验证**（pass #32）：currentUser/SimpChinese+English/语言选择器——v0.26.0 CI 已成功产出 `x64-setup.exe`（构建管线走通），剩下载实机确认安装界面与每用户安装行为；附带修复 release.yml 便携版上传硬编码 0.1.0 文件名的遗留 bug（曾致 v0.26.0 首次出包失败，a0f88ab）
 - [ ] **工程图导出分辨率随窗口**（pass #32 行为升级）：DrawingCanvas 背衬跟随容器（原固定 800 逻辑分辨率）——小窗导出可低于旧分辨率；如需稳定输出可加导出最小分辨率钳制
 - [ ] **"外部观察者回写"现象**：3 个 Agent 跨 2 轮报告文件被回退到秒级前快照（最终态均已复验）——未归因；候选：并发 Agent 的 git 操作/测试运行重建
 - [ ] **启动冒烟门禁**：任何 pass 落地前 page-loads+#viewport-canvas 挂载检查（QA 审计建议——单测绿但模块图断曾让 dev 无法启动）
