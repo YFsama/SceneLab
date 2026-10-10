@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { generateGCode, generateMultiToolGCode, estimateMachiningTime } from './gcode';
-import type { Toolpath } from './types';
+import { generateContourToolpath } from './toolpath';
+import { createCylinder, createBox } from '../geometry/brep';
+import type { Toolpath, ToolpathPoint } from './types';
 
 const em6 = { id: 'em-6mm', name: '6mm Endmill', diameter: 6, flutes: 2, type: 'endmill' as const, fluteLength: 20, overallLength: 50, material: 'carbide' as const };
 const em3 = { ...em6, id: 'em-3mm', name: '3mm Endmill', diameter: 3 };
@@ -221,5 +223,219 @@ describe('estimateMachiningTime', () => {
     const zeroFeed = makeToolpath({ params: { ...PARAMS, feedRate: 0, plungeRate: 0 } });
     expect(estimateMachiningTime(zeroFeed)).toBeGreaterThanOrEqual(0);
     expect(Number.isFinite(estimateMachiningTime(zeroFeed))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G2/G3 arc output (Mastercam-style arc filter)
+// ---------------------------------------------------------------------------
+
+interface ParsedMove {
+  code: string;
+  /** Machine coordinates (X = scene x, Y = scene z, Z = scene y). */
+  start: { x: number; y: number; z: number };
+  end: { x: number; y: number; z: number };
+  /** Arc center in machine XY, reconstructed from I/J (arcs only). */
+  center?: { x: number; y: number };
+}
+
+/** Parse G0–G3 motion lines in execution order, tracking the absolute (G90)
+ * position so each move's start is known and arc centers can be rebuilt. */
+function parseMoves(g: string): ParsedMove[] {
+  const moves: ParsedMove[] = [];
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const line of g.split('\n')) {
+    if (!/^G[0-3](?:\.\d+)? /.test(line)) continue;
+    const words: Record<string, number> = {};
+    for (const w of line.match(/[A-Z]-?\d+(?:\.\d+)?/g) ?? []) {
+      const letter = w[0]!;
+      if (words[letter] === undefined) words[letter] = Number(w.slice(1));
+    }
+    const end = { x: words.X ?? cx, y: words.Y ?? cy, z: words.Z ?? cz };
+    const move: ParsedMove = { code: `G${words.G}`, start: { x: cx, y: cy, z: cz }, end };
+    if (words.G === 2 || words.G === 3) {
+      move.center = { x: cx + (words.I ?? 0), y: cy + (words.J ?? 0) };
+    }
+    moves.push(move);
+    cx = end.x;
+    cy = end.y;
+    cz = end.z;
+  }
+  return moves;
+}
+
+/** Find the toolpath point matching a machine position (from index `from`). */
+function findPointIdx(
+  tp: Toolpath,
+  m: { x: number; y: number; z: number },
+  from: number,
+): number {
+  const idx = tp.points.findIndex(
+    (p, k) =>
+      k >= from && Math.abs(p.x - m.x) < 1e-3 && Math.abs(p.z - m.y) < 1e-3 && Math.abs(p.y - m.z) < 1e-3,
+  );
+  expect(idx, `no toolpath point matches machine (${m.x}, ${m.y}, ${m.z})`).toBeGreaterThanOrEqual(0);
+  return idx;
+}
+
+describe('G2/G3 arc fitting — round parts', () => {
+  // 128-gon cylinder: the offset path's sagitta R·(1 − cos(π/128)) ≈ 5.4 µm
+  // sits inside the default 0.01 mm tolerance, so the loop collapses to arcs.
+  const cylinderTp = (): Toolpath =>
+    generateContourToolpath(createCylinder(15, 20, 128), em6, {
+      ...PARAMS,
+      depthOfCut: 20,
+      stockTop: 20,
+      stockBottom: 0,
+    });
+
+  it('collapses the polyline: G1 count drops ~100×, arcs appear', () => {
+    const tp = cylinderTp();
+    const fitted = generateGCode(tp);
+    const plain = generateGCode(tp, 'grbl', { arcTolerance: 0 });
+    const count = (g: string, re: RegExp) => g.split('\n').filter((l) => re.test(l)).length;
+    const plainG1 = count(plain, /^G1 /);
+    const fittedG1 = count(fitted, /^G1 /);
+    const fittedArcs = count(fitted, /^G[23] /);
+    expect(plainG1).toBeGreaterThanOrEqual(120); // plunge + 128-gon loop
+    expect(count(plain, /^G[23] /)).toBe(0); // arcTolerance 0 disables fitting
+    expect(fittedArcs).toBeGreaterThanOrEqual(3);
+    expect(fittedG1).toBeLessThan(plainG1 / 10); // only the plunge remains
+  });
+
+  it('arc lines carry 4-decimal X/Y/Z/I/J and modal F', () => {
+    const g = generateGCode(cylinderTp());
+    const arcLines = g.split('\n').filter((l) => /^G[23] /.test(l));
+    expect(arcLines.length).toBeGreaterThanOrEqual(3);
+    for (const line of arcLines) {
+      expect(line).toMatch(/^G[23] X-?\d+\.\d{4} Y-?\d+\.\d{4} Z-?\d+\.\d{4} I-?\d+\.\d{4} J-?\d+\.\d{4}( F\d+)?$/);
+    }
+    // F500 on the plunge, F1000 on the first arc, modal afterwards.
+    expect(g.match(/ F\d+/g)).toHaveLength(2);
+    expect(arcLines[0]).toMatch(/ F1000$/);
+    expect(arcLines[1]).not.toMatch(/ F\d+$/);
+  });
+
+  it('reverse-solving X/Y/I/J reproduces the offset circle within tolerance', () => {
+    const tp = cylinderTp();
+    const arcs = parseMoves(generateGCode(tp)).filter((m) => m.code === 'G2' || m.code === 'G3');
+    expect(arcs.length).toBeGreaterThanOrEqual(3);
+    const trueRadius = 15 + 3 / Math.cos(Math.PI / 128); // miter offset vertex radius
+    let cursor = 0;
+    for (const a of arcs) {
+      const s = findPointIdx(tp, a.start, cursor);
+      const e = findPointIdx(tp, a.end, s);
+      cursor = e;
+      expect(a.center).toBeDefined();
+      const c = a.center!;
+      const rStart = Math.hypot(a.start.x - c.x, a.start.y - c.y);
+      const rEnd = Math.hypot(a.end.x - c.x, a.end.y - c.y);
+      // I/J + start must give the same radius as X/Y (the GRBL error-33 check).
+      expect(Math.abs(rStart - rEnd)).toBeLessThan(1e-3);
+      expect(Math.abs(rStart - trueRadius)).toBeLessThan(5e-3);
+      // Every original polyline point of the span stays within tolerance.
+      for (let k = s; k <= e; k++) {
+        const p = tp.points[k]!;
+        expect(Math.abs(Math.hypot(p.x - c.x, p.z - c.y) - rStart)).toBeLessThanOrEqual(0.0101);
+      }
+      // G2/G3 word matches the polyline's actual turn direction.
+      const ps = tp.points[s]!;
+      const pm = tp.points[(s + e) >> 1]!;
+      const pe = tp.points[e]!;
+      const cross = (pm.x - ps.x) * (pe.z - ps.z) - (pm.z - ps.z) * (pe.x - ps.x);
+      expect(a.code).toBe(cross > 0 ? 'G3' : 'G2');
+    }
+  });
+
+  it('both profiles post arcs (grbl and linuxcnc)', () => {
+    for (const profile of ['grbl', 'linuxcnc'] as const) {
+      const g = generateGCode(cylinderTp(), profile);
+      expect(g.split('\n').filter((l) => /^G[23] /.test(l)).length).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('the toolpath itself is untouched — fitting only affects the post', () => {
+    const tp = cylinderTp();
+    const before = tp.points.map((p) => `${p.x.toFixed(6)},${p.y.toFixed(6)},${p.z.toFixed(6)}`).join(';');
+    generateGCode(tp);
+    expect(tp.points.map((p) => `${p.x.toFixed(6)},${p.y.toFixed(6)},${p.z.toFixed(6)}`).join(';')).toBe(before);
+  });
+});
+
+describe('G2/G3 arc fitting — straight parts and breaks', () => {
+  it('box contour stays pure G1 — straight walls never become arcs', () => {
+    const tp = generateContourToolpath(createBox(50, 10, 30), em6, {
+      ...PARAMS,
+      depthOfCut: 10,
+      stockTop: 10,
+      stockBottom: 0,
+    });
+    const g = generateGCode(tp);
+    expect(g.match(/^G[23] /gm)).toBeNull();
+    expect(g.match(/^G1 /gm)).not.toBeNull();
+    expect(g.match(/^G1 /gm)!.length).toBeGreaterThan(0);
+  });
+
+  it('arcs never span a rapid or a depth change', () => {
+    const quarter = (startDeg: number): ToolpathPoint[] =>
+      Array.from({ length: 25 }, (_, k) => {
+        const a = ((startDeg + (90 * k) / 24) * Math.PI) / 180;
+        return { x: 10 * Math.cos(a), y: 5, z: 10 * Math.sin(a), rapid: false };
+      });
+    // Helix: same circle in xz but y drops every step (a tab climb).
+    const helix: ToolpathPoint[] = Array.from({ length: 20 }, (_, k) => {
+      const a = ((90 + (90 * k) / 19) * Math.PI) / 180;
+      return { x: 10 * Math.cos(a), y: 5 - k * 0.05, z: 10 * Math.sin(a), rapid: false };
+    });
+    const points: ToolpathPoint[] = [
+      { x: 10, y: 15, z: 0, rapid: true },
+      ...quarter(0), // indices 1..25 — flat, arc-able
+      { x: 0, y: 15, z: 10, rapid: true }, // index 26 — rapid break
+      ...helix, // indices 27..46 — y changes every step
+      ...quarter(180), // indices 47..71 — flat, arc-able
+    ];
+    const tp = makeToolpath({ operation: 'contour', points });
+    const arcs = parseMoves(generateGCode(tp)).filter((m) => m.code === 'G2' || m.code === 'G3');
+    expect(arcs.length).toBeGreaterThanOrEqual(2);
+    let cursor = 0;
+    for (const a of arcs) {
+      const s = findPointIdx(tp, a.start, cursor);
+      const e = findPointIdx(tp, a.end, s);
+      cursor = e;
+      const insideFlat = (i: number) => (i >= 1 && i <= 25) || (i >= 47 && i <= 71);
+      expect(insideFlat(s), `arc start ${s} must lie in a flat run`).toBe(true);
+      expect(insideFlat(e), `arc end ${e} must lie in the same flat run`).toBe(true);
+    }
+    // The helical climb stays linear: every one of its points is a G1 target.
+    const g1Ends = parseMoves(generateGCode(tp)).filter((m) => m.code === 'G1');
+    for (let k = 27; k <= 46; k++) {
+      const p = tp.points[k]!;
+      expect(
+        g1Ends.some((m) => Math.abs(m.end.x - p.x) < 1e-3 && Math.abs(m.end.y - p.z) < 1e-3 && Math.abs(m.end.z - p.y) < 1e-3),
+        `helix point ${k} must be posted as G1`,
+      ).toBe(true);
+    }
+  });
+
+  it('drill programs never contain arcs', () => {
+    const drillTp = makeToolpath({
+      operation: 'drill',
+      tool: { ...em6, id: 'drill-6mm', name: '6mm Drill', type: 'drill' as const },
+      params: { ...PARAMS, peckDepth: 2 },
+      points: [
+        { x: 10, y: 10, z: 4, rapid: true },
+        { x: 10, y: 7, z: 4, rapid: true },
+        { x: 10, y: 0, z: 4, rapid: false, feedRate: 500 },
+        { x: 10, y: 10, z: 4, rapid: true },
+      ],
+    });
+    for (const profile of ['grbl', 'linuxcnc'] as const) {
+      const g = generateGCode(drillTp, profile);
+      expect(g.match(/^G[23] /gm)).toBeNull();
+    }
+    // The GRBL peck expansion is untouched by the arc filter.
+    expect(generateGCode(drillTp, 'grbl')).toContain('G1 Z3.000 F500');
   });
 });

@@ -26,7 +26,9 @@ export {
   estimateMachiningTime,
   estimateTime,
 } from './gcode';
-export type { MachineProfile } from './gcode';
+export type { MachineProfile, GCodeOptions } from './gcode';
+export { fitArcs } from './arcFit';
+export type { ArcSpec } from './arcFit';
 export { topSilhouette, offsetPolygon } from './silhouette';
 export type { Point2, SilhouetteLoop, TopSilhouette } from './silhouette';
 export { generateOperationToolpath, defaultCamSetup } from './setup';

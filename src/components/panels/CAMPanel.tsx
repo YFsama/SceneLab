@@ -12,9 +12,14 @@ import {
   detectCircularHoles,
 } from '../../lib/cam';
 import type { MachineProfile, CAMParameters, CAMOperation, WorkMaterial } from '../../lib/cam';
+import { copyText } from '../../lib/errorLog';
 import type { SolidBody } from '../../lib/geometry/types';
 import { computeBoundingBox } from '../../lib/geometry/brep';
-import { Cog, Play, Pause, RotateCcw, Download, Clock, Wrench, Gauge, Trash2, RefreshCw, Plus } from 'lucide-react';
+import { GCodePreview } from '../ui/GCodePreview';
+import {
+  Cog, Play, Pause, RotateCcw, Download, Clock, Wrench, Gauge, Trash2, RefreshCw, Plus,
+  Pencil, Copy, ChevronUp, ChevronDown, SkipForward, Eye, X,
+} from 'lucide-react';
 
 const WORK_MATERIALS: WorkMaterial[] = [
   'aluminum', 'brass', 'softwood', 'hardwood', 'mdf', 'acrylic', 'steel', 'pcb',
@@ -27,11 +32,36 @@ const MACHINE_PROFILES: MachineProfile[] = ['grbl', 'linuxcnc'];
  * 'scenelab:arm-hole' decoupling pattern — no store field, the viewport owns
  * the sim state in refs and listens). `opId` targets one operation; without
  * it the viewport walks the first enabled op with a cached toolpath.
+ * 'step' advances one move; 'speed' re-times playback live (0.25×–8×).
  * Not exported (react-refresh): the test file uses the literal event name.
  */
 const CAM_SIM_EVENT = 'scenelab:cam-sim';
-function dispatchCamSim(action: 'play' | 'pause' | 'reset' | 'seek', opId?: string, t?: number): void {
-  window.dispatchEvent(new CustomEvent(CAM_SIM_EVENT, { detail: { action, opId, t } }));
+function dispatchCamSim(
+  action: 'play' | 'pause' | 'reset' | 'seek' | 'step' | 'speed',
+  opId?: string,
+  t?: number,
+  speed?: number,
+): void {
+  window.dispatchEvent(new CustomEvent(CAM_SIM_EVENT, { detail: { action, opId, t, speed } }));
+}
+
+/** Simulation speed factors offered by the transport (dispatched hot). */
+const SIM_SPEEDS = [0.25, 0.5, 1, 2, 4, 8] as const;
+
+/**
+ * The contour-only CAMParameters fields (direction/tabs/springPass/rampEntry)
+ * bind through dedicated draft controls below, so a stored op's params are
+ * STRIPPED of them when loaded into the numeric draft — the dedicated controls
+ * are the single source of truth and a stale value can never leak back into a
+ * non-contour op.
+ */
+function stripContourExtras(p: CAMParameters): CAMParameters {
+  const out = { ...p } as CAMParameters & Record<string, unknown>;
+  delete out['direction'];
+  delete out['tabs'];
+  delete out['springPass'];
+  delete out['rampEntry'];
+  return out;
 }
 
 /** Fresh unique custom-tool id (randomUUID where available, viewBookmark style). */
@@ -119,6 +149,8 @@ export function CAMPanel() {
   const addCamOperation = useStore((s) => s.addCamOperation);
   const removeCamOperation = useStore((s) => s.removeCamOperation);
   const updateCamOperation = useStore((s) => s.updateCamOperation);
+  const moveCamOperation = useStore((s) => s.moveCamOperation);
+  const duplicateCamOperation = useStore((s) => s.duplicateCamOperation);
   const setCamStock = useStore((s) => s.setCamStock);
   const regenerateCamToolpaths = useStore((s) => s.regenerateCamToolpaths);
 
@@ -135,6 +167,39 @@ export function CAMPanel() {
   // operation type it was taken on; the derivation below ignores stale pins
   // (no reset effect needed).
   const [pin, setPin] = useState<{ bodyId: string; op: 'drill'; holes: Array<{ x: number; z: number; depth: number }> } | null>(null);
+
+  // Editing session: a row's Edit loads that op into the draft states above
+  // (type/tool/body/params) and pins it; Generate becomes Update until
+  // committed or cancelled. Derived away when the op disappears (deleted,
+  // undo) — the pickedBodyId fallback style, no reset effect.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingOp = editingId ? operations.find((o) => o.id === editingId) : undefined;
+
+  // Contour-only draft fields (the ContourParams contract names; they ride in
+  // op.params on generate/update). Disabled switches are OMITTED on generate
+  // (params stay clean — undefined is the default) and written as undefined
+  // on update, so the key-wise params merge clears whatever an earlier edit
+  // left behind.
+  const [direction, setDirection] = useState<'climb' | 'conventional'>('climb');
+  const [tabsEnabled, setTabsEnabled] = useState(false);
+  const [tabCount, setTabCount] = useState(3);
+  const [tabHeight, setTabHeight] = useState(3);
+  const [tabWidth, setTabWidth] = useState(6);
+  const [springPass, setSpringPass] = useState(false);
+  const [rampEntry, setRampEntry] = useState(false);
+
+  // G-code preview modal (generated on demand; never cached in the store).
+  const [preview, setPreview] = useState<{
+    gcode: string;
+    lineCount: number;
+    sizeBytes: number;
+    toolsUsed: string;
+    feedRange: string;
+  } | null>(null);
+
+  // Simulation speed for the transport (dispatched hot — the viewport owns
+  // playback and re-times without pausing).
+  const [simSpeed, setSimSpeed] = useState<number>(1);
 
   // Custom tools live in a module array (persisted to localStorage) — bump a
   // dummy state counter on every mutation to force the re-render, and read
@@ -216,17 +281,37 @@ export function CAMPanel() {
     }));
   };
 
+  /** Compose the op params from the drafts: numeric base + stock seeding from
+   * the TARGET BODY's bbox (the raw 0/−10 defaults would plan below a body
+   * resting on the origin plane) + the contour-only fields (see the draft
+   * block for the omit/undefined rule). */
+  const opParams = (mode: 'add' | 'update', bb: ReturnType<typeof computeBoundingBox>): CAMParameters => {
+    const out: CAMParameters = { ...params, stockTop: bb.max.y, stockBottom: bb.min.y, safeZAboveStock };
+    if (operation === 'contour') {
+      out.direction = direction; // select — always concrete ('climb' default)
+      if (tabsEnabled) out.tabs = { count: tabCount, height: tabHeight, width: tabWidth };
+      else if (mode === 'update') out.tabs = undefined;
+      if (springPass) out.springPass = true;
+      else if (mode === 'update') out.springPass = undefined;
+      if (rampEntry) out.rampEntry = true;
+      else if (mode === 'update') out.rampEntry = undefined;
+    } else if (mode === 'update') {
+      // Editing away from contour: explicitly clear fields an earlier edit of
+      // this op may have written (the merge is key-wise).
+      out.direction = undefined;
+      out.tabs = undefined;
+      out.springPass = undefined;
+      out.rampEntry = undefined;
+    }
+    return out;
+  };
+
   const handleGenerate = () => {
     if (!activeTool) return;
     if (!targetBody) {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
-    // Seed the stock heights from the TARGET BODY's bbox — the raw defaults
-    // (0/−10) plan below a body resting on the origin plane and the whole
-    // toolpath renders under the part with the G-code cutting negative Z.
-    // The setup's safeZAboveStock rides along so the generators' traverse
-    // height follows the serialized setup (pass-29 review #10).
     const bb = computeBoundingBox(targetBody);
     addCamOperation({
       name: `${t(`cam.${operation}`)} — ${targetBody.name}`,
@@ -234,17 +319,66 @@ export function CAMPanel() {
       type: operation,
       bodyId: targetBody.id,
       toolId: activeTool.id,
-      params: { ...params, stockTop: bb.max.y, stockBottom: bb.min.y, safeZAboveStock },
+      params: opParams('add', bb),
       // Omitted/empty holes → the generator auto-detects on the body.
       ...(operation === 'drill' && drillHoles.length > 0 ? { holes: drillHoles } : {}),
     });
     showToast(t('cam.generated'), 'success');
   };
 
+  /** Commit the editing session: patch the op in place (never appends) and
+   * drop back to the Generate CTA. */
+  const handleUpdate = () => {
+    if (!editingOp || !activeTool) return;
+    if (!targetBody) {
+      showToast(t('toast.noBodies'), 'warning');
+      return;
+    }
+    const bb = computeBoundingBox(targetBody);
+    updateCamOperation(editingOp.id, {
+      name: `${t(`cam.${operation}`)} — ${targetBody.name}`,
+      type: operation,
+      bodyId: targetBody.id,
+      toolId: activeTool.id,
+      params: opParams('update', bb),
+      // holes untouched: editing never retargets the drill detection.
+    });
+    setEditingId(null);
+    showToast(t('cam.generated'), 'success');
+  };
+
+  /** Load an op back into the draft and enter the editing session. */
+  const handleEdit = (op: CAMOperation) => {
+    setEditingId(op.id);
+    setOperation(op.type);
+    setSelectedTool(op.toolId);
+    setPickedBodyId(op.bodyId);
+    // Numeric base stripped of the contour-only fields; those load into their
+    // dedicated draft controls (the single source of truth, see opParams).
+    setParams(stripContourExtras(op.params));
+    setDirection(op.params.direction ?? 'climb');
+    setTabsEnabled(!!op.params.tabs);
+    if (op.params.tabs) {
+      setTabCount(op.params.tabs.count);
+      setTabHeight(op.params.tabs.height);
+      setTabWidth(op.params.tabs.width);
+    }
+    setSpringPass(!!op.params.springPass);
+    setRampEntry(!!op.params.rampEntry);
+  };
+
+  const handleDuplicate = (id: string) => {
+    const newId = duplicateCamOperation(id);
+    if (newId) showToast(t('cam.duplicated'), 'success');
+  };
+
+  /** The currently cached toolpaths in op-list order (the export/preview base). */
+  const cachedToolpaths = () => operations
+    .map((op) => camToolpaths[op.id]?.toolpath)
+    .filter((tp): tp is NonNullable<typeof tp> => tp !== undefined);
+
   const handleExportGCode = async () => {
-    const toolpaths = operations
-      .map((op) => camToolpaths[op.id]?.toolpath)
-      .filter((tp): tp is NonNullable<typeof tp> => tp !== undefined);
+    const toolpaths = cachedToolpaths();
     if (toolpaths.length === 0) {
       showToast(t('cam.noToolpaths'), 'warning');
       return;
@@ -254,6 +388,55 @@ export function CAMPanel() {
     // chain) into the entry chunk; this is an on-click path, latency-free.
     const { downloadFile } = await import('../../lib/io/studio3d');
     downloadFile(gcode, 'toolpath.nc');
+    showToast(t('cam.gcodeExported'), 'success');
+  };
+
+  /** Open the preview modal over the program for the CURRENT cache + profile. */
+  const handlePreviewGCode = () => {
+    const toolpaths = cachedToolpaths();
+    if (toolpaths.length === 0) {
+      showToast(t('cam.noToolpaths'), 'warning');
+      return;
+    }
+    const gcode = generateMultiToolGCode(toolpaths, machineProfile);
+    // Tool summary in T-number order — the post-processor numbers tools by
+    // first appearance, so the same walk yields the same T numbers.
+    const toolLabels = new Map<string, string>();
+    for (const tp of toolpaths) {
+      if (!toolLabels.has(tp.tool.id)) {
+        toolLabels.set(tp.tool.id, `T${toolLabels.size + 1} ⌀${tp.tool.diameter}`);
+      }
+    }
+    // Feed range: scan the emitted program's F words (covers plunge/cut feeds
+    // of every op in one pass).
+    const feeds = (gcode.match(/F\d+(?:\.\d+)?/g) ?? []).map((f) => Number(f.slice(1)));
+    const lo = feeds.length > 0 ? Math.min(...feeds) : 0;
+    const hi = feeds.length > 0 ? Math.max(...feeds) : 0;
+    setPreview({
+      gcode,
+      lineCount: gcode === '' ? 0 : gcode.split('\n').length - (gcode.endsWith('\n') ? 1 : 0),
+      sizeBytes: new TextEncoder().encode(gcode).length,
+      toolsUsed: [...toolLabels.values()].join(' · '),
+      feedRange: feeds.length === 0
+        ? '—'
+        : lo === hi
+          ? `${Math.round(lo)} mm/min`
+          : `${Math.round(lo)}–${Math.round(hi)} mm/min`,
+    });
+  };
+
+  const handleCopyPreview = async () => {
+    if (!preview) return;
+    // copyText: async Clipboard API with the hidden-textarea+execCommand
+    // fallback for webviews that deny it — failure surfaces as a toast.
+    const ok = await copyText(preview.gcode);
+    showToast(ok ? t('cam.copied') : t('cam.copyFailed'), ok ? 'success' : 'error');
+  };
+
+  const handleDownloadPreview = async () => {
+    if (!preview) return;
+    const { downloadFile } = await import('../../lib/io/studio3d');
+    downloadFile(preview.gcode, 'toolpath.nc');
     showToast(t('cam.gcodeExported'), 'success');
   };
 
@@ -520,6 +703,101 @@ export function CAMPanel() {
               />
             </div>
           </div>
+
+          {/* Contour-only parameters (locked contract fields): cut direction,
+           * holding tabs (enable + count/height/width), spring pass and ramp
+           * entry. Disabled switches keep the op params clean — see opParams. */}
+          {operation === 'contour' && (
+            <div className="space-y-1.5 rounded bg-surface p-2">
+              <div>
+                <label htmlFor="cam-direction" className="text-text-muted text-[10px]">{t('cam.direction')}</label>
+                <select
+                  id="cam-direction"
+                  value={direction}
+                  onChange={(e) => setDirection(e.target.value === 'conventional' ? 'conventional' : 'climb')}
+                  className="w-full px-2 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                >
+                  <option value="climb">{t('cam.climb')}</option>
+                  <option value="conventional">{t('cam.conventional')}</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="cam-tabs-enable" className="flex items-center gap-1.5 text-text-muted text-[10px]">
+                  <input
+                    id="cam-tabs-enable"
+                    type="checkbox"
+                    checked={tabsEnabled}
+                    onChange={(e) => setTabsEnabled(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  {t('cam.tabs')}
+                </label>
+                <div className={`mt-1 grid grid-cols-3 gap-1.5 ${tabsEnabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                  <div>
+                    <label htmlFor="cam-tab-count" className="text-text-muted text-[10px]">{t('cam.tabCount')}</label>
+                    <input
+                      id="cam-tab-count"
+                      type="number"
+                      min={1}
+                      step={1}
+                      disabled={!tabsEnabled}
+                      value={tabCount}
+                      onChange={(e) => setTabCount(Number(e.target.value))}
+                      className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cam-tab-height" className="text-text-muted text-[10px]">{t('cam.tabHeight')}</label>
+                    <input
+                      id="cam-tab-height"
+                      type="number"
+                      min={0.1}
+                      step={0.5}
+                      disabled={!tabsEnabled}
+                      value={tabHeight}
+                      onChange={(e) => setTabHeight(Number(e.target.value))}
+                      className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cam-tab-width" className="text-text-muted text-[10px]">{t('cam.tabWidth')}</label>
+                    <input
+                      id="cam-tab-width"
+                      type="number"
+                      min={0.1}
+                      step={0.5}
+                      disabled={!tabsEnabled}
+                      value={tabWidth}
+                      onChange={(e) => setTabWidth(Number(e.target.value))}
+                      className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <label htmlFor="cam-spring-pass" className="flex items-center gap-1.5 text-text-secondary">
+                  <input
+                    id="cam-spring-pass"
+                    type="checkbox"
+                    checked={springPass}
+                    onChange={(e) => setSpringPass(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  {t('cam.springPass')}
+                </label>
+                <label htmlFor="cam-ramp-entry" className="flex items-center gap-1.5 text-text-secondary">
+                  <input
+                    id="cam-ramp-entry"
+                    type="checkbox"
+                    checked={rampEntry}
+                    onChange={(e) => setRampEntry(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  {t('cam.rampEntry')}
+                </label>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Stock definition (serialized with the project; nothing previewed yet) */}
@@ -583,14 +861,42 @@ export function CAMPanel() {
           )}
         </div>
 
-        {/* Generate button */}
-        <button
-          onClick={handleGenerate}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
-        >
-          <Play size={14} />
-          {t('cam.generate')}
-        </button>
+        {/* Generate / Update CTA: while an editing session is pinned the button
+         * commits the patch (updateCamOperation — never appends), with a Cancel
+         * escape and a warning banner naming the op under edit. */}
+        {editingOp ? (
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 rounded bg-surface px-2 py-1.5 text-[10px] text-warning" title={t('cam.editing', { name: editingOp.name })}>
+              <Pencil size={11} className="shrink-0" />
+              <span className="truncate">{t('cam.editing', { name: editingOp.name })}</span>
+            </div>
+            <div className="flex gap-1">
+              <button
+                onClick={handleUpdate}
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
+              >
+                <Play size={14} />
+                {t('cam.update')}
+              </button>
+              <button
+                onClick={() => setEditingId(null)}
+                title={t('cam.cancelOp')}
+                aria-label={t('cam.cancelOp')}
+                className="flex items-center justify-center px-3 py-2 bg-surface border border-panel-border text-text-secondary rounded hover:bg-surface-hover hover:text-text-primary transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={handleGenerate}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
+          >
+            <Play size={14} />
+            {t('cam.generate')}
+          </button>
+        )}
 
         {/* Operations (store-driven) */}
         {operations.length > 0 && (
@@ -605,7 +911,9 @@ export function CAMPanel() {
 
           {/* Simulation transport: dispatches window events the viewport owns
            * (no store field — the arm-hole decoupling). Disabled without a
-           * cached toolpath; per-row ▶ below targets that specific op. */}
+           * cached toolpath; per-row ▶ below targets that specific op. The
+           * speed select re-times playback hot ('speed' event, no pause); the
+           * step button advances one move ('step'). */}
           <div className="flex items-center gap-1" role="group" aria-label={t('cam.simulate')}>
             <button
               id="cam-sim-play"
@@ -637,16 +945,43 @@ export function CAMPanel() {
             >
               <RotateCcw size={11} />
             </button>
+            <button
+              id="cam-sim-step"
+              onClick={() => dispatchCamSim('step')}
+              disabled={!hasCache}
+              title={t('cam.simStep')}
+              aria-label={t('cam.simStep')}
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-surface border border-panel-border rounded text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <SkipForward size={11} />
+            </button>
+            <select
+              id="cam-sim-speed"
+              value={simSpeed}
+              onChange={(e) => {
+                const speed = Number(e.target.value);
+                setSimSpeed(speed);
+                dispatchCamSim('speed', undefined, undefined, speed);
+              }}
+              disabled={!hasCache}
+              title={t('cam.simSpeed')}
+              aria-label={t('cam.simSpeed')}
+              className="w-14 px-1 py-1.5 bg-surface border border-panel-border rounded text-text-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {SIM_SPEEDS.map((v) => (
+                <option key={v} value={v}>{v}×</option>
+              ))}
+            </select>
           </div>
 
-            {operations.map((op) => {
+            {operations.map((op, i) => {
               const cache = camToolpaths[op.id];
               // Enabled but uncached = the body was regenerated/deleted since
               // the toolpath was computed (ids rotate on recompute) — flag it
               // instead of silently showing "—".
               const stale = op.enabled && !cache;
               return (
-                <div key={op.id} className="flex items-center gap-2 p-2 bg-surface rounded">
+                <div key={op.id} className="flex items-center gap-1.5 p-2 bg-surface rounded">
                   <input
                     type="checkbox"
                     checked={op.enabled}
@@ -654,7 +989,6 @@ export function CAMPanel() {
                     aria-label={op.name}
                     className="accent-accent"
                   />
-                  <Wrench size={12} className="text-text-muted shrink-0" />
                   <span className={`flex-1 truncate ${op.enabled ? 'text-text-secondary' : 'text-text-muted line-through'}`} title={stale ? t('cam.stale') : op.name}>{op.name}</span>
                   <span
                     className={`text-text-muted shrink-0 ${stale ? 'text-warning italic' : ''}`}
@@ -662,6 +996,43 @@ export function CAMPanel() {
                   >
                     {cache ? `${cache.timeMin.toFixed(1)} ${t('cam.minutes')}` : stale ? t('cam.stale') : '—'}
                   </span>
+                  {/* Reorder (bounds-disabled), duplicate, edit — the G-code
+                   * order follows this list. The pencil highlights the row an
+                   * editing session is pinned to. */}
+                  <button
+                    onClick={() => moveCamOperation(op.id, -1)}
+                    disabled={i === 0}
+                    title={t('cam.moveUp')}
+                    aria-label={`${t('cam.moveUp')} ${op.name}`}
+                    className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronUp size={12} />
+                  </button>
+                  <button
+                    onClick={() => moveCamOperation(op.id, 1)}
+                    disabled={i === operations.length - 1}
+                    title={t('cam.moveDown')}
+                    aria-label={`${t('cam.moveDown')} ${op.name}`}
+                    className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronDown size={12} />
+                  </button>
+                  <button
+                    onClick={() => handleDuplicate(op.id)}
+                    title={t('cam.duplicate')}
+                    aria-label={`${t('cam.duplicate')} ${op.name}`}
+                    className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover"
+                  >
+                    <Copy size={12} />
+                  </button>
+                  <button
+                    onClick={() => handleEdit(op)}
+                    title={t('cam.edit')}
+                    aria-label={`${t('cam.edit')} ${op.name}`}
+                    className={`p-1 rounded hover:bg-surface-hover ${editingOp?.id === op.id ? 'text-accent' : 'text-text-muted hover:text-text-primary'}`}
+                  >
+                    <Pencil size={12} />
+                  </button>
                   {/* Simulate THIS op (user-picked; the transport buttons walk
                    * the first enabled op instead). */}
                   <button
@@ -691,7 +1062,7 @@ export function CAMPanel() {
               );
             })}
 
-            {/* Machine profile + export */}
+            {/* Machine profile + preview + export */}
             <div className="flex gap-2">
               <select
                 id="cam-profile-select"
@@ -704,6 +1075,16 @@ export function CAMPanel() {
                 ))}
               </select>
               <button
+                id="cam-gcode-preview"
+                onClick={handlePreviewGCode}
+                disabled={!hasCache}
+                title={t('cam.preview')}
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 bg-surface border border-panel-border text-text-primary rounded hover:bg-surface-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Eye size={13} />
+                {t('cam.preview')}
+              </button>
+              <button
                 onClick={handleExportGCode}
                 className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-surface border border-panel-border text-text-primary rounded hover:bg-surface-hover transition-colors"
               >
@@ -714,6 +1095,24 @@ export function CAMPanel() {
           </div>
         )}
       </div>
+
+      {/* Preview modal as the panel root's last child: fixed-positioned to the
+       * viewport (out of flow, so the scrolling column never clips or lays it
+       * out) — the same overlay style as the global dialogs. */}
+      {preview && (
+        <GCodePreview
+          gcode={preview.gcode}
+          lineCount={preview.lineCount}
+          sizeBytes={preview.sizeBytes}
+          toolsUsed={preview.toolsUsed}
+          feedRange={preview.feedRange}
+          timeMin={totalTime}
+          profile={machineProfile}
+          onClose={() => setPreview(null)}
+          onCopy={() => { void handleCopyPreview(); }}
+          onDownload={() => { void handleDownloadPreview(); }}
+        />
+      )}
     </div>
   );
 }

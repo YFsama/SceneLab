@@ -443,6 +443,42 @@ describe('CAM setup serialization', () => {
     expect(back.operations).toEqual([op]);
   });
 
+  it("round-trips the contour strategy params (direction/tabs/spring/ramp + safeZ)", () => {
+    // Pass #33 review P1: sanitizeCamParams whitelisted only
+    // allowance/peckDepth, so a saved-then-reloaded setup silently LOST tabs
+    // (cut-through → part flies loose) and the direction choice.
+    const contour: CAMOperation = {
+      ...op,
+      id: 'camop_2',
+      name: 'Contour Box',
+      type: 'contour',
+      params: {
+        ...op.params,
+        safeZAboveStock: 9,
+        direction: 'conventional',
+        tabs: { count: 3, height: 3, width: 6 },
+        springPass: true,
+        rampEntry: true,
+      },
+    };
+    const cam: SerializedCam = { stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 9, operations: [contour] };
+    const project = serializeProject('cam-contour', [], [], [], undefined, undefined, cam);
+    const back = deserializeCam(loadFromFile(saveToFile(project)));
+    const p = back.operations[0]!.params;
+    expect(p.safeZAboveStock).toBe(9);
+    expect(p.direction).toBe('conventional');
+    expect(p.tabs).toEqual({ count: 3, height: 3, width: 6 });
+    expect(p.springPass).toBe(true);
+    expect(p.rampEntry).toBe(true);
+    // Invalid tab payloads degrade to "no tabs" instead of dead weight.
+    const bad: SerializedCam = {
+      stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 5,
+      operations: [{ ...contour, params: { ...contour.params, tabs: { count: 0, height: -1, width: 2 } } }],
+    };
+    const backBad = deserializeCam(loadFromFile(saveToFile(serializeProject('cam-bad', [], [], [], undefined, undefined, bad))));
+    expect(backBad.operations[0]!.params.tabs).toBeUndefined();
+  });
+
   it('round-trips explicit box stock min/max', () => {
     const cam: SerializedCam = {
       stock: { mode: 'box', min: { x: -1, y: -2, z: -3 }, max: { x: 4, y: 5, z: 6 } },

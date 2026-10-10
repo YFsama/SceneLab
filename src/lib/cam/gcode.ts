@@ -1,5 +1,6 @@
-import type { Toolpath, GCodeLine } from './types';
+import type { Toolpath, GCodeLine, ToolpathPoint } from './types';
 import { safeMargin } from './toolpath';
+import { fitArcs, type ArcSpec } from './arcFit';
 
 /**
  * Machine dialects for the post-processor.
@@ -9,8 +10,30 @@ import { safeMargin } from './toolpath';
  */
 export type MachineProfile = 'grbl' | 'linuxcnc';
 
+/** Post-processor options. `arcTolerance` ≤ 0 disables arc fitting. */
+export interface GCodeOptions {
+  /** Max deviation between fitted arcs and the polyline (mm). Default 0.01. */
+  arcTolerance?: number;
+}
+
+const DEFAULT_ARC_TOLERANCE = 0.01; // mm
+
 function fmt(n: number): string {
   return n.toFixed(3);
+}
+
+/**
+ * Arc coordinates and I/J offsets get one decimal more than linear moves:
+ * GRBL's classic "error 33: arc target invalid" fires when rounding makes the
+ * implied start/end radii inconsistent, so the arc path keeps 4 places while
+ * G0/G1 stay at 3 to avoid diff noise in straight-move programs.
+ */
+function fmtArc(n: number): string {
+  return (Math.abs(n) < 5e-5 ? 0 : n).toFixed(4);
+}
+
+function isArcSpec(item: ToolpathPoint | ArcSpec): item is ArcSpec {
+  return 'center' in item;
 }
 
 /**
@@ -30,25 +53,61 @@ interface EmitState {
   lastFeed?: number;
 }
 
-function emitMoves(tp: Toolpath, profile: MachineProfile, state: EmitState, lines: GCodeLine[]): void {
+/** Emit one G0/G1 move to a toolpath point (scene (x, y, z) → machine X = x, Y = z, Z = y). */
+function emitPoint(tp: Toolpath, p: ToolpathPoint, state: EmitState, lines: GCodeLine[]): void {
+  const xyz = `X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)}`;
+  if (p.rapid) {
+    lines.push({ code: `G0 ${xyz}` });
+  } else {
+    const feed = p.feedRate ?? tp.params.feedRate;
+    if (feed !== state.lastFeed) {
+      lines.push({ code: `G1 ${xyz} F${feed}` });
+      state.lastFeed = feed;
+    } else {
+      lines.push({ code: `G1 ${xyz}` });
+    }
+  }
+}
+
+/** Emit one fitted arc as `G2/G3 X Y Z I J [F]` — I/J are incremental center
+ * offsets in the machine XY plane, ccw posts as G3. Feed follows the same
+ * modal rule as G1 (re-emitted only on change, taken from the arc's end). */
+function emitArc(tp: Toolpath, arc: ArcSpec, state: EmitState, lines: GCodeLine[]): void {
+  // Defensive: fitArcs only forms arcs inside constant-y runs, so start and
+  // end share the layer height. If one ever leaks through, degrade to the chord.
+  if (Math.abs(arc.start.y - arc.end.y) > 1e-9) {
+    emitPoint(tp, arc.end, state, lines);
+    return;
+  }
+  const code =
+    `${arc.ccw ? 'G3' : 'G2'} X${fmtArc(arc.end.x)} Y${fmtArc(arc.end.z)} Z${fmtArc(arc.end.y)}` +
+    ` I${fmtArc(arc.center.x - arc.start.x)} J${fmtArc(arc.center.z - arc.start.z)}`;
+  const feed = arc.end.feedRate ?? tp.params.feedRate;
+  if (feed !== state.lastFeed) {
+    lines.push({ code: `${code} F${feed}` });
+    state.lastFeed = feed;
+  } else {
+    lines.push({ code });
+  }
+}
+
+function emitMoves(
+  tp: Toolpath,
+  profile: MachineProfile,
+  state: EmitState,
+  lines: GCodeLine[],
+  arcTolerance: number,
+): void {
   if (tp.operation === 'drill') {
     emitDrillMoves(tp, profile, state, lines);
     return;
   }
-  for (const p of tp.points) {
-    // Scene (x, y, z) → machine X = x, Y = z, Z = y.
-    const xyz = `X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)}`;
-    if (p.rapid) {
-      lines.push({ code: `G0 ${xyz}` });
-    } else {
-      const feed = p.feedRate ?? tp.params.feedRate;
-      if (feed !== state.lastFeed) {
-        lines.push({ code: `G1 ${xyz} F${feed}` });
-        state.lastFeed = feed;
-      } else {
-        lines.push({ code: `G1 ${xyz}` });
-      }
-    }
+  // Arc filtering (Mastercam-style): coplanar cutting runs post as G2/G3,
+  // rapids/depth changes pass through untouched.
+  const items = fitArcs(tp.points, arcTolerance);
+  for (const item of items) {
+    if (isArcSpec(item)) emitArc(tp, item, state, lines);
+    else emitPoint(tp, item, state, lines);
   }
 }
 
@@ -111,7 +170,7 @@ function emitDrillMoves(
 }
 
 /** Emit one complete program for the given toolpaths. */
-function emitProgram(toolpaths: Toolpath[], profile: MachineProfile): string {
+function emitProgram(toolpaths: Toolpath[], profile: MachineProfile, arcTolerance: number): string {
   const lines: GCodeLine[] = [];
   const state: EmitState = {};
   const last = toolpaths[toolpaths.length - 1];
@@ -159,7 +218,7 @@ function emitProgram(toolpaths: Toolpath[], profile: MachineProfile): string {
 
     lines.push({ code: `M3 S${tp.params.spindleSpeed}`, comment: 'Start spindle' });
     lines.push({ code: 'G4 P1', comment: 'Dwell 1s for spindle ramp-up' });
-    emitMoves(tp, profile, state, lines);
+    emitMoves(tp, profile, state, lines, arcTolerance);
     prevToolId = tp.tool.id;
   }
 
@@ -181,13 +240,21 @@ function emitProgram(toolpaths: Toolpath[], profile: MachineProfile): string {
 }
 
 /** Generate G-code for a single toolpath. */
-export function generateGCode(toolpath: Toolpath, profile: MachineProfile = 'grbl'): string {
-  return emitProgram([toolpath], profile);
+export function generateGCode(
+  toolpath: Toolpath,
+  profile: MachineProfile = 'grbl',
+  options: GCodeOptions = {},
+): string {
+  return emitProgram([toolpath], profile, options.arcTolerance ?? DEFAULT_ARC_TOLERANCE);
 }
 
 /** Generate one G-code program for multiple toolpaths (single M2/M30). */
-export function generateMultiToolGCode(toolpaths: Toolpath[], profile: MachineProfile = 'grbl'): string {
-  return emitProgram(toolpaths, profile);
+export function generateMultiToolGCode(
+  toolpaths: Toolpath[],
+  profile: MachineProfile = 'grbl',
+  options: GCodeOptions = {},
+): string {
+  return emitProgram(toolpaths, profile, options.arcTolerance ?? DEFAULT_ARC_TOLERANCE);
 }
 
 const RAPID_RATE = 5000; // mm/min
@@ -199,6 +266,10 @@ export function estimateMachiningTime(toolpath: Toolpath): number {
   // Walk the moves in execution order so each segment's length reflects the
   // real motion (including rapid↔cut transitions). Rapids move at the rapid
   // rate; cuts at the per-move or default feed rate (guarding feed > 0).
+  // Times are computed from the ORIGINAL polyline even when the post emits
+  // fitted arcs: a chord understates its arc by Δθ²/24 per segment, well
+  // under 0.01 % at CAM subdivision densities — the estimate's accuracy is
+  // unchanged by arc filtering.
   const moves = toolpath.points;
   for (let i = 1; i < moves.length; i++) {
     const curr = moves[i]!;

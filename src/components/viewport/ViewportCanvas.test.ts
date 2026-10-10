@@ -10,7 +10,7 @@ import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts, showToast } from '../../lib/toast';
 import { captureFreshCanvas } from '../../lib/render/capture';
 import { defaultCamSetup } from '../../lib/cam';
-import { ViewportCanvas } from './ViewportCanvas';
+import { ViewportCanvas, advanceCamSim, camSimStepTarget, normalizeCamSimSpeed } from './ViewportCanvas';
 import { ToastHost } from '../ui/ToastHost';
 
 // ViewportCanvas is a WebGL component; jsdom has neither WebGL nor a canvas
@@ -1483,6 +1483,95 @@ describe('ViewportCanvas CAM toolpath overlay (rendered)', () => {
   });
 });
 
+// Playback-control math (speed multiplier + single step), extracted as pure
+// module functions in ViewportCanvas — direct vitest targets, no WebGL. The
+// sim advances TIME: feeds are per-move mm/s and leftover time carries across
+// segment boundaries, so a multiplier scales the walked distance linearly.
+describe('CAM sim playback math (pure)', () => {
+  // Three 10 mm moves at 10, 20 and 5 mm/s (feeds[0] is a unused placeholder —
+  // move i runs from cum[i-1] to cum[i]).
+  const cum = [0, 10, 20, 30];
+  const feeds = [0, 10, 20, 5];
+  const pointCount = 4;
+
+  describe('normalizeCamSimSpeed', () => {
+    it('passes contract multipliers through and falls back to 1 for junk', () => {
+      for (const s of [0.25, 0.5, 1, 2, 4, 8]) expect(normalizeCamSimSpeed(s)).toBe(s);
+      for (const bad of [0, -4, NaN, Infinity, -Infinity, undefined, null, '4']) {
+        expect(normalizeCamSimSpeed(bad)).toBe(1);
+      }
+    });
+  });
+
+  describe('advanceCamSim', () => {
+    it('2× speed doubles the distance walked by the same dt (no boundary crossing)', () => {
+      const one = advanceCamSim(1, 0, 0.25, 1, cum, feeds, pointCount);
+      const two = advanceCamSim(1, 0, 0.25, 2, cum, feeds, pointCount);
+      expect(one).toEqual({ seg: 1, dist: 2.5, finished: false }); // 0.25 s × 10 mm/s
+      expect(two.seg).toBe(1); // still inside the same move
+      expect(two.dist).toBeCloseTo(5, 10); // exactly double
+    });
+
+    it('carries leftover time across a boundary at the NEXT move\u2019s rate', () => {
+      // Move 1 needs 1.0 s; the remaining 0.05 s run at move 2\u2019s 20 mm/s.
+      const r = advanceCamSim(1, 0, 1.05, 1, cum, feeds, pointCount);
+      expect(r.seg).toBe(2);
+      expect(r.dist).toBeCloseTo(1, 10);
+      expect(r.finished).toBe(false);
+    });
+
+    it('0.25× and 8× scale the same dt proportionally', () => {
+      expect(advanceCamSim(2, 0, 0.1, 0.25, cum, feeds, pointCount).dist).toBeCloseTo(0.5, 10);
+      // 0.04 s × 8 × 20 mm/s = 6.4 mm — still inside the 10 mm move.
+      expect(advanceCamSim(2, 0, 0.04, 8, cum, feeds, pointCount).dist).toBeCloseTo(6.4, 10);
+    });
+
+    it('a hot speed change continues from the existing progress (no reset)', () => {
+      // 0.2 s at 1× walked 2 mm; switching to 4× mid-move keeps those 2 mm.
+      const r = advanceCamSim(1, 2, 0.1, 4, cum, feeds, pointCount);
+      expect(r.seg).toBe(1);
+      expect(r.dist).toBeCloseTo(6, 10); // 2 + 0.1 s × (4 × 10 mm/s)
+    });
+
+    it('reports finished once the walk passes the last point', () => {
+      expect(advanceCamSim(3, 5, 2, 1, cum, feeds, pointCount)).toEqual({ seg: 4, dist: 0, finished: true });
+      expect(advanceCamSim(3, 5, 1, 1, cum, feeds, pointCount).finished).toBe(true); // exactly at the boundary counts
+      expect(advanceCamSim(3, 5, 0.999, 1, cum, feeds, pointCount).finished).toBe(false); // a hair short
+    });
+
+    it('sanitizes a non-positive/NaN multiplier to 1× inside the walker', () => {
+      expect(advanceCamSim(1, 0, 0.25, 0, cum, feeds, pointCount).dist).toBeCloseTo(2.5, 10);
+      expect(advanceCamSim(1, 0, 0.25, NaN, cum, feeds, pointCount).dist).toBeCloseTo(2.5, 10);
+    });
+  });
+
+  describe('camSimStepTarget', () => {
+    it('mid-segment: the end of the move in progress', () => {
+      expect(camSimStepTarget(1, 3, cum, pointCount)).toBe(1);
+      expect(camSimStepTarget(2, 9.999, cum, pointCount)).toBe(2);
+    });
+
+    it('already on a boundary: the NEXT move\u2019s end (every step lands on a fresh index)', () => {
+      expect(camSimStepTarget(1, 10, cum, pointCount)).toBe(2);
+      // The state setSimPosition leaves after landing (seg=k, dist=full).
+      expect(camSimStepTarget(2, 10, cum, pointCount)).toBe(3);
+      // Fresh sim parked at the start (seg=1, dist=0).
+      expect(camSimStepTarget(1, 0, cum, pointCount)).toBe(1);
+    });
+
+    it('skips zero-length moves (landing on them is geometrically a no-op)', () => {
+      const tie = [0, 10, 10, 20];
+      expect(camSimStepTarget(1, 10, tie, 4)).toBe(3);
+      expect(camSimStepTarget(2, 0, tie, 4)).toBe(3);
+    });
+
+    it('returns null at or past the program end (step is a no-op)', () => {
+      expect(camSimStepTarget(3, 10, cum, pointCount)).toBeNull(); // end of the last move
+      expect(camSimStepTarget(4, 0, cum, pointCount)).toBeNull(); // finished-state seg
+    });
+  });
+});
+
 // Machine simulation (pass-29 CAM-PLUS T1): the panel dispatches
 // 'scenelab:cam-sim' window events; the viewport owns the sim in refs and
 // walks the FIRST enabled cached op. A fake rAF drives the ticks with exact
@@ -1843,6 +1932,177 @@ describe('ViewportCanvas CAM machine simulation (rendered)', () => {
         .map((g) => g.parameters.radiusTop)
         .sort((a, b) => a - b);
       expect(radii[0]).toBeCloseTo(3, 5); // ⌀6/2
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  // ---- playback control: speed multiplier (hot change) + single step ----
+
+  /** Test-side cumulative length walk of a cached toolpath. */
+  function cumOf(pts: { x: number; y: number; z: number }[]): number[] {
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      cum.push(cum[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z));
+    }
+    return cum;
+  }
+
+  it('speed ×4 applies mid-play without moving the tool and quadruples the advance rate', async () => {
+    const id = seedCamOperation();
+    const cache = useStore.getState().camToolpaths[id]!;
+    const pts = cache.toolpath.points;
+    const plunge = cache.toolpath.params.plungeRate;
+    const cum = cumOf(pts);
+    const total = cum[cum.length - 1]!;
+    // The longest CUT move — seek 30% into it so a 1× then 4× pair of 40 ms
+    // ticks stays strictly inside (no boundary crossing, no direction change:
+    // at the 1000 mm/min cut feed, 40 ms walks ≈ 0.67 mm).
+    let k = -1;
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i]!;
+      if (p.rapid) continue;
+      if (p.feedRate !== undefined && p.feedRate === plunge) continue;
+      if (k < 0 || cum[i]! - cum[i - 1]! > cum[k]! - cum[k - 1]!) k = i;
+    }
+    expect(k).toBeGreaterThan(0);
+    const segLen = cum[k]! - cum[k - 1]!;
+    expect(segLen).toBeGreaterThan(6); // room for the measurement inside the move
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'seek', t: (cum[k - 1]! + 0.3 * segLen) / total });
+      const origin = simTool().position.clone();
+      dispatchSim({ action: 'play' });
+      raf.flush(16); // arm the dt clock
+
+      // 40 ms at 1× walks d1 from the seek point.
+      raf.flush(40);
+      const d1 = simTool().position.distanceTo(origin);
+      const at1x = simTool().position.clone();
+      expect(d1).toBeGreaterThan(0.01);
+
+      // Hot change: rate only — position, segment and play state untouched.
+      dispatchSim({ action: 'speed', speed: 4 });
+      expect(simTool().position.equals(at1x)).toBe(true);
+      raf.flush(40);
+      const d4 = simTool().position.distanceTo(at1x);
+      expect(d4).toBeCloseTo(4 * d1, 4);
+
+      // Junk multipliers fall back to 1× (and never twitch the tool).
+      const preJunk = simTool().position.clone();
+      dispatchSim({ action: 'speed', speed: 0 });
+      expect(simTool().position.equals(preJunk)).toBe(true);
+      dispatchSim({ action: 'speed', speed: NaN });
+      expect(simTool().position.equals(preJunk)).toBe(true);
+      raf.flush(40);
+      expect(simTool().position.distanceTo(preJunk)).toBeCloseTo(d1, 4);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('step parks the tool exactly on successive point boundaries, pauses, and play resumes forward', async () => {
+    const id = seedCamOperation();
+    const pts = useStore.getState().camToolpaths[id]!.toolpath.points;
+    const cum = cumOf(pts);
+    // Expected targets straight from the spec: successive DISTINCT points
+    // (zero-length moves land on identical coordinates — a step skips them).
+    const distinct: number[] = [];
+    for (let i = 1; i < pts.length; i++) if (cum[i]! > cum[i - 1]! + 1e-12) distinct.push(i);
+    expect(distinct.length).toBeGreaterThanOrEqual(3);
+    const at = (i: number) => new THREE.Vector3(pts[i]!.x, pts[i]!.y, pts[i]!.z);
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'reset' });
+      expect(simTool().position.distanceTo(at(0))).toBeLessThan(1e-6);
+
+      dispatchSim({ action: 'step' });
+      expect(simTool().position.distanceTo(at(distinct[0]!))).toBeLessThan(1e-6);
+      dispatchSim({ action: 'step' });
+      expect(simTool().position.distanceTo(at(distinct[1]!))).toBeLessThan(1e-6);
+      dispatchSim({ action: 'step' });
+      expect(simTool().position.distanceTo(at(distinct[2]!))).toBeLessThan(1e-6);
+
+      // Stepping paused the walk: ticks must not move the tool.
+      raf.flush(200);
+      expect(simTool().position.distanceTo(at(distinct[2]!))).toBeLessThan(1e-6);
+
+      // Play resumes FORWARD from the boundary (no restart at points[0]).
+      dispatchSim({ action: 'play' });
+      raf.flush(16); // arm
+      raf.flush(100);
+      const moved = simTool().position.distanceTo(at(distinct[2]!));
+      expect(moved).toBeGreaterThan(0.01);
+      expect(simTool().position.distanceTo(at(0))).toBeGreaterThan(moved);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('step while playing pauses on the exact next point boundary', async () => {
+    const id = seedCamOperation();
+    const pts = useStore.getState().camToolpaths[id]!.toolpath.points;
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'play' });
+      raf.flush(16); // arm
+      raf.flush(30); // somewhere mid-move
+      const midPlay = simTool().position.clone();
+
+      dispatchSim({ action: 'step' });
+      const stepped = simTool().position.clone();
+      // Exactly ON a toolpath point (a point-index boundary)…
+      const nearest = Math.min(...pts.map((p) => stepped.distanceTo(new THREE.Vector3(p.x, p.y, p.z))));
+      expect(nearest).toBeLessThan(1e-6);
+      // …strictly past the mid-play spot…
+      expect(stepped.distanceTo(midPlay)).toBeGreaterThan(0);
+      // …and frozen: playback was paused by the step.
+      raf.flush(200);
+      expect(simTool().position.equals(stepped)).toBe(true);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('step is a no-op once the walk reached the program end', async () => {
+    const id = seedCamOperation();
+    const pts = useStore.getState().camToolpaths[id]!.toolpath.points;
+    const cum = cumOf(pts);
+    const total = cum[cum.length - 1]!;
+    const at = (i: number) => new THREE.Vector3(pts[i]!.x, pts[i]!.y, pts[i]!.z);
+    // Land strictly INSIDE the final move first (mid-last-segment step must
+    // park on the program end), including a degenerate tail in the math.
+    let last = pts.length - 1;
+    while (last > 1 && cum[last]! - cum[last - 1]! <= 1e-12) last -= 1;
+    const mid = (cum[last - 1]! + 0.5 * (cum[last]! - cum[last - 1]!)) / total;
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      dispatchSim({ action: 'seek', t: mid });
+      expect(simTool().position.distanceTo(at(pts.length - 1))).toBeGreaterThan(1e-6); // not at the end yet
+
+      // Stepping from inside the final move parks on the last point…
+      dispatchSim({ action: 'step' });
+      expect(simTool().position.distanceTo(at(pts.length - 1))).toBeLessThan(1e-6);
+      const end = simTool().position.clone();
+      // …and a further step (and ticks) change nothing — finished state.
+      dispatchSim({ action: 'step' });
+      expect(simTool().position.equals(end)).toBe(true);
+      raf.flush(100);
+      expect(simTool().position.equals(end)).toBe(true);
     } finally {
       await unmount(m);
       raf.restore();

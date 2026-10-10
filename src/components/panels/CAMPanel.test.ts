@@ -410,6 +410,253 @@ describe('CAMPanel (rendered, store-driven)', () => {
     }
   });
 
+  // --- Edit session / contour params / preview / transport extras ----------
+  // (UX pass: row reorder + duplicate, edit round-trip through the draft,
+  // the contour-only contract fields, the G-code preview modal and the
+  // 'step'/'speed' sim events.)
+
+  /** Toggle a jsdom checkbox the way a real click does (checked flip + change). */
+  async function toggleCheckbox(input: HTMLInputElement): Promise<void> {
+    await act(async () => {
+      input.click();
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  it('Edit loads the op into the draft; Update patches it through updateCamOperation', async () => {
+    const box = useStore.getState().bodies[0]!;
+    useStore.getState().addCamOperation({
+      name: 'Contour — Box', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm',
+      params: {
+        ...params, direction: 'conventional', tabs: { count: 4, height: 2, width: 5 }, springPass: true,
+      },
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+
+      // Draft loaded: tool, operation radio, contour-only controls populated.
+      expect(m.container.querySelector<HTMLSelectElement>('#cam-tool-select')!.value).toBe('em-3mm');
+      const contourRadio = [...m.container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.contour']!)!;
+      expect(contourRadio.getAttribute('aria-checked')).toBe('true');
+      expect(m.container.querySelector<HTMLSelectElement>('#cam-direction')!.value).toBe('conventional');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-tabs-enable')!.checked).toBe(true);
+      expect(m.container.querySelector<HTMLInputElement>('#cam-tab-count')!.value).toBe('4');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-tab-height')!.value).toBe('2');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-tab-width')!.value).toBe('5');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-spring-pass')!.checked).toBe(true);
+      expect(m.container.querySelector<HTMLInputElement>('#cam-ramp-entry')!.checked).toBe(false);
+      // The editing session is visible: banner + Update CTA instead of Generate.
+      expect(m.container.textContent).toContain(translations.en!['cam.editing']!.split('{name}')[0]!);
+      expect(buttonByText(m.container, translations.en!['cam.update']!)).not.toBeNull();
+
+      // Edit a numeric param, Update → patched in place (never appended).
+      await setNumberInput(m.container.querySelector<HTMLInputElement>('#cam-doc')!, '3');
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+      const ops = useStore.getState().camSetup.operations;
+      expect(ops).toHaveLength(1);
+      expect(ops[0]!.params.depthOfCut).toBe(3);
+      // The contour fields survive the round trip (key-wise merge).
+      expect(ops[0]!.params.direction).toBe('conventional');
+      expect(ops[0]!.params.tabs).toEqual({ count: 4, height: 2, width: 5 });
+      expect(ops[0]!.params.springPass).toBe(true);
+      expect(ops[0]!.toolId).toBe('em-3mm');
+      // Session exited: the Generate CTA is back.
+      expect(buttonByText(m.container, translations.en!['cam.generate']!)).not.toBeNull();
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('Update clears contour fields an earlier edit wrote when the type moves away', async () => {
+    const box = useStore.getState().bodies[0]!;
+    const id = useStore.getState().addCamOperation({
+      name: 'Contour — Box', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm',
+      params: { ...params, direction: 'conventional', springPass: true },
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      // Switch the draft to pocket, then Update: the merge is key-wise, so the
+      // panel must explicitly clear the contour fields.
+      const pocketRadio = [...m.container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.pocket']!)!;
+      await act(async () => { pocketRadio.click(); });
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+      const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      expect(op.type).toBe('pocket');
+      expect(op.params.direction).toBeUndefined();
+      expect(op.params.springPass).toBeUndefined();
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('contour draft controls flow into the generated params; disabled switches stay absent', async () => {
+    const m = await mount(createElement(CAMPanel));
+    try {
+      const contourRadio = [...m.container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.contour']!)!;
+      await act(async () => { contourRadio.click(); });
+
+      // The contour block appeared with its defaults.
+      expect(m.container.querySelector('#cam-direction')).not.toBeNull();
+      expect(m.container.querySelector<HTMLSelectElement>('#cam-direction')!.value).toBe('climb');
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-direction')!, 'conventional');
+      await toggleCheckbox(m.container.querySelector<HTMLInputElement>('#cam-tabs-enable')!);
+      await setNumberInput(m.container.querySelector<HTMLInputElement>('#cam-tab-count')!, '5');
+
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+      const op = useStore.getState().camSetup.operations[0]!;
+      expect(op.type).toBe('contour');
+      expect(op.params.direction).toBe('conventional');
+      expect(op.params.tabs).toEqual({ count: 5, height: 3, width: 6 }); // height/width defaults
+      // Unchecked switches are OMITTED — params stay clean (undefined = default).
+      expect('springPass' in op.params).toBe(false);
+      expect('rampEntry' in op.params).toBe(false);
+
+      // Switching the draft to pocket hides the contour block, and a pocket
+      // op never carries the fields.
+      const pocketRadio = [...m.container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.pocket']!)!;
+      await act(async () => { pocketRadio.click(); });
+      expect(m.container.querySelector('#cam-direction')).toBeNull();
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+      const pocket = useStore.getState().camSetup.operations[1]!;
+      expect(pocket.type).toBe('pocket');
+      expect('direction' in pocket.params).toBe(false);
+      expect('tabs' in pocket.params).toBe(false);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('row ↑/↓ reorder through moveCamOperation; duplicate inserts a copy after the original', async () => {
+    const box = useStore.getState().bodies[0]!;
+    const idA = useStore.getState().addCamOperation({
+      name: 'A — Box', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    const idB = useStore.getState().addCamOperation({
+      name: 'B — Box', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+    const ids = () => useStore.getState().camSetup.operations.map((o) => o.id);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      // A's ↑ and B's ↓ are bounds-disabled.
+      const upButtons = m.container.querySelectorAll<HTMLButtonElement>(`button[title="${translations.en!['cam.moveUp']!}"]`);
+      const downButtons = m.container.querySelectorAll<HTMLButtonElement>(`button[title="${translations.en!['cam.moveDown']!}"]`);
+      expect(upButtons[0]!.disabled).toBe(true);
+      expect(downButtons[1]!.disabled).toBe(true);
+      expect(upButtons[1]!.disabled).toBe(false);
+      expect(downButtons[0]!.disabled).toBe(false);
+
+      await act(async () => { upButtons[1]!.click(); }); // B up
+      expect(ids()).toEqual([idB, idA]);
+
+      await act(async () => { m.container.querySelectorAll<HTMLButtonElement>(`button[title="${translations.en!['cam.duplicate']!}"]`)[0]!.click(); });
+      const ops = useStore.getState().camSetup.operations;
+      expect(ops).toHaveLength(3);
+      expect(ops[0]!.id).toBe(idB);
+      expect(ops[1]!.name).toBe(`B — Box${translations.en!['cam.copySuffix']!}`);
+      expect(ops[2]!.id).toBe(idA);
+      expect(useStore.getState().camToolpaths[ops[1]!.id]).toBeDefined();
+      expect(getToasts().some((t) => t.message === translations.en!['cam.duplicated']!)).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('G-code Preview is disabled without a cached toolpath', async () => {
+    useStore.getState().addCamOperation({
+      name: 'Pocket — Ghost', enabled: true, type: 'pocket', bodyId: 'body-gone', toolId: 'em-6mm', params,
+    });
+    useStore.setState({ camToolpaths: {} });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      expect(buttonById(m.container, 'cam-gcode-preview')!.disabled).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('G-code Preview opens the modal over the generated program with stats', async () => {
+    // Copy runs through the real copyText helper — stub the async clipboard
+    // the DiagnosticsDialog-test way so the success toast is deterministic.
+    const writeText = vi.fn(async (text: string) => text);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+
+    const box = useStore.getState().bodies[0]!;
+    useStore.getState().addCamOperation({
+      name: 'Pocket — Box', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonById(m.container, 'cam-gcode-preview')!.click(); });
+
+      expect(generateMultiToolGCode).toHaveBeenCalledTimes(1);
+      expect(m.container.textContent).toContain(translations.en!['cam.previewTitle']!);
+      // Stats: profile, the deduped tool summary ("T1 ⌀6" style), feed range.
+      expect(m.container.textContent).toContain('T1 ⌀6');
+      expect(m.container.textContent).toContain('mm/min');
+      // The code area shows the generated program (profile header comment).
+      expect(m.container.querySelector('pre')!.textContent).toContain('Profile: grbl');
+      expect(m.container.querySelector('pre')!.textContent).toContain('G90');
+
+      // Copy posts through the clipboard helper (fallback-safe) and toasts.
+      const copyButton = [...m.container.querySelectorAll<HTMLButtonElement>('button')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.copy']!)!;
+      await act(async () => { copyButton.click(); });
+      await act(async () => { await Promise.resolve(); });
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(getToasts().some((t) => t.message === translations.en!['cam.copied']!)).toBe(true);
+
+      // Close returns to the plain panel.
+      const close = [...m.container.querySelectorAll<HTMLButtonElement>('button')]
+        .find((b) => b.getAttribute('aria-label') === translations.en!['dialog.close']!)!;
+      await act(async () => { close.click(); });
+      expect(m.container.querySelector('pre')).toBeNull();
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true, writable: true });
+      await unmount(m);
+    }
+  });
+
+  it('Sim speed select and step button dispatch the extended cam-sim protocol', async () => {
+    const box = useStore.getState().bodies[0]!;
+    useStore.getState().addCamOperation({
+      name: 'Pocket — Box', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+
+    const details: Array<Record<string, unknown>> = [];
+    const onSim = (e: Event) => details.push((e as CustomEvent).detail as Record<string, unknown>);
+    window.addEventListener('scenelab:cam-sim', onSim);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      expect(buttonById(m.container, 'cam-sim-step')!.disabled).toBe(false);
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-sim-speed')!, '2');
+      await act(async () => { buttonById(m.container, 'cam-sim-step')!.click(); });
+
+      expect(details.map((d) => d.action)).toEqual(['speed', 'step']);
+      expect(details[0]!.speed).toBe(2);
+      expect(details[0]!.opId).toBeUndefined(); // transport-wide, not per-op
+      expect(details[1]!.speed).toBeUndefined();
+    } finally {
+      await unmount(m);
+      window.removeEventListener('scenelab:cam-sim', onSim);
+    }
+  });
+
   // --- Regen throttling (perf pass #31) ---------------------------------------
   // The effect used to re-run the whole toolpath pipeline synchronously on
   // EVERY featureVersion bump. These tests pin the two guards: a 200 ms

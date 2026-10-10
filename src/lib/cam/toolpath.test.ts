@@ -10,6 +10,7 @@ import { createBox, createCylinder, createTube, createExtrude } from '../geometr
 import { booleanOpManifold, warmUpBooleanEngine } from '../geometry/booleanManifold';
 import { translateBody } from '../geometry/operations';
 import type { ToolDefinition, CAMParameters, Toolpath, ToolpathPoint } from './types';
+import { polygonArea, topSilhouette, offsetPolygon } from './silhouette';
 
 const tool: ToolDefinition = {
   id: 'em-6mm',
@@ -76,6 +77,69 @@ function assertPlungeFeeds(tp: Toolpath, plungeRate: number): void {
       ).toBe(plungeRate);
     }
   }
+}
+
+/**
+ * Contour cutting runs: each run is the plunge + cut points of one closed
+ * loop at one level, bounded by rapids (a spring pass extends the final-level
+ * run instead of starting a new one).
+ */
+function contourRuns(tp: Toolpath): ToolpathPoint[][] {
+  const runs: ToolpathPoint[][] = [];
+  let cur: ToolpathPoint[] = [];
+  for (const p of tp.points) {
+    if (p.rapid) {
+      if (cur.length > 0) runs.push(cur);
+      cur = [];
+    } else {
+      cur.push(p);
+    }
+  }
+  if (cur.length > 0) runs.push(cur);
+  return runs;
+}
+
+/** Signed area of a cutting run in the planning plane (positive = CCW). */
+function runArea(run: ToolpathPoint[]): number {
+  return polygonArea(run.map((p) => ({ u: p.x, v: p.z })));
+}
+
+/** Planar (machine XY) arc length travelled by a run. */
+function planarArc(run: ToolpathPoint[]): number {
+  let s = 0;
+  for (let i = 1; i < run.length; i++) {
+    s += Math.hypot(run[i]!.x - run[i - 1]!.x, run[i]!.z - run[i - 1]!.z);
+  }
+  return s;
+}
+
+/**
+ * Arc spans [s0, s1] where the run rises above `ground` (a holding-tab ride).
+ * Spans are measured from the last grounded point to the first grounded point
+ * around the ride, so a span covers ramps + flat and its width is the tab's
+ * full arc width.
+ */
+function liftedArcs(run: ToolpathPoint[], ground: number): Array<[number, number]> {
+  // Cumulative planar arc at each point of the run.
+  const cum: number[] = [0];
+  for (let i = 1; i < run.length; i++) {
+    cum.push(cum[i - 1]! + Math.hypot(run[i]!.x - run[i - 1]!.x, run[i]!.z - run[i - 1]!.z));
+  }
+  const spans: Array<[number, number]> = [];
+  let lastGround = 0;
+  let open: number | null = null;
+  for (let i = 0; i < run.length; i++) {
+    const p = run[i]!;
+    if (p.y > ground + 1e-9) {
+      if (open === null) open = lastGround;
+    } else {
+      if (open !== null) spans.push([open, cum[i]!]);
+      open = null;
+      lastGround = cum[i]!;
+    }
+  }
+  if (open !== null) spans.push([open, cum[cum.length - 1]!]);
+  return spans;
 }
 
 describe('generatePocketToolpath', () => {
@@ -427,6 +491,364 @@ describe('generateContourToolpath', () => {
     });
     const levels = [...new Set(tp.cuttingMoves.map((p) => p.y.toFixed(3)))].map(Number).sort((a, b) => b - a);
     expect(levels).toEqual([6, 2, 0]);
+  });
+});
+
+describe('generateContourToolpath — cut direction (climb/conventional)', () => {
+  it('default/climb mills the outer loop CCW; conventional reverses it CW', () => {
+    const body = createBox(50, 10, 30);
+    const base = { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 };
+    const climb = generateContourToolpath(body, tool, base);
+    const conv = generateContourToolpath(body, tool, { ...base, direction: 'conventional' });
+    const aC = runArea(contourRuns(climb)[0]!);
+    const aV = runArea(contourRuns(conv)[0]!);
+    // M3 climb ⇔ material on the left of travel: outside the part that is a
+    // CCW outer loop (positive shoelace area), mirrored for conventional.
+    expect(aC).toBeGreaterThan(0);
+    expect(aV).toBeLessThan(0);
+    // Same offset rectangle either way: (50 + 2r) × (30 + 2r), same start.
+    expect(Math.abs(aC)).toBeCloseTo(56 * 36, 1);
+    expect(aC).toBeCloseTo(-aV, 6);
+    expect(contourRuns(conv)[0]![0]!.x).toBeCloseTo(contourRuns(climb)[0]![0]!.x, 6);
+    expect(contourRuns(conv)[0]![0]!.z).toBeCloseTo(contourRuns(climb)[0]![0]!.z, 6);
+  });
+
+  it('climb mills island loops CW; conventional CCW (tube through-hole)', () => {
+    const body = createTube(15, 6, 20, 32);
+    const base = { ...params, depthOfCut: 20, stockTop: 20, stockBottom: 0 };
+    const climb = generateContourToolpath(body, tool, base);
+    const conv = generateContourToolpath(body, tool, { ...base, direction: 'conventional' });
+    const classify = (tp: Toolpath): { outer: number; island: number } => {
+      const runs = contourRuns(tp);
+      const outerRun = runs.find((r) => Math.max(...r.map((p) => Math.hypot(p.x, p.z))) > 10)!;
+      const islandRun = runs.find((r) => Math.max(...r.map((p) => Math.hypot(p.x, p.z))) < 10)!;
+      return { outer: runArea(outerRun), island: runArea(islandRun) };
+    };
+    // Material lies OUTSIDE an island loop, so climb keeps it on the left by
+    // running the loop clockwise (negative area).
+    expect(classify(climb).outer).toBeGreaterThan(0);
+    expect(classify(climb).island).toBeLessThan(0);
+    expect(classify(conv).outer).toBeLessThan(0);
+    expect(classify(conv).island).toBeGreaterThan(0);
+  });
+});
+
+describe('generateContourToolpath — holding tabs', () => {
+  // Box 50×10×30 → offset rectangle 56 × 36 (perimeter 184, 4 vertices);
+  // levels [8,6,4,2,0] with depthOfCut 2, final level 0, tabTop = 0 + 3.
+  const box = createBox(50, 10, 30);
+  const base = { ...params, depthOfCut: 2, stockTop: 10, stockBottom: 0 };
+  const tabs = { count: 2, height: 3, width: 6 };
+
+  /** True when (x, z) lies on the 56 × 36 offset rectangle boundary. */
+  const onOffsetRect = (x: number, z: number): boolean => {
+    const onV = Math.abs(Math.abs(x) - 28) < 1e-6 && Math.abs(z) <= 18 + 1e-6;
+    const onH = Math.abs(Math.abs(z) - 18) < 1e-6 && Math.abs(x) <= 28 + 1e-6;
+    return onV || onH;
+  };
+
+  it('rides 3D tabs on sub-tabTop levels: flat top at tabTop, ground elsewhere', () => {
+    const tp = generateContourToolpath(box, tool, { ...base, tabs });
+    const runs = contourRuns(tp);
+    expect(runs).toHaveLength(5); // 5 levels × 1 outer loop
+
+    const final = runs[4]!;
+    // Heights stay within [finalLevel, tabTop] and reach tabTop exactly.
+    for (const p of final) {
+      expect(p.y).toBeGreaterThanOrEqual(0 - 1e-9);
+      expect(p.y).toBeLessThanOrEqual(3 + 1e-9);
+      // Tabs never leave the path: every point stays on the offset rectangle.
+      expect(onOffsetRect(p.x, p.z)).toBe(true);
+    }
+    expect(Math.max(...final.map((p) => p.y))).toBeCloseTo(3, 6);
+
+    // Two rides per revolution, each exactly `width` of arc…
+    const spans = liftedArcs(final, 0);
+    expect(spans).toHaveLength(2);
+    for (const [s0, s1] of spans) expect(s1 - s0).toBeCloseTo(6, 6);
+    // …centred evenly by arc length (perimeter 184 → 92 apart)…
+    const centers = spans.map(([s0, s1]) => (s0 + s1) / 2).sort((a, b) => a - b);
+    expect(centers[1]! - centers[0]!).toBeCloseTo(92, 6);
+
+    // …and the Y truth along the arc: the flat window (6 mm tab − two 2 mm
+    // ramps) sits at exactly tabTop, everything outside the intervals at
+    // exactly the final level.
+    const inFlat = (s: number): boolean =>
+      spans.some(([s0, s1]) => s > s0 + 2 + 1e-6 && s < s1 - 2 - 1e-6);
+    const inTab = (s: number): boolean =>
+      spans.some(([s0, s1]) => s > s0 + 1e-6 && s < s1 - 1e-6);
+    let s = 0;
+    for (let i = 0; i < final.length; i++) {
+      const p = final[i]!;
+      if (inFlat(s)) expect(p.y).toBeCloseTo(3, 6);
+      else if (!inTab(s)) expect(p.y).toBeCloseTo(0, 6);
+      const b = final[(i + 1) % final.length]!;
+      s += Math.hypot(b.x - p.x, b.z - p.z);
+    }
+
+    // The level just under tabTop (y = 2 < 3) also rides, topped at tabTop.
+    const lvl2 = runs[3]!;
+    expect(Math.max(...lvl2.map((p) => p.y))).toBeCloseTo(3, 6);
+    expect(liftedArcs(lvl2, 2)).toHaveLength(2);
+    // Upper levels (8, 6, 4 ≥ tabTop) never lift.
+    const depths = [8, 6, 4];
+    runs.slice(0, 3).forEach((run, i) => {
+      for (const p of run) expect(p.y).toBeCloseTo(depths[i]!, 6);
+    });
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+
+  it('silently ignores invalid tab specs — output identical to no tabs', () => {
+    const specs = [
+      { count: 0, height: 3, width: 6 },
+      { count: 2, height: 0, width: 6 },
+      { count: 2, height: 3, width: 0 },
+    ];
+    const plain = generateContourToolpath(box, tool, { ...base, depthOfCut: 10 });
+    for (const t of specs) {
+      const tp = generateContourToolpath(box, tool, { ...base, depthOfCut: 10, tabs: t });
+      expect(tp.points).toEqual(plain.points);
+    }
+  });
+
+  it('wraps overlapping tab intervals across the loop seam without gouging', () => {
+    // width > L/count is the only way an interval can cross the seam (centres
+    // sit half a spacing away from it); with count 3 / width 64 on the 184 mm
+    // loop the tabs overlap and must merge into one continuous ride.
+    const tp = generateContourToolpath(box, tool, {
+      ...base, depthOfCut: 10, tabs: { count: 3, height: 3, width: 64 },
+    });
+    const final = contourRuns(tp)[0]!;
+    const ys = final.map((p) => p.y);
+    expect(Math.max(...ys)).toBeCloseTo(3, 6);
+    // Tabs cover the whole loop: the cutter never reaches the final level…
+    expect(Math.min(...ys)).toBeGreaterThan(1);
+    // …the ride is continuous (|Δy| bounded by the ramp slope H/2mm per mm of
+    // arc — a seam mishandled as flat ground would jump ~2 mm over no arc)…
+    for (let i = 1; i < final.length; i++) {
+      const a = final[i - 1]!;
+      const b = final[i]!;
+      const arc = Math.hypot(b.x - a.x, b.z - a.z);
+      expect(Math.abs(b.y - a.y)).toBeLessThanOrEqual((3 / 2) * arc + 1e-6);
+    }
+    // …and the seam itself is ridden: plunge and closure agree above ground.
+    expect(final[0]!.y).toBeCloseTo(final[final.length - 1]!.y, 6);
+    expect(final[0]!.y).toBeGreaterThan(0);
+  });
+});
+
+describe('generateContourToolpath — spring pass', () => {
+  it('adds exactly one extra revolution at the final depth, without retracting', () => {
+    const body = createBox(50, 10, 30);
+    const base = { ...params, depthOfCut: 5, stockTop: 10, stockBottom: 0 }; // levels [5, 0]
+    const plain = generateContourToolpath(body, tool, base);
+    const spring = generateContourToolpath(body, tool, { ...base, springPass: true });
+
+    // The spring revolution reuses the entry/exit: no extra rapids, no extra run.
+    expect(spring.rapidMoves.length).toBe(plain.rapidMoves.length);
+    expect(contourRuns(spring).length).toBe(contourRuns(plain).length);
+
+    const p = contourRuns(plain);
+    const s = contourRuns(spring);
+    expect(planarArc(p[0]!)).toBeCloseTo(184, 6); // one revolution = perimeter
+    expect(planarArc(s[0]!)).toBeCloseTo(184, 6); // non-final level unchanged
+    expect(planarArc(s[1]!)).toBeCloseTo(2 * 184, 6); // final level: two revolutions
+    for (const pt of s[1]!) expect(pt.y).toBeCloseTo(0, 6);
+  });
+
+  it('re-rides the tabs on the spring revolution (3D tab protection)', () => {
+    const body = createBox(50, 10, 30);
+    const tp = generateContourToolpath(body, tool, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0,
+      tabs: { count: 2, height: 3, width: 6 }, springPass: true,
+    });
+    const final = contourRuns(tp)[0]!;
+    // Two revolutions × two tabs = four rides, each the full tab width.
+    const spans = liftedArcs(final, 0);
+    expect(spans).toHaveLength(4);
+    for (const [s0, s1] of spans) expect(s1 - s0).toBeCloseTo(6, 6);
+    expect(Math.max(...final.map((p) => p.y))).toBeCloseTo(3, 6);
+  });
+});
+
+describe('generateContourToolpath — ramp entry', () => {
+  const body = createBox(50, 10, 30);
+  const onOffsetRect = (x: number, z: number): boolean => {
+    const onV = Math.abs(Math.abs(x) - 28) < 1e-6 && Math.abs(z) <= 18 + 1e-6;
+    const onH = Math.abs(Math.abs(z) - 18) < 1e-6 && Math.abs(x) <= 28 + 1e-6;
+    return onV || onH;
+  };
+
+  it('descends along the path on the first level; deeper levels still plunge', () => {
+    const tp = generateContourToolpath(body, tool, {
+      ...params, depthOfCut: 5, stockTop: 10, stockBottom: 0, rampEntry: true,
+    }); // levels [5, 0]; first feedPlane = stockTop + 1 = 11
+    const firstIdx = tp.points.findIndex((p) => !p.rapid);
+    const a = tp.points[firstIdx - 1]!; // rapid at the feed plane, loop start
+    const b = tp.points[firstIdx]!;
+    expect(a.y).toBeCloseTo(11, 6);
+    // The first cutting move descends diagonally: strictly between the feed
+    // plane and the level, while advancing along the path…
+    expect(b.y).toBeGreaterThan(5 + 1e-9);
+    expect(b.y).toBeLessThan(11 - 1e-9);
+    expect(Math.hypot(b.x - a.x, b.z - a.z)).toBeGreaterThan(0.1);
+    // …and a later move on this level completes the descent to yLevel.
+    const firstRun = contourRuns(tp)[0]!;
+    expect(firstRun.some((p) => Math.abs(p.y - 5) < 1e-9)).toBe(true);
+    for (const p of firstRun) {
+      expect(p.y).toBeGreaterThanOrEqual(5 - 1e-9);
+      expect(p.y).toBeLessThanOrEqual(11 + 1e-9);
+      // The ramp follows the offset rectangle instead of chording it.
+      expect(onOffsetRect(p.x, p.z)).toBe(true);
+    }
+    assertPlungeFeeds(tp, params.plungeRate);
+
+    // The second level keeps the legacy vertical plunge at plunge feed.
+    const secondRun = contourRuns(tp)[1]!;
+    const idx = tp.points.indexOf(secondRun[0]!);
+    const prev = tp.points[idx - 1]!;
+    expect(prev.y).toBeCloseTo(6, 6); // feedPlane = previous level + 1
+    expect(secondRun[0]!.x).toBeCloseTo(prev.x, 9);
+    expect(secondRun[0]!.z).toBeCloseTo(prev.z, 9);
+    expect(secondRun[0]!.y).toBeCloseTo(0, 6);
+    expect(secondRun[0]!.feedRate).toBe(params.plungeRate);
+  });
+
+  it('default entry stays a vertical plunge at plunge feed (legacy)', () => {
+    const tp = generateContourToolpath(body, tool, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0,
+    });
+    const firstIdx = tp.points.findIndex((p) => !p.rapid);
+    const a = tp.points[firstIdx - 1]!;
+    const b = tp.points[firstIdx]!;
+    expect(b.x).toBeCloseTo(a.x, 9);
+    expect(b.z).toBeCloseTo(a.z, 9);
+    expect(b.y).toBeCloseTo(0, 6);
+    expect(b.feedRate).toBe(params.plungeRate);
+    // Classic structure: plunge + 3 vertex cuts + closure, one run.
+    expect(contourRuns(tp)).toHaveLength(1);
+    expect(tp.cuttingMoves).toHaveLength(5);
+  });
+});
+
+describe('generateContourToolpath — review pass #33 regressions', () => {
+  it('single-level ramp entry re-cuts the entry wedge at full depth', () => {
+    // One depth level only: the ramp covers [0, rampLen] and the revolution
+    // [rampLen, L], so without a closing re-cut of the entry span the part
+    // would stay attached to the stock by the ramp wedge — the exact failure
+    // mode holding tabs exist to prevent.
+    const body = createBox(50, 10, 30); // offset loop = mitered rect ±28/±18, L = 184
+    const tp = generateContourToolpath(body, tool, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0, rampEntry: true,
+    });
+    let covered = 0;
+    for (let i = 1; i < tp.points.length; i++) {
+      const a = tp.points[i - 1]!;
+      const b = tp.points[i]!;
+      if (!b.rapid && Math.abs(b.y) < 1e-9 && Math.abs(a.y) < 1e-9) {
+        covered += Math.hypot(b.x - a.x, b.z - a.z);
+      }
+    }
+    expect(covered).toBeGreaterThanOrEqual(184 - 1e-6);
+    // …and the wedge cleanup must NOT fire when a spring pass already covers
+    // the full loop: the spring revolution [0, L] swallows the wedge, so the
+    // total full-depth coverage is exactly two loops minus the diagonal ramp
+    // approach (which is never at full depth by construction).
+    const spring = generateContourToolpath(body, tool, {
+      ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0, rampEntry: true, springPass: true,
+    });
+    let springCovered = 0;
+    for (let i = 1; i < spring.points.length; i++) {
+      const a = spring.points[i - 1]!;
+      const b = spring.points[i]!;
+      if (!b.rapid && Math.abs(b.y) < 1e-9 && Math.abs(a.y) < 1e-9) {
+        springCovered += Math.hypot(b.x - a.x, b.z - a.z);
+      }
+    }
+    const rampLen = Math.min(Math.max(2 * tool.diameter, 10 / Math.tan((15 * Math.PI) / 180)), 184);
+    expect(springCovered).toBeCloseTo(2 * 184 - rampLen, 6);
+  });
+
+  it('ramp × tab: emitted chords never ride above the true envelope (two-sided bisection)', () => {
+    // The reviewer's failing geometry: 56×36 ring, single level, tabs 3@20.
+    // The old emitTo only bisected the FIRST half of a suspicious chord, so a
+    // descent line crossing a tab flank could close with a chord up to
+    // ~height/40 above the profile. Rebuild the envelope analytically and
+    // sample every chord against it.
+    const body = createBox(56, 8, 36);
+    const spec = {
+      ...params, depthOfCut: 8, stockTop: 8, stockBottom: 0,
+      rampEntry: true, tabs: { count: 3, height: 3, width: 20 },
+    };
+    const tp = generateContourToolpath(body, tool, spec);
+
+    // Offset loop for XY → arc-length mapping (mitered rect, straight edges:
+    // consecutive emitted stops never straddle a corner, so arc-length lerp
+    // between them is exact).
+    const sil = topSilhouette(body);
+    expect(sil).not.toBeNull();
+    const path = offsetPolygon(sil!.outer.points, tool.diameter / 2);
+    expect(path).not.toBeNull();
+    const loop = path!;
+    const cum: number[] = [0];
+    for (let i = 1; i < loop.length; i++) {
+      cum.push(cum[i - 1]! + Math.hypot(loop[i]!.u - loop[i - 1]!.u, loop[i]!.v - loop[i - 1]!.v));
+    }
+    const L = cum[cum.length - 1]! + Math.hypot(loop[0]!.u - loop[loop.length - 1]!.u, loop[0]!.v - loop[loop.length - 1]!.v);
+
+    /** Arc length of an emitted point: nearest edge (incl. the closing edge). */
+    const arcOf = (u: number, v: number): number => {
+      let best = { d: Infinity, s: 0 };
+      for (let i = 0; i < loop.length; i++) {
+        const a = loop[i]!;
+        const b = loop[(i + 1) % loop.length]!;
+        const base = cum[i]!;
+        const du = b.u - a.u;
+        const dv = b.v - a.v;
+        const lenSq = du * du + dv * dv;
+        const t = lenSq < 1e-12 ? 0 : Math.max(0, Math.min(1, ((u - a.u) * du + (v - a.v) * dv) / lenSq));
+        const d = Math.hypot(u - (a.u + t * du), v - (a.v + t * dv));
+        if (d < best.d) best = { d, s: base + t * Math.sqrt(lenSq) };
+      }
+      expect(best.d).toBeLessThan(1e-6); // emitted points sit ON the loop
+      return best.s;
+    };
+
+    // Analytic envelope: max(linear ramp descent, tab trapezoids, yLevel 0).
+    const feedPlane = spec.stockTop + 1;
+    const rampLen = Math.min(Math.max(2 * tool.diameter, spec.stockTop / Math.tan((15 * Math.PI) / 180)), L);
+    const tabTop = spec.tabs.height;
+    const tabRamp = Math.min(spec.tabs.width * 0.4, 2);
+    const centers = Array.from({ length: spec.tabs.count }, (_, i) => ((i + 0.5) * L) / spec.tabs.count);
+    const env = (s: number): number => {
+      let y = s <= rampLen + 1e-9 ? feedPlane + (0 - feedPlane) * (s / rampLen) : 0;
+      for (const c of centers) {
+        const lo = c - spec.tabs.width / 2;
+        const hi = c + spec.tabs.width / 2;
+        if (s < lo - 1e-12 || s > hi + 1e-12) continue;
+        const local =
+          s <= lo + tabRamp
+            ? (tabTop * (s - lo)) / tabRamp
+            : s < hi - tabRamp
+              ? tabTop
+              : tabTop * (1 - (s - (hi - tabRamp)) / tabRamp);
+        y = Math.max(y, local);
+      }
+      return y;
+    };
+
+    const run = contourRuns(tp)[0]!;
+    for (let i = 1; i < run.length; i++) {
+      const a = run[i - 1]!;
+      const b = run[i]!;
+      const s0 = arcOf(a.x, a.z);
+      const s1 = arcOf(b.x, b.z);
+      for (const t of [0.25, 0.5, 0.75]) {
+        const chordY = a.y + (b.y - a.y) * t;
+        const sT = s0 + (s1 - s0) * t;
+        expect(chordY - env(sT)).toBeLessThanOrEqual(1e-6);
+      }
+    }
   });
 });
 

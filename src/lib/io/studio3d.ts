@@ -311,6 +311,25 @@ function sanitizeCamParams(raw: unknown): CAMParameters {
   if (allowance !== null) out.allowance = allowance;
   const peckDepth = finiteNum(p.peckDepth);
   if (peckDepth !== null) out.peckDepth = peckDepth;
+  const safeZ = finiteNum(p.safeZAboveStock);
+  if (safeZ !== null) out.safeZAboveStock = safeZ;
+  // Contour strategy extras (pass #33). Absent/invalid → generator defaults.
+  if (p.direction === 'climb' || p.direction === 'conventional') out.direction = p.direction;
+  if (p.springPass === true) out.springPass = true;
+  if (p.rampEntry === true) out.rampEntry = true;
+  const tabs = p.tabs;
+  if (tabs && typeof tabs === 'object') {
+    const t = tabs as Record<string, unknown>;
+    const count = finiteNum(t.count);
+    const height = finiteNum(t.height);
+    const width = finiteNum(t.width);
+    // Mirror validTabs(): non-positive/non-finite values mean "no tabs" and
+    // are dropped instead of carried as dead weight.
+    if (count !== null && height !== null && width !== null &&
+        count >= 1 && height > 0 && width > 0) {
+      out.tabs = { count, height, width };
+    }
+  }
   return out;
 }
 

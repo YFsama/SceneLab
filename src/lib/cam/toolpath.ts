@@ -331,6 +331,185 @@ export interface ContourOptions {
   allowance?: number;
 }
 
+/** Contour holding tabs after validation (see CAMParameters.tabs). */
+interface ContourTabs {
+  count: number;
+  height: number;
+  width: number;
+}
+
+/**
+ * Validate the tab spec. A count below 1 or a non-positive height/width (also
+ * any non-finite value) silently disables tabs — the loop is cut through at
+ * full depth, exactly the legacy behaviour.
+ */
+function validTabs(tabs: CAMParameters['tabs']): ContourTabs | null {
+  if (!tabs) return null;
+  const { count, height, width } = tabs;
+  if (!Number.isFinite(count) || !Number.isFinite(height) || !Number.isFinite(width)) return null;
+  if (count < 1 || height <= 0 || width <= 0) return null;
+  return { count, height, width };
+}
+
+/**
+ * Reverse a closed loop's winding while keeping its start vertex, so the
+ * rapid/plunge entry point of a loop does not move when the cut direction
+ * flips.
+ */
+function reverseLoop(points: Point2[]): Point2[] {
+  return [points[0]!, ...points.slice(1).reverse()];
+}
+
+/** Cumulative arc length at each vertex of a closed loop (vertex 0 → 0). */
+function loopArcs(path: Point2[]): number[] {
+  const s = [0];
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]!;
+    const b = path[i]!;
+    s.push(s[i - 1]! + Math.hypot(b.u - a.u, b.v - a.v));
+  }
+  return s;
+}
+
+/** Total arc length of a closed loop, closing edge included. */
+function loopLength(path: Point2[], arcs: number[]): number {
+  const a = path[path.length - 1]!;
+  const b = path[0]!;
+  return arcs[arcs.length - 1]! + Math.hypot(b.u - a.u, b.v - a.v);
+}
+
+/** Point at arc length s ∈ [0, L] along the closed loop. */
+function loopPointAt(path: Point2[], arcs: number[], L: number, s: number): Point2 {
+  if (s >= L - 1e-9) return path[0]!;
+  let lo = 0;
+  let hi = arcs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (arcs[mid]! <= s) lo = mid;
+    else hi = mid - 1;
+  }
+  const a = path[lo]!;
+  const b = path[lo + 1 < path.length ? lo + 1 : 0]!;
+  const segLen = lo + 1 < arcs.length ? arcs[lo + 1]! - arcs[lo]! : L - arcs[lo]!;
+  if (segLen <= 1e-12) return a;
+  const f = (s - arcs[lo]!) / segLen;
+  return { u: a.u + (b.u - a.u) * f, v: a.v + (b.v - a.v) * f };
+}
+
+/**
+ * Tab height profile along one closed loop for one cut level. Centres sit at
+ * (i + ½)·L/count by arc length; each tab spans `width` with linear ramps of
+ * min(width·0.4, 2 mm) at both ends and a flat top at `tabTop` (height above
+ * the FINAL level, so shallower levels simply ride higher). `breaks` are the
+ * arc positions where the profile kinks.
+ *
+ * The height is the UPPER ENVELOPE of all tabs. With the ½-spacing centre
+ * offset, an interval can only cross the loop seam when width > L/count —
+ * i.e. exactly when neighbours overlap — and taking the max merges them
+ * instead of letting one tab's ramp dip below another's top (which would mill
+ * into the tab). The seam-crossing itself is handled by wrapping the signed
+ * arc distance to [−L/2, L/2).
+ */
+function makeTabProfile(
+  L: number,
+  yLevel: number,
+  tabTop: number,
+  tabs: ContourTabs,
+): { yAt: (s: number) => number; breaks: number[] } {
+  const spacing = L / tabs.count;
+  const half = tabs.width / 2;
+  const ramp = Math.min(tabs.width * 0.4, 2);
+  const lift = tabTop - yLevel;
+  const wrapHalf = (d: number): number => ((d + L / 2) % L + L) % L - L / 2;
+  const yAt = (s: number): number => {
+    let y = yLevel;
+    for (let i = 0; i < tabs.count; i++) {
+      const x = Math.abs(wrapHalf(s - (i + 0.5) * spacing));
+      if (x < half) y = Math.max(y, yLevel + lift * Math.min(1, (half - x) / ramp));
+    }
+    return y;
+  };
+  const raw: number[] = [];
+  for (let i = 0; i < tabs.count; i++) {
+    const c = (i + 0.5) * spacing;
+    for (const b of [c - half, c - half + ramp, c + half - ramp, c + half]) {
+      const wrapped = ((b % L) + L) % L;
+      if (wrapped > 1e-9 && wrapped < L - 1e-9) raw.push(wrapped);
+    }
+  }
+  raw.sort((a, b) => a - b);
+  return { yAt, breaks: raw.filter((s, i) => i === 0 || s - raw[i - 1]! > 1e-7) };
+}
+
+/**
+ * Cut along the loop from arc `fromS` to `toS` following the height profile
+ * `yOf`. Cut points are emitted at the given stops (loop vertices, profile
+ * kinks, optional extras) and at `toS`; between stops the profile is verified
+ * linear and bisected where it bends, so the emitted polyline never deviates
+ * from an upper-envelope profile (overlapping tabs, or a ramp entry crossing
+ * a tab flank). The tool is assumed to already stand at (fromS, yOf(fromS));
+ * only positions strictly inside (fromS, toS] are emitted.
+ */
+function cutProfiledSpan(
+  m: MoveList,
+  path: Point2[],
+  arcs: number[],
+  L: number,
+  fromS: number,
+  toS: number,
+  yOf: (s: number) => number,
+  stops: number[],
+): void {
+  const cutAt = (s: number, y: number): void => {
+    const p = s >= L - 1e-9 ? path[0]! : loopPointAt(path, arcs, L, s);
+    m.cut({ x: p.u, y, z: p.v });
+  };
+  let prevS = fromS;
+  let prevY = yOf(fromS);
+  const emitTo = (s: number): void => {
+    const y = yOf(s);
+    if (s - prevS > 1e-9) {
+      const mid = (prevS + s) / 2;
+      if (Math.abs(yOf(mid) - (prevY + y) / 2) > 1e-9) {
+        emitTo(mid); // hidden bend in the first half…
+        // …and the second half needs the same check: the profile can bend
+        // again in (mid, s) (ramp descent crossing a tab flank), so re-run
+        // THIS segment against the updated prevS/prevY instead of closing it
+        // with an unverified chord (review pass #33: one-sided bisection let
+        // such chords ride ~0.08 mm above the envelope).
+        return emitTo(s);
+      }
+    }
+    cutAt(s, y);
+    prevS = s;
+    prevY = y;
+  };
+  for (const s of stops) emitTo(s);
+  emitTo(toS);
+}
+
+/** Sorted arc positions strictly inside (fromS, toS) needing a cut point:
+ * loop vertices, profile kinks (tab edges) and optional extras. */
+function spanStops(
+  path: Point2[],
+  arcs: number[],
+  fromS: number,
+  toS: number,
+  breaks: number[],
+  extras: number[] = [],
+): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < path.length; i++) {
+    const s = arcs[i]!;
+    if (s > fromS + 1e-9 && s < toS - 1e-9) out.push(s);
+  }
+  for (const s of [...breaks, ...extras]) {
+    if (s > fromS + 1e-9 && s < toS - 1e-9) out.push(s);
+  }
+  out.sort((a, b) => a - b);
+  return out.filter((s, i) => i === 0 || s - out[i - 1]! > 1e-7);
+}
+
 /** Generate a contour toolpath around a body's top-view silhouette. */
 export function generateContourToolpath(
   body: SolidBody,
@@ -356,30 +535,111 @@ export function generateContourToolpath(
 
   // Cutter compensation: outside the outer loop, inside the islands.
   const offset = tool.diameter / 2 + (options.allowance ?? params.allowance ?? 0);
+
+  // Cut direction under an M3 spindle: climb milling keeps the material on
+  // the LEFT of the travel direction — outer loops CCW (exactly what
+  // offsetPolygon returns: every silhouette loop is normalised CCW) and
+  // island loops CW, because there the material lies OUTSIDE the loop.
+  // 'conventional' flips both windings; the start vertex is preserved either
+  // way so the entry point never moves.
+  const conventional = params.direction === 'conventional';
+  const orient = (loop: Point2[], island: boolean): Point2[] =>
+    island !== conventional ? reverseLoop(loop) : loop;
+
   const paths: Point2[][] = [];
   const outerPath = offsetPolygon(sil.outer.points, offset);
-  if (outerPath) paths.push(outerPath);
+  if (outerPath) paths.push(orient(outerPath, false));
   for (const island of sil.islands) {
     const p = offsetPolygon(island.points, -offset);
-    if (p) paths.push(p); // null ⇒ tool cannot fit the hole; skip it
+    if (p) paths.push(orient(p, true)); // null ⇒ tool cannot fit the hole; skip it
   }
   if (paths.length === 0) return empty;
 
   const levels = depthLevels(params);
+  const tabs = validTabs(params.tabs);
+  // Tabs are measured above the FINAL cut level; only levels below the tab
+  // top need to lift (deeper than the final level cannot exist).
+  const tabTop = tabs
+    ? (levels.length > 0 ? levels[levels.length - 1]! : params.stockBottom) + tabs.height
+    : Number.NEGATIVE_INFINITY;
+
   for (let li = 0; li < levels.length; li++) {
     const yLevel = levels[li]!;
     const yPrev = li === 0 ? params.stockTop : levels[li - 1]!;
     const feedPlane = li === 0 ? params.stockTop + 1 : yPrev + 1;
+
     for (const path of paths) {
       const start = path[0]!;
+      const arcs = loopArcs(path);
+      const L = loopLength(path, arcs);
+
+      // Height profile along the loop: flat at yLevel, except levels below
+      // the tab top ride the tabs (y ∈ [yLevel, tabTop], cut feed throughout).
+      const profile =
+        tabs !== null && yLevel < tabTop
+          ? makeTabProfile(L, yLevel, tabTop, tabs)
+          : { yAt: (): number => yLevel, breaks: [] as number[] };
+      const yAt = profile.yAt;
+
       m.rapid({ x: start.u, y: safe, z: start.v });
       m.rapid({ x: start.u, y: feedPlane, z: start.v });
-      m.plunge({ x: start.u, y: yLevel, z: start.v });
-      for (let i = 1; i < path.length; i++) {
-        const pt = path[i]!;
-        m.cut({ x: pt.u, y: yLevel, z: pt.v });
+
+      let cutFrom = 0;
+      if (params.rampEntry === true && li === 0) {
+        // Ramp the first-level entry: descend along the path, following its
+        // vertices so the move never chords across the offset loop (a chord
+        // of a convex section would gouge the wall by its sagitta), lifted
+        // over any tab in the way.
+        const ramp = rampLength(tool, yPrev - yLevel, L);
+        if (ramp > 1e-6) {
+          const descent = (s: number): number => feedPlane + (yLevel - feedPlane) * (s / ramp);
+          cutProfiledSpan(
+            m, path, arcs, L, 0, ramp,
+            (s: number): number => Math.max(descent(s), yAt(s)),
+            // The mid-ramp stop guarantees the descent is visible as (≥2)
+            // strictly-descending cut moves even on long featureless edges.
+            spanStops(path, arcs, 0, ramp, profile.breaks, [ramp / 2]),
+          );
+          cutFrom = ramp;
+        } else {
+          m.plunge({ x: start.u, y: Math.min(yAt(0), feedPlane), z: start.v });
+        }
+      } else {
+        // Legacy vertical entry; the plunge target rides a tab when the loop
+        // start happens to sit on one (min keeps a degenerate tab-above-feed-
+        // plane spec from plunging upward).
+        m.plunge({ x: start.u, y: Math.min(yAt(0), feedPlane), z: start.v });
       }
-      m.cut({ x: start.u, y: yLevel, z: start.v }); // close the loop
+
+      // One full revolution from wherever the entry left the tool, closing
+      // back onto the start point.
+      if (cutFrom < L - 1e-9) {
+        cutProfiledSpan(
+          m, path, arcs, L, cutFrom, L, yAt,
+          spanStops(path, arcs, cutFrom, L, profile.breaks),
+        );
+      }
+      // Spring pass: one extra revolution at the final depth with no retract
+      // — it re-rides the tabs at the same heights, which is exactly what 3D
+      // ramps-on-tabs protect the cutter from. It also re-cuts the whole loop
+      // including any first-level ramp wedge.
+      if (params.springPass === true && li === levels.length - 1) {
+        cutProfiledSpan(
+          m, path, arcs, L, 0, L, yAt,
+          spanStops(path, arcs, 0, L, profile.breaks),
+        );
+      } else if (cutFrom > 1e-9 && li === levels.length - 1) {
+        // Single-level ramp entry leaves the entry wedge [0, ramp] above
+        // yLevel: deeper levels would clean it on their full revolution, but
+        // with no deeper level (and no spring pass) the part would stay
+        // attached to the stock — the failure mode tabs exist to prevent.
+        // The main revolution just closed at s = L ≡ 0, so this continues in
+        // position; a degenerate ramp == L degrades to one full extra loop.
+        cutProfiledSpan(
+          m, path, arcs, L, 0, cutFrom, yAt,
+          spanStops(path, arcs, 0, cutFrom, profile.breaks),
+        );
+      }
       m.rapid({ x: start.u, y: safe, z: start.v });
     }
   }

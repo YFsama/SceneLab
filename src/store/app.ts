@@ -550,6 +550,14 @@ interface AppState {
   /** Patch an operation (top-level fields replace, params merge) and refresh
    * its cached toolpath. */
   updateCamOperation: (id: string, patch: CamOperationPatch) => void;
+  /** Move an operation up (dir −1) or down (dir +1) in the ordered list; an
+   * unknown id or a move past either end is a no-op. Undoable + dirty; the
+   * toolpath cache is recomputed from the new order. */
+  moveCamOperation: (id: string, dir: -1 | 1) => void;
+  /** Duplicate an operation: new camop_N id, localized " (copy)" name suffix,
+   * inserted right AFTER the original (its toolpath is generated and cached).
+   * Undoable + dirty; returns the new id, or undefined for an unknown id. */
+  duplicateCamOperation: (id: string) => string | undefined;
   setCamStock: (stock: CAMSetup['stock']) => void;
   /** Recompute the toolpath cache for every enabled op with a resolvable body
    * and tool. Pure recompute of derived data — no undo entry, no dirty flag. */
@@ -904,10 +912,12 @@ export const useStore = create<AppState>((set, get) => {
   };
 
   /** Rebuild the whole toolpath cache from the current setup (drops entries of
-   * removed/unresolvable ops). */
-  const recomputeCamToolpaths = (): Record<string, CamToolpathCache> => {
+   * removed/unresolvable ops). Takes the operations to rebuild from — the
+   * current list by default — so order-changing actions can recompute from
+   * their freshly ordered array before it lands in state. */
+  const recomputeCamToolpaths = (ops: CAMOperation[] = get().camSetup.operations): Record<string, CamToolpathCache> => {
     const next: Record<string, CamToolpathCache> = {};
-    for (const op of get().camSetup.operations) {
+    for (const op of ops) {
       const cache = resolveCamToolpath(op);
       if (cache) next[op.id] = cache;
     }
@@ -2828,6 +2838,54 @@ export const useStore = create<AppState>((set, get) => {
       else delete camToolpaths[id]; // disabled or unresolvable — no stale cache
       return { camSetup: { ...s.camSetup, operations }, camToolpaths, projectDirty: true };
     });
+  },
+  moveCamOperation: (id, dir) => {
+    // Unknown id or a move past either end: refuse without the no-op undo
+    // entry (the removeDirectBody hygiene rule).
+    const ops = get().camSetup.operations;
+    const idx = ops.findIndex((o) => o.id === id);
+    if (idx === -1 || idx + dir < 0 || idx + dir >= ops.length) return;
+    pushUndo();
+    const operations = [...ops];
+    const [moved] = operations.splice(idx, 1);
+    operations.splice(idx + dir, 0, moved!);
+    set((s) => ({
+      camSetup: { ...s.camSetup, operations },
+      // The cache is keyed by op id and the export walks the operations
+      // array, so a pure reorder needs NO recompute — preserving the entries
+      // keeps ↑/↓ instant on heavy setups (a full regen here froze the panel
+      // per click; review pass #33). Stale-flag healing stays with the panel's
+      // fingerprint-driven regen effect.
+      camToolpaths: s.camToolpaths,
+      projectDirty: true,
+    }));
+  },
+  duplicateCamOperation: (id) => {
+    const ops = get().camSetup.operations;
+    const idx = ops.findIndex((o) => o.id === id);
+    if (idx === -1) return undefined; // unknown id — no copy, no undo entry
+    pushUndo();
+    const src = ops[idx]!;
+    const newId = makeCamOpId();
+    const suffix = toastText('cam.copySuffix');
+    // Same body/tool/params (holes cloned — the copy must not alias the
+    // original's array), new id + localized " (copy)" name; the stable-identity
+    // binding (bodyFeatureId) carries over so the duplicate keeps tracking the
+    // same tree body across recompute rotations. Re-duplicating a copy does not
+    // stack suffixes.
+    const copy: BoundCamOperation = {
+      ...src,
+      id: newId,
+      name: src.name.endsWith(suffix) ? src.name : `${src.name}${suffix}`,
+      ...(src.holes ? { holes: [...src.holes] } : {}),
+    };
+    const cache = resolveCamToolpath(copy);
+    set((s) => ({
+      camSetup: { ...s.camSetup, operations: [...ops.slice(0, idx + 1), copy, ...ops.slice(idx + 1)] },
+      ...(cache ? { camToolpaths: { ...s.camToolpaths, [newId]: cache } } : {}),
+      projectDirty: true,
+    }));
+    return newId;
   },
   setCamStock: (stock) => {
     pushUndo();

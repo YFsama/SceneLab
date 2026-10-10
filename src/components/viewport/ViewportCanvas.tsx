@@ -231,6 +231,74 @@ function applyDragPreview(
   }
 }
 
+// CAM machine-simulation math, extracted as pure functions so the playback
+// contract (speed multiplier + single step) is unit-testable without a WebGL
+// context. The sim itself advances TIME: feeds[i] is move i's speed in mm/s
+// and leftover time carries across segment boundaries — a speed multiplier
+// therefore scales the dt handed to the walker, nothing else.
+/* eslint-disable react-refresh/only-export-components -- pure math exported for ViewportCanvas.test.ts direct testing; no React involved */
+
+/** Contract multiplier for the 'speed' sim action: any positive finite number
+ * passes through; anything else (undefined, 0, negative, NaN, ±Infinity)
+ * falls back to 1× so a malformed panel payload can never freeze playback. */
+export function normalizeCamSimSpeed(speed: unknown): number {
+  return typeof speed === 'number' && Number.isFinite(speed) && speed > 0 ? speed : 1;
+}
+
+/** Advance a walk state (seg, dist) by `dt` seconds of wall clock at
+ * `speed`× the per-move feed rates (mm/s). Pure: returns the next state and
+ * whether the program end was reached — the caller owns the sim object. */
+export function advanceCamSim(
+  seg: number,
+  dist: number,
+  dt: number,
+  speed: number,
+  cum: number[],
+  feeds: number[],
+  pointCount: number,
+): { seg: number; dist: number; finished: boolean } {
+  // Carry TIME across segment boundaries — each move runs at its own speed
+  // (rapid 5×, plunge slower), so leftover time from a fast move must not
+  // leak into a slow one at the wrong rate.
+  let timeLeft = dt * normalizeCamSimSpeed(speed);
+  let s = seg;
+  let d = dist;
+  while (s < pointCount && timeLeft > 1e-9) {
+    const feed = feeds[s]!;
+    const remain = cum[s]! - cum[s - 1]! - d;
+    const need = remain / feed;
+    if (timeLeft < need) {
+      d += timeLeft * feed;
+      timeLeft = 0;
+    } else {
+      timeLeft -= need;
+      s += 1;
+      d = 0;
+    }
+  }
+  return { seg: s, dist: d, finished: s >= pointCount };
+}
+
+/** Point index the next 'step' lands on: the end of the move in progress —
+ * or, when the tool already sits exactly ON a boundary (previous step, or a
+ * seek that landed on a point), the end of the following move, so every step
+ * reaches a fresh index. Zero-length moves are skipped (landing on them is
+ * geometrically a no-op). null = already at the program end (no-op). */
+export function camSimStepTarget(
+  seg: number,
+  dist: number,
+  cum: number[],
+  pointCount: number,
+): number | null {
+  if (seg >= pointCount) return null;
+  const segLen = cum[seg]! - cum[seg - 1]!;
+  let target = dist >= segLen - 1e-9 ? seg + 1 : seg;
+  while (target < pointCount && cum[target]! - cum[target - 1]! <= 1e-12) target += 1;
+  return target >= pointCount ? null : target;
+}
+
+/* eslint-enable react-refresh/only-export-components */
+
 export function ViewportCanvas() {
   const { t } = useT();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -263,10 +331,11 @@ export function ViewportCanvas() {
   // setup or the derived toolpath cache changes.
   const camGroupRef = useRef<THREE.Group | null>(null);
   // CAM machine simulation. The PANEL dispatches 'scenelab:cam-sim' window
-  // events (play/pause/reset/seek, the arm-hole decoupling — no store field);
-  // this component owns the entire sim state in refs and walks the cached
-  // toolpath on the render loop's rAF. The tool mesh lives in its OWN group
-  // because the overlay effect clears camGroup's children on every rebuild.
+  // events (play/pause/reset/seek/step/speed, the arm-hole decoupling — no
+  // store field); this component owns the entire sim state in refs and walks
+  // the cached toolpath on the render loop's rAF. The tool mesh lives in its
+  // OWN group because the overlay effect clears camGroup's children on every
+  // rebuild.
   const camSimGroupRef = useRef<THREE.Group | null>(null);
   const camSimRef = useRef<{
     opId: string;
@@ -281,6 +350,8 @@ export function ViewportCanvas() {
     playing: boolean;
     diameter: number;
     lastT: number | null;
+    /** Playback speed multiplier ('speed' action; 1 = real time). */
+    speed: number;
   } | null>(null);
   const camSimTickRef = useRef<((now: number) => void) | null>(null);
   // Dim twin of the cut material: the not-yet-cut remainder of the simulated
@@ -1559,11 +1630,12 @@ export function ViewportCanvas() {
   }, [camWorkspace, camSetup, camToolpaths]);
 
   // CAM machine simulation (the arm-hole event pattern, inverted: the PANEL
-  // dispatches 'scenelab:cam-sim' {action:'play'|'pause'|'reset'|'seek',
-  // opId?, t?} and this side owns every ref). The cutter walks the op's
-  // ordered toolpath points at feed-derived speeds (rapids at 5× the cut
-  // feed), on the render loop's rAF; walked cut polylines stay bright while
-  // the remainder dims.
+  // dispatches 'scenelab:cam-sim' {action:'play'|'pause'|'reset'|'seek'|
+  // 'step'|'speed', opId?, t?, speed?} and this side owns every ref). The
+  // cutter walks the op's ordered toolpath points at feed-derived speeds
+  // (rapids at 5× the cut feed) scaled by the 'speed' multiplier, on the
+  // render loop's rAF; 'step' parks it on the next point boundary. Walked
+  // cut polylines stay bright while the remainder dims.
   useEffect(() => {
     const RAPID_FACTOR = 5; // rapid speed = 5 × the cut feed
 
@@ -1700,6 +1772,8 @@ export function ViewportCanvas() {
         opId, points, cum, feeds,
         total: cum[cum.length - 1]!,
         seg: 1, dist: 0, playing: false, diameter, lastT: null as number | null,
+        // A rebuild (op/tool switch) keeps the knob where the user left it.
+        speed: normalizeCamSimSpeed(sim?.speed),
       };
       camSimRef.current = next;
       setSimPosition(next, 0);
@@ -1708,14 +1782,23 @@ export function ViewportCanvas() {
 
     const onCamSim = (e: Event) => {
       const d = (e as CustomEvent).detail as {
-        action: 'play' | 'pause' | 'reset' | 'seek';
+        action: 'play' | 'pause' | 'reset' | 'seek' | 'step' | 'speed';
         opId?: string;
         t?: number;
+        speed?: number;
       };
       const s = useStore.getState();
+      // No explicit opId (transport-bar buttons): stick with the op the sim is
+      // ALREADY walking — falling back to the first enabled op here would
+      // rebuild ensureSim and silently reset progress whenever the user had
+      // started a per-row simulation on a later op (review pass #33).
+      const activeOpId = camSimRef.current?.opId;
       const op = d.opId !== undefined
         ? s.camSetup.operations.find((o) => o.id === d.opId)
-        : s.camSetup.operations.find((o) => o.enabled && s.camToolpaths[o.id]);
+        : s.camSetup.operations.find(
+            (o) => o.id === activeOpId && o.enabled && s.camToolpaths[o.id],
+          )
+          ?? s.camSetup.operations.find((o) => o.enabled && s.camToolpaths[o.id]);
       if (!op) return;
       const cache = s.camToolpaths[op.id];
       if (!cache || cache.toolpath.points.length < 2) return;
@@ -1741,6 +1824,21 @@ export function ViewportCanvas() {
           setSimPosition(sim, t * sim.total);
           break;
         }
+        case 'step': {
+          // Pause first (stepping while playing must not resume), then jump to
+          // the next toolpath-point boundary. lastT re-arms so a later play
+          // starts fresh instead of burning the accumulated wall-clock dt.
+          sim.playing = false;
+          sim.lastT = null;
+          const target = camSimStepTarget(sim.seg, sim.dist, sim.cum, sim.points.length);
+          if (target === null) break; // already parked on the program end
+          setSimPosition(sim, sim.cum[target]!);
+          break;
+        }
+        case 'speed':
+          // Hot change: rate only — position, segment and play state stay.
+          sim.speed = normalizeCamSimSpeed(d.speed);
+          break;
       }
     };
     window.addEventListener('scenelab:cam-sim', onCamSim);
@@ -1758,24 +1856,12 @@ export function ViewportCanvas() {
       }
       const dt = Math.min((now - sim.lastT) / 1000, 0.1); // tab-switch clamp
       sim.lastT = now;
-      // Carry TIME across segment boundaries — each move runs at its own
-      // speed (rapid 5×, plunge slower), so leftover distance from a fast
-      // move must not leak into a slow one at the wrong rate.
-      let timeLeft = dt;
-      while (sim.seg < sim.points.length && timeLeft > 1e-9) {
-        const speed = sim.feeds[sim.seg]!;
-        const remain = sim.cum[sim.seg]! - sim.cum[sim.seg - 1]! - sim.dist;
-        const need = remain / speed;
-        if (timeLeft < need) {
-          sim.dist += timeLeft * speed;
-          timeLeft = 0;
-        } else {
-          timeLeft -= need;
-          sim.seg += 1;
-          sim.dist = 0;
-        }
-      }
-      if (sim.seg >= sim.points.length) {
+      // The walker consumes dt scaled by the speed multiplier; the per-move
+      // feeds and the time-carry across boundaries live in advanceCamSim.
+      const next = advanceCamSim(sim.seg, sim.dist, dt, sim.speed, sim.cum, sim.feeds, sim.points.length);
+      sim.seg = next.seg;
+      sim.dist = next.dist;
+      if (next.finished) {
         sim.playing = false; // program end — parked on the last point, all bright
         setSimPosition(sim, sim.total);
         return;

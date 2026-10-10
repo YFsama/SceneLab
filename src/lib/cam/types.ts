@@ -24,6 +24,14 @@ export interface CAMParameters {
   /** Traverse height above the stock top (mm); seeded from
    * CAMSetup.safeZAboveStock when the panel adds an op. Default 5. */
   safeZAboveStock?: number;
+  /** Contour cut direction (M3 spindle). Climb = outer loops CCW + islands CW; conventional reverses both. Default 'climb'. */
+  direction?: 'climb' | 'conventional';
+  /** Contour holding tabs, evenly spaced per closed loop by arc length. height is above the FINAL cut level; width is arc length along the path including ramps. */
+  tabs?: { count: number; height: number; width: number };
+  /** One extra full loop at the final depth after the last cutting pass (Fusion-style spring pass). Default false. */
+  springPass?: boolean;
+  /** First-level entry descends along the path instead of a vertical plunge. Default false (legacy behavior). */
+  rampEntry?: boolean;
 }
 
 /**

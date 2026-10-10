@@ -7,6 +7,7 @@ import { computeMeasureReadout } from '../lib/geometry/measure';
 import { createSketch, addRectangle, addLine, addCircle, addConstraint, addPoint, closestPointPair } from '../lib/sketch/engine';
 import { serializeProject, saveToFile, loadFromFile, deserializeFeatures, deserializeDirectBodies, deserializeDrawing, deserializeCam } from '../lib/io';
 import { defaultCamSetup } from '../lib/cam';
+import { translations } from '../lib/i18n';
 import { makeDetailId, makeNoteId } from '../lib/io/drawingNotes';
 import { defaultDrawingViewPlacements } from '../lib/io/studio3d';
 
@@ -3366,6 +3367,100 @@ describe('CAM setup state (operations + toolpath cache)', () => {
     expect(useStore.getState().camSetup.stock).toEqual({ mode: 'box', min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 12, z: 30 } });
     useStore.getState().undo();
     expect(useStore.getState().camSetup.stock).toEqual({ mode: 'bounding-box', margin: 2 });
+  });
+
+  it('moveCamOperation swaps neighbours and is one undo step; out-of-bounds is a no-op', () => {
+    const idA = useStore.getState().addCamOperation({
+      name: 'A', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    const idB = useStore.getState().addCamOperation({
+      name: 'B', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+    const idC = useStore.getState().addCamOperation({
+      name: 'C', enabled: true, type: 'face', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    const ids = () => useStore.getState().camSetup.operations.map((o) => o.id);
+    const depth = useStore.getState().undoStack.length; // three adds
+
+    // Past either end: refused without even an undo entry.
+    useStore.getState().moveCamOperation(idA, -1);
+    useStore.getState().moveCamOperation(idC, 1);
+    useStore.getState().moveCamOperation('camop_none', 1);
+    expect(ids()).toEqual([idA, idB, idC]);
+    expect(useStore.getState().undoStack).toHaveLength(depth);
+
+    useStore.getState().moveCamOperation(idB, -1);
+    expect(ids()).toEqual([idB, idA, idC]);
+    expect(useStore.getState().undoStack).toHaveLength(depth + 1);
+    expect(useStore.getState().projectDirty).toBe(true);
+
+    useStore.getState().undo();
+    expect(ids()).toEqual([idA, idB, idC]);
+  });
+
+  it('moveCamOperation preserves the cache (a pure reorder regenerates nothing)', () => {
+    const idA = useStore.getState().addCamOperation({
+      name: 'A', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    const idB = useStore.getState().addCamOperation({
+      name: 'B', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+    const cacheBefore = useStore.getState().camToolpaths[idB]!;
+    useStore.getState().moveCamOperation(idB, -1);
+    const caches = useStore.getState().camToolpaths;
+    expect(caches[idA]).toBeDefined(); // every op still cached
+    expect(caches[idB]).toBeDefined();
+    // Reordered reality (pass #33 review): the cache is keyed by op id and the
+    // export walks the operations array, so a reorder must NOT recompute —
+    // the same cache OBJECT survives, keeping ↑/↓ instant on heavy setups.
+    // Stale-entry healing belongs to the panel's fingerprint-driven regen.
+    expect(caches[idB]).toBe(cacheBefore); // preserved by reference, not recomputed
+    expect(caches[idB]!.toolpath.points.length).toBeGreaterThan(0);
+  });
+
+  it('duplicateCamOperation inserts a suffixed copy after the original and caches it', () => {
+    const idA = useStore.getState().addCamOperation({
+      name: 'Contour', enabled: true, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+    const idB = useStore.getState().addCamOperation({
+      name: 'Pocket', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    // The suffix is localized (store-side toastText); resolve it for whatever
+    // locale the test env is in.
+    const suffix = translations[useStore.getState().locale]?.['cam.copySuffix'] ?? translations.en?.['cam.copySuffix'];
+
+    const newId = useStore.getState().duplicateCamOperation(idA)!;
+    expect(newId).toMatch(/^camop_\d+$/);
+    expect(newId).not.toBe(idA);
+    const ops = useStore.getState().camSetup.operations;
+    expect(ops.map((o) => o.id)).toEqual([idA, newId, idB]); // right AFTER the original
+    const [src, copy] = [ops[0]!, ops[1]!];
+    expect(copy.name).toBe(`${src.name}${suffix}`);
+    expect(copy.type).toBe(src.type);
+    expect(copy.bodyId).toBe(src.bodyId);
+    expect(copy.toolId).toBe(src.toolId);
+    expect(copy.params).toEqual(src.params);
+    expect(copy.enabled).toBe(src.enabled);
+    expect(useStore.getState().camToolpaths[newId]).toBeDefined(); // the copy's toolpath
+    expect(useStore.getState().camToolpaths[newId]!.toolpath.points.length).toBeGreaterThan(0);
+    expect(useStore.getState().projectDirty).toBe(true);
+
+    // Re-duplicating the copy does not stack suffixes.
+    useStore.getState().duplicateCamOperation(newId);
+    expect(useStore.getState().camSetup.operations.find((o) => o.id === newId)!.name)
+      .toBe(`${src.name}${suffix}`);
+
+    useStore.getState().undo();
+    expect(useStore.getState().camSetup.operations.map((o) => o.id)).toEqual([idA, newId, idB]);
+    expect(useStore.getState().camToolpaths[newId]).toBeDefined();
+    useStore.getState().undo();
+    expect(useStore.getState().camSetup.operations.map((o) => o.id)).toEqual([idA, idB]);
+    expect(useStore.getState().camToolpaths[newId]).toBeUndefined();
+
+    // Unknown id: no copy, no undo entry.
+    const depth = useStore.getState().undoStack.length;
+    expect(useStore.getState().duplicateCamOperation('camop_none')).toBeUndefined();
+    expect(useStore.getState().undoStack).toHaveLength(depth);
   });
 
   it('project round-trip: cam block survives serialize/load and caches regenerate', () => {
