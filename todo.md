@@ -1,7 +1,7 @@
 # SceneLab — Roadmap & Working Queue
 
 > AI-first 3D CAD/CAM — Web-first + Tauri desktop shell
-> **当前版本 v0.26.0** · 详见 [CHANGELOG.md](CHANGELOG.md)（用户向历史）与 git log（技术细节）。
+> **当前版本 v0.27.0** · 详见 [CHANGELOG.md](CHANGELOG.md)（用户向历史）与 git log（技术细节）。
 
 ## Project Vision
 
@@ -22,12 +22,12 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ---
 
-## Status Snapshot — v0.26.0 (2026-10-09)
+## Status Snapshot — v0.27.0 (2026-10-10)
 
 | 维度 | 状态 |
 |------|------|
-| 测试 | **2733 vitest / 158 文件**；**E2E 30/30**（+canvas-resize ×2、responsive ×3）；cargo 6；浏览器走查（IAB 输入派发受限，事件级验证 + E2E 补位） |
-| 版本 | v0.18.0 → v0.26.0 共 9 个版本，32 个开发轮次（pass #1–#32） |
+| 测试 | **2793 vitest / 160 文件**；**E2E 30/30**；cargo 6；浏览器走查（IAB 输入派发受限，事件级验证 + E2E 补位——本轮 CAM 全流程走查通过） |
+| 版本 | v0.18.0 → v0.27.0 共 10 个版本，33 个开发轮次（pass #1–#33） |
 | 可靠性 | 全局错误捕获（errorLog 环形 100/持久 30）+ ErrorBoundary + 诊断对话框（复制/保存/预填 issue 反馈）+ 错误 toast 复制 |
 | 平台 | getOS/getPlatform 检测；⌘/⌥ 快捷键显示；⌘+点击修复；视口三画布 DPR 变更响应；工程图画布补 resize |
 | 布局 | <960px compact：侧面板渲染层抑制（持久化偏好不动）；800×600 无横向溢出、视口 ≥400px（E2E 固化） |
@@ -35,7 +35,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | AI | ~121 个注册工具（含 undo/特征管理/文件交付）；maxIterations 16/32；诚实失败协议 |
 | 几何内核 | Manifold 精确布尔（预热后）；**真 Manifold 圆角/倒角/抽壳**（90° 圆角 +0.26%、水密）；Face 溯源标记；自适应细分；参数化往返漂移实测为零 |
 | 互操作 | STEP 导出 OCCT 可读（FreeCAD 级）；解析圆柱面（同体 16.4MB→115KB）；STL/OBJ/3MF/DXF(sheet)/SVG/PDF |
-| CAM | XZ 平面规划正确轴向；真轮廓+刀具补偿；grbl/LinuxCNC 双轮廓；机床仿真；工序随参数化编辑存活 |
+| CAM | 轮廓精修四件套（tabs 桁料/climb-conv/spring/斜坡下刀）；G2/G3 圆弧后处理（⌀30 圆切削行 −96%，4 位小数防 GRBL error 33）；工序编辑/重排/复制 + G-code 预览预检；仿真倍速/单步；市场调研见 docs/cnc-research.md |
 | 性能 | 体素路径 AABB 缓存（~12×）；邻接 Map 索引（39×）；主 chunk gzip −49%；指纹 memo；自动保存跳过无变更 |
 | 方法 | 三层验证文化：金测试 → 独立审查（可运行验证）→ 真实浏览器走查；连续三轮拦截规格级错误 |
 
@@ -106,6 +106,18 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - [ ] 样条草图实体（SketchEntity 联合类型加曲线——求解器/拾取/链化全链路，L）
 - [ ] 孔点击定位的面法向钻孔在直接体上的工程图标注（feature 派生 by design——至少文档说明）
 
+### E2. CAM 后续（pass #33 调研立项，详见 docs/cnc-research.md）
+
+- [ ] **Adaptive/trochoidal 摆线粗加工**（商业报告最高位缺失项；恒定啮合角，创客机器刚性差尤其受益——独立大轮）
+- [ ] **V-carving/文字雕刻**（创客高频、开源空白、商业护城河；V 刀变深勾线——独立大轮）
+- [ ] Rest machining 创客化（2.5D 剩料跟踪 + 换小刀清残料两步向导）
+- [ ] Setup sheet 工艺卡（HTML/打印：刀具表 + 每序工时 + 参数）
+- [ ] 毛坯视口可视化 + 刀路 overlay 按刀着色
+- [ ] 钻孔 G81/G82 变体与 dwell；WCS（G54）显式输出与对刀原点选择
+- [ ] 编辑钻孔工序换 body 后 holes 重探测或清空提示（审查已知限制）
+- [ ] 编辑重命名保留用户自定义后缀（当前按 类型+目标 重建派生名，"(copy)" 不保留）
+- [ ] pocket 侧壁精光 pass（粗精合一趋势，Mastercam 2025 Finish Passes 式）
+
 ### E. 基础设施 / 流程
 
 - [ ] **NSIS 安装器实机验证**（pass #32）：currentUser/SimpChinese+English/语言选择器——v0.26.0 CI 已成功产出 `x64-setup.exe`（构建管线走通），剩下载实机确认安装界面与每用户安装行为；附带修复 release.yml 便携版上传硬编码 0.1.0 文件名的遗留 bug（曾致 v0.26.0 首次出包失败，a0f88ab）
@@ -149,3 +161,4 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | #30 | 10-03 | 最深轮：STEP OCCT P0/几何诚实（凹体积/圆角停止间隙）/CAM 仿真/三审计 | v0.24.0 |
 | #31 | 10-03 | 真 Manifold 圆角倒角抽壳/Face 溯源→解析 STEP 圆柱/每视图工程图 | v0.25.0 |
 | #32 | 10-09 | 平台适配/DPR 变更/响应式布局/帮助美化/安装启动/错误记录复制上报 | v0.26.0 |
+| #33 | 10-10 | CNC 市场调研驱动 CAM 平价补全：轮廓 tabs/方向/spring/ramp + G2/G3 圆弧 + 工序管理/预检 + 仿真控制 | v0.27.0 |

@@ -2,6 +2,67 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.27.0] — 2026-10-10
+
+CAM 平价补全轮（市面 CNC 软件调研驱动，见 `docs/cnc-research.md`）：轮廓
+精修四件套 + G2/G3 圆弧后处理 + 工序管理/预检 UX + 仿真播放控制（4 实现者
+并行 + 独立审查 1×P1 5×P2 修复 + 浏览器走查）。
+
+### CAM — 轮廓精修 (Contour Finishing)
+
+- **桁料 tabs**（Fusion/Vectric 式）：轮廓工序可开 `count/height/width`
+  三参数桁料——终层以上骑越、弧长均匀分布、两端斜坡的 3D 造型；重叠
+  tab 取上包络平滑合并，环形回绕正确处理。切穿轮廓不再飞料。
+- **顺铣/逆铣**（climb/conventional）：M3 下 climb=外环 CCW+岛屿 CW
+  自洽（修正了旧实现岛屿不自洽的方向）；可选翻转。
+- **弹簧光刀**（spring pass）：终层额外整圈不抬刀精修，骑越同一 tab
+  剖面。
+- **斜线下刀**（ramp entry）：首层沿路径斜线降到切深（杜绝垂直扎刀
+  断刀风险）；单层时收尾补切入口楔料（否则零件仍连料——审查发现并
+  修复）。
+
+### CAM — G2/G3 圆弧后处理 (Arc Fitting)
+
+- 新 `lib/cam/arcFit.ts`（Mastercam Arc Filter 风格）：共面切削折线
+  贪心拟合为圆弧，发出 `G2/G3 X Y Z I J`（**4 位小数**——GRBL error 33
+  "arc target invalid" 的经典教训）；分段 sagitta 界防矩形陷阱、扫角
+  ≤120°、rapid/变高断弧（tab 爬坡永不被吞）；跨度帽 512 点防 O(n²)
+  冻结（审查发现 20k 段圈 3.4s → 修复后 <100ms）。
+- 实测收益：⌀30 圆柱轮廓 G-code 切削行 **129 → 5（−96%）**；直线件
+  逐字节不变；drill 输出不变；两 profile（grbl/LinuxCNC）一致。
+
+### CAM — 工序管理与预检 (Operations & Inspection)
+
+- 工序列表：**上移/下移重排**（重排不再全量重算刀路缓存）、**复制**
+  （本地化后缀、紧随原序）、**编辑回填**（载入草稿 → Update/Cancel，
+  键级合并清场）。
+- **G-code 预览模态**（gSender file insights 式）：行数/字节/用刀/
+  F 范围/估时/profile 六格统计 + 等宽代码区（>4000 行截断显示
+  "+N more"）+ 复制/下载。
+
+### CAM — 仿真播放控制 (Simulation Transport)
+
+- **倍速 0.25×–8×**（播放中热改不重置进度）+ **单步**（推进到下一
+  刀路点边界并暂停）；传输条无 opId 时粘住当前模拟工序（不再跳回
+  首工序重置进度——审查发现并修复）。
+
+### 审查修复 (Review Fixes)
+
+- **[P1] 工程序列化往返**：`sanitizeCamParams` 现放行
+  direction/tabs/springPass/rampEntry（+存量 safeZAboveStock）——此前
+  保存重载后新参数全部丢失。
+- [P2] tab 包络折线发射双侧二分校验（弦恒不越包络，解析重建采样
+  ≤1e-6）；重排保留缓存；fitArcs 跨度帽。
+- 已知限制：编辑钻孔工序换 body 后 holes 保持原坐标（有意，待后续
+  重新探测）；编辑重命名会重建派生名称（"(copy)" 后缀不保留）。
+
+### 研究产物
+
+- `docs/cnc-research.md`：商业 CAM（Fusion/Mastercam/NX 等 13 家）+
+  创客/开源（Vectric/gSender/GRBL 生态等）双报告要点、SceneLab 现状
+  盈缺矩阵、后续轮次候选（adaptive 摆线粗加工、V-carving、rest
+  machining、setup sheet、毛坯可视化…）。
+
 ## [0.26.0] — 2026-10-09
 
 平台适配与可靠性轮：错误记录/复制/上报全链路 + 跨显示器 DPR 变更 + 窄窗
