@@ -10,7 +10,7 @@ import { createBox, createCylinder, createTube, createExtrude } from '../geometr
 import { booleanOpManifold, warmUpBooleanEngine } from '../geometry/booleanManifold';
 import { translateBody } from '../geometry/operations';
 import type { ToolDefinition, CAMParameters, Toolpath, ToolpathPoint } from './types';
-import { polygonArea, topSilhouette, offsetPolygon } from './silhouette';
+import { polygonArea, topSilhouette, offsetPolygon, pointInPolygon, type Point2 } from './silhouette';
 
 const tool: ToolDefinition = {
   id: 'em-6mm',
@@ -140,6 +140,175 @@ function liftedArcs(run: ToolpathPoint[], ground: number): Array<[number, number
   }
   if (open !== null) spans.push([open, cum[cum.length - 1]!]);
   return spans;
+}
+
+/** True when the closed segments a→b and c→d share any point (incl. touching). */
+function testSegmentsIntersect(a: Point2, b: Point2, c: Point2, d: Point2): boolean {
+  const cross = (o: Point2, p: Point2, q: Point2): number =>
+    (p.u - o.u) * (q.v - o.v) - (p.v - o.v) * (q.u - o.u);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true;
+  }
+  const onSegment = (p: Point2, q: Point2, e: Point2): boolean =>
+    cross(p, q, e) === 0 &&
+    Math.min(p.u, q.u) <= e.u && e.u <= Math.max(p.u, q.u) &&
+    Math.min(p.v, q.v) <= e.v && e.v <= Math.max(p.v, q.v);
+  return (
+    (d1 === 0 && onSegment(c, d, a)) || (d2 === 0 && onSegment(c, d, b)) ||
+    (d3 === 0 && onSegment(a, b, c)) || (d4 === 0 && onSegment(a, b, d))
+  );
+}
+
+/** Simple-polygon check: every non-adjacent edge pair must not intersect. */
+function loopSelfIntersects(pts: Point2[]): boolean {
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue; // the closing pair shares vertex 0
+      if (testSegmentsIntersect(pts[i]!, pts[(i + 1) % n]!, pts[j]!, pts[(j + 1) % n]!)) return true;
+    }
+  }
+  return false;
+}
+
+interface DetectedLoop {
+  /** Cut points of one closed loop, in emission order. */
+  loop: ToolpathPoint[];
+  /** Plan position where the loop starts (and closes). */
+  start: Point2;
+  /** Signed shoelace area over the loop points (positive = CCW). */
+  area: number;
+  /** Loop perimeter including the closing edge. */
+  per: number;
+}
+
+/**
+ * Detect the closed loops a toolpath cuts (rings, finish passes, tab-free
+ * contour revolutions). A loop is a maximal sequence of cut moves that
+ * returns to where it began — anchored EITHER at the position right before
+ * its first cut (plunge/ramp entries start from a rapid there; a helical
+ * true-up starts from the previous cut) OR at the first cut point itself
+ * (link entries: the link move ends ON the loop start). Cut sequences that
+ * never return (raster rows) stay open and are dropped.
+ */
+function closedLoops(tp: Toolpath): DetectedLoop[] {
+  const out: DetectedLoop[] = [];
+  const same = (a: Point2, b: Point2): boolean =>
+    Math.abs(a.u - b.u) < 1e-6 && Math.abs(a.v - b.v) < 1e-6;
+  let cur: Point2 | null = null;
+  let anchorPrev: Point2 | null = null;
+  let anchorFirst: Point2 | null = null;
+  let moved = false;
+  let collect: ToolpathPoint[] = [];
+  for (const p of tp.points) {
+    const plan = { u: p.x, v: p.z };
+    if (p.rapid) {
+      cur = plan;
+      anchorPrev = null;
+      anchorFirst = null;
+      moved = false;
+      collect = [];
+      continue;
+    }
+    if (anchorFirst === null) {
+      anchorPrev = cur;
+      anchorFirst = plan;
+      moved = false;
+      collect = [];
+    }
+    collect.push(p);
+    if (!same(plan, anchorPrev!) && !same(plan, anchorFirst)) moved = true;
+    cur = plan;
+    if (moved && (same(plan, anchorPrev!) || same(plan, anchorFirst))) {
+      const pts = collect.map((q) => ({ u: q.x, v: q.z }));
+      let per = 0;
+      for (let i = 1; i < pts.length; i++) {
+        per += Math.hypot(pts[i]!.u - pts[i - 1]!.u, pts[i]!.v - pts[i - 1]!.v);
+      }
+      per += Math.hypot(pts[0]!.u - pts[pts.length - 1]!.u, pts[0]!.v - pts[pts.length - 1]!.v);
+      out.push({ loop: collect, start: same(plan, anchorPrev!) ? anchorPrev! : anchorFirst!, area: polygonArea(pts), per });
+      anchorPrev = null;
+      anchorFirst = null;
+      moved = false;
+      collect = [];
+    }
+  }
+  return out;
+}
+
+/** Loop points as a plan polygon, trailing duplicate of the start dropped. */
+function loopPolygon(loop: ToolpathPoint[]): Point2[] {
+  const pts = loop.map((p) => ({ u: p.x, v: p.z }));
+  const first = pts[0]!;
+  const last = pts[pts.length - 1]!;
+  if (pts.length > 1 && Math.abs(first.u - last.u) < 1e-9 && Math.abs(first.v - last.v) < 1e-9) {
+    pts.pop();
+  }
+  return pts;
+}
+
+/** Signed planar angle swept by consecutive points around a centre. */
+function sweptAngle(pts: ToolpathPoint[], e: { u: number; v: number }): number {
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    const au = a.x - e.u;
+    const av = a.z - e.v;
+    const bu = b.x - e.u;
+    const bv = b.z - e.v;
+    total += Math.atan2(au * bv - av * bu, au * bu + av * bv);
+  }
+  return total;
+}
+
+/**
+ * Recover the helical first entry of a toolpath: the first cutting run's
+ * descent prefix (points above the level, plus the first point that reaches
+ * it) and the flat true-up circle that follows. The helix angles are uniform
+ * over whole revolutions, so the descent centroid IS the helix centre.
+ */
+function recoverHelixEntry(tp: Toolpath, yLevel: number): {
+  preRun: ToolpathPoint;
+  descent: ToolpathPoint[];
+  flat: ToolpathPoint[];
+  center: Point2;
+  radius: number;
+  revs: number;
+} {
+  const start = tp.points.findIndex((p) => !p.rapid);
+  expect(start).toBeGreaterThan(0);
+  const run: ToolpathPoint[] = [];
+  for (let i = start; i < tp.points.length && !tp.points[i]!.rapid; i++) run.push(tp.points[i]!);
+  const di = run.findIndex((p) => Math.abs(p.y - yLevel) < 1e-9);
+  expect(di).toBeGreaterThan(0);
+  const descent = run.slice(0, di + 1);
+  let cu = 0;
+  let cv = 0;
+  for (const p of descent) {
+    cu += p.x / descent.length;
+    cv += p.z / descent.length;
+  }
+  const center = { u: cu, v: cv };
+  const radius = descent.reduce((s, p) => s + Math.hypot(p.x - cu, p.z - cv), 0) / descent.length;
+  const flat: ToolpathPoint[] = [];
+  for (let i = di + 1; i < run.length; i++) {
+    if (Math.abs(Math.hypot(run[i]!.x - cu, run[i]!.z - cv) - radius) > 1e-6) break;
+    flat.push(run[i]!);
+  }
+  const turn = sweptAngle([tp.points[start - 1]!, ...descent], center);
+  return {
+    preRun: tp.points[start - 1]!,
+    descent,
+    flat,
+    center,
+    radius,
+    revs: Math.round(turn / (2 * Math.PI)),
+  };
 }
 
 describe('generatePocketToolpath', () => {
@@ -495,17 +664,20 @@ describe('generateContourToolpath', () => {
 });
 
 describe('generateContourToolpath — cut direction (climb/conventional)', () => {
-  it('default/climb mills the outer loop CCW; conventional reverses it CW', () => {
+  it('default/climb mills the outer loop CW; conventional reverses it CCW', () => {
     const body = createBox(50, 10, 30);
     const base = { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 };
     const climb = generateContourToolpath(body, tool, base);
     const conv = generateContourToolpath(body, tool, { ...base, direction: 'conventional' });
     const aC = runArea(contourRuns(climb)[0]!);
     const aV = runArea(contourRuns(conv)[0]!);
-    // M3 climb ⇔ material on the left of travel: outside the part that is a
-    // CCW outer loop (positive shoelace area), mirrored for conventional.
-    expect(aC).toBeGreaterThan(0);
-    expect(aV).toBeLessThan(0);
+    // Corrected convention (pass #34 review, chip-thickness simulation): M3
+    // climb ⇔ material on the RIGHT of travel — with the tool outside the
+    // part the enclosed material sits on the right when the loop runs CW
+    // (negative shoelace area), mirrored for conventional. Pass #33 shipped
+    // this inverted; 0.28.0 fixes it.
+    expect(aC).toBeLessThan(0);
+    expect(aV).toBeGreaterThan(0);
     // Same offset rectangle either way: (50 + 2r) × (30 + 2r), same start.
     expect(Math.abs(aC)).toBeCloseTo(56 * 36, 1);
     expect(aC).toBeCloseTo(-aV, 6);
@@ -513,7 +685,7 @@ describe('generateContourToolpath — cut direction (climb/conventional)', () =>
     expect(contourRuns(conv)[0]![0]!.z).toBeCloseTo(contourRuns(climb)[0]![0]!.z, 6);
   });
 
-  it('climb mills island loops CW; conventional CCW (tube through-hole)', () => {
+  it('climb mills island loops CCW; conventional CW (tube through-hole)', () => {
     const body = createTube(15, 6, 20, 32);
     const base = { ...params, depthOfCut: 20, stockTop: 20, stockBottom: 0 };
     const climb = generateContourToolpath(body, tool, base);
@@ -524,12 +696,12 @@ describe('generateContourToolpath — cut direction (climb/conventional)', () =>
       const islandRun = runs.find((r) => Math.max(...r.map((p) => Math.hypot(p.x, p.z))) < 10)!;
       return { outer: runArea(outerRun), island: runArea(islandRun) };
     };
-    // Material lies OUTSIDE an island loop, so climb keeps it on the left by
-    // running the loop clockwise (negative area).
-    expect(classify(climb).outer).toBeGreaterThan(0);
-    expect(classify(climb).island).toBeLessThan(0);
-    expect(classify(conv).outer).toBeLessThan(0);
-    expect(classify(conv).island).toBeGreaterThan(0);
+    // Material lies OUTSIDE an island loop, so climb (material on the right)
+    // keeps it there by running the loop CCW (positive area).
+    expect(classify(climb).outer).toBeLessThan(0);
+    expect(classify(climb).island).toBeGreaterThan(0);
+    expect(classify(conv).outer).toBeGreaterThan(0);
+    expect(classify(conv).island).toBeLessThan(0);
   });
 });
 
@@ -815,32 +987,45 @@ describe('generateContourToolpath — review pass #33 regressions', () => {
     };
 
     // Analytic envelope: max(linear ramp descent, tab trapezoids, yLevel 0).
+    // The ramp window lives at the START of the EMISSION. The loop array is
+    // CCW, but the corrected climb convention runs the outer contour CW
+    // (pass #34), so travel distance runs AGAINST the array arc length:
+    // d = L − s. Detect the emission direction from the first two cut points
+    // instead of assuming it (the test must hold under either convention).
     const feedPlane = spec.stockTop + 1;
     const rampLen = Math.min(Math.max(2 * tool.diameter, spec.stockTop / Math.tan((15 * Math.PI) / 180)), L);
     const tabTop = spec.tabs.height;
     const tabRamp = Math.min(spec.tabs.width * 0.4, 2);
     const centers = Array.from({ length: spec.tabs.count }, (_, i) => ((i + 0.5) * L) / spec.tabs.count);
+    const run0 = contourRuns(tp)[0]!;
+    const sFirst = arcOf(run0[0]!.x, run0[0]!.z);
+    const sSecond = arcOf(run0[1]!.x, run0[1]!.z);
+    // Travel distance from the loop start (path[0], s = 0 ≡ L).
+    const travelOf = (s: number): number => {
+      const d = sSecond >= sFirst ? s : L - s;
+      return ((d % L) + L) % L;
+    };
     const env = (s: number): number => {
-      let y = s <= rampLen + 1e-9 ? feedPlane + (0 - feedPlane) * (s / rampLen) : 0;
+      const d = travelOf(s);
+      let y = d <= rampLen + 1e-9 ? feedPlane + (0 - feedPlane) * (d / rampLen) : 0;
       for (const c of centers) {
         const lo = c - spec.tabs.width / 2;
         const hi = c + spec.tabs.width / 2;
-        if (s < lo - 1e-12 || s > hi + 1e-12) continue;
+        if (d < lo - 1e-12 || d > hi + 1e-12) continue;
         const local =
-          s <= lo + tabRamp
-            ? (tabTop * (s - lo)) / tabRamp
-            : s < hi - tabRamp
+          d <= lo + tabRamp
+            ? (tabTop * (d - lo)) / tabRamp
+            : d < hi - tabRamp
               ? tabTop
-              : tabTop * (1 - (s - (hi - tabRamp)) / tabRamp);
+              : tabTop * (1 - (d - (hi - tabRamp)) / tabRamp);
         y = Math.max(y, local);
       }
       return y;
     };
 
-    const run = contourRuns(tp)[0]!;
-    for (let i = 1; i < run.length; i++) {
-      const a = run[i - 1]!;
-      const b = run[i]!;
+    for (let i = 1; i < run0.length; i++) {
+      const a = run0[i - 1]!;
+      const b = run0[i]!;
       const s0 = arcOf(a.x, a.z);
       const s1 = arcOf(b.x, b.z);
       for (const t of [0.25, 0.5, 0.75]) {
@@ -928,5 +1113,393 @@ describe('generateFaceToolpath', () => {
     expect(Math.min(...us)).toBeCloseTo(-tool.diameter, 6);
     expect(Math.max(...us)).toBeCloseTo(40 + tool.diameter, 6);
     assertPlungeFeeds(tp, params.plungeRate);
+  });
+});
+
+describe('generatePocketToolpath — offset strategy (contour-parallel rings)', () => {
+  const boxBody = createBox(50, 10, 30); // silhouette 50 × 30 centred on the origin
+  const boxBounds = { min: { x: -25, y: 0, z: -15 }, max: { x: 25, y: 10, z: 15 } };
+  const base = { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 }; // one level at y = 0
+
+  const boxOffset = (extra: Partial<CAMParameters> = {}): Toolpath =>
+    generatePocketToolpath(
+      boxBounds, tool, { ...base, pocketStrategy: 'offset', ...extra }, { body: boxBody },
+    );
+
+  it('clears with rings: wall ring CCW, core rings CW (climb under M3)', () => {
+    const tp = boxOffset();
+    const loops = closedLoops(tp);
+    // Cleared region 44 × 24 (r = 3 inset); stepover clamps to 0.4·d = 2.4.
+    // Ring k insets the region by k·2.4: the v half-height 12 − 2.4k stays
+    // positive through k = 4 and k = 5 collapses the polygon to a line
+    // (offsetPolygon returns null) — exactly five rings, ≈ floor(12/2.4)+1.
+    expect(loops).toHaveLength(5);
+    // Corrected convention (pass #34 review): climb keeps the material on
+    // the RIGHT. Ring 0 hugs the wall (material OUTSIDE the loop) → CCW
+    // puts it on the right — matching the CCW helix entry. Every deeper ring
+    // engages the uncleared core INSIDE the loop → CW.
+    const areas = loops.map((l) => l.area);
+    for (let k = 0; k < 5; k++) {
+      expect(Math.sign(areas[k]!), `ring ${k} winding`).toBe(k === 0 ? 1 : -1);
+    }
+    expect(areas[0]!).toBeCloseTo(44 * 24, 6);
+    expect(areas[1]!).toBeCloseTo(-39.2 * 19.2, 6);
+    // Ring starts are the inset corner vertices (−22 + 2.4k, −12 + 2.4k):
+    // reverseLoop keeps the start vertex, so every ring starts at the offset
+    // image of the silhouette's first vertex.
+    for (let k = 0; k < 5; k++) {
+      expect(loops[k]!.start.u).toBeCloseTo(-22 + 2.4 * k, 6);
+      expect(loops[k]!.start.v).toBeCloseTo(-12 + 2.4 * k, 6);
+      // Self-intersection guard: every emitted ring is a simple polygon.
+      expect(loopSelfIntersects(loopPolygon(loops[k]!.loop)), `ring ${k} self-intersects`).toBe(false);
+    }
+  });
+
+  it('links ring-to-ring with cut moves — one cutting run per level', () => {
+    const tp = boxOffset();
+    // The region is convex and island-free, so every ring transition links:
+    // the whole level is one cut run between the entry (safe + feed plane)
+    // and the level-end retract — three rapids in total.
+    expect(contourRuns(tp)).toHaveLength(1);
+    expect(tp.rapidMoves).toHaveLength(3);
+    assertPlungeFeeds(tp, params.plungeRate);
+    // Retracts that start below safe stay vertical (entry ramp + level end).
+    const safe = base.stockTop + 5;
+    for (let i = 1; i < tp.points.length; i++) {
+      const prev = tp.points[i - 1]!;
+      const p = tp.points[i]!;
+      if (p.rapid && prev.y < safe - 1e-6) {
+        expect(Math.abs(p.x - prev.x)).toBeLessThan(1e-9);
+        expect(Math.abs(p.z - prev.z)).toBeLessThan(1e-9);
+        expect(p.y).toBeGreaterThan(prev.y);
+      }
+    }
+  });
+
+  it('ring bands cover ≥ 95% of the cleared region', () => {
+    const tp = boxOffset();
+    const loops = closedLoops(tp);
+    const regionArea = 44 * 24;
+    const sover = 2.4;
+    // Each ring sweeps a band of ≈ perimeter × stepover.
+    const band = loops.reduce((s, l) => s + l.per * sover, 0);
+    expect(band).toBeGreaterThanOrEqual(0.95 * regionArea);
+    // Mitered corners overlap their neighbouring bands (Σ per × sover
+    // overshoots the true union by ~11% here); anything near twice the
+    // region area would mean rings outside the region.
+    expect(band).toBeLessThanOrEqual(1.2 * regionArea);
+  });
+
+  it('L-shaped pocket falls back to the raster — full coverage over partial rings', () => {
+    // Asymmetric L (80×80 minus a 30×30 corner notch). Concave regions make
+    // the offsetPolygon centroid-inradius guard truncate the ring family
+    // early (pass #34 review measured 53.8% swept coverage on this exact
+    // shape), so the offset strategy now refuses concave outlines and the
+    // raster clears everything instead.
+    const lBody = createExtrude({
+      profile: [
+        { x: -40, y: 0, z: -40 }, { x: 40, y: 0, z: -40 }, { x: 40, y: 0, z: 40 },
+        { x: -10, y: 0, z: 40 }, { x: -10, y: 0, z: 10 }, { x: -40, y: 0, z: 10 },
+      ],
+      direction: { x: 0, y: 1, z: 0 }, distance: 10, symmetric: false,
+    });
+    const lBounds = { min: { x: -40, y: 0, z: -40 }, max: { x: 40, y: 10, z: 40 } };
+    const offsetTp = generatePocketToolpath(
+      lBounds, tool, { ...base, pocketStrategy: 'offset' }, { body: lBody },
+    );
+    const rasterTp = generatePocketToolpath(
+      lBounds, tool, { ...base }, { body: lBody },
+    );
+    // The fallback is the raster, byte-for-byte (same params otherwise).
+    expect(offsetTp.points).toEqual(rasterTp.points);
+    // And the raster genuinely clears the region: sample a grid over the
+    // cleared area and verify ≥99% of interior sample points lie within a
+    // cutter radius of some cut SEGMENT (the reviewer's Monte-Carlo swept-
+    // disc criterion — raster rows emit one move per row, so point distance
+    // would only see the row endpoints).
+    const moves = offsetTp.points;
+    const segClear = (u: number, v: number): boolean => {
+      for (let i = 1; i < moves.length; i++) {
+        const a = moves[i - 1]!;
+        const b = moves[i]!;
+        // A move is a rapid iff its END point is — the ramp/plunge segments
+        // START at a rapid position but are genuine cutting moves.
+        if (b.rapid) continue;
+        const du = b.x - a.x;
+        const dv = b.z - a.z;
+        const lenSq = du * du + dv * dv;
+        const t = lenSq < 1e-12 ? 0 : Math.max(0, Math.min(1, ((u - a.x) * du + (v - a.z) * dv) / lenSq));
+        if (Math.hypot(u - (a.x + t * du), v - (a.z + t * dv)) <= 3 + 0.15) return true;
+      }
+      return false;
+    };
+    let inside = 0;
+    let total = 0;
+    for (let u = -39; u <= 39; u += 1.5) {
+      for (let v = -39; v <= 39; v += 1.5) {
+        const inL = u >= -10 || v <= 10; // L footprint (notch = top-LEFT: u < -10 AND v > 10 is outside)
+        if (!inL) continue;
+        total++;
+        if (segClear(u, v)) inside++;
+      }
+    }
+    expect(inside / total).toBeGreaterThanOrEqual(0.99);
+  });
+
+  it('silently falls back to raster for silhouettes with islands (tube)', () => {
+    const tube = createTube(15, 6, 20, 32);
+    const small = { ...tool, diameter: 3, fluteLength: 12 };
+    const tubeBounds = { min: { x: -15, y: 0, z: -15 }, max: { x: 15, y: 20, z: 15 } };
+    const tubeBase = { ...params, depthOfCut: 20, stockTop: 20, stockBottom: 0 };
+    const off = generatePocketToolpath(
+      tubeBounds, small, { ...tubeBase, pocketStrategy: 'offset' }, { body: tube },
+    );
+    const raster = generatePocketToolpath(tubeBounds, small, tubeBase, { body: tube });
+    expect(off.cuttingMoves.length).toBeGreaterThan(0);
+    expect(off.points).toEqual(raster.points);
+  });
+
+  it('keeps the tool-too-large empty path when the cutter cannot fit', () => {
+    // Symmetric L: the vertex centroid lies on the reflex corner, so the
+    // r = 3 inset is rejected and the legacy semantics return an empty path.
+    const lBody = createExtrude({
+      profile: [
+        { x: -20, y: 0, z: -20 }, { x: 20, y: 0, z: -20 }, { x: 20, y: 0, z: 20 },
+        { x: 0, y: 0, z: 20 }, { x: 0, y: 0, z: 0 }, { x: -20, y: 0, z: 0 },
+      ],
+      direction: { x: 0, y: 1, z: 0 }, distance: 10, symmetric: false,
+    });
+    const tp = generatePocketToolpath(
+      { min: { x: -20, y: 0, z: -20 }, max: { x: 20, y: 10, z: 20 } },
+      tool, { ...base, pocketStrategy: 'offset' }, { body: lBody },
+    );
+    expect(tp.points).toEqual([]);
+  });
+});
+
+describe('generatePocketToolpath — helical entry', () => {
+  // Roomy rectangle: cleared region [3,47] × [3,27] (44 × 24) fits a swept
+  // disc of radius up to 12, so the helix placement succeeds. doc 3 → levels
+  // [7, 4, 1, 0]; the first feed plane is stockTop + 1 = 11.
+  const helixBounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 50, y: 0, z: 30 } };
+  const spec = { ...params, depthOfCut: 3, stockTop: 10, stockBottom: 0, helixEntry: true };
+  const r = tool.diameter / 2;
+  const region: Point2[] = [{ u: 3, v: 3 }, { u: 47, v: 3 }, { u: 47, v: 27 }, { u: 3, v: 27 }];
+
+  it('first entry descends along a helix and finishes with a flat true-up circle', () => {
+    const tp = generatePocketToolpath(helixBounds, tool, spec);
+    const helix = recoverHelixEntry(tp, 7);
+    // ≥ 1 revolution of ≥ 20 polyline segments descending from the feed
+    // plane, y monotone non-increasing, reaching the level exactly.
+    expect(helix.revs).toBeGreaterThanOrEqual(1);
+    expect(helix.descent.length).toBeGreaterThanOrEqual(20 * helix.revs);
+    expect(sweptAngle([helix.preRun, ...helix.descent], helix.center))
+      .toBeGreaterThanOrEqual(2 * Math.PI * helix.revs - 1e-3);
+    expect(helix.preRun.y).toBeCloseTo(11, 6); // feed plane above the stock
+    for (let i = 1; i < helix.descent.length; i++) {
+      expect(helix.descent[i]!.y).toBeLessThanOrEqual(helix.descent[i - 1]!.y + 1e-12);
+    }
+    expect(helix.descent[helix.descent.length - 1]!.y).toBeCloseTo(7, 9);
+    // Helix radius within the planned envelope [0.05r, 0.9r].
+    expect(helix.radius).toBeGreaterThan(0.05 * r);
+    expect(helix.radius).toBeLessThanOrEqual(0.9 * r + 1e-9);
+    // One full flat revolution at the level follows (Fusion-style true-up).
+    expect(helix.flat.length).toBeGreaterThanOrEqual(20);
+    for (const p of helix.flat) expect(p.y).toBeCloseTo(7, 9);
+    expect(sweptAngle([helix.descent[helix.descent.length - 1]!, ...helix.flat], helix.center))
+      .toBeGreaterThanOrEqual(2 * Math.PI - 1e-3);
+    // The true-up exit continues straight into the first row — no retract:
+    // the next cut lands on the row start (u = 3, first row v ≈ 3).
+    const runStart = tp.points.findIndex((p) => !p.rapid);
+    const after = tp.points[runStart + helix.descent.length + helix.flat.length]!;
+    expect(after.y).toBeCloseTo(7, 9);
+    expect(after.x).toBeCloseTo(3, 6);
+    expect(after.z).toBeGreaterThanOrEqual(3);
+    expect(after.z).toBeLessThanOrEqual(3.01);
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+
+  it('the swept entry disc stays inside the cleared region', () => {
+    const tp = generatePocketToolpath(helixBounds, tool, spec);
+    const helix = recoverHelixEntry(tp, 7);
+    const R = r + helix.radius;
+    // Disc-safety reconstruction: 16 samples on the swept-disc circle all
+    // fall inside the cleared region.
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * 2 * Math.PI;
+      expect(pointInPolygon({ u: helix.center.u + Math.cos(a) * R, v: helix.center.v + Math.sin(a) * R }, region)).toBe(true);
+    }
+    // Exact for the axis-aligned region: the disc is inside iff its axis
+    // extremes clear the four walls.
+    expect(helix.center.u - R).toBeGreaterThanOrEqual(3 - 1e-6);
+    expect(helix.center.u + R).toBeLessThanOrEqual(47 + 1e-6);
+    expect(helix.center.v - R).toBeGreaterThanOrEqual(3 - 1e-6);
+    expect(helix.center.v + R).toBeLessThanOrEqual(27 + 1e-6);
+  });
+
+  it('offset strategy enters through the helix, then cuts the wall ring CW', () => {
+    const body = createBox(50, 10, 30);
+    const tp = generatePocketToolpath(
+      { min: { x: -25, y: 0, z: -15 }, max: { x: 25, y: 10, z: 15 } },
+      tool,
+      { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0, pocketStrategy: 'offset', helixEntry: true },
+      { body },
+    );
+    const helix = recoverHelixEntry(tp, 0);
+    expect(helix.revs).toBeGreaterThanOrEqual(1);
+    expect(helix.descent.length).toBeGreaterThanOrEqual(20 * helix.revs);
+    expect(helix.flat.length).toBeGreaterThanOrEqual(20);
+    // Swept disc inside the 44 × 24 cleared region.
+    const R = r + helix.radius;
+    expect(helix.center.u - R).toBeGreaterThanOrEqual(-22 - 1e-6);
+    expect(helix.center.u + R).toBeLessThanOrEqual(22 + 1e-6);
+    expect(helix.center.v - R).toBeGreaterThanOrEqual(-12 - 1e-6);
+    expect(helix.center.v + R).toBeLessThanOrEqual(12 + 1e-6);
+    // The wall ring still runs first (CCW — climb on the wall side) with its
+    // usual start vertex.
+    const wall = closedLoops(tp).find((l) => Math.abs(l.area - 44 * 24) < 1e-6);
+    expect(wall).toBeDefined();
+    expect(wall!.start.u).toBeCloseTo(-22, 6);
+    expect(wall!.start.v).toBeCloseTo(-12, 6);
+  });
+
+  it('falls back to the legacy linear ramp when the disc cannot fit (narrow slot)', () => {
+    const body = createExtrude({
+      profile: [
+        { x: 0, y: 0, z: 0 }, { x: 30, y: 0, z: 0 }, { x: 30, y: 0, z: 8 }, { x: 0, y: 0, z: 8 },
+      ],
+      direction: { x: 0, y: 1, z: 0 }, distance: 10, symmetric: false,
+    });
+    const bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 10, z: 8 } };
+    // Cleared region only 2 mm tall — no disc of radius ≥ 3.15 fits.
+    const slotBase = { ...params, depthOfCut: 2, stockTop: 10, stockBottom: 0 };
+    const helix = generatePocketToolpath(bounds, tool, { ...slotBase, helixEntry: true }, { body });
+    const legacy = generatePocketToolpath(bounds, tool, slotBase, { body });
+    expect(helix.points).toEqual(legacy.points);
+    // …and the legacy first cut is the diagonal ramp descent.
+    const i = helix.points.findIndex((p) => !p.rapid);
+    const a = helix.points[i - 1]!;
+    const b = helix.points[i]!;
+    expect(Math.abs(b.x - a.x)).toBeGreaterThan(1);
+    expect(b.y).toBeLessThan(a.y);
+  });
+
+  it('falls back when the descent would need more than three revolutions', () => {
+    // 20×14 pocket → region 14×8 → best disc radius 4 → ρ = 1 → pitch
+    // 2π·tan15° ≈ 1.68 mm/rev; the 11 mm first-level descent needs 7 revs.
+    const bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 20, y: 0, z: 14 } };
+    const capBase = { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 };
+    const helix = generatePocketToolpath(bounds, tool, { ...capBase, helixEntry: true });
+    const legacy = generatePocketToolpath(bounds, tool, capBase);
+    expect(helix.points).toEqual(legacy.points);
+  });
+});
+
+describe('generatePocketToolpath — wall finish pass', () => {
+  it('raster: after clearing, adds a CCW boundary loop and CW island loops', () => {
+    const tube = createTube(15, 6, 20, 32);
+    const small = { ...tool, diameter: 3, fluteLength: 12 };
+    const tp = generatePocketToolpath(
+      { min: { x: -15, y: 0, z: -15 }, max: { x: 15, y: 20, z: 15 } },
+      small,
+      { ...params, depthOfCut: 20, stockTop: 20, stockBottom: 0, wallFinishPass: true },
+      { body: tube },
+    );
+    const loops = closedLoops(tp);
+    // Raster rows never close; only the finish loops appear. Outer wall loop
+    // at radius 15 − 1.5 = 13.5 (CCW: material outside the loop sits on the
+    // right under climb), island loop at 6 + 1.5 = 7.5 (CW: material inside
+    // the grown island sits on the right).
+    const meanR = (l: DetectedLoop): number =>
+      l.loop.reduce((s, p) => s + Math.hypot(p.x, p.z), 0) / l.loop.length;
+    const wall = loops.filter((l) => Math.abs(meanR(l) - 13.5) < 0.1);
+    const island = loops.filter((l) => Math.abs(meanR(l) - 7.5) < 0.1);
+    expect(wall).toHaveLength(1); // one level
+    expect(wall[0]!.area).toBeGreaterThan(0);
+    expect(island).toHaveLength(1);
+    expect(island[0]!.area).toBeLessThan(0);
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+
+  it('offset: walks the wall ring twice per level (spring-pass semantics)', () => {
+    const body = createBox(50, 10, 30);
+    const tp = generatePocketToolpath(
+      { min: { x: -25, y: 0, z: -15 }, max: { x: 25, y: 10, z: 15 } },
+      tool,
+      { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0, pocketStrategy: 'offset', wallFinishPass: true },
+      { body },
+    );
+    const loops = closedLoops(tp);
+    // Five clearing rings + one finish re-cut of the wall ring.
+    expect(loops).toHaveLength(6);
+    const atWallStart = loops.filter(
+      (l) => Math.abs(l.start.u + 22) < 1e-6 && Math.abs(l.start.v + 12) < 1e-6,
+    );
+    expect(atWallStart).toHaveLength(2);
+    for (const l of atWallStart) expect(l.area).toBeGreaterThan(0); // both CCW
+  });
+
+  it('wallFinishPass:false equals the legacy output', () => {
+    const body = createBox(50, 10, 30);
+    const b = { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 };
+    const bounds = { min: { x: -25, y: 0, z: -15 }, max: { x: 25, y: 10, z: 15 } };
+    const off = generatePocketToolpath(bounds, tool, { ...b, wallFinishPass: false }, { body });
+    const plain = generatePocketToolpath(bounds, tool, b, { body });
+    expect(off.points).toEqual(plain.points);
+  });
+});
+
+describe('generateFaceToolpath — helical entry', () => {
+  it('replaces the first-row ramp with a helix + true-up, then cuts the row', () => {
+    const tp = generateFaceToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 40, y: 10, z: 20 } },
+      tool,
+      { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0, helixEntry: true },
+    );
+    const helix = recoverHelixEntry(tp, 0);
+    expect(helix.revs).toBeGreaterThanOrEqual(1);
+    expect(helix.revs).toBeLessThanOrEqual(3); // the revolution cap
+    expect(helix.descent.length).toBeGreaterThanOrEqual(20 * helix.revs);
+    expect(sweptAngle([helix.preRun, ...helix.descent], helix.center))
+      .toBeGreaterThanOrEqual(2 * Math.PI * helix.revs - 1e-3);
+    expect(helix.flat.length).toBeGreaterThanOrEqual(20);
+    for (const p of helix.flat) expect(p.y).toBeCloseTo(0, 9);
+    // The true-up exit cuts back to the first row start (uMin = −6) and the
+    // row itself follows without a retract.
+    const runStart = tp.points.findIndex((p) => !p.rapid);
+    const after = tp.points[runStart + helix.descent.length + helix.flat.length]!;
+    expect(after.y).toBeCloseTo(0, 9);
+    expect(after.x).toBeCloseTo(-tool.diameter, 6);
+    expect(after.z).toBeCloseTo(0, 6);
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+});
+
+describe('new CAM parameters default to the legacy output', () => {
+  it('explicit legacy values reproduce the defaults byte-for-byte', () => {
+    const bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 50, y: 0, z: 10 } };
+    const base = { ...params, depthOfCut: 2, stockTop: 10, stockBottom: 0 };
+    const legacy = generatePocketToolpath(bounds, tool, base);
+    const explicit = generatePocketToolpath(bounds, tool, {
+      ...base,
+      pocketStrategy: 'raster',
+      helixEntry: false,
+      wallFinishPass: false,
+    });
+    expect(explicit.points).toEqual(legacy.points);
+
+    const faceBounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 40, y: 10, z: 20 } };
+    const faceLegacy = generateFaceToolpath(faceBounds, tool, base);
+    const faceExplicit = generateFaceToolpath(faceBounds, tool, { ...base, helixEntry: false });
+    expect(faceExplicit.points).toEqual(faceLegacy.points);
+
+    // Drill contract fields are type-only today: generation ignores them.
+    const drillLegacy = generateDrillToolpath([{ x: 1, z: 1, depth: 2 }], tool, base);
+    const drillExplicit = generateDrillToolpath(
+      [{ x: 1, z: 1, depth: 2 }],
+      tool,
+      { ...base, drillCycle: 'simple', dwellSeconds: 2 },
+    );
+    expect(drillExplicit.points).toEqual(drillLegacy.points);
   });
 });

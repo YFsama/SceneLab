@@ -10,15 +10,20 @@ import {
   generateMultiToolGCode,
   computeFeedsAndSpeeds,
   detectCircularHoles,
+  generateSetupSheetHtml,
+  programSafeZ,
 } from '../../lib/cam';
-import type { MachineProfile, CAMParameters, CAMOperation, WorkMaterial } from '../../lib/cam';
+import type {
+  MachineProfile, CAMParameters, CAMOperation, WorkMaterial, GCodeOptions, SetupSheetOp,
+} from '../../lib/cam';
 import { copyText } from '../../lib/errorLog';
 import type { SolidBody } from '../../lib/geometry/types';
 import { computeBoundingBox } from '../../lib/geometry/brep';
 import { GCodePreview } from '../ui/GCodePreview';
+import { SetupSheet } from '../ui/SetupSheet';
 import {
   Cog, Play, Pause, RotateCcw, Download, Clock, Wrench, Gauge, Trash2, RefreshCw, Plus,
-  Pencil, Copy, ChevronUp, ChevronDown, SkipForward, Eye, X,
+  Pencil, Copy, ChevronUp, ChevronDown, SkipForward, Eye, X, ClipboardList,
 } from 'lucide-react';
 
 const WORK_MATERIALS: WorkMaterial[] = [
@@ -49,19 +54,39 @@ function dispatchCamSim(
 const SIM_SPEEDS = [0.25, 0.5, 1, 2, 4, 8] as const;
 
 /**
- * The contour-only CAMParameters fields (direction/tabs/springPass/rampEntry)
- * bind through dedicated draft controls below, so a stored op's params are
- * STRIPPED of them when loaded into the numeric draft — the dedicated controls
- * are the single source of truth and a stale value can never leak back into a
- * non-contour op.
+ * The op-type-specific CAMParameters fields — contour (direction/tabs/
+ * springPass/rampEntry) and pass #34 (pocketStrategy/helixEntry/wallFinishPass/
+ * drillCycle/dwellSeconds) — bind through dedicated draft controls below, so a
+ * stored op's params are STRIPPED of them when loaded into the numeric draft:
+ * the dedicated controls are the single source of truth and a stale value can
+ * never leak back into a different op type on the next Generate.
  */
-function stripContourExtras(p: CAMParameters): CAMParameters {
+function stripOpExtras(p: CAMParameters): CAMParameters {
   const out = { ...p } as CAMParameters & Record<string, unknown>;
   delete out['direction'];
   delete out['tabs'];
   delete out['springPass'];
   delete out['rampEntry'];
+  delete out['pocketStrategy'];
+  delete out['helixEntry'];
+  delete out['wallFinishPass'];
+  delete out['drillCycle'];
+  delete out['dwellSeconds'];
   return out;
+}
+
+/**
+ * Tool numbering shared with the post-processor: first appearance over the
+ * cached toolpaths in op-list order — generateMultiToolGCode numbers tools
+ * walking exactly this sequence, so any consumer of T numbers derives them
+ * from this map (pass #33's preview summary, the pass #34 setup sheet).
+ */
+function postToolNumbers(toolpaths: Array<{ tool: { id: string } }>): Map<string, number> {
+  const numbers = new Map<string, number>();
+  for (const tp of toolpaths) {
+    if (!numbers.has(tp.tool.id)) numbers.set(tp.tool.id, numbers.size + 1);
+  }
+  return numbers;
 }
 
 /** Fresh unique custom-tool id (randomUUID where available, viewBookmark style). */
@@ -163,6 +188,9 @@ export function CAMPanel() {
   // bodies[0] with no cascading render.
   const [pickedBodyId, setPickedBodyId] = useState<string | null>(null);
   const [machineProfile, setMachineProfile] = useState<MachineProfile>('grbl');
+  // WCS checkbox beside the profile picker (pass #34): opts the post into
+  // emitting the G54 work offset. Off by default — legacy programs unchanged.
+  const [wcs, setWcs] = useState(false);
   // Drill targets pinned by the detect button. The pin records WHICH body and
   // operation type it was taken on; the derivation below ignores stale pins
   // (no reset effect needed).
@@ -188,6 +216,16 @@ export function CAMPanel() {
   const [springPass, setSpringPass] = useState(false);
   const [rampEntry, setRampEntry] = useState(false);
 
+  // Pocket-only drafts (pass #34, same omit/undefined rule; the strategy
+  // select is always-concrete like `direction` — 'raster' is the default).
+  const [pocketStrategy, setPocketStrategy] = useState<'raster' | 'offset'>('raster');
+  const [helixEntry, setHelixEntry] = useState(false);
+  const [wallFinishPass, setWallFinishPass] = useState(false);
+  // Drill-only drafts (pass #34): the cycle select is always-concrete
+  // ('peck' default); dwell seconds ride along only for the dwell cycle.
+  const [drillCycle, setDrillCycle] = useState<'peck' | 'simple' | 'dwell'>('peck');
+  const [dwellSeconds, setDwellSeconds] = useState(0.5);
+
   // G-code preview modal (generated on demand; never cached in the store).
   const [preview, setPreview] = useState<{
     gcode: string;
@@ -196,6 +234,13 @@ export function CAMPanel() {
     toolsUsed: string;
     feedRange: string;
   } | null>(null);
+
+  // Setup sheet modal (pass #34): the HTML document generated on demand from
+  // the CURRENT ops + cache; never cached in the store.
+  const [setupSheetHtml, setSetupSheetHtml] = useState<string | null>(null);
+
+  // Project name for the setup sheet header (the store's save-slot name).
+  const projectName = useStore((s) => s.projectName);
 
   // Simulation speed for the transport (dispatched hot — the viewport owns
   // playback and re-times without pausing).
@@ -283,8 +328,9 @@ export function CAMPanel() {
 
   /** Compose the op params from the drafts: numeric base + stock seeding from
    * the TARGET BODY's bbox (the raw 0/−10 defaults would plan below a body
-   * resting on the origin plane) + the contour-only fields (see the draft
-   * block for the omit/undefined rule). */
+   * resting on the origin plane) + the op-type-specific fields (contour and
+   * the pass #34 pocket/drill contracts; see the draft blocks for the
+   * omit/undefined rule). */
   const opParams = (mode: 'add' | 'update', bb: ReturnType<typeof computeBoundingBox>): CAMParameters => {
     const out: CAMParameters = { ...params, stockTop: bb.max.y, stockBottom: bb.min.y, safeZAboveStock };
     if (operation === 'contour') {
@@ -302,6 +348,25 @@ export function CAMPanel() {
       out.tabs = undefined;
       out.springPass = undefined;
       out.rampEntry = undefined;
+    }
+    if (operation === 'pocket') {
+      out.pocketStrategy = pocketStrategy; // select — always concrete ('raster' default)
+      if (helixEntry) out.helixEntry = true;
+      else if (mode === 'update') out.helixEntry = undefined;
+      if (wallFinishPass) out.wallFinishPass = true;
+      else if (mode === 'update') out.wallFinishPass = undefined;
+    } else if (mode === 'update') {
+      out.pocketStrategy = undefined;
+      out.helixEntry = undefined;
+      out.wallFinishPass = undefined;
+    }
+    if (operation === 'drill') {
+      out.drillCycle = drillCycle; // select — always concrete ('peck' default)
+      if (drillCycle === 'dwell') out.dwellSeconds = dwellSeconds;
+      else if (mode === 'update') out.dwellSeconds = undefined;
+    } else if (mode === 'update') {
+      out.drillCycle = undefined;
+      out.dwellSeconds = undefined;
     }
     return out;
   };
@@ -335,13 +400,32 @@ export function CAMPanel() {
       return;
     }
     const bb = computeBoundingBox(targetBody);
+    const bodyChanged = editingOp.bodyId !== targetBody.id;
+    // Derived name (pass #34): rebuilt ONLY when a derivation input moved
+    // (type or body) — a name the user curated (or a duplicate's copy
+    // suffix) survives an edit that changed neither. A rebuild re-appends
+    // the localized copy suffix so editing a duplicate doesn't launder it
+    // into an "original" name (duplicateCamOperation's no-stacking rule).
+    const copySuffix = t('cam.copySuffix');
+    const name = editingOp.type === operation && !bodyChanged
+      ? editingOp.name
+      : `${t(`cam.${operation}`)} — ${targetBody.name}${editingOp.name.endsWith(copySuffix) ? copySuffix : ''}`;
     updateCamOperation(editingOp.id, {
-      name: `${t(`cam.${operation}`)} — ${targetBody.name}`,
+      name,
       type: operation,
       bodyId: targetBody.id,
       toolId: activeTool.id,
       params: opParams('update', bb),
-      // holes untouched: editing never retargets the drill detection.
+      // Retargeting a drill re-detects its holes on the NEW body (pass #34):
+      // pins from the old body's geometry would silently drill stale
+      // positions. An empty detection writes an empty list, which the
+      // generator treats as the auto-detect case — it then throws honestly
+      // on a body with no circular holes and the stale hint surfaces it
+      // (same semantics as the detect button / auto-detect path). Same body
+      // → holes untouched.
+      ...(operation === 'drill' && bodyChanged
+        ? { holes: detectedHoles.map((h) => ({ x: h.centre.x, z: h.centre.z, depth: h.depth })) }
+        : {}),
     });
     setEditingId(null);
     showToast(t('cam.generated'), 'success');
@@ -353,9 +437,10 @@ export function CAMPanel() {
     setOperation(op.type);
     setSelectedTool(op.toolId);
     setPickedBodyId(op.bodyId);
-    // Numeric base stripped of the contour-only fields; those load into their
-    // dedicated draft controls (the single source of truth, see opParams).
-    setParams(stripContourExtras(op.params));
+    // Numeric base stripped of the op-type-specific fields; those load into
+    // their dedicated draft controls (the single source of truth, see
+    // opParams).
+    setParams(stripOpExtras(op.params));
     setDirection(op.params.direction ?? 'climb');
     setTabsEnabled(!!op.params.tabs);
     if (op.params.tabs) {
@@ -365,6 +450,11 @@ export function CAMPanel() {
     }
     setSpringPass(!!op.params.springPass);
     setRampEntry(!!op.params.rampEntry);
+    setPocketStrategy(op.params.pocketStrategy ?? 'raster');
+    setHelixEntry(!!op.params.helixEntry);
+    setWallFinishPass(!!op.params.wallFinishPass);
+    setDrillCycle(op.params.drillCycle ?? 'peck');
+    setDwellSeconds(op.params.dwellSeconds ?? 0.5);
   };
 
   const handleDuplicate = (id: string) => {
@@ -377,13 +467,20 @@ export function CAMPanel() {
     .map((op) => camToolpaths[op.id]?.toolpath)
     .filter((tp): tp is NonNullable<typeof tp> => tp !== undefined);
 
+  /**
+   * Post-processor options from the drafts: the WCS checkbox beside the
+   * profile picker (G54 work-offset emission, off by default so legacy
+   * programs are unchanged).
+   */
+  const gcodeOptions = (): GCodeOptions => ({ wcs });
+
   const handleExportGCode = async () => {
     const toolpaths = cachedToolpaths();
     if (toolpaths.length === 0) {
       showToast(t('cam.noToolpaths'), 'warning');
       return;
     }
-    const gcode = generateMultiToolGCode(toolpaths, machineProfile);
+    const gcode = generateMultiToolGCode(toolpaths, machineProfile, gcodeOptions());
     // Dynamic import: a static one drags io/studio3d (and its io barrel
     // chain) into the entry chunk; this is an on-click path, latency-free.
     const { downloadFile } = await import('../../lib/io/studio3d');
@@ -398,15 +495,13 @@ export function CAMPanel() {
       showToast(t('cam.noToolpaths'), 'warning');
       return;
     }
-    const gcode = generateMultiToolGCode(toolpaths, machineProfile);
-    // Tool summary in T-number order — the post-processor numbers tools by
-    // first appearance, so the same walk yields the same T numbers.
-    const toolLabels = new Map<string, string>();
-    for (const tp of toolpaths) {
-      if (!toolLabels.has(tp.tool.id)) {
-        toolLabels.set(tp.tool.id, `T${toolLabels.size + 1} ⌀${tp.tool.diameter}`);
-      }
-    }
+    const gcode = generateMultiToolGCode(toolpaths, machineProfile, gcodeOptions());
+    // Tool summary in T-number order (map iteration order = insertion order
+    // = first appearance = the post-processor's numbering).
+    const diameters = new Map(toolpaths.map((tp) => [tp.tool.id, tp.tool.diameter]));
+    const toolsUsed = [...postToolNumbers(toolpaths)]
+      .map(([id, n]) => `T${n} ⌀${diameters.get(id)}`)
+      .join(' · ');
     // Feed range: scan the emitted program's F words (covers plunge/cut feeds
     // of every op in one pass).
     const feeds = (gcode.match(/F\d+(?:\.\d+)?/g) ?? []).map((f) => Number(f.slice(1)));
@@ -416,7 +511,7 @@ export function CAMPanel() {
       gcode,
       lineCount: gcode === '' ? 0 : gcode.split('\n').length - (gcode.endsWith('\n') ? 1 : 0),
       sizeBytes: new TextEncoder().encode(gcode).length,
-      toolsUsed: [...toolLabels.values()].join(' · '),
+      toolsUsed,
       feedRange: feeds.length === 0
         ? '—'
         : lo === hi
@@ -482,6 +577,63 @@ export function CAMPanel() {
   const stockMode = stock.mode;
   const bboxStock = stockMode === 'bounding-box' ? stock : null;
   const boxStock = stockMode === 'box' ? stock : null;
+  // One-line stock description for the setup sheet header (locale-neutral
+  // machining notation — the document itself is English by convention).
+  const stockText = boxStock
+    ? `${(boxStock.max.x - boxStock.min.x).toFixed(1)}×${(boxStock.max.y - boxStock.min.y).toFixed(1)}×${(boxStock.max.z - boxStock.min.z).toFixed(1)} mm`
+    : `bbox +${bboxStock?.margin ?? 0} mm`;
+
+  /**
+   * Open the setup sheet modal over the CURRENT setup (pass #34). Works with
+   * no cached toolpath at all — every op is listed, uncached rows just show
+   * "—" in the time column. T numbers mirror the post-processor exactly (the
+   * posted sequence numbers first); a tool only an uncached/disabled op uses
+   * trails AFTER them so its row still names a T number without shifting the
+   * numbers the G-code will emit. (Declared after every input it reads —
+   * earlier-declared captures trip the React Compiler's memo-preservation
+   * bailout for the totalTime memo above.)
+   */
+  const handleSetupSheet = () => {
+    const numbers = postToolNumbers(cachedToolpaths());
+    const numberFor = (toolId: string): number => {
+      let n = numbers.get(toolId);
+      if (n === undefined) {
+        n = numbers.size + 1;
+        numbers.set(toolId, n);
+      }
+      return n;
+    };
+    const ops: SetupSheetOp[] = operations.map((op) => {
+      const tool = getAllTools().find((tl) => tl.id === op.toolId);
+      return {
+        name: op.name,
+        type: op.type,
+        toolName: tool?.name ?? op.toolId,
+        toolNumber: numberFor(op.toolId),
+        diameter: tool?.diameter ?? 0,
+        timeMin: camToolpaths[op.id]?.timeMin ?? 0,
+        feedRate: op.params.feedRate,
+        spindleSpeed: op.params.spindleSpeed,
+        enabled: op.enabled,
+      };
+    });
+    // Safe Z straight from the post-processor's own programSafeZ rule (the
+    // first op seeds it, exactly like emitProgram does) — the sheet must
+    // document the traverse height the program ACTUALLY emits, not a
+    // lookalike formula (pass #34 review P2: stockTop+margin ≠ the post's
+    // stockTop+max(10, margin)).
+    const firstTp = operations
+      .map((op) => camToolpaths[op.id]?.toolpath)
+      .find((tp) => tp !== undefined);
+    setSetupSheetHtml(generateSetupSheetHtml({
+      projectName,
+      profile: machineProfile,
+      stock: stockText,
+      safeZ: programSafeZ(firstTp),
+      totalTimeMin: totalTime,
+      ops,
+    }));
+  };
 
   return (
     <div className="w-full h-full flex flex-col text-xs">
@@ -798,6 +950,87 @@ export function CAMPanel() {
               </div>
             </div>
           )}
+
+          {/* Pocket-only parameters (pass #34): strategy select — offset stays
+           * selectable even when the pocket has through holes (the generator
+           * falls back to raster itself; the title says so, no UI coupling) —
+           * plus helix entry and wall finish switches (omit/undefined rule,
+           * see opParams). */}
+          {operation === 'pocket' && (
+            <div className="space-y-1.5 rounded bg-surface p-2">
+              <div>
+                <label htmlFor="cam-pocket-strategy" className="text-text-muted text-[10px]">{t('cam.pocketStrategy')}</label>
+                <select
+                  id="cam-pocket-strategy"
+                  value={pocketStrategy}
+                  onChange={(e) => setPocketStrategy(e.target.value === 'offset' ? 'offset' : 'raster')}
+                  title={t('cam.offsetHint')}
+                  className="w-full px-2 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                >
+                  <option value="raster">{t('cam.raster')}</option>
+                  <option value="offset">{t('cam.offset')}</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <label htmlFor="cam-helix-entry" className="flex items-center gap-1.5 text-text-secondary">
+                  <input
+                    id="cam-helix-entry"
+                    type="checkbox"
+                    checked={helixEntry}
+                    onChange={(e) => setHelixEntry(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  {t('cam.helixEntry')}
+                </label>
+                <label htmlFor="cam-wall-finish" className="flex items-center gap-1.5 text-text-secondary">
+                  <input
+                    id="cam-wall-finish"
+                    type="checkbox"
+                    checked={wallFinishPass}
+                    onChange={(e) => setWallFinishPass(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  {t('cam.wallFinish')}
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Drill-only parameters (pass #34): cycle select + the dwell
+           * seconds input that only the dwell cycle shows (default 0.5 s). */}
+          {operation === 'drill' && (
+            <div className="space-y-1.5 rounded bg-surface p-2">
+              <div>
+                <label htmlFor="cam-drill-cycle" className="text-text-muted text-[10px]">{t('cam.drillCycle')}</label>
+                <select
+                  id="cam-drill-cycle"
+                  value={drillCycle}
+                  onChange={(e) => setDrillCycle(
+                    e.target.value === 'simple' ? 'simple' : e.target.value === 'dwell' ? 'dwell' : 'peck',
+                  )}
+                  className="w-full px-2 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                >
+                  <option value="peck">{t('cam.peck')}</option>
+                  <option value="simple">{t('cam.simple')}</option>
+                  <option value="dwell">{t('cam.dwell')}</option>
+                </select>
+              </div>
+              {drillCycle === 'dwell' && (
+                <div>
+                  <label htmlFor="cam-dwell-seconds" className="text-text-muted text-[10px]">{t('cam.dwellSeconds')}</label>
+                  <input
+                    id="cam-dwell-seconds"
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={dwellSeconds}
+                    onChange={(e) => setDwellSeconds(Number(e.target.value))}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Stock definition (serialized with the project; nothing previewed yet) */}
@@ -1062,8 +1295,10 @@ export function CAMPanel() {
               );
             })}
 
-            {/* Machine profile + preview + export */}
-            <div className="flex gap-2">
+            {/* Machine profile + WCS + preview/export/setup-sheet. The WCS
+             * checkbox rides the post-processor options (G54 work-offset
+             * emission; off by default so legacy programs are unchanged). */}
+            <div className="flex items-center gap-2">
               <select
                 id="cam-profile-select"
                 value={machineProfile}
@@ -1074,6 +1309,22 @@ export function CAMPanel() {
                   <option key={p} value={p}>{p}</option>
                 ))}
               </select>
+              <label
+                htmlFor="cam-wcs"
+                title={t('cam.wcs')}
+                className="flex items-center gap-1 px-2 py-1.5 text-text-secondary"
+              >
+                <input
+                  id="cam-wcs"
+                  type="checkbox"
+                  checked={wcs}
+                  onChange={(e) => setWcs(e.target.checked)}
+                  className="accent-accent"
+                />
+                G54
+              </label>
+            </div>
+            <div className="flex gap-2">
               <button
                 id="cam-gcode-preview"
                 onClick={handlePreviewGCode}
@@ -1090,6 +1341,17 @@ export function CAMPanel() {
               >
                 <Download size={14} />
                 {t('cam.exportGCode')}
+              </button>
+              {/* Setup sheet works without any cached toolpath (uncached rows
+               * degrade to "—" in the time column), so it stays enabled. */}
+              <button
+                id="cam-setup-sheet"
+                onClick={handleSetupSheet}
+                title={t('cam.setupSheet')}
+                className="flex items-center justify-center gap-1.5 px-2 py-2 bg-surface border border-panel-border text-text-primary rounded hover:bg-surface-hover transition-colors"
+              >
+                <ClipboardList size={13} />
+                {t('cam.setupSheet')}
               </button>
             </div>
           </div>
@@ -1111,6 +1373,14 @@ export function CAMPanel() {
           onClose={() => setPreview(null)}
           onCopy={() => { void handleCopyPreview(); }}
           onDownload={() => { void handleDownloadPreview(); }}
+        />
+      )}
+
+      {/* Setup sheet modal, same fixed-overlay pattern as the preview. */}
+      {setupSheetHtml && (
+        <SetupSheet
+          html={setupSheetHtml}
+          onClose={() => setSetupSheetHtml(null)}
         />
       )}
     </div>

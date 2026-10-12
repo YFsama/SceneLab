@@ -14,6 +14,8 @@ export type MachineProfile = 'grbl' | 'linuxcnc';
 export interface GCodeOptions {
   /** Max deviation between fitted arcs and the polyline (mm). Default 0.01. */
   arcTolerance?: number;
+  /** Emit G54 (activate work coordinate system 1) in the program header. Default false. */
+  wcs?: boolean;
 }
 
 const DEFAULT_ARC_TOLERANCE = 0.01; // mm
@@ -40,9 +42,10 @@ function isArcSpec(item: ToolpathPoint | ArcSpec): item is ArcSpec {
  * Program-level traverse height (machine Z). Always at least the op's
  * safeZAboveStock margin (serialized in the setup) and never below the
  * historical 10 mm envelope, so tool-change retractions clear a raised
- * safe margin too.
+ * safe margin too. Exported so the setup sheet prints the SAME traverse
+ * height the program will actually use (pass #34 review P2).
  */
-function programSafeZ(tp: Toolpath | undefined): number {
+export function programSafeZ(tp: Toolpath | undefined): number {
   const base = tp?.params.stockTop ?? 0;
   const margin = tp ? safeMargin(tp.params) : 10;
   return base + Math.max(10, margin);
@@ -111,11 +114,26 @@ function emitMoves(
   }
 }
 
+/** Clamp the G82 P / G4 P dwell to the 0.01–5 s window; default 0.5 s.
+ * NaN falls back to the default — Math.min/max propagate NaN, and a literal
+ * `G4 PNaN` line is not executable (pass #34 review P2). */
+function clampDwell(seconds: number | undefined): number {
+  const s = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : 0.5;
+  return Math.min(5, Math.max(0.01, s));
+}
+
+/** Dwell seconds print without trailing zeros (P0.5, P1, P5), matching the
+ * header's `G4 P1` spindle-ramp style instead of the 3-place linear coords. */
+function fmtDwell(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
 /**
  * Drill cycles. The generator emits one plunge cut per hole; the profile
- * decides how it is posted: GRBL gets an expanded peck cycle (G1 down at
- * plunge feed alternating with G0 retracts to the R plane), LinuxCNC gets a
- * canned G83 … R Q F followed by G80.
+ * decides how it is posted: GRBL gets an expanded cycle (G1 down at plunge
+ * feed, G4 pause for 'dwell', G0 retracts to the R plane), LinuxCNC gets a
+ * canned G81 (single plunge) / G82 (plunge + P dwell) / G83 (peck, R Q F)
+ * followed by G80.
  */
 function emitDrillMoves(
   tp: Toolpath,
@@ -128,6 +146,8 @@ function emitDrillMoves(
   // above the op's safeZAboveStock margin (toolpath and G-code must agree).
   const retractR = params.stockTop + Math.min(2, safeMargin(params));
   const peck = Math.max(0.1, params.peckDepth ?? Math.max(0.5, tp.tool.diameter / 2));
+  const { drillCycle = 'peck', dwellSeconds } = params;
+  const dwell = clampDwell(dwellSeconds);
 
   for (const p of tp.points) {
     if (p.rapid) {
@@ -140,11 +160,42 @@ function emitDrillMoves(
     if (depth <= 0) continue;
 
     if (profile === 'linuxcnc') {
-      lines.push({
-        code: `G83 X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)} R${fmt(retractR)} Q${fmt(peck)} F${feed}`,
-        comment: `Drill ⌀${tp.tool.diameter} to depth ${fmt(depth)}`,
-      });
+      if (drillCycle === 'simple') {
+        lines.push({
+          code: `G81 X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)} R${fmt(retractR)} F${feed}`,
+          comment: `Simple drill ⌀${tp.tool.diameter} to depth ${fmt(depth)}`,
+        });
+      } else if (drillCycle === 'dwell') {
+        lines.push({
+          code: `G82 X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)} R${fmt(retractR)} P${fmtDwell(dwell)} F${feed}`,
+          comment: `Drill + dwell ⌀${tp.tool.diameter} to depth ${fmt(depth)}`,
+        });
+      } else {
+        lines.push({
+          code: `G83 X${fmt(p.x)} Y${fmt(p.z)} Z${fmt(p.y)} R${fmt(retractR)} Q${fmt(peck)} F${feed}`,
+          comment: `Drill ⌀${tp.tool.diameter} to depth ${fmt(depth)}`,
+        });
+      }
       state.lastFeed = feed;
+    } else if (drillCycle === 'simple' || drillCycle === 'dwell') {
+      lines.push({
+        code: '',
+        comment:
+          drillCycle === 'dwell'
+            ? `Drill + dwell (${fmt(p.x)}, ${fmt(p.z)}) depth ${fmt(depth)} — dwell ${fmtDwell(dwell)}s`
+            : `Simple drill (${fmt(p.x)}, ${fmt(p.z)}) depth ${fmt(depth)}`,
+      });
+      // One plunge straight to full depth at plunge feed (no peck steps).
+      if (feed !== state.lastFeed) {
+        lines.push({ code: `G1 Z${fmt(p.y)} F${feed}` });
+        state.lastFeed = feed;
+      } else {
+        lines.push({ code: `G1 Z${fmt(p.y)}` });
+      }
+      if (drillCycle === 'dwell') {
+        lines.push({ code: `G4 P${fmtDwell(dwell)}`, comment: 'Dwell at full depth' });
+      }
+      lines.push({ code: `G0 Z${fmt(retractR)}`, comment: 'Retract to R plane' });
     } else {
       const pecks = Math.max(1, Math.ceil(depth / peck - 1e-9));
       lines.push({
@@ -170,7 +221,7 @@ function emitDrillMoves(
 }
 
 /** Emit one complete program for the given toolpaths. */
-function emitProgram(toolpaths: Toolpath[], profile: MachineProfile, arcTolerance: number): string {
+function emitProgram(toolpaths: Toolpath[], profile: MachineProfile, options: GCodeOptions): string {
   const lines: GCodeLine[] = [];
   const state: EmitState = {};
   const last = toolpaths[toolpaths.length - 1];
@@ -184,6 +235,11 @@ function emitProgram(toolpaths: Toolpath[], profile: MachineProfile, arcToleranc
   lines.push({ code: 'G21', comment: 'Metric (mm)' });
   lines.push({ code: 'G17', comment: 'XY plane' });
   lines.push({ code: 'G94', comment: 'Feed per minute' });
+  if (options.wcs) {
+    // GRBL powers up with G54 active, but an explicit word documents the
+    // fixture offset and keeps multi-WCS machines from inheriting G55+.
+    lines.push({ code: 'G54', comment: 'Work coordinate system 1' });
+  }
   // Z-only rapid FIRST so no XY traverse can happen below the safe height.
   lines.push({ code: `G0 Z${fmt(safeZ)}`, comment: 'Safe height before first XY move' });
 
@@ -218,7 +274,7 @@ function emitProgram(toolpaths: Toolpath[], profile: MachineProfile, arcToleranc
 
     lines.push({ code: `M3 S${tp.params.spindleSpeed}`, comment: 'Start spindle' });
     lines.push({ code: 'G4 P1', comment: 'Dwell 1s for spindle ramp-up' });
-    emitMoves(tp, profile, state, lines, arcTolerance);
+    emitMoves(tp, profile, state, lines, options.arcTolerance ?? DEFAULT_ARC_TOLERANCE);
     prevToolId = tp.tool.id;
   }
 
@@ -245,7 +301,7 @@ export function generateGCode(
   profile: MachineProfile = 'grbl',
   options: GCodeOptions = {},
 ): string {
-  return emitProgram([toolpath], profile, options.arcTolerance ?? DEFAULT_ARC_TOLERANCE);
+  return emitProgram([toolpath], profile, options);
 }
 
 /** Generate one G-code program for multiple toolpaths (single M2/M30). */
@@ -254,7 +310,7 @@ export function generateMultiToolGCode(
   profile: MachineProfile = 'grbl',
   options: GCodeOptions = {},
 ): string {
-  return emitProgram(toolpaths, profile, options.arcTolerance ?? DEFAULT_ARC_TOLERANCE);
+  return emitProgram(toolpaths, profile, options);
 }
 
 const RAPID_RATE = 5000; // mm/min

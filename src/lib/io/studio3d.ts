@@ -330,6 +330,17 @@ function sanitizeCamParams(raw: unknown): CAMParameters {
       out.tabs = { count, height, width };
     }
   }
+  // Pass #34 extras. Absent/invalid → generator/post defaults.
+  if (p.pocketStrategy === 'raster' || p.pocketStrategy === 'offset') {
+    out.pocketStrategy = p.pocketStrategy;
+  }
+  if (p.helixEntry === true) out.helixEntry = true;
+  if (p.wallFinishPass === true) out.wallFinishPass = true;
+  if (p.drillCycle === 'peck' || p.drillCycle === 'simple' || p.drillCycle === 'dwell') {
+    out.drillCycle = p.drillCycle;
+  }
+  const dwell = finiteNum(p.dwellSeconds);
+  if (dwell !== null && dwell > 0) out.dwellSeconds = dwell;
   return out;
 }
 

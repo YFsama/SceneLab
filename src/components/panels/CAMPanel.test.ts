@@ -6,17 +6,27 @@ import { useStore } from '../../store/app';
 import { createBox } from '../../lib/geometry/brep';
 import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts } from '../../lib/toast';
-import { defaultCamSetup, generateMultiToolGCode, getAllTools, getTool, clearCustomTools } from '../../lib/cam';
+import {
+  defaultCamSetup, generateMultiToolGCode, getAllTools, getTool, clearCustomTools,
+  detectCircularHoles,
+} from '../../lib/cam';
 import { downloadFile } from '../../lib/io/studio3d';
 
 // The panel is rendered for real (jsdom + createRoot + act, the project's
-// mount-harness style). Only the two SIDE-EFFECTFUL leaves are mocked — the
-// G-code post-processor (to assert the export call) and the file download —
-// everything else (store actions, the real generator, detection) runs live.
+// mount-harness style). Only the SIDE-EFFECTFUL leaves are mocked — the
+// G-code post-processor (to assert the export call), the file download and
+// the PANEL-SIDE hole detection (to script the drill re-detect scenarios;
+// the store/generator chain imports detectCircularHoles straight from
+// geometry/query, so its detection stays real) — everything else (store
+// actions, the real generator) runs live.
 
 vi.mock('../../lib/cam', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/cam')>();
-  return { ...actual, generateMultiToolGCode: vi.fn(actual.generateMultiToolGCode) };
+  return {
+    ...actual,
+    generateMultiToolGCode: vi.fn(actual.generateMultiToolGCode),
+    detectCircularHoles: vi.fn(actual.detectCircularHoles),
+  };
 });
 
 vi.mock('../../lib/io/studio3d', async (importOriginal) => {
@@ -98,6 +108,7 @@ describe('CAMPanel (rendered, store-driven)', () => {
   beforeEach(() => {
     clearToasts();
     vi.mocked(generateMultiToolGCode).mockClear();
+    vi.mocked(detectCircularHoles).mockClear();
     vi.mocked(downloadFile).mockClear();
     clearCustomTools();
     localStorage.removeItem('scenelab.customTools');
@@ -159,8 +170,13 @@ describe('CAMPanel (rendered, store-driven)', () => {
 
     const m = await mount(createElement(CAMPanel));
     try {
-      // Disable via the row checkbox → cache dropped, op kept.
-      const checkbox = m.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+      // Disable via the row checkbox → cache dropped, op kept. Targeted by
+      // aria-label: since pass #34 the DEFAULT pocket draft block renders
+      // checkboxes ABOVE the list, so "first checkbox in the panel" is no
+      // longer the row's enabled toggle.
+      const checkbox = m.container.querySelector<HTMLInputElement>(
+        'input[type="checkbox"][aria-label="Contour — Box"]',
+      )!;
       await act(async () => {
         checkbox.click();
         checkbox.dispatchEvent(new Event('change', { bubbles: true }));
@@ -654,6 +670,236 @@ describe('CAMPanel (rendered, store-driven)', () => {
     } finally {
       await unmount(m);
       window.removeEventListener('scenelab:cam-sim', onSim);
+    }
+  });
+
+  // --- Pass #34: pocket/drill param contracts, WCS, setup sheet, ----------
+  // drill retarget re-detection and rename preservation.
+
+  it('pocket drafts flow into the generated params; disabled switches stay absent', async () => {
+    const m = await mount(createElement(CAMPanel));
+    try {
+      // Pocket is the default draft; defaults show in the controls.
+      expect(m.container.querySelector<HTMLSelectElement>('#cam-pocket-strategy')!.value).toBe('raster');
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-pocket-strategy')!, 'offset');
+      await toggleCheckbox(m.container.querySelector<HTMLInputElement>('#cam-helix-entry')!);
+
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+      const op = useStore.getState().camSetup.operations[0]!;
+      expect(op.type).toBe('pocket');
+      expect(op.params.pocketStrategy).toBe('offset');
+      expect(op.params.helixEntry).toBe(true);
+      // Unchecked switch OMITTED — params stay clean (undefined = default).
+      expect('wallFinishPass' in op.params).toBe(false);
+      // And the other op type's contract fields never ride along.
+      expect('drillCycle' in op.params).toBe(false);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('drill cycle drafts flow into the generated params; dwell shows the seconds input', async () => {
+    const m = await mount(createElement(CAMPanel));
+    try {
+      const drillRadio = [...m.container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.drill']!)!;
+      await act(async () => { drillRadio.click(); });
+
+      // The seconds input only exists for the dwell cycle; default 0.5 s.
+      expect(m.container.querySelector('#cam-dwell-seconds')).toBeNull();
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-drill-cycle')!, 'dwell');
+      const dwell = m.container.querySelector<HTMLInputElement>('#cam-dwell-seconds')!;
+      expect(dwell).not.toBeNull();
+      expect(dwell.value).toBe('0.5');
+      await setNumberInput(dwell, '1.5');
+
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+      const op = useStore.getState().camSetup.operations[0]!;
+      expect(op.type).toBe('drill');
+      expect(op.params.drillCycle).toBe('dwell');
+      expect(op.params.dwellSeconds).toBe(1.5);
+      // Pocket fields never ride along on a drill op.
+      expect('helixEntry' in op.params).toBe(false);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('the WCS checkbox rides the post-processor options (third argument)', async () => {
+    const box = useStore.getState().bodies[0]!;
+    useStore.getState().addCamOperation({
+      name: 'Pocket — Box', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      const wcsBox = m.container.querySelector<HTMLInputElement>('#cam-wcs')!;
+      expect(wcsBox.checked).toBe(false); // off by default — legacy programs
+
+      await act(async () => { buttonByText(m.container, translations.en!['cam.exportGCode']!)!.click(); });
+      expect(vi.mocked(generateMultiToolGCode).mock.calls[0]![2]).toEqual({ wcs: false });
+
+      await toggleCheckbox(wcsBox);
+      await act(async () => { buttonById(m.container, 'cam-gcode-preview')!.click(); });
+      const calls = vi.mocked(generateMultiToolGCode).mock.calls;
+      expect(calls[calls.length - 1]![2]).toEqual({ wcs: true });
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('Setup sheet opens the modal over the current setup, disabled ops included', async () => {
+    const box = useStore.getState().bodies[0]!;
+    useStore.getState().addCamOperation({
+      name: 'Pocket — Box', enabled: true, type: 'pocket', bodyId: box.id, toolId: 'em-6mm', params,
+    });
+    useStore.getState().addCamOperation({
+      name: 'Contour — Box', enabled: false, type: 'contour', bodyId: box.id, toolId: 'em-3mm', params,
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonById(m.container, 'cam-setup-sheet')!.click(); });
+      expect(m.container.textContent).toContain(translations.en!['cam.setupSheetTitle']!);
+
+      const iframe = m.container.querySelector<HTMLIFrameElement>('iframe');
+      expect(iframe).not.toBeNull();
+      const doc = iframe!.getAttribute('srcdoc')!;
+      // Header: the store's project name; rows: every op, T numbers in post
+      // order, and the disabled op listed with the no-cache em-dash time.
+      expect(doc).toContain('Untitled');
+      expect(doc).toContain('Pocket — Box');
+      expect(doc).toContain('Contour — Box');
+      expect(doc).toContain('T1 ');
+      expect(doc).toContain('class="off"');
+      expect(doc).toContain('—</td>');
+
+      // Close returns to the plain panel.
+      const close = [...m.container.querySelectorAll<HTMLButtonElement>('button')]
+        .find((b) => b.getAttribute('aria-label') === translations.en!['dialog.close']!)!;
+      await act(async () => { close.click(); });
+      expect(m.container.querySelector('iframe')).toBeNull();
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('editing a drill op that retargets the body re-detects holes on the NEW body', async () => {
+    const boxA = useStore.getState().bodies[0]!;
+    const boxB = createBox(8, 8, 8);
+    boxB.name = 'Plate';
+    useStore.setState({ bodies: [boxA, boxB], directBodies: [boxA, boxB], objectIds: [boxA.id, boxB.id] });
+    // Auto-detect style op (no holes field) on body A.
+    const id = useStore.getState().addCamOperation({
+      name: 'Drill — Box', enabled: true, type: 'drill', bodyId: boxA.id, toolId: 'drill-3mm', params,
+    });
+
+    // Script the PANEL-side detection (the store chain keeps the real one).
+    const actual = await vi.importActual<typeof import('../../lib/cam')>('../../lib/cam');
+    const fake = [{ centre: { x: 2, z: 3 }, diameter: 3, depth: 10 }];
+    vi.mocked(detectCircularHoles).mockImplementation(() => fake);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-body-select')!, boxB.id);
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+
+      const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      // Holes REPLACED by the new body's detection (mapped to op holes).
+      expect(op.holes).toEqual([{ x: 2, z: 3, depth: 10 }]);
+      // The retarget also rebuilt the derived name for the new body.
+      expect(op.name).toBe(`${translations.en!['cam.drill']!} — Plate`);
+    } finally {
+      vi.mocked(detectCircularHoles).mockImplementation(actual.detectCircularHoles);
+      await unmount(m);
+    }
+  });
+
+  it('retarget with EMPTY detection clears the pins — honest throw, stale hint', async () => {
+    const boxA = useStore.getState().bodies[0]!;
+    const boxB = createBox(8, 8, 8);
+    useStore.setState({ bodies: [boxA, boxB], directBodies: [boxA, boxB], objectIds: [boxA.id, boxB.id] });
+    // Explicit pins on A (e.g. duplicated from a drilled part).
+    const id = useStore.getState().addCamOperation({
+      name: 'Drill — Box', enabled: true, type: 'drill', bodyId: boxA.id, toolId: 'drill-3mm',
+      params, holes: [{ x: 1, z: 1, depth: 4 }],
+    });
+    expect(useStore.getState().camToolpaths[id]).toBeDefined();
+
+    const actual = await vi.importActual<typeof import('../../lib/cam')>('../../lib/cam');
+    vi.mocked(detectCircularHoles).mockImplementation(() => []);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-body-select')!, boxB.id);
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+
+      const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      // Empty pins = the auto-detect case for the generator: the new body (a
+      // plain box, real detection in the store chain) yields nothing → the
+      // op throws honestly, drops from the cache and flags stale.
+      expect(op.holes).toEqual([]);
+      expect(useStore.getState().camToolpaths[id]).toBeUndefined();
+      expect(m.container.textContent).toContain(translations.en!['cam.stale']!);
+    } finally {
+      vi.mocked(detectCircularHoles).mockImplementation(actual.detectCircularHoles);
+      await unmount(m);
+    }
+  });
+
+  it('updating a drill op on the SAME body leaves holes and the name untouched', async () => {
+    const box = useStore.getState().bodies[0]!;
+    const holes = [{ x: 1, z: 2, depth: 5 }];
+    const id = useStore.getState().addCamOperation({
+      name: 'Custom drill name', enabled: true, type: 'drill', bodyId: box.id, toolId: 'drill-3mm',
+      params, holes,
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+      const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      expect(op.holes).toEqual(holes);
+      // Same type + body → the curated name survives (no derivation rerun).
+      expect(op.name).toBe('Custom drill name');
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('retarget rebuilds the derived name and preserves the copy suffix; a type change rebuilds too', async () => {
+    const boxA = useStore.getState().bodies[0]!;
+    const boxB = createBox(8, 8, 8);
+    boxB.name = 'Plate';
+    useStore.setState({ bodies: [boxA, boxB], directBodies: [boxA, boxB], objectIds: [boxA.id, boxB.id] });
+    const suffix = translations.en!['cam.copySuffix']!;
+    const id = useStore.getState().addCamOperation({
+      name: `Pocket — Box${suffix}`, enabled: true, type: 'pocket', bodyId: boxA.id, toolId: 'em-6mm', params,
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-body-select')!, boxB.id);
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+      let op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      // Rebuilt for the new body, suffix re-appended (no laundering).
+      expect(op.name).toBe(`${translations.en!['cam.pocket']!} — Plate${suffix}`);
+
+      // Type change alone rebuilds as well (same body).
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      const contourRadio = [...m.container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+        .find((b) => (b.textContent ?? '').trim() === translations.en!['cam.contour']!)!;
+      await act(async () => { contourRadio.click(); });
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+      op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      expect(op.name).toBe(`${translations.en!['cam.contour']!} — Plate${suffix}`);
+      expect(op.type).toBe('contour');
+    } finally {
+      await unmount(m);
     }
   });
 

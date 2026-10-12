@@ -479,6 +479,47 @@ describe('CAM setup serialization', () => {
     expect(backBad.operations[0]!.params.tabs).toBeUndefined();
   });
 
+  it('round-trips the pass #34 strategy fields (pocket/drill/post extras)', () => {
+    const pocket: CAMOperation = {
+      ...op,
+      id: 'camop_3',
+      name: 'Pocket Up',
+      params: {
+        ...op.params,
+        pocketStrategy: 'offset',
+        helixEntry: true,
+        wallFinishPass: true,
+      },
+    };
+    const drill: CAMOperation = {
+      ...op,
+      id: 'camop_4',
+      name: 'Drill Dwell',
+      type: 'drill',
+      params: {
+        ...op.params,
+        drillCycle: 'dwell',
+        dwellSeconds: 1.5,
+      },
+    };
+    const cam: SerializedCam = { stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 5, operations: [pocket, drill] };
+    const back = deserializeCam(loadFromFile(saveToFile(serializeProject('cam-34', [], [], [], undefined, undefined, cam))));
+    const pp = back.operations[0]!.params;
+    expect(pp.pocketStrategy).toBe('offset');
+    expect(pp.helixEntry).toBe(true);
+    expect(pp.wallFinishPass).toBe(true);
+    const dp = back.operations[1]!.params;
+    expect(dp.drillCycle).toBe('dwell');
+    expect(dp.dwellSeconds).toBe(1.5);
+    // Non-positive dwell degrades to the default (omitted).
+    const zero: SerializedCam = {
+      stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 5,
+      operations: [{ ...drill, params: { ...drill.params, dwellSeconds: 0 } }],
+    };
+    const backZero = deserializeCam(loadFromFile(saveToFile(serializeProject('cam-34z', [], [], [], undefined, undefined, zero))));
+    expect(backZero.operations[0]!.params.dwellSeconds).toBeUndefined();
+  });
+
   it('round-trips explicit box stock min/max', () => {
     const cam: SerializedCam = {
       stock: { mode: 'box', min: { x: -1, y: -2, z: -3 }, max: { x: 4, y: 5, z: 6 } },

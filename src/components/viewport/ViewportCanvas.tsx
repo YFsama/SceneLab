@@ -23,12 +23,12 @@ import { pickEdge } from '../../lib/render/pick';
 import { MATERIALS } from '../../lib/materials';
 import { snapToPoints, sketchSnapPoints, inferAlignment, inferLineEnd, nearestVertexWithin, angleAtVertex } from '../../lib/sketch/snap';
 import { pickSketchEntity } from '../../lib/sketch/pick';
-import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis, type Vec3 } from '../../lib/geometry';
+import { centerBody, convexHullBody, flipBodyNormals, mirrorAcrossAxis, splitAcrossAxis, computeVolumetricCentroid, type Axis, type SolidBody, type Vec3 } from '../../lib/geometry';
 import { faceAreaAndCentroid } from '../../lib/geometry/measure';
 import { layFlat, seatOnBed } from '../../lib/print';
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu';
 import { runCommand, recentCommands, commandLabel } from '../../lib/commands/registry';
-import type { ToolpathPoint } from '../../lib/cam';
+import type { CAMSetup, ToolpathPoint } from '../../lib/cam';
 import { Maximize2, Check, Box } from 'lucide-react';
 import { useT } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
@@ -245,6 +245,69 @@ export function normalizeCamSimSpeed(speed: unknown): number {
   return typeof speed === 'number' && Number.isFinite(speed) && speed > 0 ? speed : 1;
 }
 
+/** Last multiplier the 'speed' sim action set (module-level, normalized).
+ * The overlay rebuild path drops camSimRef entirely, so this is the only
+ * place the knob can survive it: a freshly created sim seeds its speed from
+ * here. Reset intentionally does NOT write it — the multiplier is a playback
+ * control, not program state. */
+let lastCamSimSpeed = 1;
+
+/** Stable per-tool color for cut overlay lines: FNV-1a hash of the tool id →
+ * hue, HSL(0.65 sat / 0.55 light). Same id always maps to the same color
+ * across rebuilds and sessions; rapids stay the shared neutral pink. */
+export function camToolColor(toolId: string): THREE.Color {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < toolId.length; i++) {
+    h ^= toolId.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const c = new THREE.Color();
+  c.setHSL(((h >>> 0) % 3600) / 3600, 0.65, 0.55);
+  return c;
+}
+
+/** Wireframe color for the CAM stock box — a dim earthy brown that reads as
+ * scenery rather than a toolpath: lower saturation/lightness than the
+ * HSL(0.65, 0.55) cut hues and far from the rapid pink. */
+const CAM_STOCK_COLOR = 0x886644;
+
+/**
+ * Resolve the stock wireframe bounds under EDITOR semantics. Note: toolpath
+ * generation actually cuts against each operation's own stockTop/Bottom, so
+ * the stock definition is purely an editor/document concept — this
+ * visualization renders exactly what the panel shows:
+ *   - 'bounding-box': the union bounds of ALL bodies ± margin (null when
+ *     there are no bodies);
+ *   - 'box': the explicit min/max in SCENE coordinates (y-up); per-axis
+ *     bounds are treated as unordered and any non-finite input is refused.
+ */
+function resolveCamStockBounds(
+  stock: CAMSetup['stock'],
+  bodies: SolidBody[],
+): { min: Vec3; max: Vec3 } | null {
+  if (stock.mode === 'box') {
+    const lo = {
+      x: Math.min(stock.min.x, stock.max.x),
+      y: Math.min(stock.min.y, stock.max.y),
+      z: Math.min(stock.min.z, stock.max.z),
+    };
+    const hi = {
+      x: Math.max(stock.min.x, stock.max.x),
+      y: Math.max(stock.min.y, stock.max.y),
+      z: Math.max(stock.min.z, stock.max.z),
+    };
+    const all = [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z];
+    return all.every(Number.isFinite) ? { min: lo, max: hi } : null;
+  }
+  const bb = combinedBounds(bodies);
+  if (!bb) return null;
+  const margin = Number.isFinite(stock.margin) ? stock.margin : 0;
+  return {
+    min: { x: bb.min.x - margin, y: bb.min.y - margin, z: bb.min.z - margin },
+    max: { x: bb.max.x + margin, y: bb.max.y + margin, z: bb.max.z + margin },
+  };
+}
+
 /** Advance a walk state (seg, dist) by `dt` seconds of wall clock at
  * `speed`× the per-move feed rates (mm/s). Pure: returns the next state and
  * whether the program end was reached — the caller owns the sim object. */
@@ -337,6 +400,11 @@ export function ViewportCanvas() {
   // OWN group because the overlay effect clears camGroup's children on every
   // rebuild.
   const camSimGroupRef = useRef<THREE.Group | null>(null);
+  // CAM stock wireframe (cam workspace). Lives in its OWN group because the
+  // toolpath overlay effect clears camGroup's children on every rebuild — the
+  // stock must survive those and only rebuild when the stock definition or
+  // the bodies (bbox mode) change.
+  const camStockGroupRef = useRef<THREE.Group | null>(null);
   const camSimRef = useRef<{
     opId: string;
     points: ToolpathPoint[];
@@ -480,6 +548,9 @@ export function ViewportCanvas() {
   // CAM setup + derived toolpath cache (project state) and whether the cam
   // workspace is active — the toolpath overlay renders only in that workspace.
   const camSetup = useStore((s) => s.camSetup);
+  // Stock on its own selector: the reference only changes when setCamStock
+  // replaces it, so editing operations never rebuild the stock wireframe.
+  const camStock = useStore((s) => s.camSetup.stock);
   const camToolpaths = useStore((s) => s.camToolpaths);
   const camWorkspace = useStore((s) => s.workspace === 'cam');
   const [bodyMenu, setBodyMenu] = useState<{ x: number; y: number; bodyId: string | null } | null>(null);
@@ -632,7 +703,8 @@ export function ViewportCanvas() {
     const constructionMat = sketchConstructionMatRef.current;
     const constructionPtMat = sketchConstructionPtMatRef.current;
     const camRapidMat = camRapidMatRef.current;
-    const camCutMat = camCutMatRef.current;
+    const camCutMats = camCutMatsRef.current;
+    const camStockMat = camStockMatRef.current;
     const camCutDimMat = camCutDimMatRef.current;
 
     const renderer = new THREE.WebGLRenderer({
@@ -847,6 +919,13 @@ export function ViewportCanvas() {
     scene.add(camSimGroup);
     camSimGroupRef.current = camSimGroup;
 
+    // The stock wireframe's own group (survives camGroup rebuilds).
+    const camStockGroup = new THREE.Group();
+    camStockGroup.name = 'cam-stock';
+    camStockGroup.visible = false;
+    scene.add(camStockGroup);
+    camStockGroupRef.current = camStockGroup;
+
     animate();
 
     // Last applied resize values — ResizeObserver fires per frame during
@@ -904,7 +983,8 @@ export function ViewportCanvas() {
       hlMat.dispose();
       constructionMat.dispose();
       constructionPtMat.dispose();
-      // CAM overlay: per-line geometries + the two shared materials.
+      // CAM overlay: per-line geometries, the shared rapid material, and the
+      // per-tool cut materials (each disposed, then the cache emptied).
       const camGroup = camGroupRef.current;
       if (camGroup) {
         for (const child of camGroup.children) {
@@ -912,7 +992,16 @@ export function ViewportCanvas() {
         }
       }
       camRapidMat.dispose();
-      camCutMat.dispose();
+      for (const m of camCutMats.values()) m.dispose();
+      camCutMats.clear();
+      // Stock wireframe: the box's edge geometry + the shared material.
+      const stockGroup = camStockGroupRef.current;
+      if (stockGroup) {
+        for (const child of stockGroup.children) {
+          if (child instanceof THREE.LineSegments) child.geometry.dispose();
+        }
+      }
+      camStockMat.dispose();
       // Simulation: tool-mesh geometries/material + the dim cut material.
       camCutDimMat.dispose();
       const simGroup = camSimGroupRef.current;
@@ -1254,9 +1343,14 @@ export function ViewportCanvas() {
   const sketchConstructionMatRef = useRef(new THREE.LineDashedMaterial({ color: 0x6c7086, dashSize: 0.3, gapSize: 0.15 }));
   const sketchConstructionPtMatRef = useRef(new THREE.PointsMaterial({ color: 0x6c7086, size: 4, sizeAttenuation: false }));
   // Shared materials for the CAM toolpath overlay (created once, disposed on
-  // unmount): rapids dashed and always on top, cuts solid and translucent.
+  // unmount): the rapid material stays shared (rapids are one neutral color);
+  // CUT lines are colored per TOOL (hash of the tool id → hue), so they live
+  // in a Map<toolId, LineBasicMaterial> that persists across overlay
+  // rebuilds — geometry-only disposal, materials disposed on unmount.
   const camRapidMatRef = useRef(new THREE.LineDashedMaterial({ color: 0xf38ba8, depthTest: false, transparent: true, opacity: 0.7, dashSize: 0.5, gapSize: 0.3 }));
-  const camCutMatRef = useRef(new THREE.LineBasicMaterial({ color: 0x89b4fa, transparent: true, opacity: 0.9 }));
+  const camCutMatsRef = useRef(new Map<string, THREE.LineBasicMaterial>());
+  // The stock wireframe's dim brown box-line material (shared, one box).
+  const camStockMatRef = useRef(new THREE.LineBasicMaterial({ color: CAM_STOCK_COLOR, transparent: true, opacity: 0.85 }));
 
   useEffect(() => {
     const sketchGroup = sketchGroupRef.current;
@@ -1562,15 +1656,26 @@ export function ViewportCanvas() {
   // per-segment split is what lets the simulation highlight progress exactly:
   // a single polyline could only dim/truncate at whole vertices
   // (setDrawRange), losing the in-progress segment. Tradeoff: hundreds of
-  // small draw calls per op instead of a handful — fine for a viz overlay;
-  // the two materials stay shared. Toolpath points are already SCENE
-  // coordinates (x/z plan, y = height) per the generator contract — they are
-  // used verbatim, with no remap. Geometry-only disposal.
+  // small draw calls per op instead of a handful — fine for a viz overlay.
+  // Cut lines are colored PER TOOL (stable hash hue, cached material per
+  // toolId); rapids share the neutral dashed material. Toolpath points are
+  // already SCENE coordinates (x/z plan, y = height) per the generator
+  // contract — they are used verbatim, with no remap. Geometry-only disposal.
   useEffect(() => {
     const camGroup = camGroupRef.current;
     if (!camGroup) return;
     const rapidMat = camRapidMatRef.current;
-    const cutMat = camCutMatRef.current;
+    const cutMats = camCutMatsRef.current;
+    /** Cached per-tool cut material (created on first use, disposed on
+     * unmount — never inside this rebuild effect). */
+    const cutMatFor = (toolId: string): THREE.LineBasicMaterial => {
+      let mat = cutMats.get(toolId);
+      if (!mat) {
+        mat = new THREE.LineBasicMaterial({ color: camToolColor(toolId), transparent: true, opacity: 0.9 });
+        cutMats.set(toolId, mat);
+      }
+      return mat;
+    };
 
     while (camGroup.children.length > 0) {
       const child = camGroup.children[0]!;
@@ -1580,6 +1685,7 @@ export function ViewportCanvas() {
 
     // The cache the sim was walking is gone/rekeyed — drop the sim state (a
     // new play event rebuilds it against the fresh cache) and hide the tool.
+    // The playback SPEED deliberately survives via lastCamSimSpeed.
     camSimRef.current = null;
     if (camSimGroupRef.current) camSimGroupRef.current.visible = false;
 
@@ -1593,6 +1699,7 @@ export function ViewportCanvas() {
       const cache = camToolpaths[op.id];
       if (!cache) continue;
       const opId = op.id;
+      const cutMat = cutMatFor(op.toolId);
       const plungeRate = cache.toolpath.params.plungeRate;
       // simMarks records the toolpath point indices of the segment's two
       // endpoints — the sim maps walked distance → per-segment progress.
@@ -1601,6 +1708,9 @@ export function ViewportCanvas() {
         line.name = 'cam-cut';
         line.userData.simMarks = [markA, markB];
         line.userData.opId = opId;
+        // The segment's own (bright) material — the sim highlight swaps
+        // between this and the shared dim twin, and restores this one.
+        line.userData.cutMat = cutMat;
         // Pristine endpoints for the sim's truncation/restore (the attribute
         // itself holds Float32 copies).
         line.userData.segStart = a.clone();
@@ -1628,6 +1738,48 @@ export function ViewportCanvas() {
     }
     dirtyRef.current = true;
   }, [camWorkspace, camSetup, camToolpaths]);
+
+  // CAM stock wireframe: a dim box-line outline of the resolved stock bounds
+  // (EDITOR semantics — see resolveCamStockBounds; generation actually uses
+  // each op's stockTop/Bottom, so this renders what the stock panel defines).
+  // Own group + own effect: toolpath overlay rebuilds clear camGroup, and the
+  // stock must not be swept away with them. Geometry-only disposal (the
+  // material is shared and dies on unmount).
+  useEffect(() => {
+    const group = camStockGroupRef.current;
+    if (!group) return;
+
+    while (group.children.length > 0) {
+      const child = group.children[0]!;
+      group.remove(child);
+      if (child instanceof THREE.LineSegments) child.geometry.dispose();
+    }
+
+    const bounds = camWorkspace ? resolveCamStockBounds(camStock, bodies) : null;
+    group.visible = bounds !== null;
+    if (!bounds) {
+      dirtyRef.current = true;
+      return;
+    }
+
+    const min = new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.min.z);
+    const size = new THREE.Vector3(
+      bounds.max.x - bounds.min.x,
+      bounds.max.y - bounds.min.y,
+      bounds.max.z - bounds.min.z,
+    );
+    // EdgesGeometry of a BoxGeometry sized to the stock; the intermediate box
+    // geometry itself is dropped immediately (only its 12 edges are kept).
+    const solid = new THREE.BoxGeometry(size.x, size.y, size.z);
+    const edges = new THREE.EdgesGeometry(solid);
+    solid.dispose();
+    const box = new THREE.LineSegments(edges, camStockMatRef.current);
+    box.name = 'cam-stock-box';
+    box.position.copy(min).addScaledVector(size, 0.5);
+    box.userData.bounds = { min: { ...bounds.min }, max: { ...bounds.max } };
+    group.add(box);
+    dirtyRef.current = true;
+  }, [camWorkspace, camStock, bodies]);
 
   // CAM machine simulation (the arm-hole event pattern, inverted: the PANEL
   // dispatches 'scenelab:cam-sim' {action:'play'|'pause'|'reset'|'seek'|
@@ -1669,15 +1821,16 @@ export function ViewportCanvas() {
     };
 
     /** Highlight exactly what has been walked. Cut overlay lines are one
-     * THREE.Line per segment, so each switches material on its own; the
-     * in-progress segment additionally moves its far endpoint onto the tool
-     * position (restored afterwards from userData) — setDrawRange could only
-     * truncate at whole vertices and hid the segment until it was complete.
-     * Cross-op residue: lines of OTHER ops reset to dim here too, so playing
-     * op B clears what op A's finished walk left bright. */
+     * THREE.Line per segment, so each switches material on its own — bright
+     * is the segment's OWN per-tool material (userData.cutMat), dim the
+     * shared translucent twin; the in-progress segment additionally moves its
+     * far endpoint onto the tool position (restored afterwards from
+     * userData) — setDrawRange could only truncate at whole vertices and hid
+     * the segment until it was complete. Cross-op residue: lines of OTHER
+     * ops reset to dim here too, so playing op B clears what op A's finished
+     * walk left bright. */
     const updateHighlight = (opId: string, cum: number[], walked: number): void => {
       const group = camGroupRef.current;
-      const bright = camCutMatRef.current;
       const dim = camCutDimMatRef.current;
       if (!group) return;
       for (const child of group.children) {
@@ -1695,6 +1848,7 @@ export function ViewportCanvas() {
           restoreEnd();
           continue;
         }
+        const bright = (child.userData.cutMat as THREE.LineBasicMaterial | undefined) ?? dim;
         const cumA = cum[marks[0]] ?? 0;
         const cumB = cum[marks[1]] ?? 0;
         if (walked >= cumB) {
@@ -1772,8 +1926,11 @@ export function ViewportCanvas() {
         opId, points, cum, feeds,
         total: cum[cum.length - 1]!,
         seg: 1, dist: 0, playing: false, diameter, lastT: null as number | null,
-        // A rebuild (op/tool switch) keeps the knob where the user left it.
-        speed: normalizeCamSimSpeed(sim?.speed),
+        // A rebuild (op/tool switch) keeps the knob where the user left it:
+        // the previous sim's speed when switching straight over, otherwise
+        // the last value the 'speed' action set (survives the overlay-cache
+        // invalidation that nulls camSimRef).
+        speed: normalizeCamSimSpeed(sim?.speed ?? lastCamSimSpeed),
       };
       camSimRef.current = next;
       setSimPosition(next, 0);
@@ -1837,7 +1994,10 @@ export function ViewportCanvas() {
         }
         case 'speed':
           // Hot change: rate only — position, segment and play state stay.
+          // The normalized value is remembered module-level so a NEW sim
+          // (overlay rebuild invalidated the old one) starts at this rate.
           sim.speed = normalizeCamSimSpeed(d.speed);
+          lastCamSimSpeed = sim.speed;
           break;
       }
     };

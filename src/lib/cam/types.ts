@@ -32,6 +32,16 @@ export interface CAMParameters {
   springPass?: boolean;
   /** First-level entry descends along the path instead of a vertical plunge. Default false (legacy behavior). */
   rampEntry?: boolean;
+  /** Pocket clearing pattern: 'raster' zigzag (default, legacy) or 'offset' contour-parallel rings. Silhouettes with islands fall back to raster. */
+  pocketStrategy?: 'raster' | 'offset';
+  /** Pocket entry: descend along a validated helical loop instead of the linear ramp / vertical plunge. Default false (legacy). */
+  helixEntry?: boolean;
+  /** Pocket wall finish: one extra loop along the wall-side boundary at each level after clearing it. Default false. */
+  wallFinishPass?: boolean;
+  /** Drill cycle variant (post-processor reads this): 'peck' default, 'simple' single plunge, 'dwell' pause at depth. */
+  drillCycle?: 'peck' | 'simple' | 'dwell';
+  /** Dwell seconds for drillCycle 'dwell' (post clamps 0.01–5, default 0.5). */
+  dwellSeconds?: number;
 }
 
 /**

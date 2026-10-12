@@ -10,7 +10,7 @@ import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts, showToast } from '../../lib/toast';
 import { captureFreshCanvas } from '../../lib/render/capture';
 import { defaultCamSetup } from '../../lib/cam';
-import { ViewportCanvas, advanceCamSim, camSimStepTarget, normalizeCamSimSpeed } from './ViewportCanvas';
+import { ViewportCanvas, advanceCamSim, camSimStepTarget, camToolColor, normalizeCamSimSpeed } from './ViewportCanvas';
 import { ToastHost } from '../ui/ToastHost';
 
 // ViewportCanvas is a WebGL component; jsdom has neither WebGL nor a canvas
@@ -1418,10 +1418,11 @@ describe('ViewportCanvas CAM toolpath overlay (rendered)', () => {
       expect(group.visible).toBe(true);
       const lines = group.children.filter((c): c is THREE.Line => c instanceof THREE.Line);
       expect(lines.length).toBeGreaterThan(0);
-      // Cut polylines in the cut material (0x89b4fa, opaque-ish)…
+      // Cut polylines in the op's per-tool cut material (hash hue of the op's
+      // toolId — one op here, so one shared color across all its cuts)…
       const cuts = lines.filter((l) => l.name === 'cam-cut');
       expect(cuts.length).toBeGreaterThan(0);
-      expect((cuts[0]!.material as THREE.LineBasicMaterial).color.getHex()).toBe(0x89b4fa);
+      expect((cuts[0]!.material as THREE.LineBasicMaterial).color.getHex()).toBe(camToolColor('em-6mm').getHex());
       // …and rapid/plunge segments in the dashed rapid material (0xf38ba8,
       // depthTest false, drawn on top).
       const moves = lines.filter((l) => l.name === 'cam-move');
@@ -1480,6 +1481,220 @@ describe('ViewportCanvas CAM toolpath overlay (rendered)', () => {
     const spies = lines.map((l) => vi.spyOn(l.geometry, 'dispose'));
     await unmount(m);
     for (const spy of spies) expect(spy).toHaveBeenCalled();
+  });
+
+  it('colors cut lines per tool: one shared color per toolId, distinct across tools; rapids unchanged', async () => {
+    const box = createBox(20, 15, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], objectIds: [box.id] });
+    const add = (name: string, toolId: string) =>
+      useStore.getState().addCamOperation({
+        name,
+        enabled: true,
+        type: 'pocket',
+        bodyId: box.id,
+        toolId,
+        params: { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 2, stepover: 3, stockTop: 10, stockBottom: -5 },
+      });
+    const idA = add('Pocket A', 'em-6mm');
+    const idB = add('Pocket B', 'em-3mm');
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const lines = camGroup().children.filter((c): c is THREE.Line => c instanceof THREE.Line);
+      const cuts = lines.filter((l) => l.name === 'cam-cut');
+      const cutOf = (opId: string) => cuts.filter((l) => l.userData.opId === opId);
+      expect(cutOf(idA).length).toBeGreaterThan(0);
+      expect(cutOf(idB).length).toBeGreaterThan(0);
+
+      // Same tool → the SAME cached material instance on every segment…
+      const matA = cutOf(idA)[0]!.material as THREE.LineBasicMaterial;
+      const matB = cutOf(idB)[0]!.material as THREE.LineBasicMaterial;
+      for (const l of cutOf(idA)) expect(l.material).toBe(matA);
+      for (const l of cutOf(idB)) expect(l.material).toBe(matB);
+      // …at the deterministic hash hue, and the two tools' colors differ.
+      expect(matA.color.getHex()).toBe(camToolColor('em-6mm').getHex());
+      expect(matB.color.getHex()).toBe(camToolColor('em-3mm').getHex());
+      expect(matA.color.getHex()).not.toBe(matB.color.getHex());
+      expect(matA.color.getHex()).not.toBe(0xf38ba8); // never the rapid pink
+      expect(matA.transparent).toBe(true);            // bright twin of the dim highlight
+
+      // Rapids keep the shared neutral dashed material regardless of tool.
+      const moves = lines.filter((l) => l.name === 'cam-move');
+      expect(moves.length).toBeGreaterThan(0);
+      for (const l of moves) {
+        expect((l.material as THREE.LineDashedMaterial).color.getHex()).toBe(0xf38ba8);
+        expect(l.material).toBe(moves[0]!.material); // one shared rapid material
+      }
+    } finally {
+      await unmount(m);
+    }
+  });
+});
+
+// CAM stock wireframe: the stock box renders from camSetup.stock under EDITOR
+// semantics — bbox mode = union bounds of ALL bodies ± margin, box mode =
+// explicit min/max in scene (y-up) coordinates — and only in the cam
+// workspace. It lives in its OWN group ('cam-stock') so toolpath overlay
+// rebuilds (which clear cam-toolpaths) never sweep it away.
+describe('ViewportCanvas CAM stock wireframe (rendered)', () => {
+  beforeEach(() => {
+    clearToasts();
+    recordedControls.length = 0;
+    recordedScenes.length = 0;
+    useStore.setState({
+      locale: 'en',
+      workspace: 'cam',
+      sketchActive: false,
+      sketchTool: 'select',
+      sketchPlaneId: 'xy',
+      currentSketch: null,
+      selectedSketchId: null,
+      selectedSketchIds: [],
+      bodies: [],
+      selectedIds: [],
+      selectedEdgeIds: [],
+      selectedFaceIds: [],
+      hiddenIds: [],
+      annotations: [],
+      viewDirection: 'iso',
+      projection: 'perspective',
+      measureActive: false,
+      visionSelectActive: false,
+      numericPrompt: null,
+      camSetup: defaultCamSetup(),
+      camToolpaths: {},
+      undoStack: [],
+      redoStack: [],
+    });
+  });
+
+  function lastScene(): THREE.Scene {
+    const scene = recordedScenes[recordedScenes.length - 1];
+    expect(scene).toBeDefined();
+    return scene as THREE.Scene;
+  }
+
+  function stockGroup(): THREE.Group {
+    const group = lastScene().getObjectByName('cam-stock');
+    expect(group).toBeDefined();
+    return group as THREE.Group;
+  }
+
+  function stockBox(): THREE.LineSegments | undefined {
+    return stockGroup().children.find((c): c is THREE.LineSegments => c instanceof THREE.LineSegments);
+  }
+
+  /** One 20×15×10 box (x ±10, y 0..15, z ±5) as the scene's single body. */
+  function seedBody(): void {
+    const box = createBox(20, 15, 10);
+    useStore.setState({ bodies: [box], directBodies: [box], objectIds: [box.id] });
+  }
+
+  it('renders the bbox-mode stock as the union of bodies ± margin', async () => {
+    seedBody();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const box = stockBox();
+      expect(box).toBeDefined();
+      expect(box!.name).toBe('cam-stock-box');
+      expect(stockGroup().visible).toBe(true);
+      // Dim stock-specific brown, never confused with rapid/cut colors.
+      expect((box!.material as THREE.LineBasicMaterial).color.getHex()).toBe(0x886644);
+      // createBox(20,15,10) spans x ±10 / y 0..15 / z ±5; default margin 2.
+      const bb = new THREE.Box3().setFromObject(box!);
+      expect(bb.min.x).toBeCloseTo(-12, 5);
+      expect(bb.max.x).toBeCloseTo(12, 5);
+      expect(bb.min.y).toBeCloseTo(-2, 5);
+      expect(bb.max.y).toBeCloseTo(17, 5);
+      expect(bb.min.z).toBeCloseTo(-7, 5);
+      expect(bb.max.z).toBeCloseTo(7, 5);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('box mode renders the explicit min/max in scene coordinates', async () => {
+    seedBody(); // bodies exist — box mode must IGNORE them
+    useStore.setState({
+      camSetup: {
+        ...defaultCamSetup(),
+        stock: { mode: 'box', min: { x: 2, y: -3, z: 0 }, max: { x: 32, y: 17, z: 12 } },
+      },
+    });
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const bb = new THREE.Box3().setFromObject(stockBox()!);
+      expect(bb.min.x).toBeCloseTo(2, 5);
+      expect(bb.min.y).toBeCloseTo(-3, 5);
+      expect(bb.min.z).toBeCloseTo(0, 5);
+      expect(bb.max.x).toBeCloseTo(32, 5);
+      expect(bb.max.y).toBeCloseTo(17, 5);
+      expect(bb.max.z).toBeCloseTo(12, 5);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('renders no stock outside the cam workspace, and none for empty bbox stock', async () => {
+    seedBody();
+    useStore.setState({ workspace: 'model' });
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      // Model workspace: group exists but is empty and hidden.
+      let group = stockGroup();
+      expect(group.children).toHaveLength(0);
+      expect(group.visible).toBe(false);
+
+      // Entering the cam workspace builds the box from the same bodies.
+      await act(async () => { useStore.setState({ workspace: 'cam' }); });
+      group = stockGroup();
+      expect(group.visible).toBe(true);
+      expect(group.children.filter((c) => c instanceof THREE.LineSegments)).toHaveLength(1);
+
+      // Cam workspace but bbox stock with NO bodies: nothing renders.
+      await act(async () => { useStore.setState({ bodies: [], directBodies: [], objectIds: [] }); });
+      group = stockGroup();
+      expect(group.children).toHaveLength(0);
+      expect(group.visible).toBe(false);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('replaces the box on a stock change, disposing the old geometry', async () => {
+    seedBody();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const first = stockBox()!;
+      expect(first).toBeDefined();
+      const spy = vi.spyOn(first.geometry, 'dispose');
+
+      await act(async () => {
+        useStore.setState({ camSetup: { ...useStore.getState().camSetup, stock: { mode: 'bounding-box', margin: 5 } } });
+      });
+
+      expect(spy).toHaveBeenCalled();
+      const second = stockBox()!;
+      expect(second).toBeDefined();
+      expect(second).not.toBe(first);
+      expect(stockGroup().children).toHaveLength(1);
+      const bb = new THREE.Box3().setFromObject(second);
+      expect(bb.min.x).toBeCloseTo(-15, 5);
+      expect(bb.max.x).toBeCloseTo(15, 5);
+      expect(bb.min.y).toBeCloseTo(-5, 5);
+      expect(bb.max.y).toBeCloseTo(20, 5);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('disposes the stock box geometry on unmount', async () => {
+    seedBody();
+    const m = await mount(createElement(ViewportCanvas));
+    const box = stockBox()!;
+    const spy = vi.spyOn(box.geometry, 'dispose');
+    await unmount(m);
+    expect(spy).toHaveBeenCalled();
   });
 });
 
@@ -2001,6 +2216,66 @@ describe('ViewportCanvas CAM machine simulation (rendered)', () => {
       expect(simTool().position.equals(preJunk)).toBe(true);
       raf.flush(40);
       expect(simTool().position.distanceTo(preJunk)).toBeCloseTo(d1, 4);
+    } finally {
+      await unmount(m);
+      raf.restore();
+    }
+  });
+
+  it('keeps the speed multiplier across overlay rebuilds (a fresh sim seeds from it; reset does not clear it)', async () => {
+    const id = seedCamOperation();
+    const cache = useStore.getState().camToolpaths[id]!;
+    const pts = cache.toolpath.points;
+    const plunge = cache.toolpath.params.plungeRate;
+    const cum = cumOf(pts);
+    const total = cum[cum.length - 1]!;
+    // Park inside the longest CUT move (same selection as the hot-change test
+    // above) so a pair of 40 ms ticks never crosses a move boundary.
+    let k = -1;
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i]!;
+      if (p.rapid) continue;
+      if (p.feedRate !== undefined && p.feedRate === plunge) continue;
+      if (k < 0 || cum[i]! - cum[i - 1]! > cum[k]! - cum[k - 1]!) k = i;
+    }
+    expect(k).toBeGreaterThan(0);
+    const segLen = cum[k]! - cum[k - 1]!;
+    expect(segLen).toBeGreaterThan(6);
+    const seekT = (cum[k - 1]! + 0.3 * segLen) / total;
+
+    const raf = installFakeRaf();
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      // Start a sim and turn the knob to 4×…
+      dispatchSim({ action: 'play' });
+      dispatchSim({ action: 'speed', speed: 4 });
+
+      // …then invalidate the overlay cache the sim walks (a camSetup
+      // reference bump re-runs the overlay effect, which nulls camSimRef —
+      // the bug: the next sim used to come back at 1×).
+      await act(async () => {
+        useStore.setState({ camSetup: { ...useStore.getState().camSetup } });
+      });
+
+      // RESET creates the replacement sim — it must NOT reset the multiplier
+      // (the knob is a playback control, not program state) — and a seek
+      // parks it back inside the measurement move.
+      dispatchSim({ action: 'reset' });
+      dispatchSim({ action: 'seek', t: seekT });
+      const origin = simTool().position.clone();
+      dispatchSim({ action: 'play' });
+      raf.flush(16); // arm the dt clock
+      raf.flush(40);
+      const at4 = simTool().position.clone();
+      const d4 = at4.distanceTo(origin);
+      expect(d4).toBeGreaterThan(0.01);
+
+      // Dropping to 1× makes the SAME tick walk a quarter of it — so the
+      // rebuilt sim really was running at 4× (the bug would give d4 = d1).
+      dispatchSim({ action: 'speed', speed: 1 });
+      raf.flush(40);
+      const d1 = simTool().position.distanceTo(at4);
+      expect(d4).toBeCloseTo(4 * d1, 4);
     } finally {
       await unmount(m);
       raf.restore();

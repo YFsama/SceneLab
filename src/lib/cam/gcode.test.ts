@@ -185,6 +185,176 @@ describe('drill cycles per machine profile', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Drill cycle variants (simple / dwell / peck) and the optional G54 WCS word
+// ---------------------------------------------------------------------------
+
+/** Contract drill-cycle fields on CAMParameters (the parameters owner lands
+ * them; spread into the fixture so it type-checks before that merge). */
+type DrillCycleFields = { drillCycle?: 'peck' | 'simple' | 'dwell'; dwellSeconds?: number };
+
+/** Same hole as the legacy drillTp above (depth 5, R plane Z7, F500). */
+const drillCycleTp = (fields: DrillCycleFields = {}): Toolpath =>
+  makeToolpath({
+    operation: 'drill',
+    tool: { ...em6, id: 'drill-6mm', name: '6mm Drill', type: 'drill' as const },
+    params: { ...PARAMS, peckDepth: 2, ...fields },
+    points: [
+      { x: 10, y: 10, z: 4, rapid: true }, // safe
+      { x: 10, y: 7, z: 4, rapid: true }, // R plane (stockTop+2)
+      { x: 10, y: 0, z: 4, rapid: false, feedRate: 500 }, // plunge: depth 5
+      { x: 10, y: 10, z: 4, rapid: true }, // retract
+    ],
+  });
+
+describe('drill cycle variants — 3 cycles × 2 profiles', () => {
+  it("LinuxCNC 'simple': canned G81 (no Q/P), cancelled by G80, no expansion", () => {
+    const g = generateGCode(drillCycleTp({ drillCycle: 'simple' }), 'linuxcnc');
+    expect(g).toMatch(/^G81 X10\.000 Y4\.000 Z0\.000 R7\.000 F500 ; Simple drill /m);
+    expect(g).not.toContain('G82');
+    expect(g).not.toContain('G83');
+    expect(g.indexOf('G80')).toBeGreaterThan(g.indexOf('G81'));
+    expect(g).not.toMatch(/^G1 Z/gm);
+  });
+
+  it("LinuxCNC 'dwell': canned G82 with P seconds before F, cancelled by G80", () => {
+    const g = generateGCode(drillCycleTp({ drillCycle: 'dwell' }), 'linuxcnc');
+    expect(g).toMatch(/^G82 X10\.000 Y4\.000 Z0\.000 R7\.000 P0\.5 F500 ; Drill \+ dwell /m);
+    expect(g).not.toContain('G81');
+    expect(g).not.toContain('G83');
+    expect(g.indexOf('G80')).toBeGreaterThan(g.indexOf('G82'));
+  });
+
+  it("LinuxCNC 'peck': still the legacy G83 R Q F + G80", () => {
+    const g = generateGCode(drillCycleTp({ drillCycle: 'peck' }), 'linuxcnc');
+    expect(g).toMatch(/^G83 X10\.000 Y4\.000 Z0\.000 R7\.000 Q2\.000 F500 ; Drill /m);
+    expect(g.indexOf('G80')).toBeGreaterThan(g.indexOf('G83'));
+  });
+
+  it("GRBL 'simple': one plunge straight to depth, no intermediate retracts", () => {
+    const g = generateGCode(drillCycleTp({ drillCycle: 'simple' }), 'grbl');
+    const plunges = g.split('\n').filter((l) => /^G1 Z/.test(l));
+    expect(plunges).toHaveLength(1); // single plunge to the bottom…
+    expect(plunges[0]).toBe('G1 Z0.000 F500');
+    // …then exactly ONE retract to the R plane (no per-peck G0 retractions).
+    expect(g.split('\n').filter((l) => /^G0 Z7\.000/.test(l))).toHaveLength(1);
+    expect(g).toContain('; Simple drill (10.000, 4.000) depth 5.000');
+    expect(g).not.toContain('G8');
+    expect(g.match(/^G4 /gm)).toHaveLength(1); // only the spindle ramp-up dwell
+  });
+
+  it("GRBL 'dwell': G4 P0.5 sits between the plunge and the R-plane retract", () => {
+    const g = generateGCode(drillCycleTp({ drillCycle: 'dwell' }), 'grbl');
+    const lines = g.split('\n');
+    const plunge = lines.findIndex((l) => l.startsWith('G1 Z0.000'));
+    const dwell = lines.findIndex((l) => /^G4 P0\.5 ; Dwell at full depth$/.test(l));
+    const retract = lines.findIndex((l) => /^G0 Z7\.000 ; Retract to R plane$/.test(l));
+    expect(plunge).toBeGreaterThan(-1);
+    expect(dwell).toBeGreaterThan(plunge);
+    expect(retract).toBeGreaterThan(dwell);
+    expect(lines.filter((l) => /^G1 Z/.test(l))).toHaveLength(1);
+    expect(g).toContain('; Drill + dwell (10.000, 4.000) depth 5.000');
+  });
+
+  it("GRBL 'peck': identical to the legacy default output, byte for byte", () => {
+    const legacy = makeToolpath({
+      operation: 'drill',
+      tool: { ...em6, id: 'drill-6mm', name: '6mm Drill', type: 'drill' as const },
+      params: { ...PARAMS, peckDepth: 2 },
+      points: drillCycleTp().points,
+    });
+    for (const profile of ['grbl', 'linuxcnc'] as const) {
+      expect(generateGCode(drillCycleTp({ drillCycle: 'peck' }), profile))
+        .toBe(generateGCode(legacy, profile));
+    }
+  });
+
+  it('dwell seconds clamp into [0.01, 5] on both profiles', () => {
+    for (const profile of ['grbl', 'linuxcnc'] as const) {
+      const lo = generateGCode(drillCycleTp({ drillCycle: 'dwell', dwellSeconds: 0 }), profile);
+      const hi = generateGCode(drillCycleTp({ drillCycle: 'dwell', dwellSeconds: 10 }), profile);
+      expect(lo).toMatch(/P0\.01(?!\d)/);
+      expect(hi).toMatch(/P5(?![\d.])/);
+    }
+  });
+
+  it('modal F still applies across variants: two dwell holes, F once but G4 twice', () => {
+    const tp = makeToolpath({
+      operation: 'drill',
+      tool: { ...em6, id: 'drill-6mm', name: '6mm Drill', type: 'drill' as const },
+      params: { ...PARAMS, peckDepth: 2, ...({ drillCycle: 'dwell', dwellSeconds: 0.25 } as DrillCycleFields) },
+      points: [
+        { x: 10, y: 10, z: 4, rapid: true },
+        { x: 10, y: 7, z: 4, rapid: true },
+        { x: 10, y: 0, z: 4, rapid: false, feedRate: 500 },
+        { x: 10, y: 10, z: 4, rapid: true },
+        { x: 30, y: 7, z: 4, rapid: true },
+        { x: 30, y: 0, z: 4, rapid: false, feedRate: 500 },
+        { x: 30, y: 10, z: 4, rapid: true },
+      ],
+    });
+    const g = generateGCode(tp, 'grbl');
+    expect(g.match(/ F500/g)).toHaveLength(1); // modal: second hole reuses F
+    expect(g.match(/^G4 P0\.25 /gm)).toHaveLength(2); // dwell per hole
+    expect(g.split('\n').filter((l) => /^G1 Z0\.000/.test(l))).toHaveLength(2);
+  });
+});
+
+describe('wcs option — optional G54 in the program header', () => {
+  it('wcs on: G54 lands after G94 and before the first Z rapid (both profiles)', () => {
+    for (const profile of ['grbl', 'linuxcnc'] as const) {
+      const lines = generateGCode(makeToolpath(), profile, { wcs: true }).split('\n');
+      const codes = lines.filter((l) => /^[GM]\d/.test(l)).map((l) => l.split(/[ ;]/)[0]);
+      expect(codes.slice(0, 5)).toEqual(['G90', 'G21', 'G17', 'G94', 'G54']);
+      const g54 = lines.findIndex((l) => l.startsWith('G54 '));
+      const firstZ = lines.findIndex((l) => /^G0 Z/.test(l));
+      expect(g54).toBeGreaterThan(-1);
+      expect(firstZ).toBeGreaterThan(g54);
+      expect(lines[g54]).toContain('Work coordinate system 1');
+    }
+  });
+
+  it('wcs off (default): no G54 and the header ends right after G94', () => {
+    const g = generateGCode(makeToolpath());
+    expect(g).not.toContain('G54');
+    const lines = g.split('\n');
+    const g94 = lines.findIndex((l) => l.startsWith('G94'));
+    expect(lines[g94 + 1]).toMatch(/^G0 Z/);
+    // Passing an empty options object changes nothing either.
+    expect(generateGCode(makeToolpath(), 'grbl', {})).toBe(generateGCode(makeToolpath()));
+  });
+});
+
+describe('arc fitting and drill cycles coexist in one program', () => {
+  it('cylinder contour + dwell drill post without interfering', () => {
+    const contour = generateContourToolpath(createCylinder(15, 20, 128), em6, {
+      ...PARAMS,
+      depthOfCut: 20,
+      stockTop: 20,
+      stockBottom: 0,
+    });
+    const drill = drillCycleTp({ drillCycle: 'dwell' }); // different tool → tool change
+    const g = generateMultiToolGCode([contour, drill], 'grbl');
+
+    // Arc section intact: same arc count as the contour-only program.
+    const arcCount = (s: string) => s.split('\n').filter((l) => /^G[23] /.test(l)).length;
+    expect(arcCount(g)).toBe(arcCount(generateGCode(contour, 'grbl')));
+    expect(arcCount(g)).toBeGreaterThanOrEqual(3);
+
+    // Drill section intact after the tool change: plunge → G4 dwell → retract.
+    const drillSection = g.split('\n').slice(g.split('\n').findIndex((l) => /=== Toolpath 2/.test(l)));
+    expect(drillSection.some((l) => l.startsWith('G1 Z0.000 F500'))).toBe(true);
+    const plunge = drillSection.findIndex((l) => l.startsWith('G1 Z0.000'));
+    const dwell = drillSection.findIndex((l) => /^G4 P0\.5 /.test(l));
+    const retract = drillSection.findIndex((l) => /^G0 Z7\.000 ; Retract to R plane$/.test(l));
+    expect(dwell).toBeGreaterThan(plunge);
+    expect(retract).toBeGreaterThan(dwell);
+    // No arcs leaked into the drill section, no drill expansion into the arcs.
+    expect(drillSection.filter((l) => /^G[23] /.test(l))).toHaveLength(0);
+    expect(g).toContain('; M6 T2');
+  });
+});
+
 describe('estimateMachiningTime', () => {
   it('returns positive time for a toolpath', () => {
     expect(estimateMachiningTime(makeToolpath())).toBeGreaterThan(0);

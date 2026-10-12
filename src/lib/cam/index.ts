@@ -25,6 +25,7 @@ export {
   generateMultiToolGCode,
   estimateMachiningTime,
   estimateTime,
+  programSafeZ,
 } from './gcode';
 export type { MachineProfile, GCodeOptions } from './gcode';
 export { fitArcs } from './arcFit';
@@ -36,3 +37,5 @@ export type { CAMSetup, CAMOperation } from './setup';
 export { computeFeedsAndSpeeds } from './feedsSpeeds';
 export type { WorkMaterial, FeedsSpeeds, FeedsSpeedsOptions } from './feedsSpeeds';
 export { detectCircularHoles } from '../geometry/query';
+export { generateSetupSheetHtml } from './setupSheet';
+export type { SetupSheetInput, SetupSheetOp } from './setupSheet';
