@@ -2,6 +2,65 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.28.0] — 2026-10-12
+
+CAM 第二轮：开粗升级 + 输出补全（5 Agent 并行：1 研究 + 4 实现 + 独立审查
+2×P1 4×P2 修复 + 浏览器走查）。算法深研产物见 `docs/cnc-algorithms.md`。
+
+### ⚠️ 方向语义修正（重要）
+
+- **顺铣/逆铣约定翻正**：pass #33 引入的 climb/conventional 采用了错误的
+  "材料在左=顺铣"推导；本轮审查以切屑厚度数值仿真证明 **M3 下顺铣=材料
+  在右**（与 easy_cam 惯例一致）。v0.28.0 起：contour climb=外轮廓 CW +
+  岛屿 CCW；pocket 环切贴壁环 CCW + 内部环 CW；侧壁精光同步翻正；螺旋
+  下刀（CCW）与环方向就此自洽。含通孔零件与 contour 工序的默认输出方向
+  会与 0.27.x 相反——新方向才是正确的顺铣。
+
+### CAM — 开粗升级 (Pocket Roughing)
+
+- **环切偏置清空**（pocketStrategy: raster/offset）：轮廓平行环带从贴壁
+  向内推进、环间智能连接；仅用于无岛**凸形**区域——凹形/带岛自动回退
+  光栅（审查发现凹形环族被保守截断只清 53.8%，回退后实测覆盖 ≥99%）。
+- **螺旋下刀**（helixEntry）：入口螺旋盘用**精确边界距离**验证（非采样，
+  窄壁尖刺无所遁形）；沿名义点→质心搜索最大可容纳半径，pitch 由 15°
+  坡角决定、超 3 圈自动回退线性斜坡；平底整圈 true-up 后衔接行/环切削。
+- **侧壁精光**（wallFinishPass）：每层清空后贴壁环额外一圈（弹簧光刀
+  语义，Fusion/Mastercam Finish Passes 同款），光栅策略下含岛屿环。
+
+### CAM — 输出与预检 (Output & Inspection)
+
+- **钻孔循环变体**（drillCycle）：peck（默认 G83/啄式展开）、simple
+  （G81/一次到底）、dwell（G82/底部停顿 G4 P，秒数钳制 0.01–5）；两
+  profile 输出经审读验证，默认输出字节级不变。
+- **G54 WCS 可选输出**：程序头 G94 后可发 G54（多坐标系机床的安全习惯）。
+- **Setup sheet 工艺卡**：自包含打印友好 HTML（工序/刀具 T# ⌀/参数/工时
+  表 + 页眉汇总），模态预览（iframe）+ 复制/下载/打印；Safe Z 与后处理
+  programSafeZ 同口径。
+- **毛坯视口可视化**：CAM 工作区渲染毛坯线框盒（bbox±margin 或显式 box，
+  编辑器语义）；**刀路按刀着色**（刀具 id 稳定色相）；仿真倍率跨刀路
+  重建持久。
+
+### CAM — 编辑与序列化
+
+- 钻孔工序编辑换 body 自动重探测孔位（旧 pins 清除，空探测走诚实报错）；
+  编辑重命名保留原名（type/body 未变）或保留 "(副本)" 后缀。
+- 序列化白名单放行全部新字段（旧工程加载走默认）。
+
+### 审查修复与已知限制
+
+- [P1] 方向语义翻正（见上）；[P1] 凹形 offset 回退光栅；[P2] 螺旋盘
+  精确距离验证；[P2] dwell NaN 钳制；[P2] 工艺卡 Safe Z 口径统一。
+- 已知限制：螺旋出口到环/行起点的衔接弦以全深切过荒料（≈1–2 步距，
+  与 Fusion 行为一致，机械载荷可接受）；环切仅凸形区域（凹形待多环
+  Clipper offset 基建，见 docs/cnc-algorithms.md）。
+
+### 研究产物
+
+- `docs/cnc-algorithms.md`（520 行）：trochoidal/adaptive（啮合角闭式解、
+  trochoid 参数化、参考刀路偏移法路线）、V-carving（F-Engrave 采样式中
+  轴源码级分析、单线字 hersheytext 路线）、rest machining（heightmap 差
+  法零新依赖）+ pass #35 立项建议（Engrave+文本 → Adaptive v1 → Rest）。
+
 ## [0.27.0] — 2026-10-10
 
 CAM 平价补全轮（市面 CNC 软件调研驱动，见 `docs/cnc-research.md`）：轮廓
