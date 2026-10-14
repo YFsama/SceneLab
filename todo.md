@@ -1,7 +1,7 @@
 # SceneLab — Roadmap & Working Queue
 
 > AI-first 3D CAD/CAM — Web-first + Tauri desktop shell
-> **当前版本 v0.28.0** · 详见 [CHANGELOG.md](CHANGELOG.md)（用户向历史）与 git log（技术细节）。
+> **当前版本 v0.29.0** · 详见 [CHANGELOG.md](CHANGELOG.md)（用户向历史）与 git log（技术细节）。
 
 ## Project Vision
 
@@ -22,12 +22,12 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ---
 
-## Status Snapshot — v0.28.0 (2026-10-12)
+## Status Snapshot — v0.29.0 (2026-10-14)
 
 | 维度 | 状态 |
 |------|------|
-| 测试 | **2847 vitest / 162 文件**；**E2E 30/30**；cargo 6；浏览器走查（IAB 输入派发受限，事件级验证 + E2E 补位——本轮 CAM 全流程走查通过） |
-| 版本 | v0.18.0 → v0.28.0 共 11 个版本，34 个开发轮次（pass #1–#34） |
+| 测试 | **2883 vitest / 164 文件**；**E2E 30/30**；cargo 6；浏览器走查（IAB 输入派发受限，事件级验证 + E2E 补位——本轮 CAM 全流程走查通过） |
+| 版本 | v0.18.0 → v0.29.0 共 12 个版本，35 个开发轮次（pass #1–#35） |
 | 可靠性 | 全局错误捕获（errorLog 环形 100/持久 30）+ ErrorBoundary + 诊断对话框（复制/保存/预填 issue 反馈）+ 错误 toast 复制 |
 | 平台 | getOS/getPlatform 检测；⌘/⌥ 快捷键显示；⌘+点击修复；视口三画布 DPR 变更响应；工程图画布补 resize |
 | 布局 | <960px compact：侧面板渲染层抑制（持久化偏好不动）；800×600 无横向溢出、视口 ≥400px（E2E 固化） |
@@ -35,7 +35,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | AI | ~121 个注册工具（含 undo/特征管理/文件交付）；maxIterations 16/32；诚实失败协议 |
 | 几何内核 | Manifold 精确布尔（预热后）；**真 Manifold 圆角/倒角/抽壳**（90° 圆角 +0.26%、水密）；Face 溯源标记；自适应细分；参数化往返漂移实测为零 |
 | 互操作 | STEP 导出 OCCT 可读（FreeCAD 级）；解析圆柱面（同体 16.4MB→115KB）；STL/OBJ/3MF/DXF(sheet)/SVG/PDF |
-| CAM | 轮廓精修四件套 + 环切/螺旋下刀/侧壁精光（凸形限定，凹形回退光栅 ≥99% 覆盖）+ 钻孔循环 G81/82/83 + G54 + 工艺卡 + 毛坯可视化/按刀着色；G2/G3 圆弧后处理（⌀30 圆切削行 −96%）；**顺铣方向已按切屑厚度仿真翻正（M3=材料在右）**；调研见 docs/cnc-research.md + docs/cnc-algorithms.md |
+| CAM | 第 5 工序 Engrave 雕刻（Hershey 文本→刀路，V 刀 tipAngle/tipFlat 字段）；轮廓精修四件套 + 环切/螺旋下刀/侧壁精光（凸形限定，凹形回退光栅 ≥99% 覆盖）+ 钻孔循环 G81/82/83 + G54 + 工艺卡 + 毛坯可视化/按刀着色；G2/G3 圆弧后处理（⌀30 圆切削行 −96%）；**顺铣方向已按切屑厚度仿真翻正（M3=材料在右）**；调研见 docs/cnc-research.md + docs/cnc-algorithms.md |
 | 性能 | 体素路径 AABB 缓存（~12×）；邻接 Map 索引（39×）；主 chunk gzip −49%；指纹 memo；自动保存跳过无变更 |
 | 方法 | 三层验证文化：金测试 → 独立审查（可运行验证）→ 真实浏览器走查；连续三轮拦截规格级错误 |
 
@@ -108,7 +108,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ### E2. CAM 后续（pass #34 后；算法细节见 docs/cnc-algorithms.md）
 
-- [ ] **Engrave 雕刻 + 单线字文本工具**（#34 算法深研 #1 建议：低风险高差异化；前置补 ToolDefinition.tipAngleDeg/tipFlat；验收=文本→sketch→op→G-code 全链路 E2E）
+- [x] ~~Engrave 雕刻 + 单线字文本~~（pass #35 完成：固定深度 E1 + Hershey 文本→刀路全链；下一步 E2 真 V-carve 变深）
 - [ ] **Adaptive/trochoidal 摆线粗加工 v1**（#35 候选：参考刀路偏移法+角落局部 trochoid；前置=多环 Clipper offset 基建——先出纯函数切片；验收=5 金样无过切、啮合角≤目标×1.2、弧段>60%）
 - [ ] **Rest machining heightmap v1**（#35 候选：Float32 worker 2.6MB@0.25mm；残料行区间直接接现有 scanline 管线，零新依赖；验收=空切率<40%）
 - [ ] 环切扩展到凹形区域（需多环 offset 基建，同 Adaptive 前置；当前凹形回退光栅）
@@ -161,3 +161,4 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 | #32 | 10-09 | 平台适配/DPR 变更/响应式布局/帮助美化/安装启动/错误记录复制上报 | v0.26.0 |
 | #33 | 10-10 | CNC 市场调研驱动 CAM 平价补全：轮廓 tabs/方向/spring/ramp + G2/G3 圆弧 + 工序管理/预检 + 仿真控制 | v0.27.0 |
 | #34 | 10-12 | CAM 第二轮：环切/螺旋/侧壁精光 + 钻孔循环/G54/工艺卡/毛坯可视化 + 算法深研 + **顺铣方向翻正** | v0.28.0 |
+| #35 | 10-14 | Engrave 雕刻 + Hershey 单线字文本→刀路全链 + V 刀几何字段 | v0.29.0 |

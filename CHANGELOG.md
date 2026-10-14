@@ -2,6 +2,39 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.29.0] — 2026-10-14
+
+Engrave 雕刻轮（pass #35，算法深研 #1 建议）：**文字→单线字刀路→G-code**
+全链打通（3 实现者并行 + 独立审查 + 浏览器走查）。这是两轮市场调研一致
+点名的"商业软件护城河"功能的第一步（E1 固定深度雕刻；真 V-carve 变深
+为后续轮）。
+
+### CAM — Engrave 雕刻 (Engraving)
+
+- **第 5 种工序 `engrave`**：沿折线组按层下切（engraveDepth 默认=
+  depthOfCut 单层，深于此按 depthOfCut 逐层）；每笔画独立下刀/收刀，
+  plunge/cut 进给分离；无曲线源诚实报错（与 drill 无孔同风格）。
+- **文本→刀路**：面板输入文本（内容/字体/字号/字距/原点 XZ），经
+  Hershey 单线字体实时转为切削折线（毫米、俯视 +z 朝上、基线 z=0、
+  换行 1.4×字号）；4 款字体（futural/futuram/gothicita/timesr）；
+  字距可调、支持多行与回车归一；空文本/空曲线拒绝生成并提示。
+  实测 "SCENELAB"（10mm futural、V 刀、深 1mm）→ 91 条 G1 描线 +
+  66 条 G0 换笔，预览里字母笔画清晰可辨。
+- **V 刀几何字段**：ToolDefinition.tipAngleDeg/tipFlat（默认 60°/90°
+  V 刀落地，自定义刀具随库持久化）——为后续真 V-carve（变深勾线）
+  铺路。
+- **编辑与序列化**：engrave 工序可编辑回填（text 六字段+深度，Update
+  重算曲线）、切走类型自动清场；工程保存/加载往返保留 text+curves
+  （畸形载荷清洗：单点折线/NaN 坐标/空白文本剥离）。
+
+### 基础设施
+
+- 新依赖 hersheytext@2（MIT，仅取其字体数据 JSON，334KB raw/
+  **63KB gzip** 入 io chunk，浏览器不用其 Node 入口）；自研 M/L 路径
+  解析 + capHeight 从字形数据运行时自导出（逐字体多数票 + 兜底）。
+- 修复 gcode.test 既有 flake：两份程序的字节比较剥离 `Generated:`
+  时间戳行（跨毫秒即红的隐患）。
+
 ## [0.28.0] — 2026-10-12
 
 CAM 第二轮：开粗升级 + 输出补全（5 Agent 并行：1 研究 + 4 实现 + 独立审查
