@@ -40,6 +40,53 @@ describe('toolLibrary', () => {
     expect(types.has('drill')).toBe(true);
   });
 
+  it('default V-bits carry their tip geometry (tipAngleDeg/tipFlat)', () => {
+    const v60 = getTool('vbit-60deg');
+    expect(v60).toBeDefined();
+    expect(v60!.type).toBe('vbit');
+    expect(v60!.tipAngleDeg).toBe(60);
+    expect(v60!.tipFlat).toBe(0); // sharp tip
+    const v90 = getTool('vbit-90deg');
+    expect(v90).toBeDefined();
+    expect(v90!.tipAngleDeg).toBe(90);
+    expect(v90!.tipFlat).toBe(0);
+    // Non-tapered defaults stay unspecified (undefined, not 0).
+    expect(getTool('em-6mm')!.tipAngleDeg).toBeUndefined();
+    expect(getTool('em-6mm')!.tipFlat).toBeUndefined();
+  });
+
+  it('custom vbit tip geometry round-trips through addCustomTool and a module reload', async () => {
+    const custom: ToolDefinition = {
+      id: 'custom-vbit',
+      name: 'Custom 30° V-Bit',
+      type: 'vbit',
+      diameter: 6,
+      fluteLength: 8,
+      overallLength: 40,
+      flutes: 1,
+      material: 'carbide',
+      tipAngleDeg: 30,
+      tipFlat: 0.2,
+    };
+    addCustomTool(custom);
+    // In-memory view…
+    expect(getTool('custom-vbit')!.tipAngleDeg).toBe(30);
+    expect(getTool('custom-vbit')!.tipFlat).toBe(0.2);
+    // …the persisted payload (no serialization whitelist to extend)…
+    const stored = JSON.parse(localStorage.getItem('scenelab.customTools')!) as ToolDefinition[];
+    expect(stored.find((t) => t.id === 'custom-vbit')!.tipAngleDeg).toBe(30);
+    expect(stored.find((t) => t.id === 'custom-vbit')!.tipFlat).toBe(0.2);
+    // …and a fresh module instance (= what a page reload sees).
+    vi.resetModules();
+    const fresh = await import('./toolLibrary');
+    expect(fresh.getTool('custom-vbit')!.tipAngleDeg).toBe(30);
+    expect(fresh.getTool('custom-vbit')!.tipFlat).toBe(0.2);
+    // Editing (upsert) updates the tip angle too.
+    fresh.addCustomTool({ ...custom, tipAngleDeg: 45 });
+    expect(fresh.getTool('custom-vbit')!.tipAngleDeg).toBe(45);
+    expect(fresh.getAllTools().filter((t) => t.id === 'custom-vbit')).toHaveLength(1);
+  });
+
   it('addCustomTool adds a new tool', () => {
     const custom: ToolDefinition = {
       id: 'custom-1',

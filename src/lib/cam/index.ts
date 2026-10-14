@@ -20,6 +20,13 @@ export {
   generateDrillToolpath,
   generateFaceToolpath,
 } from './toolpath';
+export { generateEngraveToolpath } from './engrave';
+export type { EngravePoint } from './engrave';
+// Text→polyline source layer for engrave ops. The panel (the app layer's only
+// legal import path is THIS index) bakes text via textToPolylines into
+// CAMOperation.curves, so the textPath surface rides the same boundary.
+export { textToPolylines, ENGRAVE_FONTS } from './textPath';
+export type { EngraveTextPoint, TextToPolylinesOptions } from './textPath';
 export {
   generateGCode,
   generateMultiToolGCode,

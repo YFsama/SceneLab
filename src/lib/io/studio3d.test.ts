@@ -520,6 +520,50 @@ describe('CAM setup serialization', () => {
     expect(backZero.operations[0]!.params.dwellSeconds).toBeUndefined();
   });
 
+  it('round-trips engrave operations (text source + baked curves + depth)', () => {
+    const engrave: CAMOperation = {
+      ...op,
+      id: 'camop_5',
+      name: 'Engrave Hello',
+      type: 'engrave',
+      text: { content: 'HELLO', font: 'gothicita', size: 12, spacing: 1.5, origin: { x: -3, z: 2 } },
+      curves: [
+        [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 1 }],
+        [{ x: 2, z: 0 }, { x: 3, z: 2 }],
+      ],
+      params: { ...op.params, engraveDepth: 1.5 },
+    };
+    const cam: SerializedCam = { stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 5, operations: [engrave] };
+    const back = deserializeCam(loadFromFile(saveToFile(serializeProject('cam-engrave', [], [], [], undefined, undefined, cam))));
+    const e = back.operations[0]!;
+    expect(e.type).toBe('engrave');
+    expect(e.text).toEqual(engrave.text);
+    expect(e.curves).toEqual(engrave.curves);
+    expect(e.params.engraveDepth).toBe(1.5);
+    // Degradation: non-engrave ops never gain text/curves; engrave junk
+    // curves (<2-point strokes) are dropped; blank text is dropped.
+    const junk: SerializedCam = {
+      stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 5,
+      operations: [{
+        ...engrave, id: 'camop_6',
+        text: { content: '   ', font: '', size: 0, spacing: 0, origin: { x: 0, z: 0 } },
+        curves: [[{ x: 1, z: 1 }], [{ x: 0, z: 0 }, { x: NaN, z: 2 }]],
+      }],
+    };
+    const backJunk = deserializeCam(loadFromFile(saveToFile(serializeProject('cam-engrave-junk', [], [], [], undefined, undefined, junk))));
+    const j = backJunk.operations[0]!;
+    expect(j.text).toBeUndefined();
+    expect(j.curves).toBeUndefined();
+    // Type gating (review pass #35 P3): a non-engrave op smuggling
+    // engraveDepth does NOT keep it — it would round-trip as dead weight.
+    const smuggler: SerializedCam = {
+      stock: { mode: 'bounding-box', margin: 2 }, safeZAboveStock: 5,
+      operations: [{ ...op, params: { ...op.params, engraveDepth: 3 } }],
+    };
+    const backPocket = deserializeCam(loadFromFile(saveToFile(serializeProject('cam-smuggle', [], [], [], undefined, undefined, smuggler))));
+    expect(backPocket.operations[0]!.params.engraveDepth).toBeUndefined();
+  });
+
   it('round-trips explicit box stock min/max', () => {
     const cam: SerializedCam = {
       stock: { mode: 'box', min: { x: -1, y: -2, z: -3 }, max: { x: 4, y: 5, z: 6 } },

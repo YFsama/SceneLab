@@ -292,7 +292,7 @@ function sanitizeCamStock(raw: unknown): CAMSetup['stock'] {
 
 /** Numeric params with finite-number overrides on top of the defaults; the
  * optional allowance/peckDepth survive only when finite. */
-function sanitizeCamParams(raw: unknown): CAMParameters {
+function sanitizeCamParams(raw: unknown, opType: string): CAMParameters {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const out: CAMParameters = {
     feedRate: 1000,
@@ -341,7 +341,50 @@ function sanitizeCamParams(raw: unknown): CAMParameters {
   }
   const dwell = finiteNum(p.dwellSeconds);
   if (dwell !== null && dwell > 0) out.dwellSeconds = dwell;
+  // Engrave-only param: gate by op type like text/curves (review pass #35
+  // P3 — a pocket op smuggling engraveDepth would otherwise round-trip
+  // forever as dead weight).
+  if (opType === 'engrave') {
+    const engraveDepth = finiteNum(p.engraveDepth);
+    if (engraveDepth !== null && engraveDepth > 0) out.engraveDepth = engraveDepth;
+  }
   return out;
+}
+
+/** Engrave source text (pass #35): content/font strings + numeric layout. */
+function sanitizeEngraveText(raw: unknown): CAMOperation['text'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const t = raw as Record<string, unknown>;
+  if (typeof t.content !== 'string' || t.content.trim() === '') return undefined;
+  const font = typeof t.font === 'string' && t.font !== '' ? t.font : 'futural';
+  const size = finiteNum(t.size);
+  const spacing = finiteNum(t.spacing);
+  const ox = finiteNum(t.origin && (t.origin as Record<string, unknown>).x);
+  const oz = finiteNum(t.origin && (t.origin as Record<string, unknown>).z);
+  return {
+    content: t.content,
+    font,
+    size: size !== null && size > 0 ? size : 10,
+    spacing: spacing !== null ? spacing : 0,
+    origin: { x: ox ?? 0, z: oz ?? 0 },
+  };
+}
+
+/** Engrave baked polylines: arrays of ≥2 finite points (pass #35). */
+function sanitizeEngraveCurves(raw: unknown): Array<Array<{ x: number; z: number }>> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const curves = raw.flatMap((c): Array<Array<{ x: number; z: number }>> => {
+    if (!Array.isArray(c) || c.length < 2) return [];
+    const pts = c.flatMap((p): Array<{ x: number; z: number }> => {
+      if (!p || typeof p !== 'object') return [];
+      const r = p as Record<string, unknown>;
+      const x = finiteNum(r.x);
+      const z = finiteNum(r.z);
+      return x !== null && z !== null ? [{ x, z }] : [];
+    });
+    return pts.length >= 2 ? [pts] : [];
+  });
+  return curves.length > 0 ? curves : undefined;
 }
 
 /** One operation, or null when the record is too malformed to keep. */
@@ -351,7 +394,8 @@ function sanitizeCamOperation(raw: unknown): CAMOperation | null {
   const type = o.type;
   if (
     typeof o.id !== 'string' || typeof o.name !== 'string' ||
-    (type !== 'pocket' && type !== 'contour' && type !== 'drill' && type !== 'face') ||
+    (type !== 'pocket' && type !== 'contour' && type !== 'drill' &&
+      type !== 'face' && type !== 'engrave') ||
     typeof o.bodyId !== 'string' || typeof o.toolId !== 'string'
   ) return null;
   const holes = Array.isArray(o.holes)
@@ -363,6 +407,8 @@ function sanitizeCamOperation(raw: unknown): CAMOperation | null {
         return x !== null && z !== null && depth !== null ? [{ x, z, depth }] : [];
       })
     : [];
+  const text = type === 'engrave' ? sanitizeEngraveText(o.text) : undefined;
+  const curves = type === 'engrave' ? sanitizeEngraveCurves(o.curves) : undefined;
   return {
     id: o.id,
     name: o.name,
@@ -370,8 +416,10 @@ function sanitizeCamOperation(raw: unknown): CAMOperation | null {
     type,
     bodyId: o.bodyId,
     toolId: o.toolId,
-    params: sanitizeCamParams(o.params),
+    params: sanitizeCamParams(o.params, type),
     ...(holes.length > 0 ? { holes } : {}),
+    ...(text !== undefined ? { text } : {}),
+    ...(curves !== undefined ? { curves } : {}),
   };
 }
 

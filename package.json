@@ -1,7 +1,7 @@
 {
   "name": "scenelab",
   "private": true,
-  "version": "0.28.0",
+  "version": "0.29.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -20,6 +20,7 @@
     "@tauri-apps/plugin-shell": "^2.3.5",
     "clsx": "^2.1.1",
     "fflate": "^0.8.3",
+    "hersheytext": "^2.0.0",
     "lucide-react": "^0.460.0",
     "manifold-3d": "^3.5.1",
     "occt-import-js": "^0.0.23",

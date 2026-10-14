@@ -104,4 +104,50 @@ describe('generateOperationToolpath', () => {
     expect(() => generateOperationToolpath(op({ type: 'drill' }), createBox(30, 20, 20), tool))
       .toThrowError(/pin holes explicitly|check the body/);
   });
+
+  it('engraves op-provided curves (the baked source of truth)', () => {
+    const tp = generateOperationToolpath(
+      op({
+        type: 'engrave',
+        params: { ...params, depthOfCut: 1, engraveDepth: 2 },
+        curves: [
+          [
+            { x: 0, z: 0 },
+            { x: 4, z: 0 },
+            { x: 4, z: 3 },
+          ],
+        ],
+      }),
+      createBox(30, 20, 20),
+      tool,
+    );
+    expect(tp.operation).toBe('engrave');
+    expect(tp.cuttingMoves.length).toBeGreaterThan(0);
+    // Two levels (engraveDepth 2 / doc 1) from stockTop 20.
+    const ys = [...new Set(tp.cuttingMoves.map((p) => p.y.toFixed(3)))];
+    expect(ys).toEqual(['19.000', '18.000']);
+  });
+
+  it('engrave THROWS without curves — and never falls back to op.text', () => {
+    // No curves, no text: refuse, drill-style, naming both remedies.
+    expect(() => generateOperationToolpath(op({ type: 'engrave' }), createBox(30, 20, 20), tool))
+      .toThrowError(/no curves/);
+    expect(() => generateOperationToolpath(op({ type: 'engrave' }), createBox(30, 20, 20), tool))
+      .toThrowError(/curve|text/);
+    // Text alone is re-editing state, NOT a generation source: an op with
+    // text but no curves must still refuse rather than engrave stale text.
+    expect(() =>
+      generateOperationToolpath(
+        op({
+          type: 'engrave',
+          text: { content: 'HELLO', font: 'sans', size: 10, spacing: 1, origin: { x: 0, z: 0 } },
+        }),
+        createBox(30, 20, 20),
+        tool,
+      )).toThrowError(/no curves/);
+    // An empty curves list is just as unusable.
+    expect(() =>
+      generateOperationToolpath(op({ type: 'engrave', curves: [] }), createBox(30, 20, 20), tool))
+      .toThrowError(/no curves/);
+  });
 });

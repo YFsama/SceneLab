@@ -7,6 +7,10 @@ export interface ToolDefinition {
   overallLength: number; // mm
   flutes: number;
   material: 'carbide' | 'hss' | 'cobalt';
+  /** Included tip angle for vbit tools (degrees). Undefined for non-tapered tools. */
+  tipAngleDeg?: number;
+  /** Flat tip diameter for vbit tools (mm); 0/undefined = sharp tip. */
+  tipFlat?: number;
 }
 
 export interface CAMParameters {
@@ -42,6 +46,8 @@ export interface CAMParameters {
   drillCycle?: 'peck' | 'simple' | 'dwell';
   /** Dwell seconds for drillCycle 'dwell' (post clamps 0.01–5, default 0.5). */
   dwellSeconds?: number;
+  /** Engrave target depth below stockTop (mm). Default: depthOfCut (single pass). Steps down by depthOfCut when deeper. */
+  engraveDepth?: number;
 }
 
 /**
@@ -70,7 +76,7 @@ export interface ToolpathPoint {
 export interface Toolpath {
   id: string;
   name: string;
-  operation: 'pocket' | 'contour' | 'drill' | 'face';
+  operation: 'pocket' | 'contour' | 'drill' | 'face' | 'engrave';
   tool: ToolDefinition;
   params: CAMParameters;
   points: ToolpathPoint[];

@@ -12,6 +12,8 @@ import {
   detectCircularHoles,
   generateSetupSheetHtml,
   programSafeZ,
+  textToPolylines,
+  ENGRAVE_FONTS,
 } from '../../lib/cam';
 import type {
   MachineProfile, CAMParameters, CAMOperation, WorkMaterial, GCodeOptions, SetupSheetOp,
@@ -23,7 +25,7 @@ import { GCodePreview } from '../ui/GCodePreview';
 import { SetupSheet } from '../ui/SetupSheet';
 import {
   Cog, Play, Pause, RotateCcw, Download, Clock, Wrench, Gauge, Trash2, RefreshCw, Plus,
-  Pencil, Copy, ChevronUp, ChevronDown, SkipForward, Eye, X, ClipboardList,
+  Pencil, Copy, ChevronUp, ChevronDown, SkipForward, Eye, X, ClipboardList, PenLine,
 } from 'lucide-react';
 
 const WORK_MATERIALS: WorkMaterial[] = [
@@ -55,11 +57,12 @@ const SIM_SPEEDS = [0.25, 0.5, 1, 2, 4, 8] as const;
 
 /**
  * The op-type-specific CAMParameters fields — contour (direction/tabs/
- * springPass/rampEntry) and pass #34 (pocketStrategy/helixEntry/wallFinishPass/
- * drillCycle/dwellSeconds) — bind through dedicated draft controls below, so a
- * stored op's params are STRIPPED of them when loaded into the numeric draft:
- * the dedicated controls are the single source of truth and a stale value can
- * never leak back into a different op type on the next Generate.
+ * springPass/rampEntry), pass #34 (pocketStrategy/helixEntry/wallFinishPass/
+ * drillCycle/dwellSeconds) and pass #35 (engraveDepth) — bind through
+ * dedicated draft controls below, so a stored op's params are STRIPPED of
+ * them when loaded into the numeric draft: the dedicated controls are the
+ * single source of truth and a stale value can never leak back into a
+ * different op type on the next Generate.
  */
 function stripOpExtras(p: CAMParameters): CAMParameters {
   const out = { ...p } as CAMParameters & Record<string, unknown>;
@@ -72,6 +75,7 @@ function stripOpExtras(p: CAMParameters): CAMParameters {
   delete out['wallFinishPass'];
   delete out['drillCycle'];
   delete out['dwellSeconds'];
+  delete out['engraveDepth'];
   return out;
 }
 
@@ -180,7 +184,7 @@ export function CAMPanel() {
   const regenerateCamToolpaths = useStore((s) => s.regenerateCamToolpaths);
 
   const [selectedTool, setSelectedTool] = useState<string>('em-6mm');
-  const [operation, setOperation] = useState<'pocket' | 'contour' | 'drill' | 'face'>('pocket');
+  const [operation, setOperation] = useState<'pocket' | 'contour' | 'drill' | 'face' | 'engrave'>('pocket');
   const [params, setParams] = useState<CAMParameters>(defaultParams);
   const [workMaterial, setWorkMaterial] = useState<WorkMaterial>('aluminum');
   // Explicit body pick (null = whatever the scene offers first). Derived
@@ -225,6 +229,20 @@ export function CAMPanel() {
   // ('peck' default); dwell seconds ride along only for the dwell cycle.
   const [drillCycle, setDrillCycle] = useState<'peck' | 'simple' | 'dwell'>('peck');
   const [dwellSeconds, setDwellSeconds] = useState(0.5);
+
+  // Engrave-only drafts (pass #35): the text SPEC (content/font/size/spacing/
+  // origin — the re-edit source, stored verbatim on the op) plus the engrave
+  // depth (a CAMParameters field, stripOpExtras'd like every op-type-specific
+  // param). The CURVES are derived, never drafted: generate/update recompute
+  // them from these fields via textToPolylines, so the op's stored text is
+  // always the truth its curves were cut from.
+  const [engraveText, setEngraveText] = useState('');
+  const [engraveFont, setEngraveFont] = useState(ENGRAVE_FONTS[0] ?? '');
+  const [engraveSize, setEngraveSize] = useState(10);
+  const [engraveSpacing, setEngraveSpacing] = useState(0);
+  const [engraveOriginX, setEngraveOriginX] = useState(0);
+  const [engraveOriginZ, setEngraveOriginZ] = useState(0);
+  const [engraveDepth, setEngraveDepth] = useState(1);
 
   // G-code preview modal (generated on demand; never cached in the store).
   const [preview, setPreview] = useState<{
@@ -326,11 +344,45 @@ export function CAMPanel() {
     }));
   };
 
+  /**
+   * Engrave curves from the drafts (pass #35): textToPolylines output with
+   * every point translated by the origin (+x/+z). Returns null — with a
+   * warning toast — when the drafts can't produce curves: blank text, or a
+   * non-blank text the font renders into nothing (e.g. a lone space).
+   * Called by BOTH generate and update so editing recomputes curves through
+   * exactly the generation path.
+   */
+  const engraveCurves = (): Array<Array<{ x: number; z: number }>> | null => {
+    if (engraveText.trim() === '') {
+      showToast(t('cam.engraveEmpty'), 'warning');
+      return null;
+    }
+    const curves = textToPolylines(engraveText, {
+      font: engraveFont,
+      size: engraveSize,
+      spacing: engraveSpacing,
+    }).map((poly) => poly.map((p) => ({ x: p.x + engraveOriginX, z: p.z + engraveOriginZ })));
+    if (curves.length === 0) {
+      showToast(t('cam.engraveNoCurves'), 'warning');
+      return null;
+    }
+    return curves;
+  };
+
+  /** The op's text spec — the verbatim re-edit source (see the draft block). */
+  const engraveTextSpec = (): NonNullable<CAMOperation['text']> => ({
+    content: engraveText,
+    font: engraveFont,
+    size: engraveSize,
+    spacing: engraveSpacing,
+    origin: { x: engraveOriginX, z: engraveOriginZ },
+  });
+
   /** Compose the op params from the drafts: numeric base + stock seeding from
    * the TARGET BODY's bbox (the raw 0/−10 defaults would plan below a body
-   * resting on the origin plane) + the op-type-specific fields (contour and
-   * the pass #34 pocket/drill contracts; see the draft blocks for the
-   * omit/undefined rule). */
+   * resting on the origin plane) + the op-type-specific fields (contour, the
+   * pass #34 pocket/drill contracts and pass #35's engraveDepth; see the
+   * draft blocks for the omit/undefined rule). */
   const opParams = (mode: 'add' | 'update', bb: ReturnType<typeof computeBoundingBox>): CAMParameters => {
     const out: CAMParameters = { ...params, stockTop: bb.max.y, stockBottom: bb.min.y, safeZAboveStock };
     if (operation === 'contour') {
@@ -368,6 +420,11 @@ export function CAMPanel() {
       out.drillCycle = undefined;
       out.dwellSeconds = undefined;
     }
+    if (operation === 'engrave') {
+      out.engraveDepth = engraveDepth; // always concrete (1 default)
+    } else if (mode === 'update') {
+      out.engraveDepth = undefined;
+    }
     return out;
   };
 
@@ -377,6 +434,10 @@ export function CAMPanel() {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
+    // Engrave: validate the text and derive the curves BEFORE anything
+    // mutates — a refusal leaves the draft exactly as typed (no half-added op).
+    const curves = operation === 'engrave' ? engraveCurves() : null;
+    if (operation === 'engrave' && curves === null) return;
     const bb = computeBoundingBox(targetBody);
     addCamOperation({
       name: `${t(`cam.${operation}`)} — ${targetBody.name}`,
@@ -387,6 +448,8 @@ export function CAMPanel() {
       params: opParams('add', bb),
       // Omitted/empty holes → the generator auto-detects on the body.
       ...(operation === 'drill' && drillHoles.length > 0 ? { holes: drillHoles } : {}),
+      // Engrave carries its re-edit source (text) plus the derived curves.
+      ...(operation === 'engrave' && curves ? { text: engraveTextSpec(), curves } : {}),
     });
     showToast(t('cam.generated'), 'success');
   };
@@ -399,6 +462,10 @@ export function CAMPanel() {
       showToast(t('toast.noBodies'), 'warning');
       return;
     }
+    // Same engrave gate as generate: the text must yield curves before the
+    // patch is built (the recomputed curves ARE the update's payload).
+    const curves = operation === 'engrave' ? engraveCurves() : null;
+    if (operation === 'engrave' && curves === null) return;
     const bb = computeBoundingBox(targetBody);
     const bodyChanged = editingOp.bodyId !== targetBody.id;
     // Derived name (pass #34): rebuilt ONLY when a derivation input moved
@@ -426,6 +493,13 @@ export function CAMPanel() {
       ...(operation === 'drill' && bodyChanged
         ? { holes: detectedHoles.map((h) => ({ x: h.centre.x, z: h.centre.z, depth: h.depth })) }
         : {}),
+      // Engrave: fresh text + recomputed curves on engrave; key-level
+      // undefined clears both when the type moves away (top-level fields
+      // replace in the patch merge — the #33 params-level clearing pattern,
+      // applied one level up for the op fields).
+      ...(operation === 'engrave' && curves
+        ? { text: engraveTextSpec(), curves }
+        : { text: undefined, curves: undefined }),
     });
     setEditingId(null);
     showToast(t('cam.generated'), 'success');
@@ -455,6 +529,16 @@ export function CAMPanel() {
     setWallFinishPass(!!op.params.wallFinishPass);
     setDrillCycle(op.params.drillCycle ?? 'peck');
     setDwellSeconds(op.params.dwellSeconds ?? 0.5);
+    // Engrave: the op's text spec loads back field-by-field (curves are NOT
+    // drafted — Update recomputes them through the generation path), depth
+    // into its dedicated draft (stripOpExtras kept it out of the numeric base).
+    setEngraveText(op.text?.content ?? '');
+    setEngraveFont(op.text?.font ?? ENGRAVE_FONTS[0] ?? '');
+    setEngraveSize(op.text?.size ?? 10);
+    setEngraveSpacing(op.text?.spacing ?? 0);
+    setEngraveOriginX(op.text?.origin.x ?? 0);
+    setEngraveOriginZ(op.text?.origin.z ?? 0);
+    setEngraveDepth(op.params.engraveDepth ?? 1);
   };
 
   const handleDuplicate = (id: string) => {
@@ -768,7 +852,7 @@ export function CAMPanel() {
         <div>
           <span className="block text-text-muted mb-1">{t('cam.operation')}</span>
           <div className="flex gap-1" role="radiogroup" aria-label={t('cam.operation')}>
-            {(['pocket', 'contour', 'drill', 'face'] as const).map((op) => (
+            {(['pocket', 'contour', 'drill', 'face', 'engrave'] as const).map((op) => (
               <button
                 key={op}
                 onClick={() => setOperation(op)}
@@ -1027,6 +1111,104 @@ export function CAMPanel() {
                     onChange={(e) => setDwellSeconds(Number(e.target.value))}
                     className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
                   />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Engrave-only parameters (pass #35): the text spec — content
+           * (multi-line textarea), single-line font, size, letter spacing and
+           * the engraving origin — plus the cut depth. The V-bit hint is
+           * advisory only: any tool stays selectable (no hard limit). */}
+          {operation === 'engrave' && (
+            <div className="space-y-1.5 rounded bg-surface p-2">
+              <div>
+                <label htmlFor="cam-engrave-text" className="text-text-muted text-[10px]">{t('cam.engraveText')}</label>
+                <textarea
+                  id="cam-engrave-text"
+                  rows={3}
+                  value={engraveText}
+                  placeholder={t('cam.engravePlaceholder')}
+                  onChange={(e) => setEngraveText(e.target.value)}
+                  className="w-full px-2 py-1 bg-surface border border-panel-border rounded text-text-primary resize-y"
+                />
+              </div>
+              <div>
+                <label htmlFor="cam-engrave-font" className="text-text-muted text-[10px]">{t('cam.font')}</label>
+                <select
+                  id="cam-engrave-font"
+                  value={engraveFont}
+                  onChange={(e) => setEngraveFont(e.target.value)}
+                  className="w-full px-2 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                >
+                  {ENGRAVE_FONTS.map((font) => (
+                    <option key={font} value={font}>{font}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div>
+                  <label htmlFor="cam-engrave-size" className="text-text-muted text-[10px]">{t('cam.fontSize')}</label>
+                  <input
+                    id="cam-engrave-size"
+                    type="number"
+                    min={0.1}
+                    step={0.5}
+                    value={engraveSize}
+                    onChange={(e) => setEngraveSize(Number(e.target.value))}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="cam-engrave-spacing" className="text-text-muted text-[10px]">{t('cam.letterSpacing')}</label>
+                  <input
+                    id="cam-engrave-spacing"
+                    type="number"
+                    step={0.1}
+                    value={engraveSpacing}
+                    onChange={(e) => setEngraveSpacing(Number(e.target.value))}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="cam-engrave-origin-x" className="text-text-muted text-[10px]">{t('cam.originX')}</label>
+                  <input
+                    id="cam-engrave-origin-x"
+                    type="number"
+                    step={0.5}
+                    value={engraveOriginX}
+                    onChange={(e) => setEngraveOriginX(Number(e.target.value))}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="cam-engrave-origin-z" className="text-text-muted text-[10px]">{t('cam.originZ')}</label>
+                  <input
+                    id="cam-engrave-origin-z"
+                    type="number"
+                    step={0.5}
+                    value={engraveOriginZ}
+                    onChange={(e) => setEngraveOriginZ(Number(e.target.value))}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="cam-engrave-depth" className="text-text-muted text-[10px]">{t('cam.engraveDepth')}</label>
+                  <input
+                    id="cam-engrave-depth"
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    value={engraveDepth}
+                    onChange={(e) => setEngraveDepth(Number(e.target.value))}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+              </div>
+              {activeTool && activeTool.type !== 'vbit' && (
+                <div className="flex items-center gap-1 text-[10px] text-warning" title={t('cam.vbitHint')}>
+                  <PenLine size={11} className="shrink-0" />
+                  <span>{t('cam.vbitHint')}</span>
                 </div>
               )}
             </div>

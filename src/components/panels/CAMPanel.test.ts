@@ -8,17 +8,19 @@ import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts } from '../../lib/toast';
 import {
   defaultCamSetup, generateMultiToolGCode, getAllTools, getTool, clearCustomTools,
-  detectCircularHoles,
+  detectCircularHoles, textToPolylines, ENGRAVE_FONTS,
 } from '../../lib/cam';
 import { downloadFile } from '../../lib/io/studio3d';
 
 // The panel is rendered for real (jsdom + createRoot + act, the project's
 // mount-harness style). Only the SIDE-EFFECTFUL leaves are mocked — the
-// G-code post-processor (to assert the export call), the file download and
-// the PANEL-SIDE hole detection (to script the drill re-detect scenarios;
-// the store/generator chain imports detectCircularHoles straight from
-// geometry/query, so its detection stays real) — everything else (store
-// actions, the real generator) runs live.
+// G-code post-processor (to assert the export call), the file download, the
+// PANEL-SIDE hole detection (to script the drill re-detect scenarios; the
+// store/generator chain imports detectCircularHoles straight from
+// geometry/query, so its detection stays real) and the text rasterizer
+// (pass #35: fixed polylines make the origin translation and Update
+// recomputation deterministic) — everything else (store actions, the real
+// generator) runs live.
 
 vi.mock('../../lib/cam', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/cam')>();
@@ -26,6 +28,7 @@ vi.mock('../../lib/cam', async (importOriginal) => {
     ...actual,
     generateMultiToolGCode: vi.fn(actual.generateMultiToolGCode),
     detectCircularHoles: vi.fn(actual.detectCircularHoles),
+    textToPolylines: vi.fn(actual.textToPolylines),
   };
 });
 
@@ -109,6 +112,7 @@ describe('CAMPanel (rendered, store-driven)', () => {
     clearToasts();
     vi.mocked(generateMultiToolGCode).mockClear();
     vi.mocked(detectCircularHoles).mockClear();
+    vi.mocked(textToPolylines).mockClear();
     vi.mocked(downloadFile).mockClear();
     clearCustomTools();
     localStorage.removeItem('scenelab.customTools');
@@ -898,6 +902,225 @@ describe('CAMPanel (rendered, store-driven)', () => {
       op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
       expect(op.name).toBe(`${translations.en!['cam.contour']!} — Plate${suffix}`);
       expect(op.type).toBe('contour');
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  // --- Pass #35: engrave (text → single-line font curves) -------------------
+  // The engrave contract: op.text is the re-edit source carried verbatim,
+  // op.curves the baked generation input (textToPolylines output translated
+  // by the origin), params.engraveDepth the cut depth. The rasterizer is
+  // MOCKED (scripted fixed polylines) so the origin math and the Update
+  // recomputation are deterministic — the font rendering itself is
+  // textPath.test.ts's domain.
+
+  /** The operation-type radio button by its localized label. */
+  function radioByLabel(container: HTMLElement, label: string): HTMLButtonElement {
+    const radio = [...container.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+      .find((b) => (b.textContent ?? '').trim() === label);
+    if (!radio) throw new Error(`no operation radio labeled "${label}"`);
+    return radio;
+  }
+
+  /** Change a controlled React textarea the way a real user edit does. */
+  async function setTextArea(input: HTMLTextAreaElement, value: string): Promise<void> {
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it('the engrave radio reveals the text parameter block; the V-bit hint is advisory', async () => {
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { radioByLabel(m.container, translations.en!['cam.engrave']!).click(); });
+
+      // The block appeared: textarea + font select (every curated font, the
+      // first default) + the numeric fields with their defaults.
+      const text = m.container.querySelector<HTMLTextAreaElement>('#cam-engrave-text')!;
+      expect(text).not.toBeNull();
+      expect(text.value).toBe('');
+      const font = m.container.querySelector<HTMLSelectElement>('#cam-engrave-font')!;
+      expect([...font.options].map((o) => o.value)).toEqual([...ENGRAVE_FONTS]);
+      expect(font.value).toBe(ENGRAVE_FONTS[0]!);
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-size')!.value).toBe('10');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-spacing')!.value).toBe('0');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-origin-x')!.value).toBe('0');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-origin-z')!.value).toBe('0');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-depth')!.value).toBe('1');
+
+      // Default tool is an end mill → the advisory hint shows; picking a V-bit
+      // clears it (advisory only — other tools stay fully usable).
+      expect(m.container.textContent).toContain(translations.en!['cam.vbitHint']!);
+      await chooseOption(m.container.querySelector<HTMLSelectElement>('#cam-tool-select')!, 'vbit-60deg');
+      expect(m.container.textContent).not.toContain(translations.en!['cam.vbitHint']!);
+
+      // Switching the draft away hides the block (the pocket block returns).
+      await act(async () => { radioByLabel(m.container, translations.en!['cam.pocket']!).click(); });
+      expect(m.container.querySelector('#cam-engrave-text')).toBeNull();
+      expect(m.container.querySelector('#cam-pocket-strategy')).not.toBeNull();
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('engrave Generate with blank text warns and adds no operation', async () => {
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { radioByLabel(m.container, translations.en!['cam.engrave']!).click(); });
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+
+      expect(useStore.getState().camSetup.operations).toHaveLength(0);
+      expect(getToasts().some((t) => t.message === translations.en!['cam.engraveEmpty']!)).toBe(true);
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('engrave Generate with text that yields no curves warns and adds nothing', async () => {
+    const actual = await vi.importActual<typeof import('../../lib/cam')>('../../lib/cam');
+    vi.mocked(textToPolylines).mockImplementation(() => []);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { radioByLabel(m.container, translations.en!['cam.engrave']!).click(); });
+      await setTextArea(m.container.querySelector<HTMLTextAreaElement>('#cam-engrave-text')!, 'AB');
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+
+      expect(useStore.getState().camSetup.operations).toHaveLength(0);
+      expect(getToasts().some((t) => t.message === translations.en!['cam.engraveNoCurves']!)).toBe(true);
+    } finally {
+      vi.mocked(textToPolylines).mockImplementation(actual.textToPolylines);
+      await unmount(m);
+    }
+  });
+
+  it('engrave Generate carries the text spec, origin-translated curves and depth', async () => {
+    const actual = await vi.importActual<typeof import('../../lib/cam')>('../../lib/cam');
+    vi.mocked(textToPolylines).mockImplementation(() => [[{ x: 1, z: 2 }, { x: 3, z: 4 }]]);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { radioByLabel(m.container, translations.en!['cam.engrave']!).click(); });
+      await setTextArea(m.container.querySelector<HTMLTextAreaElement>('#cam-engrave-text')!, 'AB');
+      await setNumberInput(m.container.querySelector<HTMLInputElement>('#cam-engrave-origin-x')!, '5');
+      await setNumberInput(m.container.querySelector<HTMLInputElement>('#cam-engrave-origin-z')!, '7');
+      await setNumberInput(m.container.querySelector<HTMLInputElement>('#cam-engrave-depth')!, '1.5');
+
+      await act(async () => { buttonByText(m.container, translations.en!['cam.generate']!)!.click(); });
+      const op = useStore.getState().camSetup.operations[0]!;
+      expect(op.type).toBe('engrave');
+      // The op carries its re-edit source verbatim…
+      expect(op.text).toEqual({
+        content: 'AB', font: ENGRAVE_FONTS[0]!, size: 10, spacing: 0, origin: { x: 5, z: 7 },
+      });
+      // …and the curves are the polylines translated by the origin (+x/+z).
+      expect(op.curves).toEqual([[{ x: 6, z: 9 }, { x: 8, z: 11 }]]);
+      expect(op.params.engraveDepth).toBe(1.5);
+      // The rasterizer saw the drafts VERBATIM — translation happens after.
+      expect(textToPolylines).toHaveBeenCalledWith('AB', { font: ENGRAVE_FONTS[0]!, size: 10, spacing: 0 });
+    } finally {
+      vi.mocked(textToPolylines).mockImplementation(actual.textToPolylines);
+      await unmount(m);
+    }
+  });
+
+  it('editing an engrave op loads the text drafts; Update recomputes the curves', async () => {
+    const box = useStore.getState().bodies[0]!;
+    const id = useStore.getState().addCamOperation({
+      name: 'Engrave — Box', enabled: true, type: 'engrave', bodyId: box.id, toolId: 'vbit-60deg',
+      params: { ...params, engraveDepth: 2 },
+      text: { content: 'Hi', font: ENGRAVE_FONTS[0]!, size: 8, spacing: 0.5, origin: { x: 2, z: 3 } },
+      curves: [[{ x: 0, z: 0 }, { x: 1, z: 1 }]],
+    });
+    const actual = await vi.importActual<typeof import('../../lib/cam')>('../../lib/cam');
+    vi.mocked(textToPolylines).mockImplementation(() => [[{ x: 1, z: 1 }, { x: 2, z: 2 }]]);
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+
+      // Draft loaded field-by-field; curves are NOT drafted (recomputed).
+      expect(m.container.querySelector<HTMLSelectElement>('#cam-tool-select')!.value).toBe('vbit-60deg');
+      expect(radioByLabel(m.container, translations.en!['cam.engrave']!).getAttribute('aria-checked')).toBe('true');
+      expect(m.container.querySelector<HTMLTextAreaElement>('#cam-engrave-text')!.value).toBe('Hi');
+      expect(m.container.querySelector<HTMLSelectElement>('#cam-engrave-font')!.value).toBe(ENGRAVE_FONTS[0]!);
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-size')!.value).toBe('8');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-spacing')!.value).toBe('0.5');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-origin-x')!.value).toBe('2');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-origin-z')!.value).toBe('3');
+      expect(m.container.querySelector<HTMLInputElement>('#cam-engrave-depth')!.value).toBe('2');
+
+      // Re-edit the content, Update → text carried verbatim and the curves
+      // recomputed through the SAME generation path (mock + origin 2/3).
+      await setTextArea(m.container.querySelector<HTMLTextAreaElement>('#cam-engrave-text')!, 'Yo');
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+      const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      expect(op.text).toEqual({
+        content: 'Yo', font: ENGRAVE_FONTS[0]!, size: 8, spacing: 0.5, origin: { x: 2, z: 3 },
+      });
+      expect(op.curves).toEqual([[{ x: 3, z: 4 }, { x: 4, z: 5 }]]);
+      expect(op.params.engraveDepth).toBe(2);
+      // Patched in place; the editing session exited.
+      expect(useStore.getState().camSetup.operations).toHaveLength(1);
+      expect(buttonByText(m.container, translations.en!['cam.generate']!)).not.toBeNull();
+    } finally {
+      vi.mocked(textToPolylines).mockImplementation(actual.textToPolylines);
+      await unmount(m);
+    }
+  });
+
+  it('Update clears text/curves/engraveDepth when the type moves away from engrave', async () => {
+    const box = useStore.getState().bodies[0]!;
+    const id = useStore.getState().addCamOperation({
+      name: 'Engrave — Box', enabled: true, type: 'engrave', bodyId: box.id, toolId: 'vbit-60deg',
+      params: { ...params, engraveDepth: 1.5 },
+      text: { content: 'Hi', font: ENGRAVE_FONTS[0]!, size: 10, spacing: 0, origin: { x: 0, z: 0 } },
+      curves: [[{ x: 0, z: 0 }, { x: 1, z: 0 }]],
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      await act(async () => { buttonByTitle(m.container, translations.en!['cam.edit']!)!.click(); });
+      await act(async () => { radioByLabel(m.container, translations.en!['cam.pocket']!).click(); });
+      await act(async () => { buttonByText(m.container, translations.en!['cam.update']!)!.click(); });
+
+      const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+      expect(op.type).toBe('pocket');
+      // Key-level undefined clearing (the #33 params pattern, one level up):
+      // the patch merge is {...o, ...patch}, so explicit undefineds drop the
+      // engrave fields an earlier edit wrote.
+      expect(op.text).toBeUndefined();
+      expect(op.curves).toBeUndefined();
+      expect(op.params.engraveDepth).toBeUndefined();
+    } finally {
+      await unmount(m);
+    }
+  });
+
+  it('an engrave op with a cached toolpath previews through the shared G-code path', async () => {
+    const box = useStore.getState().bodies[0]!;
+    useStore.getState().addCamOperation({
+      name: 'Engrave — Box', enabled: true, type: 'engrave', bodyId: box.id, toolId: 'vbit-60deg',
+      params: { ...params, engraveDepth: 1 },
+      text: { content: 'AB', font: ENGRAVE_FONTS[0]!, size: 10, spacing: 0, origin: { x: 0, z: 0 } },
+      curves: [[{ x: 0, z: 0 }, { x: 2, z: 0 }, { x: 2, z: 2 }]],
+    });
+
+    const m = await mount(createElement(CAMPanel));
+    try {
+      const id = useStore.getState().camSetup.operations[0]!.id;
+      // Body + tool resolve → the store cached the engrave toolpath (the
+      // generator engraves the baked curves). No special-casing downstream:
+      // preview, time estimate and the sheet all read the same cache.
+      expect(useStore.getState().camToolpaths[id]).toBeDefined();
+      expect(buttonById(m.container, 'cam-gcode-preview')!.disabled).toBe(false);
+      await act(async () => { buttonById(m.container, 'cam-gcode-preview')!.click(); });
+      expect(generateMultiToolGCode).toHaveBeenCalledTimes(1);
+      expect(m.container.textContent).toContain(translations.en!['cam.previewTitle']!);
+      expect(m.container.querySelector('pre')!.textContent).toContain('Profile: grbl');
     } finally {
       await unmount(m);
     }

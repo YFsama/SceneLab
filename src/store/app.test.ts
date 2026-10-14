@@ -3499,4 +3499,48 @@ describe('CAM setup state (operations + toolpath cache)', () => {
     expect(useStore.getState().camSetup).toEqual(defaultCamSetup());
     expect(useStore.getState().camToolpaths).toEqual({});
   });
+
+  // --- Pass #35: engrave ops (text spec + baked curves ride the op) ----------
+
+  it('addCamOperation stores an engrave op with text/curves and caches its toolpath', () => {
+    const text = { content: 'AB', font: 'futural', size: 10, spacing: 0, origin: { x: 1, z: 2 } };
+    const curves = [[{ x: 1, z: 2 }, { x: 2, z: 2 }]];
+    const id = useStore.getState().addCamOperation({
+      name: 'Engrave', enabled: true, type: 'engrave', bodyId: box.id, toolId: 'vbit-60deg',
+      params: { ...params, engraveDepth: 1 }, text, curves,
+    });
+    const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+    expect(op.type).toBe('engrave');
+    // The re-edit source and the baked curves ride the op verbatim.
+    expect(op.text).toEqual(text);
+    expect(op.curves).toEqual(curves);
+    expect(op.params.engraveDepth).toBe(1);
+    // The generator engraves the baked curves against the live body → cache.
+    const cache = useStore.getState().camToolpaths[id]!;
+    expect(cache).toBeDefined();
+    expect(cache.toolpath.points.length).toBeGreaterThan(0);
+  });
+
+  it('updateCamOperation clears text/curves/engraveDepth when the type moves away', () => {
+    const id = useStore.getState().addCamOperation({
+      name: 'Engrave', enabled: true, type: 'engrave', bodyId: box.id, toolId: 'vbit-60deg',
+      params: { ...params, engraveDepth: 1.5 },
+      text: { content: 'AB', font: 'futural', size: 10, spacing: 0, origin: { x: 0, z: 0 } },
+      curves: [[{ x: 0, z: 0 }, { x: 1, z: 0 }]],
+    });
+    // The panel's switch-away patch: type moves to pocket with key-level
+    // undefineds clearing the engrave fields (top-level replace + the
+    // key-wise params merge).
+    useStore.getState().updateCamOperation(id, {
+      type: 'pocket',
+      text: undefined,
+      curves: undefined,
+      params: { engraveDepth: undefined },
+    });
+    const op = useStore.getState().camSetup.operations.find((o) => o.id === id)!;
+    expect(op.type).toBe('pocket');
+    expect(op.text).toBeUndefined();
+    expect(op.curves).toBeUndefined();
+    expect(op.params.engraveDepth).toBeUndefined();
+  });
 });

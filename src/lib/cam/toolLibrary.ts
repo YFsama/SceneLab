@@ -60,6 +60,8 @@ const defaultTools: ToolDefinition[] = [
     overallLength: 50,
     flutes: 2,
     material: 'carbide',
+    tipAngleDeg: 60,
+    tipFlat: 0,
   },
   {
     id: 'vbit-90deg',
@@ -70,6 +72,8 @@ const defaultTools: ToolDefinition[] = [
     overallLength: 50,
     flutes: 2,
     material: 'carbide',
+    tipAngleDeg: 90,
+    tipFlat: 0,
   },
   {
     id: 'drill-3mm',

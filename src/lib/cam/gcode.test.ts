@@ -320,8 +320,11 @@ describe('wcs option — optional G54 in the program header', () => {
     const lines = g.split('\n');
     const g94 = lines.findIndex((l) => l.startsWith('G94'));
     expect(lines[g94 + 1]).toMatch(/^G0 Z/);
-    // Passing an empty options object changes nothing either.
-    expect(generateGCode(makeToolpath(), 'grbl', {})).toBe(generateGCode(makeToolpath()));
+    // Passing an empty options object changes nothing either. The Generated
+    // timestamp line is stripped first — two separate calls can straddle a
+    // millisecond boundary and the raw toBe would flake (observed pass #35).
+    const stripStamp = (s: string): string => s.split('\n').filter((l) => !l.startsWith('; Generated:')).join('\n');
+    expect(stripStamp(generateGCode(makeToolpath(), 'grbl', {}))).toBe(stripStamp(generateGCode(makeToolpath())));
   });
 });
 
