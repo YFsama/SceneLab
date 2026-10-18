@@ -2,6 +2,99 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [Unreleased]
+
+### 几何 — 解析面承载层 P2a（FaceSource 联合扩展）
+
+`Face.source` 从 cylinder 单成员扩展为 5 成员解析面联合：`plane`（无
+生产者，SMLib 预留）/ `cylinder`（**逐字段不变**）/ `cone`（完整链
+路）/ `sphere`（代数拟合分类）/ `torus`（类型+序列化+STEP 写出就
+绪，无分类器）。多 Agent 轮：契约 → 实现 → 独立审查 → 集成验收。
+
+- **锥面完整链路**：分类器两阶段定轴（特征向量初值 → 最大轴向间隙
+  分割取两截面 3D 质心精化 → 逐环 Kåsa 拟圆；半径线性变化且半角
+  ∈(2°,80°) 打锥，法向 |n·axis|≈sinθ 符号守卫拒球带伪装）；近柱锥
+  面（<2°）诚实不打标。⌀20→⌀10 h15 圆台：apex/halfAngle 误差
+  <1e-9。`createRevolve` 按构造打标（轴平行边→柱、斜边→锥）。
+- **STEP 导出**：`CONICAL_SURFACE`（placement=apex+axis，radius 律
+  r(t)=t·tanθ）+ rim `CIRCLE`（半径恰 5/10）；球/环面写出就绪。真
+  实 OCCT 往返（opt-in）：打标圆台导出重导入 = 1 个 solid，体积差
+  <0.05%。圆柱路径数值零漂移。
+- **序列化防御**：`sanitizeFaceSource` 加载端唯一入口——未知 kind
+  （如手写 hyperboloid）与畸形数据（NaN/零轴/半角≥π/2/minor>major）
+  丢 tag 保留几何；旧格式（仅 cylinder）快照恒等保留。
+- **顺手修复 `jacobiEigen` 真 bug**：打包对称存储的 (p,q) 共享单元被
+  原地写坏 → 锥面法向散布矩阵永不收敛返回 null；修复只把 null 变
+  为收敛结果，圆柱输出数值不变（基线对照 + 全量金测证实）。
+- 测试 +25（faceSource 11、step 9、step-roundtrip OCCT 1、studio3d
+  4）。
+- **审查处置追加**（独立审查发现）：`translateBody`/`rotateBody` 不再
+  丢弃 `face.source` 与 body 级 colour/opacity/material——平移/旋转现
+  在把解析标签随网格一同变换（刚体移动后的圆柱仍是解析圆柱，STEP/CAM
+  弧不因变换降级）；STEP 锥面写出加 1e-6 rad 半角下限（防 6 位小数
+  把 semi_angle 写成 0.000000 的退化锥）；补斜轴/球带伪装/短柱/序列
+  化边界负例与正例。**如实记录两个端到端限制**（todo.md）：斜轴壁面
+  的分类管线因输出去抽稀合并断链暂不通（缓解=变换携带标签）；createRevolve
+  输出过不了 exact 布尔（只能走构造打标）。
+
+### CAM — 真圆弧刀路直出 P2b（Toolpath 圆弧段）
+
+圆柱壁解析 tag 作 ground truth，contour 工序直出 G2/G3，绕过"离散
+→fitArcs 再拟合"往返。
+
+- **`ToolpathPoint.arcTo?: {center, ccw}`**（附加式）：挂弧终点描述
+  "前一点→本点"的移动；折线消费者零破坏。
+- **`arcSources.ts`** 纯函数：‖Y 轴圆柱 tag → 规划面圆集合；折线环
+  匹配（整环/连续段，径向容差含 miter 外推，覆盖 ≥30°、步进 ≤60°、
+  方向单调）；命中即以解析半径 r±offset 替换（外轮廓 +、内腔 −）。
+- **fitArcs 真弧透传**：tag 校验（半径一致 1e-6·r、sweep≤120°）后
+  原样产 ArcSpec，贪心不跨 tag；120° 扫描角上限同时是方向守卫（反
+  向 tag 的补弧 ≥240° 必被拒——推导已钉进注释）。
+- **实测**：⌀20 凸台 + ⌀6 刀 offset3 → 每层 **1×G1 + 3×G2，半径恰
+  13.000000**（改前 ~56×G1）≈ **50× 压缩**；起终点半径一致 <1e-9，
+  不再靠 4 位小数防 GRBL error 33；无 tag 几何输出逐字节不变。
+  预览按 sag≤0.05mm 采样、模拟器弧长参数化走刀、工时按 r·sweep
+  累计；全圆 3×120°、弧不跨 tab、ramp 沿弧降级直线（G17 平弧表达
+  不了螺旋）。
+- 模拟器回放高亮：弧采样子段携带自身分数区间（simFrac），走过的弦
+  全亮、只生长当前弦（审查修复）。
+- 测试 +34（arcSources 11、toolpath 7、gcode 3、arcFit 7、
+  ViewportCanvas 6）。
+
+### CAM — 区域偏置基建与环切泛化 P1
+
+CAM 偏置基建换芯 + 环切泛化（多 Agent 轮：契约 → 实现 → 独立审查 → 集成
+验收；调研背景见 docs/nvidia-usd-brep-research.md §7 P1）。引入
+`clipper-lib@6.4.2`（Angus Johnson Clipper 的纯 JS 移植，Boost 软件许可，
+同步无 WASM），CAM 的区域级偏置从"单环 miter"升级为"多环区域形态学"。
+
+### CAM — 区域偏置基建与环切泛化
+
+- **`offsetRegion(outer, holes, delta)` 新模块**（`cam/offsetRegion.ts`）：
+  连通分量输出 `{outer, holes}[]`、绕向（外 CCW/孔 CW）与起点规范化、
+  1e6 整数缩放（1 nm 量子）+ bbox 重心化防溢出、2 µm 输入抽稀（2000 边
+  近圆 7× 提速）、round/miter join 可选。round join 对圆刀几何精确，产出
+  的折线圆角由现有 `fitArcs` 重新拟合成 G2/G3——闭环不新增后处理。
+- **环切扩展到凹形轮廓与岛屿**（`pocketStrategy: 'offset'` 不再限凸形无
+  岛）：每层从基区域整体腐蚀 −k·stepover（不迭代累积）；环方向按 climb
+  约定（M3 材料在右：贴壁环 CCW、深环与岛环 CW）；同层最近邻排序减抬
+  刀。L 形件环族覆盖率 **53.8% → 100.0%**（2002 网格样本全过，旧回退用
+  例翻身）。
+- **裁剪补偿区域化**：凹形腐蚀分裂出的多个连通分量各自生成 raster 段
+  （不再静默丢料）；分量 holes 即裁剪后岛形；腐蚀空 → "tool too large"
+  空刀路语义保留。
+- **轮廓补偿行为等价替换**（miter join，tabs/spring/ramp/climb 语义不
+  动）；区域语义顺带修正两处旧缺陷：小岛被外轮廓吞没不再静默跳过、近壁
+  岛并入外轮廓不再两环交叉。
+- 实现期发现并修复三处缺陷：贪心抽稀尾顶点丢失（跨接缝弦 + 尾部逐点兜
+  底）；1e4 量化噪声经 fitArcs 三点外接圆放大（5.6° 短弧 0.054 mm 半径
+  误差 → 1e6 缩放下 ~5e-4 mm，G-code 反解测试抓到）；岛长满并入壁后
+  AABB 避让失效（改由原始岛 bbox±(r+allowance) 推导 + 链接弦同分量约
+  束）。
+- 测试：新增 17（offsetRegion 单元 16 + 拆分区域集成 1），toolpath 4 例
+  重写 + 2 例新增（含防过切金测试：切削点到壁/岛 ≥ r−0.03）；全量
+  2903 通过 / 2 跳过（跳过为 io/step-roundtrip 既有项）。
+
 ## [0.29.0] — 2026-10-14
 
 Engrave 雕刻轮（pass #35，算法深研 #1 建议）：**文字→单线字刀路→G-code**

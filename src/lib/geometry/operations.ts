@@ -1,4 +1,4 @@
-import type { Vec3, SolidBody, Face, Edge } from './types';
+import type { Vec3, SolidBody, Face, Edge, FaceSource } from './types';
 import { computeConvexHull } from './convexHull';
 import { localToWorld, type CoordinateSystemDefinition } from './referenceGeometry';
 import { filletManifold, chamferManifold, shellManifold } from './booleanManifold';
@@ -957,6 +957,49 @@ export function centerBody(body: SolidBody): SolidBody {
   return translateBody(body, offset);
 }
 
+/** Rigid transforms move the analytic surface a tagged face lies on with the
+ *  mesh: translate shifts the anchor points (axes, angles and radii are
+ *  translation-invariant). Returns undefined for undefined input. */
+function translateFaceSource(src: FaceSource | undefined, offset: Vec3): FaceSource | undefined {
+  if (!src) return undefined;
+  const shift = (p: Vec3): Vec3 => ({ x: p.x + offset.x, y: p.y + offset.y, z: p.z + offset.z });
+  switch (src.kind) {
+    case 'plane':
+      return { ...src, point: shift(src.point) };
+    case 'cylinder':
+      return { ...src, origin: shift(src.origin) };
+    case 'cone':
+      return { ...src, apex: shift(src.apex) };
+    case 'sphere':
+      return { ...src, center: shift(src.center) };
+    case 'torus':
+      return { ...src, center: shift(src.center) };
+  }
+}
+
+/** Rotate a face's analytic source: anchor points ride the point rotation,
+ *  axis/direction vectors the direction rotation (Rodrigues preserves unit
+ *  length, so axes stay normalized). */
+function rotateFaceSource(
+  src: FaceSource | undefined,
+  rotate: (v: Vec3) => Vec3,
+  rotateDir: (v: Vec3) => Vec3,
+): FaceSource | undefined {
+  if (!src) return undefined;
+  switch (src.kind) {
+    case 'plane':
+      return { ...src, point: rotate(src.point), normal: rotateDir(src.normal) };
+    case 'cylinder':
+      return { ...src, origin: rotate(src.origin), axis: rotateDir(src.axis) };
+    case 'cone':
+      return { ...src, apex: rotate(src.apex), axis: rotateDir(src.axis) };
+    case 'sphere':
+      return { ...src, center: rotate(src.center) };
+    case 'torus':
+      return { ...src, center: rotate(src.center), axis: rotateDir(src.axis) };
+  }
+}
+
 /** Translate a body by an offset vector. */
 export function translateBody(body: SolidBody, offset: Vec3, name: string = body.name): SolidBody {
   const translate = (v: Vec3): Vec3 => ({
@@ -966,6 +1009,7 @@ export function translateBody(body: SolidBody, offset: Vec3, name: string = body
   });
 
   return {
+    ...body, // colour/opacity/material ride along
     id: genId('body'),
     name,
     vertices: body.vertices.map(translate),
@@ -973,6 +1017,7 @@ export function translateBody(body: SolidBody, offset: Vec3, name: string = body
       id: genId('face'),
       vertices: f.vertices.map(translate),
       normal: { ...f.normal },
+      source: translateFaceSource(f.source, offset),
     })),
     edges: body.edges.map((e) => ({
       id: genId('edge'),
@@ -1015,6 +1060,7 @@ export function rotateBody(
   };
 
   return {
+    ...body, // colour/opacity/material ride along
     id: genId('body'),
     name,
     vertices: body.vertices.map(rotate),
@@ -1022,6 +1068,7 @@ export function rotateBody(
       id: genId('face'),
       vertices: f.vertices.map(rotate),
       normal: rotateDir(f.normal),
+      source: rotateFaceSource(f.source, rotate, rotateDir),
     })),
     edges: body.edges.map((e) => ({
       id: genId('edge'),

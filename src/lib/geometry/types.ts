@@ -9,22 +9,48 @@ export interface Face {
   vertices: Vec3[];
   normal: Vec3;
   /**
-   * Provenance of the surface this face lies on, when the geometry kernel can
-   * attribute it. Set by the exact (Manifold) boolean output conversion in
-   * `booleanManifold.ts`: a face group whose vertices all lie on one circle
-   * swept along a common axis (a full — ≥300° — cylindrical wall, not a
-   * fragment) carries the analytic cylinder it came from, so downstream
-   * consumers (hole recognition, CAM feature detection, drawing-circle
-   * extraction) can recover radius/axis exactly instead of re-fitting.
-   * Primitives built by `brep.ts`, the voxel kernels and imported meshes do
-   * NOT set this (facet soup and hand-built meshes are not classified).
+   * Provenance of the analytic surface this face lies on, when a geometry
+   * kernel can attribute it. Producers and consumers by `kind`:
+   *
+   * - 'cylinder' — SET by the exact (Manifold) boolean output conversion in
+   *   `booleanManifold.ts` (a face group whose vertices all lie on one circle
+   *   swept along a common axis — a full ≥300° wall, not a fragment) and by
+   *   `brep.ts` createRevolve for profile edges parallel to the axis.
+   *   CONSUMED by STEP export (CYLINDRICAL_SURFACE + CIRCLE rims); hole
+   *   recognition (query.ts) and drawing circles re-fit from geometry and
+   *   deliberately ignore the tag.
+   * - 'cone' — same producers (linearly-varying section radius, half angle
+   *   > 2°) and same STEP consumer (CONICAL_SURFACE).
+   * - 'sphere' — set by the boolean classifier (algebraic sphere fit); STEP
+   *   export writes SPHERICAL_SURFACE from it.
+   * - 'plane', 'torus' — NO PRODUCER yet (reserved: hand-tagged tests,
+   *   serialization round-trips them; a future SMLib/kernel pass may set
+   *   them). STEP export honors a hand-set tag (PLANE is emitted from the
+   *   face normal regardless; TOROIDAL_SURFACE from the tag).
+   *
+   * Primitives built by `brep.ts` (except revolve bands), the voxel kernels
+   * and imported meshes do NOT set this (facet soup and hand-built meshes
+   * are not classified).
    */
   source?: FaceSource;
 }
 
-/** Analytic surface a face was classified against (see `Face.source`). */
+/**
+ * Analytic surface a face was classified against (see `Face.source`). The
+ * 'cylinder' member is frozen — it has serialization assets in saved
+ * .studio3d files and a STEP writer contract; new kinds must remain
+ * load-side tolerant (studio3d.ts drops unknown/malformed kinds and keeps
+ * the geometry).
+ */
 export type FaceSource =
-  | { kind: 'cylinder'; origin: Vec3; axis: Vec3; radius: number };
+  | { kind: 'plane'; point: Vec3; normal: Vec3 }
+  | { kind: 'cylinder'; origin: Vec3; axis: Vec3; radius: number }
+  /** Apex plus the unit axis pointing from the apex INTO the surface band:
+   *  a band vertex at axial distance t > 0 from the apex sits at radial
+   *  distance t·tan(halfAngle) from the axis. */
+  | { kind: 'cone'; apex: Vec3; axis: Vec3; halfAngle: number }
+  | { kind: 'sphere'; center: Vec3; radius: number }
+  | { kind: 'torus'; center: Vec3; axis: Vec3; majorRadius: number; minorRadius: number };
 
 export interface Edge {
   id: string;

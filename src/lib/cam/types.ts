@@ -36,7 +36,7 @@ export interface CAMParameters {
   springPass?: boolean;
   /** First-level entry descends along the path instead of a vertical plunge. Default false (legacy behavior). */
   rampEntry?: boolean;
-  /** Pocket clearing pattern: 'raster' zigzag (default, legacy) or 'offset' contour-parallel rings. Silhouettes with islands fall back to raster. */
+  /** Pocket clearing pattern: 'raster' zigzag (default, legacy) or 'offset' contour-parallel rings (concave outlines and islands included via region offsetting). */
   pocketStrategy?: 'raster' | 'offset';
   /** Pocket entry: descend along a validated helical loop instead of the linear ramp / vertical plunge. Default false (legacy). */
   helixEntry?: boolean;
@@ -71,6 +71,19 @@ export interface ToolpathPoint {
   feedRate?: number;
   /** True for a G0 rapid positioning move, false/undefined for a G1 cut. */
   rapid?: boolean;
+  /**
+   * The move from the PREVIOUS point to this one is a true circular arc
+   * (ground truth recovered from an analytic cylinder face tag — see
+   * cam/arcSources), not a discretized polyline. `center` is in scene
+   * coordinates (y = the constant layer height, so the arc lives in the
+   * (x, z) planning plane the post maps to machine XY/G17); `ccw` is the
+   * direction in that (x, z) plane. Additive on purpose: consumers that
+   * treat points as a polyline keep working verbatim (a chord understates
+   * the arc but never inverts the motion), while the post-processor
+   * (fitArcs passthrough → G2/G3), the preview sampler, the simulator and
+   * the time estimate all upgrade to read it.
+   */
+  arcTo?: { center: { x: number; y: number; z: number }; ccw: boolean };
 }
 
 export interface Toolpath {

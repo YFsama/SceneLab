@@ -6,11 +6,12 @@ import { useStore } from '../../store/app';
 import { useViewBookmarks } from '../../store/viewBookmarks';
 import { createSketch, addLine, addArc } from '../../lib/sketch/engine';
 import { createBox, translateBody, type SolidBody } from '../../lib/geometry';
+import { taggedCylinderBody } from '../../lib/cam/arcSources.test';
 import { translations } from '../../lib/i18n';
 import { clearToasts, getToasts, showToast } from '../../lib/toast';
 import { captureFreshCanvas } from '../../lib/render/capture';
-import { defaultCamSetup } from '../../lib/cam';
-import { ViewportCanvas, advanceCamSim, camSimStepTarget, camToolColor, normalizeCamSimSpeed } from './ViewportCanvas';
+import { defaultCamSetup, type ToolpathPoint } from '../../lib/cam';
+import { ViewportCanvas, advanceCamSim, camArcLength, camArcPointAt, camArcSweep, camSimStepTarget, camToolColor, normalizeCamSimSpeed, sampleCamArcMove } from './ViewportCanvas';
 import { ToastHost } from '../ui/ToastHost';
 
 // ViewportCanvas is a WebGL component; jsdom has neither WebGL nor a canvas
@@ -1529,6 +1530,56 @@ describe('ViewportCanvas CAM toolpath overlay (rendered)', () => {
       await unmount(m);
     }
   });
+
+  it('renders true-arc moves as sampled circle polylines (P2b)', async () => {
+    // A tagged ⌀20 cylinder boss contoured with a 6 mm cutter: the cached
+    // toolpath stores 3 arc-tagged moves at R13, and the overlay must SAMPLE
+    // them for display — the stored representation stays two endpoints.
+    const boss = taggedCylinderBody(10, 20, 55);
+    useStore.setState({ bodies: [boss], directBodies: [boss], objectIds: [boss.id] });
+    const id = useStore.getState().addCamOperation({
+      name: 'Contour — Tagged Boss',
+      enabled: true,
+      type: 'contour',
+      bodyId: boss.id,
+      toolId: 'em-6mm',
+      params: { feedRate: 1000, plungeRate: 300, spindleSpeed: 10000, depthOfCut: 20, stepover: 3, stockTop: 20, stockBottom: 0 },
+    });
+    const cache = useStore.getState().camToolpaths[id]!;
+    expect(cache.toolpath.points.filter((p) => p.arcTo)).toHaveLength(3);
+
+    const m = await mount(createElement(ViewportCanvas));
+    try {
+      const cuts = camGroup().children.filter(
+        (c): c is THREE.Line => c instanceof THREE.Line && c.name === 'cam-cut',
+      );
+      expect(cuts.length).toBeGreaterThan(3); // sampled sub-segments, not 3 chords
+      // Every sampled vertex sits on the analytic R13 circle within the
+      // display sag budget (Float32 attribute storage adds rounding).
+      let sampled = 0;
+      for (const cut of cuts) {
+        const attr = cut.geometry.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < attr.count; i++) {
+          const r = Math.hypot(attr.getX(i), attr.getZ(i));
+          if (Math.abs(r - 13) > 0.001 && Math.abs(r) > 1e-9) {
+            // Off-circle vertices exist only where the toolpath has real
+            // points (plunge/entry share the loop start, which IS on the
+            // circle) — fail loudly on anything else.
+            const pts = cache.toolpath.points;
+            const known = pts.some(
+              (p) => Math.abs(p.x - attr.getX(i)) < 1e-3 && Math.abs(p.z - attr.getZ(i)) < 1e-3,
+            );
+            expect(known, `off-circle overlay vertex at r=${r.toFixed(4)}`).toBe(true);
+          } else {
+            sampled++;
+          }
+        }
+      }
+      expect(sampled).toBeGreaterThan(20); // a real sampling, not the raw chords
+    } finally {
+      await unmount(m);
+    }
+  });
 });
 
 // CAM stock wireframe: the stock box renders from camSetup.stock under EDITOR
@@ -1784,6 +1835,80 @@ describe('CAM sim playback math (pure)', () => {
       expect(camSimStepTarget(3, 10, cum, pointCount)).toBeNull(); // end of the last move
       expect(camSimStepTarget(4, 0, cum, pointCount)).toBeNull(); // finished-state seg
     });
+  });
+});
+
+// True-arc move math (P2b): a move whose end point carries arcTo walks a
+// circle in the scene (x, z) plane — the preview samples it, the simulator
+// walks it by arc length, and degenerate tags degrade to linear behavior.
+describe('CAM true-arc move math (pure)', () => {
+  const tag = { center: { x: 0, y: 5, z: 0 }, ccw: true };
+  const a: ToolpathPoint = { x: 10, y: 5, z: 0, rapid: false };
+  // Quarter circle CCW from (10, 0) to (0, 10).
+  const b: ToolpathPoint = { x: 0, y: 5, z: 10, rapid: false, arcTo: tag };
+  const cwTag = { ...tag, ccw: false };
+  const bCw: ToolpathPoint = { ...b, arcTo: cwTag };
+
+  it('camArcSweep measures the directed angle in [0, 2π)', () => {
+    expect(camArcSweep(a, b, tag)).toBeCloseTo(Math.PI / 2, 9);
+    expect(camArcSweep(a, bCw, cwTag)).toBeCloseTo((3 * Math.PI) / 2, 9); // the long way round
+    expect(camArcSweep(a, a, tag)).toBe(0); // degenerate
+  });
+
+  it('camArcPointAt rides the circle; y interpolates linearly', () => {
+    const mid = camArcPointAt(a, b, tag, 0.5);
+    expect(Math.hypot(mid.x, mid.z)).toBeCloseTo(10, 9); // still on the circle
+    expect(Math.atan2(mid.z, mid.x)).toBeCloseTo(Math.PI / 4, 9); // half the sweep
+    expect(mid.y).toBeCloseTo(5, 9);
+    const up: ToolpathPoint = { ...a, y: 0 };
+    const down: ToolpathPoint = { ...b, y: 10 };
+    expect(camArcPointAt(up, down, tag, 0.25).y).toBeCloseTo(2.5, 9);
+  });
+
+  it('camArcLength is r·sweep; a degenerate tag falls back to the chord', () => {
+    expect(camArcLength(a, b, tag)).toBeCloseTo((Math.PI / 2) * 10, 9);
+    const same = { ...b, x: 10, z: 0 }; // start ≈ end with a tag — degenerate
+    expect(camArcLength(a, same, tag)).toBeCloseTo(0, 9);
+  });
+
+  it('sampleCamArcMove: samples stay within sag of the circle, endpoints verbatim', () => {
+    // 120° at R13 — the production split size.
+    const r = 13;
+    const s: ToolpathPoint = { x: r, y: 0, z: 0, rapid: false };
+    const th = (2 * Math.PI) / 3;
+    const e: ToolpathPoint = {
+      x: r * Math.cos(th), y: 0, z: r * Math.sin(th), rapid: false,
+      arcTo: { center: { x: 0, y: 0, z: 0 }, ccw: true },
+    };
+    const pts = sampleCamArcMove(s, e, e.arcTo!, 0.05);
+    expect(pts.length).toBeGreaterThanOrEqual(4);
+    expect(pts[0]).toEqual({ x: s.x, y: s.y, z: s.z });
+    expect(pts[pts.length - 1]).toEqual({ x: e.x, y: e.y, z: e.z });
+    for (const p of pts) {
+      expect(Math.abs(Math.hypot(p.x, p.z) - r)).toBeLessThanOrEqual(0.05 + 1e-9);
+    }
+    // The sampled polyline hugs the arc: its total length is within the
+    // sag budget of the true arc length r·θ.
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) {
+      len += Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.z - pts[i - 1]!.z);
+    }
+    expect(len).toBeLessThanOrEqual(r * th);
+    expect(len).toBeGreaterThanOrEqual(r * th - 0.05);
+  });
+
+  it('sampleCamArcMove floors at 64 segments per full turn and caps at 256', () => {
+    const full: ToolpathPoint = {
+      x: 5, y: 0, z: 0, rapid: false,
+      arcTo: { center: { x: 0, y: 0, z: 0 }, ccw: true },
+    };
+    // Nearly-full 359°: the 64/turn floor gives ~64 samples, well under the cap.
+    const e: ToolpathPoint = {
+      x: 5 * Math.cos(-Math.PI / 180), y: 0, z: 5 * Math.sin(-Math.PI / 180), rapid: false,
+      arcTo: full.arcTo,
+    };
+    expect(sampleCamArcMove(full, e, full.arcTo!).length).toBeGreaterThanOrEqual(63);
+    expect(sampleCamArcMove(full, e, full.arcTo!).length).toBeLessThanOrEqual(257);
   });
 });
 

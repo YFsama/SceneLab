@@ -3,6 +3,7 @@ import { exportSTEP } from './step';
 import { importSTEP } from './stepImport';
 import {
   createBox,
+  createCone,
   createCylinder,
   createSphere,
   buildEdgesFromFaces,
@@ -10,6 +11,7 @@ import {
   computeVolume,
 } from '../geometry/brep';
 import { warmUpBooleanEngine, booleanOpManifold } from '../geometry/booleanManifold';
+import { translateBody } from '../geometry/operations';
 import type { Face, SolidBody, Vec3 } from '../geometry/types';
 import { stepNeedsExactKernel } from './stepOCCT';
 
@@ -690,5 +692,260 @@ describe('exportSTEP: analytic bands and the real boolean pipeline', () => {
     // Every LINE boundary survives the faceted importer with the exact volume.
     const back = importSTEP(text);
     expect(computeVolume(back)).toBeCloseTo(computeVolume(raw!), 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Analytic cone / sphere / torus faces (the P2a FaceSource extension). Cone
+// bands mirror the cylinder contract: isolated two-rim bands collapse to the
+// CIRCLE tube form on a CONICAL_SURFACE (rim radius r(t) = t·tan θ from the
+// apex, the seam a generator LINE); shared rims keep the chord boundary on
+// one shared surface. Sphere/torus tags have no classifier producer yet —
+// these tests hand-construct faces to prove the writer format.
+// ---------------------------------------------------------------------------
+
+/** Local widening of Face carrying the extended `source` tag. */
+type TaggedSource = NonNullable<Face['source']>;
+
+/** Ring of the frustum at height y: r(y) = (30 − y)/3 (⌀20 → ⌀10 over 15). */
+function coneRingPoints(y: number, count: number): Vec3[] {
+  const r = (30 - y) / 3;
+  const pts: Vec3[] = [];
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    pts.push({ x: Math.cos(a) * r, y, z: Math.sin(a) * r });
+  }
+  return pts;
+}
+
+/** The ⌀20→⌀10 frustum's exact cone tag: r(t) = t/3 degenerates at t = 30. */
+const frustumSource = (): TaggedSource => ({
+  kind: 'cone',
+  apex: { x: 0, y: 30, z: 0 },
+  axis: { x: 0, y: -1, z: 0 },
+  halfAngle: Math.atan(1 / 3),
+});
+
+/** An ISOLATED frustum wall band (no face shares its rims) → tube form. */
+function isolatedConeBand(): SolidBody {
+  const n = adaptiveSegments(20);
+  const wall: Face & { source?: TaggedSource } = {
+    id: 'coneWall',
+    vertices: [...coneRingPoints(0, n), ...coneRingPoints(15, n)],
+    normal: { x: 1, y: 0, z: 0 },
+    source: frustumSource(),
+  };
+  return bodyOf('ConeBand', [wall]);
+}
+
+/** A capped frustum solid the way the classifier shapes it: n tagged wall
+ *  quads + 2 plane caps that share the rim vertices (chord boundary form). */
+function facetedFrustum(): SolidBody {
+  const n = adaptiveSegments(20);
+  const p = (a: number, y: number): Vec3 => {
+    const r = (30 - y) / 3;
+    return { x: Math.cos(a) * r, y, z: Math.sin(a) * r };
+  };
+  const c = Math.cos(Math.atan(1 / 3));
+  const s = Math.sin(Math.atan(1 / 3));
+  const wall: Array<Face & { source?: TaggedSource }> = [];
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const a1 = ((i + 1) / n) * Math.PI * 2;
+    const mid = (a0 + a1) / 2;
+    // Outward facet normal of the cone: radial·cos θ + ŷ·sin θ (widens down).
+    wall.push({
+      id: `coneFacet_${i}`,
+      vertices: [p(a0, 0), p(a1, 0), p(a1, 15), p(a0, 15)],
+      normal: { x: c * Math.cos(mid), y: s, z: c * Math.sin(mid) },
+      source: frustumSource(),
+    });
+  }
+  const capB: Face = { id: 'capB', vertices: [...coneRingPoints(0, n)].reverse(), normal: { x: 0, y: -1, z: 0 } };
+  const capT: Face = { id: 'capT', vertices: coneRingPoints(15, n), normal: { x: 0, y: 1, z: 0 } };
+  return bodyOf('Frustum', [...wall, capB, capT]);
+}
+
+/** Two quads on a r=5 sphere around +Y, tagged sphere (hand-set). */
+function spherePatchBody(inward = false): SolidBody {
+  const sp = (theta: number, phi: number): Vec3 => {
+    const st = Math.sin(theta);
+    return { x: 5 * st * Math.cos(phi), y: 5 * Math.cos(theta), z: 5 * st * Math.sin(phi) };
+  };
+  const quad = (t0: number, t1: number, f0: number, f1: number, tagId: string): Face & { source?: TaggedSource } => {
+    const mid = sp((t0 + t1) / 2, (f0 + f1) / 2);
+    const len = Math.hypot(mid.x, mid.y, mid.z);
+    const s = inward ? -1 : 1;
+    return {
+      id: tagId,
+      vertices: [sp(t0, f0), sp(t0, f1), sp(t1, f1), sp(t1, f0)],
+      normal: { x: (s * mid.x) / len, y: (s * mid.y) / len, z: (s * mid.z) / len },
+      source: { kind: 'sphere', center: { x: 0, y: 0, z: 0 }, radius: 5 },
+    };
+  };
+  const d = Math.PI / 12;
+  return bodyOf(inward ? 'SphereCavity' : 'SpherePatch', [
+    quad(Math.PI / 2 - d, Math.PI / 2, 0, d, 'sq0'),
+    quad(Math.PI / 2 - d, Math.PI / 2, d, 2 * d, 'sq1'),
+  ]);
+}
+
+/** One quad on a torus (major 10, minor 2, axis +Y), tagged torus (hand-set). */
+function torusPatchBody(): SolidBody {
+  const tp = (u: number, v: number): Vec3 => ({
+    x: (10 + 2 * Math.cos(v)) * Math.cos(u),
+    y: 2 * Math.sin(v),
+    z: (10 + 2 * Math.cos(v)) * Math.sin(u),
+  });
+  const midU = Math.PI / 36;
+  const patch: Face & { source?: TaggedSource } = {
+    id: 'torusPatch',
+    vertices: [tp(0, 0), tp(Math.PI / 18, 0), tp(Math.PI / 18, Math.PI / 8), tp(0, Math.PI / 8)],
+    normal: { x: Math.cos(midU), y: 0, z: Math.sin(midU) },
+    source: { kind: 'torus', center: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, majorRadius: 10, minorRadius: 2 },
+  };
+  return bodyOf('TorusPatch', [patch]);
+}
+
+describe('exportSTEP: analytic cone faces (Face.source kind:"cone")', () => {
+  const text = exportSTEP(isolatedConeBand());
+  const ents = parseEntities(text);
+
+  it('an isolated frustum band becomes 1 face + 2 CIRCLE rims + 1 CONICAL_SURFACE', () => {
+    expect((text.match(/ADVANCED_FACE/g) ?? []).length).toBe(1);
+    expect((text.match(/CONICAL_SURFACE/g) ?? []).length).toBe(1);
+    expect((text.match(/CIRCLE\(/g) ?? []).length).toBe(2);
+    expect([...ents.values()].filter((e) => e.type === 'EDGE_CURVE')).toHaveLength(3); // 2 circles + 1 seam
+    expect((text.match(/VERTEX_POINT/g) ?? []).length).toBe(2); // the two seam points
+    // Routes re-import through the exact OCCT kernel.
+    expect(stepNeedsExactKernel(text)).toBe(true);
+  });
+
+  it('CIRCLE radii follow the section law r(t) = t·tan θ (10 at y=0, 5 at y=15)', () => {
+    const circles = [...ents.values()].filter((e) => e.type === 'CIRCLE');
+    const radii = circles.map((c) => Number(c.args[2])).sort((a, b) => a - b);
+    expect(radii).toEqual([5, 10]);
+    // Each circle's placement centre sits on the axis at its rim height.
+    for (const c of circles) {
+      const placement = ents.get(Number(c.args[1]!.replace('#', '')))!;
+      const pt = ents.get(Number(placement.args[1]!.replace('#', '')))!;
+      const coords = pt.args[1]!.replace(/^\(|\)$/g, '').split(',').map(Number);
+      expect(coords[0]).toBeCloseTo(0, 5);
+      expect(coords[2]).toBeCloseTo(0, 5);
+      expect([0, 15]).toContain(Math.round(coords[1]!));
+    }
+  });
+
+  it('CONICAL_SURFACE carries the tag half angle and a tag-derived placement', () => {
+    const surf = [...ents.values()].find((e) => e.type === 'CONICAL_SURFACE')!;
+    expect(Number(surf.args[2])).toBeCloseTo(Math.tan(Math.atan(1 / 3)), 6); // radius at t = 1 from apex
+    expect(Number(surf.args[3])).toBeCloseTo(Math.atan(1 / 3), 6); // semi angle, radians (num() prints 6 decimals)
+    // Placement: apex + axis·1 = (0, 29, 0); axis direction = the cone axis.
+    const placement = ents.get(Number(surf.args[1]!.replace('#', '')))!;
+    const pt = ents.get(Number(placement.args[1]!.replace('#', '')))!;
+    const coords = pt.args[1]!.replace(/^\(|\)$/g, '').split(',').map(Number);
+    expect(coords[0]).toBeCloseTo(0, 5);
+    expect(coords[1]).toBeCloseTo(29, 5);
+    expect(coords[2]).toBeCloseTo(0, 5);
+    const dir = ents.get(Number(placement.args[2]!.replace('#', '')))!;
+    const d = dir.args[1]!.replace(/^\(|\)$/g, '').split(',').map(Number);
+    expect(d[1]).toBeCloseTo(-1, 5);
+  });
+
+  it('the seam LINE runs along a generator (slanted, not axial)', () => {
+    // Seam endpoints are the seam points of the two rims: (10,0,0) → (5,15,0)
+    // on the ref-direction ray — the LINE's VECTOR magnitude must be the
+    // generator length √(5² + 15²), not the axial 15.
+    const lines = [...ents.values()].filter((e) => e.type === 'LINE');
+    expect(lines).toHaveLength(1);
+    const vec = ents.get(Number(lines[0]!.args[2]!.replace('#', '')))!;
+    expect(Number(vec.args[2])).toBeCloseTo(Math.hypot(5, 15), 4);
+  });
+
+  it('shared rims (capped frustum) keep the chord boundary on ONE shared surface', () => {
+    const solid = facetedFrustum();
+    const frustum = exportSTEP(solid);
+    const n = adaptiveSegments(20);
+    expect((frustum.match(/ADVANCED_FACE/g) ?? []).length).toBe(n + 2);
+    expect((frustum.match(/CONICAL_SURFACE/g) ?? []).length).toBe(1);
+    expect((frustum.match(/CIRCLE\(/g) ?? []).length).toBe(0); // rims shared with caps
+    expect((frustum.match(/PLANE\(/g) ?? []).length).toBe(2);
+    // All wall facets share the one surface entity.
+    const fEnts = parseEntities(frustum);
+    const surfRefs = [...fEnts.values()]
+      .filter((e) => e.type === 'ADVANCED_FACE')
+      .map((f) => f.args[2])
+      .filter((s) => fEnts.get(Number(s!.replace('#', '')))?.type === 'CONICAL_SURFACE');
+    expect(surfRefs).toHaveLength(n);
+    expect(new Set(surfRefs).size).toBe(1);
+    // Faceted round trip through our own importer: exact volume, same faces.
+    const back = importSTEP(frustum);
+    expect(back.faces).toHaveLength(solid.faces.length);
+    expect(computeVolume(back)).toBeCloseTo(computeVolume(solid), 3);
+    // Control: the same solid with tags stripped is unaffected.
+    for (const f of solid.faces) delete (f as { source?: TaggedSource }).source;
+    const plain = importSTEP(exportSTEP(solid));
+    expect(computeVolume(plain)).toBeCloseTo(computeVolume(back), 3);
+  });
+
+  it('the real classifier pipeline tags a boolean frustum and exports it analytically', async () => {
+    await warmUpBooleanEngine();
+    const box = translateBody(createBox(24, 19, 24), { x: 0, y: -2, z: 0 });
+    const body = booleanOpManifold(createCone(10, 5, 15), box, 'intersect')!;
+    const coneFaces = body.faces.filter((f) => f.source?.kind === 'cone');
+    expect(coneFaces.length).toBeGreaterThanOrEqual(24);
+    const text = exportSTEP(body);
+    expect((text.match(/CONICAL_SURFACE/g) ?? []).length).toBe(1);
+    expect((text.match(/CIRCLE\(/g) ?? []).length).toBe(0); // caps share the rims
+    expect(stepNeedsExactKernel(text)).toBe(true);
+    const back = importSTEP(text);
+    expect(computeVolume(back)).toBeCloseTo(computeVolume(body), 2);
+  });
+});
+
+describe('exportSTEP: analytic sphere and torus faces (hand-set tags)', () => {
+  it('sphere-tagged facets share one SPHERICAL_SURFACE with the tag radius', () => {
+    const text = exportSTEP(spherePatchBody());
+    const ents = parseEntities(text);
+    expect((text.match(/SPHERICAL_SURFACE/g) ?? []).length).toBe(1);
+    expect((text.match(/ADVANCED_FACE/g) ?? []).length).toBe(2);
+    const surf = [...ents.values()].find((e) => e.type === 'SPHERICAL_SURFACE')!;
+    expect(Number(surf.args[2])).toBeCloseTo(5, 6);
+    const placement = ents.get(Number(surf.args[1]!.replace('#', '')))!;
+    const pt = ents.get(Number(placement.args[1]!.replace('#', '')))!;
+    const coords = pt.args[1]!.replace(/^\(|\)$/g, '').split(',').map(Number);
+    expect(coords).toEqual([0, 0, 0]);
+    // Both faces sit on the shared surface, outward → same_sense .T.
+    const surfRefs = [...ents.values()]
+      .filter((e) => e.type === 'ADVANCED_FACE')
+      .map((f) => f.args[2]);
+    expect(new Set(surfRefs).size).toBe(1);
+    for (const f of ents.values()) {
+      if (f.type === 'ADVANCED_FACE') expect(f.args[3]).toBe('.T.');
+    }
+    expect(stepNeedsExactKernel(text)).toBe(true);
+  });
+
+  it('an inward sphere cavity flips same_sense', () => {
+    const ents = parseEntities(exportSTEP(spherePatchBody(true)));
+    const faces = [...ents.values()].filter((e) => e.type === 'ADVANCED_FACE');
+    expect(faces).toHaveLength(2);
+    for (const f of faces) expect(f.args[3]).toBe('.F.');
+  });
+
+  it('torus-tagged facets emit a TOROIDAL_SURFACE with major/minor radii', () => {
+    const text = exportSTEP(torusPatchBody());
+    const ents = parseEntities(text);
+    expect((text.match(/TOROIDAL_SURFACE/g) ?? []).length).toBe(1);
+    const surf = [...ents.values()].find((e) => e.type === 'TOROIDAL_SURFACE')!;
+    expect(Number(surf.args[2])).toBeCloseTo(10, 6);
+    expect(Number(surf.args[3])).toBeCloseTo(2, 6);
+    // Placement axis = the torus axis (+Y).
+    const placement = ents.get(Number(surf.args[1]!.replace('#', '')))!;
+    const dir = ents.get(Number(placement.args[2]!.replace('#', '')))!;
+    const d = dir.args[1]!.replace(/^\(|\)$/g, '').split(',').map(Number);
+    expect(d[1]).toBeCloseTo(1, 5);
+    expect(d[0]).toBeCloseTo(0, 5);
+    expect(stepNeedsExactKernel(text)).toBe(true);
   });
 });

@@ -360,6 +360,89 @@ export function camSimStepTarget(
   return target >= pointCount ? null : target;
 }
 
+/** The arcTo tag type of a toolpath point (see cam/types.ts — a TRUE arc
+ * move, ground truth from an analytic cylinder face tag). */
+type ArcTag = NonNullable<ToolpathPoint['arcTo']>;
+
+/** True-arc move math (P2b): a move whose END point carries `arcTo` travels
+ * a circle in the scene (x, z) planning plane at constant y. All three
+ * helpers degrade to linear behavior on a degenerate tag (zero sweep or
+ * zero radius) — hand-broken data must never freeze or teleport the sim. */
+
+/** Directed sweep of one arc move in [0, 2π); 0 when the endpoints coincide. */
+export function camArcSweep(a: ToolpathPoint, b: ToolpathPoint, tag: ArcTag): number {
+  const a0 = Math.atan2(a.z - tag.center.z, a.x - tag.center.x);
+  const a1 = Math.atan2(b.z - tag.center.z, b.x - tag.center.x);
+  let d = tag.ccw ? a1 - a0 : a0 - a1;
+  d = ((d % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  return d;
+}
+
+/** Tool position at fraction t ∈ [0, 1] of one move (arc moves walk the
+ * circle by arc length — uniform angular rate — and interpolate y linearly,
+ * which flat arcs keep constant). */
+export function camArcPointAt(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  tag: ArcTag,
+  t: number,
+): { x: number; y: number; z: number } {
+  const r = Math.hypot(a.x - tag.center.x, a.z - tag.center.z);
+  const sweep = camArcSweep(a, b, tag);
+  if (r < 1e-9 || sweep < 1e-9) {
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+  }
+  const a0 = Math.atan2(a.z - tag.center.z, a.x - tag.center.x);
+  const th = a0 + (tag.ccw ? 1 : -1) * sweep * t;
+  return {
+    x: tag.center.x + r * Math.cos(th),
+    y: a.y + (b.y - a.y) * t,
+    z: tag.center.z + r * Math.sin(th),
+  };
+}
+
+/** True travelled length of one move: r·sweep for arcs, the chord otherwise. */
+export function camArcLength(a: ToolpathPoint, b: ToolpathPoint, tag: ArcTag): number {
+  const r = Math.hypot(a.x - tag.center.x, a.z - tag.center.z);
+  const sweep = camArcSweep(a, b, tag);
+  return r < 1e-9 || sweep < 1e-9
+    ? Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)
+    : r * sweep;
+}
+
+/**
+ * Display sampling of one arc move: polyline points from a to b ON the
+ * circle (endpoints verbatim), subdivided so the chord sagitta stays ≤ sag
+ * (0.05 mm default) with a floor of 64 segments per full turn — whichever
+ * is finer — and a 256-segment ceiling so a monster arc cannot balloon the
+ * overlay. Storage stays two endpoints; only the rendered line is sampled.
+ */
+export function sampleCamArcMove(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  tag: ArcTag,
+  sag = 0.05,
+): Array<{ x: number; y: number; z: number }> {
+  const r = Math.hypot(a.x - tag.center.x, a.z - tag.center.z);
+  const sweep = camArcSweep(a, b, tag);
+  if (r < sag || sweep < 1e-9) return [{ x: a.x, y: a.y, z: a.z }, { x: b.x, y: b.y, z: b.z }];
+  const maxStepSag = 2 * Math.acos(Math.min(1, Math.max(-1, 1 - sag / r)));
+  const step = Math.min(maxStepSag, (2 * Math.PI) / 64);
+  const n = Math.min(256, Math.max(2, Math.ceil(sweep / step)));
+  const pts: Array<{ x: number; y: number; z: number }> = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    pts.push(
+      i === 0
+        ? { x: a.x, y: a.y, z: a.z }
+        : i === n
+          ? { x: b.x, y: b.y, z: b.z }
+          : camArcPointAt(a, b, tag, t),
+    );
+  }
+  return pts;
+}
+
 /* eslint-enable react-refresh/only-export-components */
 
 export function ViewportCanvas() {
@@ -1703,10 +1786,21 @@ export function ViewportCanvas() {
       const plungeRate = cache.toolpath.params.plungeRate;
       // simMarks records the toolpath point indices of the segment's two
       // endpoints — the sim maps walked distance → per-segment progress.
-      const addCutSegment = (a: THREE.Vector3, b: THREE.Vector3, markA: number, markB: number) => {
+      // Arc-sampled sub-segments additionally carry simFrac, their fractional
+      // span [f0, f1] within the sampled move, so the highlight walks them
+      // one by one instead of truncating every chord at the move-level
+      // fraction (see updateHighlight).
+      const addCutSegment = (
+        a: THREE.Vector3,
+        b: THREE.Vector3,
+        markA: number,
+        markB: number,
+        frac?: [number, number],
+      ) => {
         const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), cutMat);
         line.name = 'cam-cut';
         line.userData.simMarks = [markA, markB];
+        if (frac) line.userData.simFrac = frac;
         line.userData.opId = opId;
         // The segment's own (bright) material — the sim highlight swaps
         // between this and the shared dim twin, and restores this one.
@@ -1718,6 +1812,9 @@ export function ViewportCanvas() {
         camGroup.add(line);
       };
       let prev: THREE.Vector3 | null = null;
+      // The original point behind `prev` (arc sampling needs the tag on the
+      // move's END point plus the raw start, not the Vector3 twin).
+      let prevPoint: ToolpathPoint | null = null;
       for (let i = 0; i < cache.toolpath.points.length; i++) {
         const p = cache.toolpath.points[i]!;
         const v = new THREE.Vector3(p.x, p.y, p.z);
@@ -1731,9 +1828,27 @@ export function ViewportCanvas() {
             camGroup.add(seg);
           }
         } else if (prev) {
-          addCutSegment(prev, v, i - 1, i);
+          if (p.arcTo) {
+            // True arc (P2b): sample for display only. Each sub-segment
+            // keeps the move's simMarks (walked-distance mapping) but adds
+            // its own fractional span, so the sim highlight lights the
+            // walked chords fully and grows only the one the tool is on;
+            // the tool itself follows the exact circle (setSimPosition is
+            // arc-aware).
+            const pts = sampleCamArcMove(prevPoint!, p, p.arcTo);
+            const n = pts.length - 1;
+            let q0 = prev;
+            for (let k = 1; k < pts.length; k++) {
+              const q1 = new THREE.Vector3(pts[k]!.x, pts[k]!.y, pts[k]!.z);
+              addCutSegment(q0, q1, i - 1, i, [(k - 1) / n, k / n]);
+              q0 = q1;
+            }
+          } else {
+            addCutSegment(prev, v, i - 1, i);
+          }
         }
         prev = v;
+        prevPoint = p;
       }
     }
     dirtyRef.current = true;
@@ -1849,8 +1964,18 @@ export function ViewportCanvas() {
           continue;
         }
         const bright = (child.userData.cutMat as THREE.LineBasicMaterial | undefined) ?? dim;
-        const cumA = cum[marks[0]] ?? 0;
-        const cumB = cum[marks[1]] ?? 0;
+        let cumA = cum[marks[0]] ?? 0;
+        let cumB = cum[marks[1]] ?? 0;
+        // Arc sub-segments narrow [cumA, cumB] to their own fractional span
+        // of the sampled move — without this every chord of an in-progress
+        // arc truncates at the move-level fraction (walked-back chords shrink
+        // and ahead chords brighten, all at once).
+        const frac = child.userData.simFrac as [number, number] | undefined;
+        if (frac) {
+          const span = cumB - cumA;
+          cumA += span * frac[0];
+          cumB = cumA + span * (frac[1] - frac[0]);
+        }
         if (walked >= cumB) {
           child.material = bright;
           restoreEnd();
@@ -1890,7 +2015,16 @@ export function ViewportCanvas() {
       const a = sim.points[lo - 1]!;
       const b = sim.points[lo]!;
       const tool = camSimGroupRef.current?.children[0];
-      if (tool) tool.position.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+      if (tool) {
+        if (b.arcTo) {
+          // True arc: walk the circle (not the chord) so the cutter visually
+          // rides the toolpath the G-code will actually cut.
+          const p = camArcPointAt(a, b, b.arcTo, t);
+          tool.position.set(p.x, p.y, p.z);
+        } else {
+          tool.position.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+        }
+      }
       sim.seg = lo;
       sim.dist = d - sim.cum[lo - 1]!;
       updateHighlight(sim.opId, sim.cum, d);
@@ -1918,7 +2052,9 @@ export function ViewportCanvas() {
       for (let i = 1; i < points.length; i++) {
         const a = points[i - 1]!;
         const b = points[i]!;
-        cum.push(cum[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z));
+        // Arc moves measure their true length (r·sweep) so the walk, the
+        // 'step' boundaries and the seek scale all stay honest on arcs.
+        cum.push(cum[i - 1]! + (b.arcTo ? camArcLength(a, b, b.arcTo) : Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)));
         const mmMin = b.rapid ? RAPID_FACTOR * feedRate : (b.feedRate ?? feedRate);
         feeds.push(Math.max(mmMin, 1) / 60);
       }

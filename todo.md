@@ -75,8 +75,12 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 
 ### A. 几何内核（内核审计路线图剩余）
 
-- [ ] **锥面/沉头孔溯源**：Face.source 目前仅圆柱（`kind:'cylinder'`）；加 `'cone'`（countersink）并在 tree.ts 创建侧直接打标（比输出分类更稳）
+- [x] ~~锥面/沉头孔溯源~~（2026-10-14 Unreleased：FaceSource 扩为 plane/cylinder/cone/sphere/torus 联合；cone 完整链路（分类器两阶段定轴 + createRevolve 构造打标 + STEP CONICAL_SURFACE/CIRCLE + OCCT 往返 <0.05%）；sphere 代数拟合；torus/plane 就绪无生产者。**剩 tree.ts 沉头孔特征侧直接打标未做**——分类器已覆盖 revolve/倒角路径）
 - [ ] **环形（多环）cap 面**：孔穿透的平面 cap 目前保持刻面内边界——Face 模型支持多环后，⌀ 孔的 STEP 才能完全收缩（当前孤立带 11.6×、共享轮辋仍刻面）
+- [ ] **锥分类器保守区**：被切割成多行顶点的锥壁、45° 临界二面角光滑合并组不打标；尖锥 STEP 走弦边界不成 CIRCLE 管形（记录为已知限制）
+- [ ] 球面分类窄窗：短圆柱带（L≲1.2r）在圆柱拟合病态时可错标 sphere（法向门 0.85 挡不住；正常路径负例已钉）；horn torus 顶点恰落轴时 STEP same_sense 退化（无生产者，理论）
+- [ ] **斜轴解析分类端到端不通**（2026-10-14 实测）：jacobiEigen 修复后斜向法向散布已能收敛出正确轴，但 fromManifold 输出去抽稀把旋转体壁面合并成 ~60° 弧的大面，相邻二面角超过 smooth-group 阈值 → 组链断裂 → 斜壁不打标（轴对齐对照 24 tag / 斜向 0）。缓解已做：translateBody/rotateBody 现在携带并变换解析标签（先分类后旋转可保住 tag）；根治需查 fromManifold 的合并阈值或旋转前分类
+- [ ] createRevolve 输出过不了 exact 布尔（'empty-exact-result'，含轴对齐轮廓）——revolve 体只能走构造打标路径，不能参与重分类（2026-10-14 实测记录）
 - [ ] **凹边精确圆角**：选到 reflex 边时精确路径整体拒绝→覆盖层回退（减材刀具无法加材）；需要加材侧补偿或真 rolling-ball
 - [ ] **非凸抽壳 Worker 化**：同步 res-40 体素内部体 ~0.2s（签名约束为同步）
 - [ ] **隐藏线消除**（工程图审计 B5，L）：深度分类投影段 + 虚线隐藏样式——圆柱/剖切的线汤可读性
@@ -109,9 +113,11 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 ### E2. CAM 后续（pass #34 后；算法细节见 docs/cnc-algorithms.md）
 
 - [x] ~~Engrave 雕刻 + 单线字文本~~（pass #35 完成：固定深度 E1 + Hershey 文本→刀路全链；下一步 E2 真 V-carve 变深）
-- [ ] **Adaptive/trochoidal 摆线粗加工 v1**（#35 候选：参考刀路偏移法+角落局部 trochoid；前置=多环 Clipper offset 基建——先出纯函数切片；验收=5 金样无过切、啮合角≤目标×1.2、弧段>60%）
+- [ ] **Adaptive/trochoidal 摆线粗加工 v1**（#35 候选：参考刀路偏移法+角落局部 trochoid；前置=多环 Clipper offset 基建 ✅ 已落地 `cam/offsetRegion.ts`（2026-10-14，Unreleased）；验收=5 金样无过切、啮合角≤目标×1.2、弧段>60%）
 - [ ] **Rest machining heightmap v1**（#35 候选：Float32 worker 2.6MB@0.25mm；残料行区间直接接现有 scanline 管线，零新依赖；验收=空切率<40%）
-- [ ] 环切扩展到凹形区域（需多环 offset 基建，同 Adaptive 前置；当前凹形回退光栅）
+- [x] ~~环切扩展到凹形区域~~（2026-10-14 Unreleased：Clipper 区域偏置落地，凹形+岛屿环切、腐蚀分裂分量独立加工；L 件环族覆盖 53.8%→100%）
+- [ ] 岛屿口袋的螺旋下刀名义点优化（offset+helix+岛时名义点落在岛环上、向质心搜索全程入岛 → 恒回退线性坡；安全但次优，审查 P3）
+- [ ] 轮廓补偿可选切换 round join（offsetRegion 已支持，行为变化：需同步改 index.test.ts 的盒轮廓 4 顶点断言）
 - [ ] 对刀原点选择 UI（G54 已有输出开关；原点拾取/WCS 预览未做）
 - [x] ~~Setup sheet 工艺卡~~ / ~~毛坯可视化+按刀着色~~ / ~~G81/G82+G54~~ / ~~钻孔编辑重探~~ / ~~保名后缀~~ / ~~侧壁精光~~ / ~~环切+螺旋下刀（凸形）~~（pass #34 完成）
 - [x] ~~顺铣方向翻正~~（pass #34 审查以切屑仿真纠正 M3=材料在右；v0.28.0 生效）

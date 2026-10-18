@@ -9,6 +9,7 @@ import { estimateMachiningTime } from './gcode';
 import { createBox, createCylinder, createTube, createExtrude } from '../geometry/brep';
 import { booleanOpManifold, warmUpBooleanEngine } from '../geometry/booleanManifold';
 import { translateBody } from '../geometry/operations';
+import { taggedCylinderBody } from './arcSources.test';
 import type { ToolDefinition, CAMParameters, Toolpath, ToolpathPoint } from './types';
 import { polygonArea, topSilhouette, offsetPolygon, pointInPolygon, type Point2 } from './silhouette';
 
@@ -488,12 +489,14 @@ describe('generatePocketToolpath', () => {
 
   it('never links across a NARROW island — the segment×AABB guard catches what the quarter samples missed', () => {
     // A 0.6 mm-wide through-slot island in a 50×10 plate, pocketed with a
-    // ⌀3 cutter: the grown keep-out is u∈[22.5,26.1]. When a row splits into
-    // [3·,22.5] and [26.1,·] the interval directions alternate, so the link
-    // chord runs from one interval's far end (u=48.5) BACK ACROSS the slot —
-    // the island sits in the first tenth of the chord where the t=.25/.5/.75
-    // samples never look, and the cutter gouged straight through the wall
-    // (pass-30 P3 T2).
+    // ⌀3 cutter. When a row splits into two intervals the interval
+    // directions alternate, so the link chord can run from one interval's
+    // far end BACK ACROSS the slot — the island sits in the first tenth of
+    // the chord where the t=.25/.5/.75 samples never look, and the cutter
+    // gouged straight through the wall (pass-30 P3 T2). The clipper-grown
+    // keep-out now has ROUNDED caps (disc dilation of the slot rectangle),
+    // so the guard criterion here is the true one: every cut segment keeps
+    // the tool centre ≥ r−0.02 from the slot rectangle itself.
     const plate = createExtrude({
       profile: [
         { x: 0, y: 0, z: 0 }, { x: 50, y: 0, z: 0 }, { x: 50, y: 0, z: 10 }, { x: 0, y: 0, z: 10 },
@@ -519,32 +522,33 @@ describe('generatePocketToolpath', () => {
     );
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
 
-    // Keep-out interior (grown island shrunk 0.01 so rows ENDING exactly on
-    // its boundary — the legitimate scanline edge — do not count as entry).
-    const box = { minU: 22.51, maxU: 26.09, minV: 0.51, maxV: 9.49 };
-    const segEntersBox = (a: { x: number; z: number }, b: { x: number; z: number }): boolean => {
-      let t0 = 0;
-      let t1 = 1;
-      const clip = (p: number, d: number, lo: number, hi: number): boolean => {
-        if (Math.abs(d) < 1e-12) return p > lo && p < hi;
-        let tn = (lo - p) / d;
-        let tf = (hi - p) / d;
-        if (tn > tf) { const tmp = tn; tn = tf; tf = tmp; }
-        t0 = Math.max(t0, tn);
-        t1 = Math.min(t1, tf);
-        return t0 <= t1;
-      };
-      return clip(a.x, b.x - a.x, box.minU, box.maxU) && clip(a.z, b.z - a.z, box.minV, box.maxV);
+    // The slot rectangle in the planning plane (u, v).
+    const rect: Point2[] = [
+      { u: 24.0, v: 2.0 }, { u: 24.6, v: 2.0 }, { u: 24.6, v: 8.0 }, { u: 24.0, v: 8.0 },
+    ];
+    /** Distance between segments a→b and c→d (0 when they touch). */
+    const distSegSeg = (a: { x: number; z: number }, b: { x: number; z: number }, c: Point2, d: Point2): number => {
+      const A = { u: a.x, v: a.z };
+      const B = { u: b.x, v: b.z };
+      if (testSegmentsIntersect(A, B, c, d)) return 0;
+      return Math.min(
+        distToSegment(A, c, d), distToSegment(B, c, d),
+        distToSegment(c, A, B), distToSegment(d, A, B),
+      );
     };
+    const r = 1.5;
     for (let i = 1; i < tp.points.length; i++) {
       const a = tp.points[i - 1]!;
       const b = tp.points[i]!;
       if (b.rapid) continue;
       if (a.y > 0.5 || b.y > 0.5) continue; // depth cuts only
-      expect(
-        segEntersBox(a, b),
-        `gouging link (${a.x.toFixed(2)},${a.z.toFixed(2)}) → (${b.x.toFixed(2)},${b.z.toFixed(2)}) crosses the island keep-out`,
-      ).toBe(false);
+      for (let e = 0; e < 4; e++) {
+        const d = distSegSeg(a, b, rect[e]!, rect[(e + 1) % 4]!);
+        expect(
+          d,
+          `gouging link (${a.x.toFixed(2)},${a.z.toFixed(2)}) → (${b.x.toFixed(2)},${b.z.toFixed(2)}) only ${d.toFixed(3)} from the island`,
+        ).toBeGreaterThanOrEqual(r - 0.02);
+      }
     }
     // The detour actually happens: crossing rows retract (the unlinked path
     // has strictly more rapids than the same pocket without the slot).
@@ -552,6 +556,40 @@ describe('generatePocketToolpath', () => {
       ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0,
     });
     expect(tp.rapidMoves.length).toBeGreaterThan(plain.rapidMoves.length);
+  });
+
+  it('pockets BOTH sides when a grown island splits the region (multi-component raster)', () => {
+    // A tall narrow island grown by the cutter radius spans the whole cleared
+    // height, so the region erosion splits into two components. Both must be
+    // machined by their own raster sweep — the old single-ring inset milled
+    // one merged (wrong) region; silently dropping a component would leave
+    // half the pocket standing.
+    const plate = createExtrude({
+      profile: [
+        { x: 0, y: 0, z: 0 }, { x: 50, y: 0, z: 0 }, { x: 50, y: 0, z: 10 }, { x: 0, y: 0, z: 10 },
+      ],
+      direction: { x: 0, y: 1, z: 0 }, distance: 10, symmetric: false,
+    });
+    const wall = translateBody(
+      createExtrude({
+        profile: [
+          { x: -0.5, y: 0, z: -4 }, { x: 0.5, y: 0, z: -4 }, { x: 0.5, y: 0, z: 4 }, { x: -0.5, y: 0, z: 4 },
+        ],
+        direction: { x: 0, y: 1, z: 0 }, distance: 12, symmetric: false,
+      }),
+      { x: 25, y: -1, z: 5 },
+    );
+    const body = booleanOpManifold(plate, wall, 'difference');
+    expect(body).not.toBeNull();
+    const tp = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 50, y: 10, z: 10 } },
+      { ...tool, diameter: 3, fluteLength: 12 },
+      { ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0 },
+      { body: body! },
+    );
+    const cuts = tp.cuttingMoves.filter((p) => p.y < 0.5);
+    expect(cuts.filter((p) => p.x < 23).length).toBeGreaterThan(0);
+    expect(cuts.filter((p) => p.x > 27).length).toBeGreaterThan(0);
   });
 
   it('keeps every rapid that starts below safe height vertical (linking version)', () => {
@@ -1190,12 +1228,13 @@ describe('generatePocketToolpath — offset strategy (contour-parallel rings)', 
     expect(band).toBeLessThanOrEqual(1.2 * regionArea);
   });
 
-  it('L-shaped pocket falls back to the raster — full coverage over partial rings', () => {
-    // Asymmetric L (80×80 minus a 30×30 corner notch). Concave regions make
-    // the offsetPolygon centroid-inradius guard truncate the ring family
-    // early (pass #34 review measured 53.8% swept coverage on this exact
-    // shape), so the offset strategy now refuses concave outlines and the
-    // raster clears everything instead.
+  it('L-shaped (concave) pocket clears with rings — no raster fallback, ≥95% coverage', () => {
+    // Asymmetric L (80×80 minus a 30×30 corner notch). The legacy
+    // offsetPolygon ring family truncated on this exact shape at 53.8% swept
+    // coverage (pass #34 review) and fell back to the raster; the clipper
+    // ring family handles the concave outline directly, so the offset
+    // strategy must now produce ring loops (not the raster) and sweep
+    // essentially the whole reachable region.
     const lBody = createExtrude({
       profile: [
         { x: -40, y: 0, z: -40 }, { x: 40, y: 0, z: -40 }, { x: 40, y: 0, z: 40 },
@@ -1210,43 +1249,55 @@ describe('generatePocketToolpath — offset strategy (contour-parallel rings)', 
     const rasterTp = generatePocketToolpath(
       lBounds, tool, { ...base }, { body: lBody },
     );
-    // The fallback is the raster, byte-for-byte (same params otherwise).
-    expect(offsetTp.points).toEqual(rasterTp.points);
-    // And the raster genuinely clears the region: sample a grid over the
-    // cleared area and verify ≥99% of interior sample points lie within a
-    // cutter radius of some cut SEGMENT (the reviewer's Monte-Carlo swept-
-    // disc criterion — raster rows emit one move per row, so point distance
-    // would only see the row endpoints).
+    // Rings, not the raster fallback.
+    expect(closedLoops(offsetTp).length).toBeGreaterThanOrEqual(5);
+    expect(offsetTp.points).not.toEqual(rasterTp.points);
+
+    // Ring family coverage: every reachable sample point of the L (inside
+    // the footprint AND ≥ r from its boundary — the disc centre can never
+    // honour closer points) lies within r+0.15 of a cut SEGMENT, ≥95% of
+    // the time. The old ring family scored 53.8% here.
+    const lPoly: Point2[] = [
+      { u: -40, v: -40 }, { u: 40, v: -40 }, { u: 40, v: 40 },
+      { u: -10, v: 40 }, { u: -10, v: 10 }, { u: -40, v: 10 },
+    ];
+    const distToLBoundary = (u: number, v: number): number => {
+      let best = Infinity;
+      for (let i = 0; i < lPoly.length; i++) {
+        best = Math.min(best, distToSegment({ u, v }, lPoly[i]!, lPoly[(i + 1) % lPoly.length]!));
+      }
+      return best;
+    };
     const moves = offsetTp.points;
     const segClear = (u: number, v: number): boolean => {
       for (let i = 1; i < moves.length; i++) {
         const a = moves[i - 1]!;
         const b = moves[i]!;
-        // A move is a rapid iff its END point is — the ramp/plunge segments
-        // START at a rapid position but are genuine cutting moves.
         if (b.rapid) continue;
-        const du = b.x - a.x;
-        const dv = b.z - a.z;
-        const lenSq = du * du + dv * dv;
-        const t = lenSq < 1e-12 ? 0 : Math.max(0, Math.min(1, ((u - a.x) * du + (v - a.z) * dv) / lenSq));
-        if (Math.hypot(u - (a.x + t * du), v - (a.z + t * dv)) <= 3 + 0.15) return true;
+        if (distToSegment({ u, v }, { u: a.x, v: a.z }, { u: b.x, v: b.z }) <= 3 + 0.15) return true;
       }
       return false;
     };
-    let inside = 0;
+    let covered = 0;
     let total = 0;
     for (let u = -39; u <= 39; u += 1.5) {
       for (let v = -39; v <= 39; v += 1.5) {
-        const inL = u >= -10 || v <= 10; // L footprint (notch = top-LEFT: u < -10 AND v > 10 is outside)
-        if (!inL) continue;
+        if (!pointInPolygon({ u, v }, lPoly)) continue;
+        if (distToLBoundary(u, v) < 3) continue; // not reachable at disc centre level
         total++;
-        if (segClear(u, v)) inside++;
+        if (segClear(u, v)) covered++;
       }
     }
-    expect(inside / total).toBeGreaterThanOrEqual(0.99);
+    expect(total).toBeGreaterThan(1000);
+    expect(covered / total).toBeGreaterThanOrEqual(0.95);
   });
 
-  it('silently falls back to raster for silhouettes with islands (tube)', () => {
+  it('clears island silhouettes with rings: wall ring CCW, island rings CW, no gouging (tube)', () => {
+    // The legacy ring family refused islands; the clipper one cuts the
+    // annulus directly: depth 0 = the wall ring (CCW, material outside) plus
+    // the grown-island ring (CW, island material inside); deeper depths erode
+    // the annulus to CW outer + CW island rings. Every cutting point must
+    // also keep ≥ r from both the wall and the island (anti-gouge).
     const tube = createTube(15, 6, 20, 32);
     const small = { ...tool, diameter: 3, fluteLength: 12 };
     const tubeBounds = { min: { x: -15, y: 0, z: -15 }, max: { x: 15, y: 20, z: 15 } };
@@ -1256,24 +1307,66 @@ describe('generatePocketToolpath — offset strategy (contour-parallel rings)', 
     );
     const raster = generatePocketToolpath(tubeBounds, small, tubeBase, { body: tube });
     expect(off.cuttingMoves.length).toBeGreaterThan(0);
-    expect(off.points).toEqual(raster.points);
+    expect(off.points).not.toEqual(raster.points); // rings, not the fallback
+
+    const loops = closedLoops(off);
+    expect(loops.length).toBeGreaterThanOrEqual(6); // 3 depths × (outer + island)
+    const meanR = (l: DetectedLoop): number =>
+      l.loop.reduce((s, p) => s + Math.hypot(p.x, p.z), 0) / l.loop.length;
+    // Depth-0 wall ring: mean radius ≈ 15−1.5 = 13.5, CCW (positive area).
+    const wall = loops.find((l) => Math.abs(meanR(l) - 13.5) < 0.1);
+    expect(wall).toBeDefined();
+    expect(wall!.area).toBeGreaterThan(0);
+    // Every other loop (island rings ≈ 7.4 and deeper annulus rings ≈
+    // 12.2/10.9/9.8/8.6) runs CW — negative signed area.
+    for (const l of loops) {
+      if (l === wall) continue;
+      expect(l.area, `loop at mean radius ${meanR(l).toFixed(2)} must be CW`).toBeLessThan(0);
+    }
+
+    // Anti-gouge: every cutting point keeps ≥ r−0.03 from the silhouette's
+    // outer wall and island boundary (raster stays within r+0.05 too).
+    const sil = topSilhouette(tube)!;
+    for (const p of off.cuttingMoves) {
+      const dWall = Math.min(
+        ...sil.outer.points.map((_, i) =>
+          distToSegment({ u: p.x, v: p.z }, sil.outer.points[i]!, sil.outer.points[(i + 1) % sil.outer.points.length]!)),
+      );
+      const island = sil.islands[0]!.points;
+      const dIsland = Math.min(
+        ...island.map((_, i) =>
+          distToSegment({ u: p.x, v: p.z }, island[i]!, island[(i + 1) % island.length]!)),
+      );
+      expect(dWall).toBeGreaterThanOrEqual(1.5 - 0.03);
+      expect(dIsland).toBeGreaterThanOrEqual(1.5 - 0.03);
+    }
+    assertPlungeFeeds(off, params.plungeRate);
   });
 
   it('keeps the tool-too-large empty path when the cutter cannot fit', () => {
-    // Symmetric L: the vertex centroid lies on the reflex corner, so the
-    // r = 3 inset is rejected and the legacy semantics return an empty path.
-    const lBody = createExtrude({
+    // A 30×5 slot with a ⌀6 cutter: the 3 mm erosion empties the region, so
+    // the legacy "tool too large" empty toolpath must survive the clipper
+    // port. (The old symmetric-L case relied on offsetPolygon's centroid
+    // guard rejecting a LEGITIMATE 40 mm L — the clipper erosion cuts that
+    // one correctly now, so the regression needs a genuinely-too-large tool.)
+    const slotBody = createExtrude({
       profile: [
-        { x: -20, y: 0, z: -20 }, { x: 20, y: 0, z: -20 }, { x: 20, y: 0, z: 20 },
-        { x: 0, y: 0, z: 20 }, { x: 0, y: 0, z: 0 }, { x: -20, y: 0, z: 0 },
+        { x: 0, y: 0, z: 0 }, { x: 30, y: 0, z: 0 }, { x: 30, y: 0, z: 5 }, { x: 0, y: 0, z: 5 },
       ],
       direction: { x: 0, y: 1, z: 0 }, distance: 10, symmetric: false,
     });
     const tp = generatePocketToolpath(
-      { min: { x: -20, y: 0, z: -20 }, max: { x: 20, y: 10, z: 20 } },
-      tool, { ...base, pocketStrategy: 'offset' }, { body: lBody },
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 10, z: 5 } },
+      tool, { ...base, pocketStrategy: 'offset' }, { body: slotBody },
     );
     expect(tp.points).toEqual([]);
+    // The same slot with a tool that fits is machined (sanity that the empty
+    // path above is about fit, not a broken generator).
+    const fits = generatePocketToolpath(
+      { min: { x: 0, y: 0, z: 0 }, max: { x: 30, y: 10, z: 5 } },
+      { ...tool, diameter: 3, fluteLength: 12 }, { ...base, pocketStrategy: 'offset' }, { body: slotBody },
+    );
+    expect(fits.cuttingMoves.length).toBeGreaterThan(0);
   });
 });
 
@@ -1501,5 +1594,140 @@ describe('new CAM parameters default to the legacy output', () => {
       { ...base, drillCycle: 'simple', dwellSeconds: 2 },
     );
     expect(drillExplicit.points).toEqual(drillLegacy.points);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// True arcs from analytic cylinder tags (P2b): the contour generator recovers
+// G2/G3 geometry straight from Face.source cylinder tags instead of letting
+// the post re-fit the discretized polyline. Bodies come from the tagged
+// builder in arcSources.test.ts (brep primitives never tag — that is the
+// production split the module exists for).
+// ---------------------------------------------------------------------------
+
+describe('generateContourToolpath — true arcs (analytic cylinder tags)', () => {
+  // ⌀20 tagged boss, 55-gon wall → tool-centre circle r = 10 + 3 = 13.
+  const boss = taggedCylinderBody(10, 20, 55);
+  const spec = { ...params, depthOfCut: 20, stockTop: 20, stockBottom: 0 };
+
+  /** Sweep (rad, positive) of one arcTo move, from its endpoints. */
+  const arcSweepOf = (a: ToolpathPoint, b: ToolpathPoint): number => {
+    const c = b.arcTo!.center;
+    const a0 = Math.atan2(a.z - c.z, a.x - c.x);
+    const a1 = Math.atan2(b.z - c.z, b.x - c.x);
+    let d = b.arcTo!.ccw ? a1 - a0 : a0 - a1;
+    d = ((d % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    return d;
+  };
+
+  it('full circle becomes three 120° arcs at the exact analytic radius', () => {
+    const tp = generateContourToolpath(boss, tool, spec);
+    const arcs: Array<[ToolpathPoint, ToolpathPoint]> = [];
+    for (let i = 1; i < tp.points.length; i++) {
+      if (tp.points[i]!.arcTo) arcs.push([tp.points[i - 1]!, tp.points[i]!]);
+    }
+    expect(arcs).toHaveLength(3);
+    let total = 0;
+    for (const [a, b] of arcs) {
+      // True arcs do not survive on decimal luck: endpoints sit on the
+      // analytic circle to float exactness (contrast the fitted path's
+      // 4-decimal G-code constraint).
+      const ca = b.arcTo!.center;
+      const rStart = Math.hypot(a.x - ca.x, a.z - ca.z);
+      const rEnd = Math.hypot(b.x - ca.x, b.z - ca.z);
+      expect(Math.abs(rStart - 13)).toBeLessThan(1e-9);
+      expect(Math.abs(rEnd - 13)).toBeLessThan(1e-9);
+      expect(Math.abs(rStart - rEnd)).toBeLessThan(1e-9);
+      expect(b.arcTo!.ccw).toBe(false); // climb outer loop runs CW
+      const sweep = arcSweepOf(a, b);
+      expect(sweep).toBeCloseTo((120 * Math.PI) / 180, 6);
+      total += sweep;
+    }
+    expect(total).toBeCloseTo(2 * Math.PI, 6);
+    // The layer collapsed: plunge + 3 arcs, nothing else.
+    expect(tp.cuttingMoves).toHaveLength(4);
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+
+  it('conventional flips the arc direction, not the geometry', () => {
+    const tp = generateContourToolpath(boss, tool, { ...spec, direction: 'conventional' });
+    const tagged = tp.points.filter((p) => p.arcTo);
+    expect(tagged).toHaveLength(3);
+    for (const p of tagged) expect(p.arcTo!.ccw).toBe(true); // CCW loop now
+    expect(Math.hypot(tagged[0]!.x, tagged[0]!.z)).toBeCloseTo(13, 9);
+  });
+
+  it('tube: outer arcs at wall r + offset (G2 side), island arcs at r − offset (G3 side)', () => {
+    const tube = taggedCylinderBody(15, 20, 48, { innerRadius: 6 });
+    const tp = generateContourToolpath(tube, tool, spec);
+    const arcs: Array<[ToolpathPoint, ToolpathPoint]> = [];
+    for (let i = 1; i < tp.points.length; i++) {
+      if (tp.points[i]!.arcTo) arcs.push([tp.points[i - 1]!, tp.points[i]!]);
+    }
+    expect(arcs).toHaveLength(6); // 3 outer + 3 island
+    const radiusOf = (ab: [ToolpathPoint, ToolpathPoint]): number =>
+      Math.hypot(ab[0]!.x - ab[1]!.arcTo!.center.x, ab[0]!.z - ab[1]!.arcTo!.center.z);
+    const outer = arcs.filter((ab) => radiusOf(ab) > 10);
+    const island = arcs.filter((ab) => radiusOf(ab) < 10);
+    expect(outer).toHaveLength(3);
+    expect(island).toHaveLength(3);
+    for (const ab of outer) {
+      expect(radiusOf(ab)).toBeCloseTo(15 + 3, 9);
+      expect(ab[1]!.arcTo!.ccw).toBe(false); // climb outer = CW
+    }
+    for (const ab of island) {
+      expect(radiusOf(ab)).toBeCloseTo(6 - 3, 9);
+      expect(ab[1]!.arcTo!.ccw).toBe(true); // climb island = CCW
+    }
+  });
+
+  it('tabs split the arcs: no arc spans a lift, flat stretches stay arcs', () => {
+    const tp = generateContourToolpath(boss, tool, {
+      ...spec, depthOfCut: 10, tabs: { count: 2, height: 2, width: 6 },
+    });
+    expect(tp.cuttingMoves.length).toBeGreaterThan(4); // tab flanks survive
+    for (let i = 1; i < tp.points.length; i++) {
+      const a = tp.points[i - 1]!;
+      const b = tp.points[i]!;
+      if (b.arcTo) {
+        expect(Math.abs(b.y - a.y), 'an arc must never span a height change').toBeLessThanOrEqual(1e-9);
+        expect(Math.hypot(b.x - b.arcTo!.center.x, b.z - b.arcTo!.center.z)).toBeCloseTo(13, 9);
+      }
+    }
+    // Both levels ride arcs where flat (level 1 clears the tab top at 2.0).
+    const arcsPerLevel = [10, 0].map((yLevel) =>
+      tp.points.filter((p) => p.arcTo && Math.abs(p.y - yLevel) < 1e-9).length);
+    expect(arcsPerLevel[0]).toBeGreaterThanOrEqual(3);
+    expect(arcsPerLevel[1]).toBeGreaterThanOrEqual(2); // tab gaps eat some
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+
+  it('ramp entry descends ON the circle with straight moves; the flat remainder is arcs', () => {
+    const tp = generateContourToolpath(boss, tool, { ...spec, depthOfCut: 10, rampEntry: true });
+    for (let i = 1; i < tp.points.length; i++) {
+      const a = tp.points[i - 1]!;
+      const b = tp.points[i]!;
+      if (b.rapid) continue;
+      // Every cutting point rides the analytic circle…
+      expect(Math.abs(Math.hypot(b.x, b.z) - 13)).toBeLessThan(1e-6);
+      // …and descending moves (the ramp helix) are straight — the flat-only
+      // G2/G3 contract cannot express them.
+      if (Math.abs(b.y - a.y) > 1e-9) expect(b.arcTo).toBeUndefined();
+    }
+    expect(tp.points.filter((p) => p.arcTo).length).toBeGreaterThanOrEqual(3);
+    assertPlungeFeeds(tp, params.plungeRate);
+  });
+
+  it('spring pass re-rides the circle: six arcs at the final depth', () => {
+    const tp = generateContourToolpath(boss, tool, { ...spec, springPass: true });
+    const tagged = tp.points.filter((p) => p.arcTo);
+    expect(tagged).toHaveLength(6); // two revolutions × 3 arcs
+  });
+
+  it('untagged walls keep the pure polyline output (no arcTo anywhere)', () => {
+    const plain = taggedCylinderBody(10, 20, 55, { tagWalls: false });
+    const tp = generateContourToolpath(plain, tool, spec);
+    expect(tp.points.some((p) => p.arcTo)).toBe(false);
+    expect(tp.cuttingMoves.length).toBeGreaterThan(30); // the 55-gon polyline
   });
 });

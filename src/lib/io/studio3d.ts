@@ -14,7 +14,7 @@ import type {
   CircularArrayFeature,
   MirrorFeature,
 } from '../features/types';
-import type { SolidBody, Vec3 } from '../geometry/types';
+import type { SolidBody, Vec3, Face, FaceSource } from '../geometry/types';
 import type { SketchEntity, SketchConstraint } from '../sketch/types';
 import type { PlaneDefinition } from '../geometry/types';
 import type { AxisDefinition, PointDefinition, CoordinateSystemDefinition, AnnotationDefinition } from '../geometry/referenceGeometry';
@@ -221,9 +221,89 @@ function serializeFeatureData(feature: Feature): unknown {
   }
 }
 
-/** Full direct-body meshes stored in a loaded project (empty if none). */
+/**
+ * Validate one Face.source record from untrusted JSON (a loaded project's
+ * direct bodies). Returns the tag unchanged-shape when it is one of the known
+ * kinds with finite, usable parameters, and null for anything else — unknown
+ * kinds from newer files, hand-edited junk, malformed numbers. Callers drop
+ * the tag and KEEP the geometry: provenance is an optimization, never a
+ * load-blocker. (The save side is typed — only the load side needs defense.)
+ */
+function sanitizeFaceSource(raw: unknown): FaceSource | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  const axisLen = (v: unknown): number => {
+    const a = finiteVec3(v);
+    return a ? Math.hypot(a.x, a.y, a.z) : 0;
+  };
+  switch (s.kind) {
+    case 'plane': {
+      const point = finiteVec3(s.point);
+      const normal = finiteVec3(s.normal);
+      return point && normal && axisLen(s.normal) > 1e-12
+        ? { kind: 'plane', point, normal }
+        : null;
+    }
+    case 'cylinder': {
+      const origin = finiteVec3(s.origin);
+      const radius = finiteNum(s.radius);
+      return origin && radius !== null && radius > 0 && axisLen(s.axis) > 1e-12
+        ? { kind: 'cylinder', origin, axis: finiteVec3(s.axis)!, radius }
+        : null;
+    }
+    case 'cone': {
+      const apex = finiteVec3(s.apex);
+      const halfAngle = finiteNum(s.halfAngle);
+      return apex && halfAngle !== null && halfAngle > 0 && halfAngle < Math.PI / 2 && axisLen(s.axis) > 1e-12
+        ? { kind: 'cone', apex, axis: finiteVec3(s.axis)!, halfAngle }
+        : null;
+    }
+    case 'sphere': {
+      const center = finiteVec3(s.center);
+      const radius = finiteNum(s.radius);
+      return center && radius !== null && radius > 0 ? { kind: 'sphere', center, radius } : null;
+    }
+    case 'torus': {
+      const center = finiteVec3(s.center);
+      const majorRadius = finiteNum(s.majorRadius);
+      const minorRadius = finiteNum(s.minorRadius);
+      return center && majorRadius !== null && minorRadius !== null &&
+          majorRadius > 0 && minorRadius > 0 && minorRadius <= majorRadius && axisLen(s.axis) > 1e-12
+        ? { kind: 'torus', center, axis: finiteVec3(s.axis)!, majorRadius, minorRadius }
+        : null;
+    }
+    default:
+      return null; // unknown kind — future file versions / hand edits
+  }
+}
+
+/**
+ * Full direct-body meshes stored in a loaded project (empty if none). Face
+ * `source` tags pass through a defensive filter: unknown or malformed kinds
+ * are DROPPED while the geometry is kept (a tag from a newer file version
+ * must never block loading), and files whose tags are all valid keep their
+ * parsed face objects untouched — the historical (cylinder-only or empty)
+ * load path is byte-for-byte what it was.
+ */
 export function deserializeDirectBodies(project: ProjectFile): SolidBody[] {
-  return Array.isArray(project.directBodies) ? project.directBodies : [];
+  const bodies = Array.isArray(project.directBodies) ? project.directBodies : [];
+  let mutated = false;
+  const cleaned = bodies.map((body): SolidBody => {
+    if (!body || !Array.isArray(body.faces)) return body;
+    let changed = false;
+    const faces = body.faces.map((f): Face => {
+      const src = (f as { source?: unknown }).source;
+      if (src === undefined) return f;
+      if (sanitizeFaceSource(src) !== null) return f;
+      changed = true;
+      return { ...f, source: undefined };
+    });
+    if (!changed) return body;
+    mutated = true;
+    return { ...body, faces };
+  });
+  // Preserve the original array identity when nothing was dropped.
+  return mutated ? cleaned : bodies;
 }
 
 /** Datum planes/axes/points stored in a loaded project (empty arrays if absent). */

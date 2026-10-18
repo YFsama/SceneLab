@@ -1,4 +1,4 @@
-import type { Vec3, SolidBody, Face, Edge, ExtrudeParams, RevolveParams } from './types';
+import type { Vec3, SolidBody, Face, Edge, ExtrudeParams, RevolveParams, FaceSource } from './types';
 import { computeConvexHull } from './convexHull';
 
 let nextId = 1;
@@ -222,6 +222,74 @@ export function createExtrude(params: ExtrudeParams): SolidBody {
   };
 }
 
+/**
+ * Analytic surface a revolved profile edge sweeps (P2a): the edge's band in
+ * the meridian half-plane is tagged by construction — parallel to the axis at
+ * constant radius → 'cylinder'; a slanted edge whose line meets the axis →
+ * 'cone' (apex at the intersection, axis pointing from the apex into the
+ * band). Radial (⊥ axis) edges sweep plane annuli and stay untagged ('plane'
+ * has no producer this pass); edges that CROSS the axis sweep
+ * self-intersecting surfaces and stay untagged too. Returns null for
+ * everything the exact geometry does not vouch for.
+ */
+function revolveBandSource(p0: Vec3, p1: Vec3, origin: Vec3, dir: Vec3): FaceSource | null {
+  const perpOf = (p: Vec3): Vec3 => {
+    const r = { x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z };
+    const t = r.x * dir.x + r.y * dir.y + r.z * dir.z;
+    return { x: r.x - dir.x * t, y: r.y - dir.y * t, z: r.z - dir.z * t };
+  };
+  const a = perpOf(p0);
+  const perpD = { x: perpOf(p1).x - a.x, y: perpOf(p1).y - a.y, z: perpOf(p1).z - a.z };
+  const dP = { x: p1.x - p0.x, y: p1.y - p0.y, z: p1.z - p0.z };
+  const ra = Math.hypot(a.x, a.y, a.z);
+  const lenD = Math.hypot(dP.x, dP.y, dP.z);
+  const scale = 1 + Math.max(ra, lenD);
+  const eps = 1e-9 * scale;
+  if (lenD <= eps) return null; // degenerate edge
+  if (ra <= eps && Math.hypot(perpOf(p1).x, perpOf(p1).y, perpOf(p1).z) <= eps) return null; // on the axis
+
+  // Edge parallel to the axis (no radial component): a cylinder band.
+  if (Math.hypot(perpD.x, perpD.y, perpD.z) <= eps) {
+    if (ra <= eps) return null;
+    const t0 = (p0.x - origin.x) * dir.x + (p0.y - origin.y) * dir.y + (p0.z - origin.z) * dir.z;
+    const t1 = (p1.x - origin.x) * dir.x + (p1.y - origin.y) * dir.y + (p1.z - origin.z) * dir.z;
+    return {
+      kind: 'cylinder',
+      origin: { x: origin.x + dir.x * ((t0 + t1) / 2), y: origin.y + dir.y * ((t0 + t1) / 2), z: origin.z + dir.z * ((t0 + t1) / 2) },
+      axis: { ...dir },
+      radius: ra,
+    };
+  }
+
+  // Slanted edge: a cone iff its infinite line meets the axis. |a + s·perpD|² = 0
+  // has real roots iff disc = −4|a×perpD|² ≥ 0 — i.e. exactly when the line
+  // passes through the axis (a double root); a skew line sweeps a hyperboloid
+  // and gets no tag.
+  const A = perpD.x * perpD.x + perpD.y * perpD.y + perpD.z * perpD.z;
+  const B = 2 * (a.x * perpD.x + a.y * perpD.y + a.z * perpD.z);
+  const disc = B * B - 4 * A * (a.x * a.x + a.y * a.y + a.z * a.z);
+  if (disc < -1e-18 * scale * scale) return null;
+  const s = -B / (2 * A); // root; clamped into [0, 1] by the disc tolerance
+  if (s > 1e-9 && s < 1 - 1e-9) return null; // crosses the axis mid-band
+  const apex = { x: p0.x + dP.x * s, y: p0.y + dP.y * s, z: p0.z + dP.z * s };
+  // Half angle: between the generator and the axis.
+  const sinT = Math.hypot(perpD.x, perpD.y, perpD.z) / lenD;
+  const cosT = Math.abs((dP.x * dir.x + dP.y * dir.y + dP.z * dir.z)) / lenD;
+  const halfAngle = Math.atan2(sinT, cosT);
+  if (halfAngle >= Math.PI / 2 - 1e-6) return null; // radial edge — plane annulus
+  // Canonical axis: from the apex INTO the band.
+  const flip =
+    ((p0.x + p1.x) / 2 - apex.x) * dir.x +
+    ((p0.y + p1.y) / 2 - apex.y) * dir.y +
+    ((p0.z + p1.z) / 2 - apex.z) * dir.z < 0;
+  return {
+    kind: 'cone',
+    apex,
+    axis: flip ? { x: -dir.x, y: -dir.y, z: -dir.z } : { ...dir },
+    halfAngle,
+  };
+}
+
 export function createRevolve(params: RevolveParams): SolidBody {
   const { profile, axis, angle } = params;
   const n = profile.length;
@@ -291,6 +359,14 @@ export function createRevolve(params: RevolveParams): SolidBody {
 
   // Side faces, wrapping the profile loop (pNext) so the cross-section closes.
   // On a full turn the band after the last ring wraps back to ring 0.
+  // Faces are indexed s·n + p (caps are pushed after this loop), so each
+  // profile edge's band is a strided slice — tagged below from the exact
+  // revolve geometry (revolveBandSource).
+  const bandSources: Array<FaceSource | null> = [];
+  for (let p = 0; p < n; p++) {
+    const pNext = (p + 1) % n;
+    bandSources.push(revolveBandSource(profile[p]!, profile[pNext]!, origin, dir));
+  }
   for (let s = 0; s < segments; s++) {
     const nextRing = (s + 1) % ringCount;
     for (let p = 0; p < n; p++) {
@@ -346,6 +422,15 @@ export function createRevolve(params: RevolveParams): SolidBody {
   }
 
   alignWindingToNormal(faces);
+
+  // Apply the analytic band tags AFTER winding alignment (which may reverse
+  // vertex loops — the tag is pure geometry and survives that).
+  for (let s = 0; s < segments; s++) {
+    for (let p = 0; p < n; p++) {
+      const src = bandSources[p]!;
+      if (src) faces[s * n + p]!.source = src;
+    }
+  }
 
   return {
     id: genId('body'),

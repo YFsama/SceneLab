@@ -154,16 +154,20 @@ describe('face provenance tagging (Face.source)', () => {
 
   it('the hole wall faces carry source: radius ≈ d/2, axis ≈ ±Y, every vertex on the cylinder', () => {
     const drilled = drill();
-    const tagged = drilled.faces.filter((f) => f.source?.kind === 'cylinder');
+    // Narrow to the cylinder variant (FaceSource is a union since cone/sphere
+    // joined it — hole walls are still classified cylinder-only).
+    const tagged = drilled.faces.flatMap((f) => {
+      const src = f.source;
+      return src && src.kind === 'cylinder' ? [{ face: f, src }] : [];
+    });
     // The 48-facet wall survives as (up to decimation) many coplanar strips —
     // all of them tagged, and nothing else is.
     expect(tagged.length).toBeGreaterThanOrEqual(24);
-    for (const f of tagged) {
-      const src = f.source!;
+    for (const { face, src } of tagged) {
       expect(Math.abs(src.radius - 2)).toBeLessThan(1e-6);
       expect(Math.abs(Math.abs(src.axis.y) - 1)).toBeLessThan(1e-9);
       expect(Math.hypot(src.axis.x, src.axis.y, src.axis.z)).toBeCloseTo(1, 9);
-      for (const v of f.vertices) {
+      for (const v of face.vertices) {
         expect(Math.abs(distToLine(v, src.origin, src.axis) - src.radius)).toBeLessThan(1e-6);
       }
     }

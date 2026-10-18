@@ -993,27 +993,105 @@ function decimateCoplanar(faces: Face[], vertices: Vec3[]): Face[] {
   return out;
 }
 
-/** Smoothness threshold for grouping faces into one surface for cylinder
+/** Smoothness threshold for grouping faces into one surface for analytic
  *  classification: facet steps of ≤ this dihedral angle count as one wall
  *  (the kernel's coarsest walls are 8-gons at 45°... which we deliberately
  *  still accept; fragments meeting at steeper creases never merge). */
 const CYLINDER_GROUP_MAX_STEP_DEG = 45;
 
+/** Minimum distinct vertices per section ring in the cone classifier — a
+ *  ring needs enough corners for the ≥300° coverage rule to mean anything
+ *  (the kernel's coarsest full walls are 8-gons). */
+const CONE_MIN_RING_VERTS = 6;
+
+/** Cone half-angle gates (radians). Below 2° a sloped wall is near-cylindrical:
+ *  the pooled cylinder fit has already rejected it at 0.1 % radius tolerance,
+ *  and the honest tag is none (writing a cone whose slope is noise would lie
+ *  to every consumer). Above 80° the frustum is near-planar and the apex
+ *  extrapolation (r→0) is numerically meaningless. */
+const CONE_MIN_HALF_ANGLE = (2 * Math.PI) / 180;
+const CONE_MAX_HALF_ANGLE = (80 * Math.PI) / 180;
+
+/** Fit tolerance shared by the cone/sphere verifications: 0.1 % of the fitted
+ *  scale plus float slack — the same standard the cylinder path applies to
+ *  its vertices (tessellation vertices lie ON the surface; only chords
+ *  deviate). */
+const analyticFitTol = (scale: number): number => 1e-3 * scale + 1e-9;
+
+/** Angular-coverage gate shared by every classifier kind: largest gap between
+ *  neighbouring vertex angles around the axis must be ≤ 60° (≥300° wall). */
+function coversFullRing(angles: number[]): boolean {
+  if (angles.length < 4) return false;
+  angles.sort((a, b) => a - b);
+  let maxGap = angles[0]! + 2 * Math.PI - angles[angles.length - 1]!;
+  for (let i = 1; i < angles.length; i++) {
+    maxGap = Math.max(maxGap, angles[i]! - angles[i - 1]!);
+  }
+  return maxGap <= (60 * Math.PI) / 180;
+}
+
 /**
- * Tag `Face.source` on face groups that lie on a common analytic cylinder.
+ * Kåsa least-squares circle fit of 2D points: minimize
+ * Σ(x²+y² − a·x − b·y − c)². Returns the center and radius, or null when the
+ * normal equations are singular / degenerate. Shared by the cylinder (pooled
+ * single circle) and cone (per section ring) classifiers.
+ */
+function fitCircle2D(pts: Array<{ x: number; y: number }>): { cx: number; cy: number; radius: number } | null {
+  let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, szz = 0, sxz = 0, syz = 0;
+  for (const p of pts) {
+    const z = p.x * p.x + p.y * p.y;
+    sx += p.x; sy += p.y; sxx += p.x * p.x; syy += p.y * p.y; sxy += p.x * p.y;
+    szz += z; sxz += z * p.x; syz += z * p.y;
+  }
+  const nPts = pts.length;
+  const sol = solve3(
+    [
+      [sxx, sxy, sx],
+      [sxy, syy, sy],
+      [sx, sy, nPts],
+    ],
+    [sxz, syz, szz],
+  );
+  if (!sol) return null;
+  const cx = sol[0]! / 2, cy = sol[1]! / 2;
+  const r2 = sol[2]! + cx * cx + cy * cy;
+  if (!(r2 > 1e-12)) return null;
+  return { cx, cy, radius: Math.sqrt(r2) };
+}
+
+/**
+ * Tag `Face.source` on face groups that lie on a common analytic surface.
  *
  * Classification (per smooth-connected face group — adjacency through shared
- * edges whose dihedral is under CYLINDER_GROUP_MAX_STEP_DEG):
- *  1. axis: normals of a cylinder wall are radial (⟂ axis), so their scatter
- *     matrix is rank 2 — the axis is its smallest-eigenvector (symmetric 3×3
- *     eigen decomposition by Jacobi rotations). Rank sanity is enforced
- *     (planar patches and spheres are rejected here).
- *  2. circle: Kåsa least-squares circle fit of the vertices projected ⟂ axis
- *     gives origin (on-axis) and radius.
- *  3. verification: EVERY group vertex within 0.1% of the fitted radius,
- *     angular coverage ≥ 300° around the axis (a full wall, not a fragment),
- *     ≥ 12 distinct vertices.
- * Only then is source set (on every face of the group). Never un-tags.
+ * edges whose dihedral is under CYLINDER_GROUP_MAX_STEP_DEG), tried in order:
+ *
+ *  1. CYLINDER (the original classifier, unchanged): normals of a cylinder
+ *     wall are radial (⟂ axis), so their scatter matrix is rank 2 — the axis
+ *     is its smallest-eigenvector (Jacobi eigen decomposition). A Kåsa circle
+ *     fit of ALL vertices projected ⟂ axis gives origin and radius; every
+ *     vertex must sit on the circle (0.1 %) and the angular coverage must be
+ *     ≥ 300° (a full wall, not a fragment) with ≥ 12 distinct vertices.
+ *  2. CONE: the group's vertices split at the largest axial gap into two
+ *     section rings; each ring is Kåsa-fitted, the two centers define the
+ *     axis, and the radii must vary linearly along it with a significant
+ *     slope (2° < half angle < 80°). A single-vertex second section sitting
+ *     on the axis is accepted as the apex (pointed cones). The fit is then
+ *     verified against EVERY group vertex (radial distance = t·tan θ, same
+ *     0.1 % tolerance) and every group facet's normal (a cone facet's normal
+ *     is exactly radial·cos θ ∓ axis·sin θ with a consistent sign — this
+ *     rejects sphere bands, whose two rings are trivially cospherical and
+ *     would otherwise fool the linear extrapolation). Tried against both the
+ *     smallest eigenvector (shallow cones, like cylinders) and the largest
+ *     (steep cones: a 45° chamfer band's normals scatter MORE along the axis
+ *     than around it, putting the axis on the top eigenvalue).
+ *  3. SPHERE: a centered algebraic (Kåsa) sphere fit of all vertices
+ *     (3×3 normal equations via solve3), verified the same way — every
+ *     vertex on the sphere (0.1 %), radius bounded by the group's extent,
+ *     every facet normal (anti)radial (|cos| ≥ 0.85, which rejects the
+ *     cospherical two-ring bands of tall cylinder/cone walls).
+ *
+ * Tori are NOT classified (the two-section machinery does not fit them);
+ * 'torus' tags have no producer. Only ever sets `source`; never un-tags.
  */
 function tagCylinderSources(faces: Face[]): void {
   if (faces.length < 4) return;
@@ -1088,73 +1166,294 @@ function tagCylinderSources(faces: Face[]): void {
     if (!eig) continue;
     const [, l1, l2] = eig.values; // ascending: smallest (≈0) is the axis
     const axis = eig.vectors[0]!; // smallest eigenvalue's eigenvector = the axis
-    // The normals must span a plane: the middle eigenvalue sizeable against
-    // the top (the smallest ≈ 0 is exactly the cylinder signature).
-    if (!(l2 > 1e-9) || l1 < 1e-6 * l2) continue;
 
-    // 2D basis ⟂ axis.
-    const ref = Math.abs(axis.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-    const e1 = vNormalize(vCross(axis, ref));
-    const e2 = vCross(axis, e1);
-    const c0 = verts[0]!;
-    const pts2 = verts.map((v) => {
-      const r = vSub(v, c0);
-      const t = vDot(axis, r);
-      const rad = vSub(r, vScale(axis, t));
-      return { x: vDot(rad, e1), y: vDot(rad, e2) };
-    });
-    // Kåsa circle fit: minimize Σ(x²+y² − a·x − b·y − c)².
-    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, szz = 0, sxz = 0, syz = 0;
-    for (const p of pts2) {
-      const z = p.x * p.x + p.y * p.y;
-      sx += p.x; sy += p.y; sxx += p.x * p.x; syy += p.y * p.y; sxy += p.x * p.y;
-      szz += z; sxz += z * p.x; syz += z * p.y;
+    // ---- 1. cylinder: normals ⟂ axis (rank-2 scatter), all verts one circle.
+    // Gate (the original classifier's, verbatim): the middle eigenvalue must
+    // be significant against the largest (normals span a plane — planar
+    // patches are rejected; the smallest is never directly gated).
+    if (l2 > 1e-9 && l1 >= 1e-6 * l2) {
+      // 2D basis ⟂ axis.
+      const ref = Math.abs(axis.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+      const e1 = vNormalize(vCross(axis, ref));
+      const e2 = vCross(axis, e1);
+      const c0 = verts[0]!;
+      const pts2 = verts.map((v) => {
+        const r = vSub(v, c0);
+        const t = vDot(axis, r);
+        const rad = vSub(r, vScale(axis, t));
+        return { x: vDot(rad, e1), y: vDot(rad, e2) };
+      });
+      const fit = fitCircle2D(pts2);
+      if (fit) {
+        const { cx, cy, radius } = fit;
+        // Verification 1: every vertex on the fitted circle (0.1% + float slack).
+        const tol = analyticFitTol(radius);
+        let onCircle = true;
+        const angles: number[] = [];
+        for (const p of pts2) {
+          const dx = p.x - cx, dy = p.y - cy;
+          if (Math.abs(Math.hypot(dx, dy) - radius) > tol) { onCircle = false; break; }
+          angles.push(Math.atan2(dy, dx));
+        }
+        // Verification 2: angular coverage ≥ 300° (max gap ≤ 60°).
+        if (onCircle && coversFullRing(angles)) {
+          // Origin: on-axis at the group's mean axis coordinate.
+          let tSum = 0;
+          for (const v of verts) tSum += vDot(axis, vSub(v, c0));
+          const origin = {
+            x: c0.x + axis.x * (tSum / verts.length) + e1.x * cx + e2.x * cy,
+            y: c0.y + axis.y * (tSum / verts.length) + e1.y * cx + e2.y * cy,
+            z: c0.z + axis.z * (tSum / verts.length) + e1.z * cx + e2.z * cy,
+          };
+          const source: FaceSource = { kind: 'cylinder', origin, axis: { ...axis }, radius };
+          for (const fi of members) {
+            const f = faces[fi]!;
+            if (!f.source) f.source = source;
+          }
+          continue;
+        }
+      }
     }
-    const nPts = pts2.length;
-    const A = [
-      [sxx, sxy, sx],
-      [sxy, syy, sy],
-      [sx, sy, nPts],
-    ];
-    const rhs = [sxz, syz, szz];
-    const sol = solve3(A, rhs);
-    if (!sol) continue;
-    const cx = sol[0]! / 2, cy = sol[1]! / 2;
-    const r2 = sol[2]! + cx * cx + cy * cy;
-    if (!(r2 > 1e-12)) continue;
-    const radius = Math.sqrt(r2);
-    // Verification 1: every vertex on the fitted circle (0.1% + float slack).
-    const tol = 1e-3 * radius + 1e-9;
-    let onCircle = true;
-    const angles: number[] = [];
-    for (const p of pts2) {
-      const dx = p.x - cx, dy = p.y - cy;
-      if (Math.abs(Math.hypot(dx, dy) - radius) > tol) { onCircle = false; break; }
-      angles.push(Math.atan2(dy, dx));
-    }
-    if (!onCircle) continue;
-    // Verification 2: angular coverage ≥ 300° (max gap ≤ 60°).
-    angles.sort((a, b) => a - b);
-    let maxGap = angles[0]! + 2 * Math.PI - angles[angles.length - 1]!;
-    for (let i = 1; i < angles.length; i++) {
-      maxGap = Math.max(maxGap, angles[i]! - angles[i - 1]!);
-    }
-    if (maxGap > (60 * Math.PI) / 180) continue;
 
-    // Origin: on-axis at the group's mean axis coordinate.
-    let tSum = 0;
-    for (const v of verts) tSum += vDot(axis, vSub(v, c0));
-    const origin = {
-      x: c0.x + axis.x * (tSum / verts.length) + e1.x * cx + e2.x * cy,
-      y: c0.y + axis.y * (tSum / verts.length) + e1.y * cx + e2.y * cy,
-      z: c0.z + axis.z * (tSum / verts.length) + e1.z * cx + e2.z * cy,
-    };
-    const source: FaceSource = { kind: 'cylinder', origin, axis: { ...axis }, radius };
-    for (const fi of members) {
-      const f = faces[fi]!;
-      if (!f.source) f.source = source;
+    // ---- 2. cone: two section rings with linearly varying radius. --------
+    const cone =
+      fitConeSource(faces, members, verts, axis) ??
+      fitConeSource(faces, members, verts, eig.vectors[2]!);
+    if (cone) {
+      for (const fi of members) {
+        const f = faces[fi]!;
+        if (!f.source) f.source = cone;
+      }
+      continue;
+    }
+
+    // ---- 3. sphere: one algebraic fit through the whole group. -----------
+    const sphere = fitSphereSource(faces, members, verts);
+    if (sphere) {
+      for (const fi of members) {
+        const f = faces[fi]!;
+        if (!f.source) f.source = sphere;
+      }
     }
   }
+}
+
+/**
+ * Fit a cone to a smooth face group along the candidate `axisDir` (unit, sign
+ * arbitrary — an eigenvector of the group's normal scatter). See
+ * `tagCylinderSources` for the full contract; returns the tag or null.
+ */
+function fitConeSource(faces: Face[], members: number[], verts: Vec3[], axisDir: Vec3): FaceSource | null {
+  // ---- stage 1: rough sections along the eigen axis → section centroids. ---
+  // The eigen axis can sit several degrees off the true axis (the area
+  // weighting of merged quads is azimuthally anisotropic), far too sloppy for
+  // the ring-planarity gate — but good enough to SEPARATE the rings (their
+  // axial gap dwarfs the tilt-induced spread). A full ring's vertex centroid
+  // then sits ON the true axis exactly, which refines the axis for stage 2.
+  const c0 = verts[0]!;
+  const splitAtLargestGap = (axis: Vec3, origin: Vec3): Vec3[][] => {
+    const keyed = verts.map((v) => ({ v, t: vDot(vSub(v, origin), axis) }));
+    keyed.sort((a, b) => a.t - b.t);
+    if (keyed[keyed.length - 1]!.t - keyed[0]!.t <= 1e-9) return []; // no axial extent
+    let cut = 0;
+    let gap = 0;
+    for (let i = 0; i + 1 < keyed.length; i++) {
+      const g = keyed[i + 1]!.t - keyed[i]!.t;
+      if (g > gap) {
+        gap = g;
+        cut = i;
+      }
+    }
+    return [keyed.slice(0, cut + 1).map((p) => p.v), keyed.slice(cut + 1).map((p) => p.v)];
+  };
+  const centroidOf = (section: Vec3[]): Vec3 => {
+    let x = 0, y = 0, z = 0;
+    for (const v of section) { x += v.x; y += v.y; z += v.z; }
+    const n = section.length || 1;
+    return { x: x / n, y: y / n, z: z / n };
+  };
+  const rough = splitAtLargestGap(axisDir, c0);
+  if (rough.length !== 2 || rough[0]!.length === 0 || rough[1]!.length === 0) return null;
+  const centroidA = centroidOf(rough[0]!);
+  const centroidB = centroidOf(rough[1]!);
+  const refine = vSub(centroidB, centroidA);
+  if (vLen(refine) <= 1e-9) return null;
+  // Refined axis must still resemble the eigen direction (the centroid line of
+  // two genuinely separate rings cannot be near-perpendicular to it). Loose on
+  // purpose: the eigenvector itself can sit ~15° off the true axis (steep
+  // cones' area weighting is strongly azimuthally anisotropic) — mixed-ring
+  // splits are rejected later by the stage-2 ring fits, not here.
+  const axisRough = vScale(refine, 1 / vLen(refine));
+  if (vLen(vCross(axisDir, axisRough)) > 0.5) return null;
+
+  // ---- stage 2: exact sections along the refined axis → Kåsa ring fits. ----
+  const sections = splitAtLargestGap(axisRough, centroidA);
+  if (sections.length !== 2) return null;
+
+  // Per-section circle fit in the plane ⟂ the refined axis. A section with
+  // many points is a rim ring (must be planar and concyclic); a single-point
+  // section may be the apex of a pointed cone (resolved below).
+  const ref = Math.abs(axisRough.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const e1 = vNormalize(vCross(axisRough, ref));
+  const e2 = vCross(axisRough, e1);
+  const axialT = (v: Vec3): number => vDot(vSub(v, centroidA), axisRough);
+  const fitRing = (section: Vec3[]): { center: Vec3; radius: number } | null => {
+    if (section.length < CONE_MIN_RING_VERTS) return null;
+    // Ring planarity ⟂ axis — a section spanning several vertex rows is a
+    // cut-up wall, not a section circle.
+    const ts = section.map(axialT).sort((a, b) => a - b);
+    // The ring's own centroid carries its axial position (and, for a full
+    // ring, lies ON the axis) — the 2D fit only recovers the radial offsets.
+    const centroid = centroidOf(section);
+    const pts2 = section.map((v) => {
+      const r = vSub(v, centroid);
+      const rad = vSub(r, vScale(axisRough, vDot(axisRough, r)));
+      return { x: vDot(rad, e1), y: vDot(rad, e2) };
+    });
+    const fit = fitCircle2D(pts2);
+    if (!fit) return null;
+    if (ts[ts.length - 1]! - ts[0]! > analyticFitTol(fit.radius)) return null;
+    const tol = analyticFitTol(fit.radius);
+    for (const p of pts2) {
+      if (Math.abs(Math.hypot(p.x - fit.cx, p.y - fit.cy) - fit.radius) > tol) return null;
+    }
+    return {
+      center: {
+        x: centroid.x + e1.x * fit.cx + e2.x * fit.cy,
+        y: centroid.y + e1.y * fit.cx + e2.y * fit.cy,
+        z: centroid.z + e1.z * fit.cx + e2.z * fit.cy,
+      },
+      radius: fit.radius,
+    };
+  };
+
+  const ringA = fitRing(sections[0]!);
+  const ringB = fitRing(sections[1]!);
+  let P1: Vec3 | null = null;
+  let r1 = 0;
+  let P2: Vec3 | null = null;
+  let r2 = 0;
+  if (ringA && ringB) {
+    P1 = ringA.center; r1 = ringA.radius;
+    P2 = ringB.center; r2 = ringB.radius;
+  } else if (ringA && !ringB && sections[1]!.length === 1) {
+    P1 = ringA.center; r1 = ringA.radius;
+    P2 = sections[1]![0]!; r2 = 0; // pointed cone apex candidate
+  } else if (ringB && !ringA && sections[0]!.length === 1) {
+    P1 = ringB.center; r1 = ringB.radius;
+    P2 = sections[0]![0]!; r2 = 0;
+  }
+  if (!P1 || !P2) return null;
+
+  // The center→center (or center→apex) line IS the axis.
+  const axisVec = vSub(P2, P1);
+  const L = vLen(axisVec);
+  if (L <= 1e-9) return null;
+  const axis = vScale(axisVec, 1 / L);
+
+  const slope = (r2 - r1) / L; // dr/dt along the axis
+  const halfAngle = Math.atan(Math.abs(slope));
+  if (halfAngle < CONE_MIN_HALF_ANGLE || halfAngle > CONE_MAX_HALF_ANGLE) return null;
+
+  // Apex: where the linear radius law r(t) = r1 + slope·t degenerates to 0.
+  const apex = vAdd(P1, vScale(axis, -r1 / slope));
+  // Canonical axis: pointing from the apex INTO the band (t > 0 on the band).
+  let tSum = 0;
+  for (const v of verts) tSum += vDot(vSub(v, apex), axis);
+  const axisCanonical = tSum < 0 ? vNeg(axis) : axis;
+
+  // Verify EVERY group vertex lies on the cone (same 0.1 % standard), on one
+  // side of the apex, and that the ring wraps ≥300°.
+  const tanH = Math.tan(halfAngle);
+  const tol = analyticFitTol(Math.max(r1, r2));
+  const angles: number[] = [];
+  for (const v of verts) {
+    const d = vSub(v, apex);
+    const t = vDot(d, axisCanonical);
+    const radial = vSub(d, vScale(axisCanonical, t));
+    const rd = vLen(radial);
+    if (t < -tol) return null; // band straddles the apex — not a cone band
+    if (Math.abs(rd - t * tanH) > tol) return null;
+    if (rd > tol) angles.push(Math.atan2(vDot(radial, e2), vDot(radial, e1)));
+  }
+  if (!coversFullRing(angles)) return null;
+
+  // Facet normals: a cone facet's normal is exactly radial·cos θ ∓ axis·sin θ,
+  // so |n·axis| ≈ sin θ with ONE sign across the group. Sphere bands (whose
+  // two rings are always cospherical) fail here, as do tori and freeforms.
+  const sinH = Math.sin(halfAngle);
+  const refAxial = vDot(faces[members[0]!]!.normal, axisCanonical);
+  if (refAxial === 0) return null;
+  for (const fi of members) {
+    const a = vDot(faces[fi]!.normal, axisCanonical);
+    if (a * refAxial <= 0 || Math.abs(Math.abs(a) - sinH) > 0.05) return null;
+  }
+
+  return { kind: 'cone', apex, axis: axisCanonical, halfAngle };
+}
+
+/**
+ * Fit a sphere to a smooth face group: centered algebraic (Kåsa) fit —
+ * minimize Σ(|p|² − u·p − w)² over centered coordinates p, whose normal
+ * equations decouple to a 3×3 system (reusing solve3) with
+ * R² = mean|p|² + |u|²/4. Verified like the other kinds: every vertex on the
+ * sphere (0.1 %), radius bounded by the group's extent (≤ 20× — a planar
+ * group algebraically fits a near-infinite-radius "sphere", where the
+ * relative tolerance becomes vacuous), and every facet normal (anti)radial
+ * (|cos| ≥ 0.85 — a true sphere facet's normal is ±(v−center)/R). The normal
+ * gate also rejects the cospherical two-ring bands of TALL cylinder/cone
+ * walls (their facet normals make a constant angle arctan(L/2r) with the
+ * radial); very SHORT bands (L ≲ 0.55·r) can still alias as spheres — a
+ * documented conservative limit, geometrically exact through every vertex.
+ * Returns the tag or null.
+ */
+function fitSphereSource(faces: Face[], members: number[], verts: Vec3[]): FaceSource | null {
+  const n = verts.length;
+  const centroid = verts.reduce((s, v) => ({ x: s.x + v.x / n, y: s.y + v.y / n, z: s.z + v.z / n }), { x: 0, y: 0, z: 0 });
+  let sxx = 0, sxy = 0, sxz = 0, syy = 0, syz = 0, szz = 0;
+  let mx = 0, my = 0, mz = 0, sz2 = 0;
+  for (const v of verts) {
+    const px = v.x - centroid.x, py = v.y - centroid.y, pz = v.z - centroid.z;
+    const z2 = px * px + py * py + pz * pz;
+    sxx += px * px; sxy += px * py; sxz += px * pz;
+    syy += py * py; syz += py * pz; szz += pz * pz;
+    mx += z2 * px; my += z2 * py; mz += z2 * pz; sz2 += z2;
+  }
+  const u = solve3(
+    [
+      [sxx, sxy, sxz],
+      [sxy, syy, syz],
+      [sxz, syz, szz],
+    ],
+    [mx, my, mz],
+  );
+  if (!u) return null; // singular — coplanar rings leave the sphere undefined
+  const center = vAdd(centroid, vScale({ x: u[0]!, y: u[1]!, z: u[2]! }, 0.5));
+  const r2 = sz2 / n + (u[0]! * u[0]! + u[1]! * u[1]! + u[2]! * u[2]!) / 4;
+  if (!(r2 > 1e-12)) return null;
+  const radius = Math.sqrt(r2);
+  // Degenerate-fit guard: a (near-)planar group algebraically fits a sphere
+  // of near-infinite radius — a plane IS that sphere's limit — and the 0.1 %
+  // tolerance scales with R, so the on-sphere check becomes vacuous (measured:
+  // a drilled box's flat cap fit R = 3.4e14). A genuine sphere group's
+  // radius is on the order of its own extent E (a full sphere has E = R; even
+  // a 10° cap only reaches R ≈ 6E), so anything beyond 20E is not a sphere
+  // this classifier can vouch for.
+  let extent = 0;
+  for (const v of verts) extent = Math.max(extent, vLen(vSub(v, centroid)));
+  if (radius > 20 * extent) return null;
+  const tol = analyticFitTol(radius);
+  for (const v of verts) {
+    if (Math.abs(vLen(vSub(v, center)) - radius) > tol) return null;
+  }
+  for (const fi of members) {
+    const f = faces[fi]!;
+    const radial = vSub(f.vertices[0]!, center);
+    const len = vLen(radial);
+    if (len < 1e-12) return null;
+    if (Math.abs(vDot(f.normal, vScale(radial, 1 / len))) < 0.85) return null;
+  }
+  return { kind: 'sphere', center, radius };
 }
 
 /** Eigen decomposition of a symmetric 3×3 matrix (cyclic Jacobi rotations).
@@ -1182,16 +1481,24 @@ function jacobiEigen(m: number[]): { values: [number, number, number]; vectors: 
       const t = (theta >= 0 ? 1 : -1) / (Math.abs(theta) + Math.hypot(1, theta));
       const c = 1 / Math.hypot(1, t);
       const s = t * c;
-      // A ← Jᵀ A J for the Givens rotation in the (p,q) plane.
-      for (let k = 0; k < 3; k++) {
-        const kp = at(k, p), kq = at(k, q);
-        const np = c * kp - s * kq, nq = s * kp + c * kq;
-        a[idx(k, p)] = np; a[idx(k, q)] = nq;
-      }
-      for (let k = 0; k < 3; k++) {
-        const pk = at(p, k), qk = at(q, k);
-        const np = c * pk - s * qk, nq = s * pk + c * qk;
-        a[idx(p, k)] = np; a[idx(q, k)] = nq;
+      // A ← Jᵀ A J for the Givens rotation in the (p,q) plane, applied as the
+      // single combined SYMMETRIC update: A·J alone is not symmetric, so the
+      // packed storage's shared (p,q) cell cannot carry rows and columns
+      // separately (the old sequential in-place form corrupted it mid-loop —
+      // near-degenerate eigenvalue pairs, e.g. a cone's scatter with one axis
+      // eigenvalue against a perpendicular double, never converged and the
+      // decomposition returned null).
+      {
+        const app = at(p, p), aqq = at(q, q), apq0 = at(p, q);
+        for (let k = 0; k < 3; k++) {
+          if (k === p || k === q) continue;
+          const akp = at(k, p), akq = at(k, q);
+          a[idx(k, p)] = c * akp - s * akq;
+          a[idx(k, q)] = s * akp + c * akq;
+        }
+        a[idx(p, p)] = c * c * app - 2 * s * c * apq0 + s * s * aqq;
+        a[idx(q, q)] = s * s * app + 2 * s * c * apq0 + c * c * aqq;
+        a[idx(p, q)] = (c * c - s * s) * apq0 + s * c * (app - aqq);
       }
       // V ← V J (accumulate the rotation into the eigenvector columns).
       for (let r = 0; r < 3; r++) {

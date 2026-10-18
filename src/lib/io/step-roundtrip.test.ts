@@ -4,6 +4,7 @@ import { importSTEP } from './stepImport';
 import { occtMeshToSolidBody, stepNeedsExactKernel } from './stepOCCT';
 import {
   createBox,
+  createCone,
   createCylinder,
   createSphere,
   computeVolume,
@@ -268,6 +269,28 @@ function isolatedBand(radius = 3, height = 20): SolidBody {
   return bodyOf('Band', [wall]);
 }
 
+/** An ISOLATED ⌀20→⌀10 frustum band (r(y) = (30−y)/3) with a cone tag →
+ *  the same canonical tube form on a CONICAL_SURFACE. */
+function isolatedConeBand(): SolidBody {
+  const n = adaptiveSegments(20);
+  const ring = (y: number): Vec3[] => {
+    const r = (30 - y) / 3;
+    const pts: Vec3[] = [];
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      pts.push({ x: Math.cos(a) * r, y, z: Math.sin(a) * r });
+    }
+    return pts;
+  };
+  const wall: Face = {
+    id: 'coneWall',
+    vertices: [...ring(0), ...ring(15)],
+    normal: { x: 1, y: 0, z: 0 },
+    source: { kind: 'cone', apex: { x: 0, y: 30, z: 0 }, axis: { x: 0, y: -1, z: 0 }, halfAngle: Math.atan(1 / 3) },
+  };
+  return bodyOf('ConeBand', [wall]);
+}
+
 /** A tube the way the landed classifier shapes it: 55 tagged wall facets + 2 caps. */
 function facetedTube(radius = 3, height = 20): SolidBody {
   const n = adaptiveSegments(radius * 2);
@@ -479,6 +502,54 @@ describe.skipIf(!RUN_REAL_OCCT)('STEP export → real OCCT kernel (opt-in)', () 
     // (b) Isolated band (the CIRCLE tube form): the real kernel parses the
     // closed CIRCLE edge curves and tessellates the true cylinder.
     const bandSolids = read(exportSTEP(isolatedBand()));
+    expect(bandSolids.length).toBeGreaterThanOrEqual(1);
+    expect(bandSolids[0]!.faces.length).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('occt-import-js parses the ANALYTIC cone exports as single exact solids', async () => {
+    const { createRequire } = await import('node:module');
+    const { readFileSync } = await import('node:fs');
+    const nodeRequire = createRequire(import.meta.url);
+    type OcctFactory = (opts: { wasmBinary: Uint8Array }) => Promise<OcctImportApi>;
+    const factory = nodeRequire('occt-import-js') as OcctFactory;
+    const wasmPath = nodeRequire.resolve('occt-import-js/dist/occt-import-js.wasm');
+    const occt = await factory({ wasmBinary: new Uint8Array(readFileSync(wasmPath)) });
+
+    const read = (text: string) => {
+      const result = occt.ReadStepFile(new TextEncoder().encode(text), {
+        linearUnit: 'millimeter',
+        linearDeflectionType: 'absolute_value',
+        linearDeflection: 0.01,
+        angularDeflection: 0.3,
+      });
+      expect(result.success).toBe(true);
+      return result.meshes
+        .filter((m) => (m.index?.array?.length ?? 0) >= 3)
+        .map((m) =>
+          occtMeshToSolidBody({ positions: m.attributes.position.array, indices: m.index.array }, 'cone'),
+        );
+    };
+
+    // (a) Shared-rim form (the classifier-tagged frustum with caps): the
+    // wall facets ride ONE CONICAL_SURFACE with the caps' chord edges — must
+    // come back as ONE solid whose volume matches the faceted n-gon frustum
+    // to well within 0.05 % (the chord boundary makes the region identical).
+    await warmUpBooleanEngine();
+    const box = translateBody(createBox(24, 19, 24), { x: 0, y: -2, z: 0 });
+    const frustum = booleanOpManifold(createCone(10, 5, 15), box, 'intersect')!;
+    const text = exportSTEP(frustum);
+    expect((text.match(/CONICAL_SURFACE/g) ?? []).length).toBe(1);
+    expect((text.match(/CIRCLE\(/g) ?? []).length).toBe(0);
+    const solids = read(text);
+    expect(solids).toHaveLength(1);
+    const expected = computeVolume(frustum);
+    const got = computeVolume(solids[0]!);
+    expect(Math.abs(got - expected) / expected).toBeLessThan(0.0005); // < 0.05 %
+
+    // (b) Isolated frustum band (the CIRCLE tube form on a cone): the real
+    // kernel parses the two closed CIRCLE rims and the generator seam.
+    const band = isolatedConeBand();
+    const bandSolids = read(exportSTEP(band));
     expect(bandSolids.length).toBeGreaterThanOrEqual(1);
     expect(bandSolids[0]!.faces.length).toBeGreaterThan(0);
   }, 120_000);

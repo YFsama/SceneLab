@@ -44,7 +44,10 @@ function assertCoversPolyline(pts: ToolpathPoint[], items: FitItem[]): void {
     } else {
       expect(pts.indexOf(item.start)).toBe(cur);
       const e = refIndex(pts, item.end);
-      expect(e).toBeGreaterThan(cur + 1); // an arc spans ≥ 2 moves
+      // Greedy-fitted arcs span ≥ 2 moves; a TRUE-arc tag (arcTo passthrough)
+      // legitimately covers a single move — e.g. the 120°-split tail of a
+      // full circle. The walk only needs progress: no move lost, none reused.
+      expect(e).toBeGreaterThan(cur);
       cur = e;
     }
   }
@@ -275,5 +278,115 @@ describe('fitArcs — span cap (review pass #33)', () => {
       expect(refIndex(pts, arc.end) - refIndex(pts, arc.start)).toBeLessThanOrEqual(512);
       assertArcWithinTolerance(pts, arc, TOL);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// True-arc (arcTo) passthrough — ground truth from analytic cylinder tags.
+// ---------------------------------------------------------------------------
+
+describe('fitArcs — true-arc passthrough', () => {
+  const TAGON = (p: ToolpathPoint, center: { x: number; z: number }, ccw: boolean): ToolpathPoint => ({
+    ...p,
+    arcTo: { center: { x: center.x, y: p.y, z: center.z }, ccw },
+  });
+
+  it('a tagged endpoint passes through as an ArcSpec with the exact circle', () => {
+    // Quarter circle r=10 at y=5, CCW; the tag carries the EXACT center. The
+    // 10° steps are too coarse for the 0.01 mm fit tolerance, so whatever
+    // the greedy manages, the arc ENDING on the tagged point must be the
+    // verbatim tag — exact circle, no circumcircle noise.
+    const pts = Array.from({ length: 10 }, (_, k) => {
+      const a = ((90 * k) / 9) * (Math.PI / 180);
+      return { x: 10 * Math.cos(a), y: 5, z: 10 * Math.sin(a), rapid: false } as ToolpathPoint;
+    });
+    const last = pts.length - 1;
+    pts[last] = TAGON(pts[last]!, { x: 0, z: 0 }, true);
+    const items = fitArcs(pts, TOL);
+    assertCoversPolyline(pts, items);
+    const taggedArc = items.filter(isArc).find((a) => a.end === pts[last]!);
+    expect(taggedArc).toBeDefined();
+    const arc = taggedArc!;
+    expect(arc.start).toBe(pts[last - 1]!); // the move into the tag, verbatim
+    expect(arc.ccw).toBe(true);
+    expect(arc.radius).toBeCloseTo(10, 9);
+    expect(arc.center.x).toBeCloseTo(0, 9);
+    expect(arc.center.z).toBeCloseTo(0, 9);
+    expect(arc.center.y).toBeCloseTo(5, 9);
+    expect(arc.sweep).toBeCloseTo((10 * Math.PI) / 180, 6); // one facet, exact
+  });
+
+  it('greedy spans never cross a tagged point — the tag ends its span', () => {
+    // Fine 96-gon with a tag planted mid-loop: no fitted arc may span the
+    // tagged index, and some arc must END exactly on it (the analytic tag
+    // beats the greedy fit wherever they meet).
+    const pts = circleLoop(96, 10);
+    pts[40] = TAGON(pts[40]!, { x: 0, z: 0 }, true);
+    const items = fitArcs(pts, TOL);
+    assertCoversPolyline(pts, items);
+    expect(items.filter(isArc).some((a) => a.end === pts[40]!)).toBe(true);
+    for (const arc of items.filter(isArc)) {
+      const s = refIndex(pts, arc.start);
+      const e = refIndex(pts, arc.end);
+      expect(!(s < 40 && e > 40), `arc [${s}, ${e}] must not span tagged point 40`).toBe(true);
+    }
+  });
+
+  it('radius wobble beyond 1e-6·r rejects the tag and falls back to fitting', () => {
+    // 130° of a circle with a tag whose center is shifted 0.1 mm — the
+    // endpoints then sit at different radii, the classic bad-data case.
+    const pts = Array.from({ length: 27 }, (_, k) => {
+      const a = ((130 * k) / 26) * (Math.PI / 180);
+      return { x: 10 * Math.cos(a), y: 5, z: 10 * Math.sin(a), rapid: false } as ToolpathPoint;
+    });
+    const bad = [...pts];
+    bad[bad.length - 1] = TAGON(bad[bad.length - 1]!, { x: 0.1, z: 0 }, true);
+    const items = fitArcs(bad, TOL);
+    // The tag was rejected (endpoints differ by ~0.1 mm in radius), and the
+    // greedy fit took over: fitted arcs cover the span within tolerance.
+    expect(items.filter(isArc).every((a) => a.end !== bad[bad.length - 1] || Math.abs(a.radius - 10) < 1e-6)).toBe(true);
+    const arcs = items.filter(isArc);
+    expect(arcs.length).toBeGreaterThanOrEqual(2); // 130° still covered by fits
+    assertCoversPolyline(bad, items);
+  });
+
+  it('a sweep over the 120° cap rejects the tag (splitting is upstream work)', () => {
+    const pts: ToolpathPoint[] = [
+      { x: 10, y: 5, z: 0, rapid: false },
+      TAGON({ x: 10 * Math.cos(2.6), y: 5, z: 10 * Math.sin(2.6), rapid: false }, { x: 0, z: 0 }, true),
+    ];
+    const items = fitArcs(pts, TOL);
+    expect(items.every(isPoint)).toBe(true); // degraded to the chord
+  });
+
+  it('a degenerate tag (start ≈ end, un-split full circle) is ignored', () => {
+    const pts: ToolpathPoint[] = [
+      { x: 10, y: 5, z: 0, rapid: false },
+      TAGON({ x: 10, y: 5, z: 0, rapid: false }, { x: 0, z: 0 }, true),
+    ];
+    expect(fitArcs(pts, TOL).every(isPoint)).toBe(true);
+  });
+
+  it('a tag on the first point of a run is ignored — its move broke the run', () => {
+    const pts = circleLoop(96, 10);
+    pts[0] = { ...pts[0]!, rapid: true };
+    const tagged = [...pts];
+    // Index 1 starts the first flat run; a tag there would describe a move
+    // out of a rapid, which no run can validate.
+    tagged[1] = TAGON(tagged[1]!, { x: 0, z: 0 }, true);
+    const items = fitArcs(tagged, TOL);
+    assertCoversPolyline(tagged, items);
+    const firstArcEnd = items.filter(isArc).map((a) => refIndex(tagged, a.end));
+    for (const e of firstArcEnd) expect(e).toBeGreaterThan(1);
+  });
+
+  it('disabled fitting still honours validated tags (ground truth, not fits)', () => {
+    const pts = circleLoop(96, 10);
+    pts[48] = TAGON(pts[48]!, { x: 0, z: 0 }, true);
+    const items = fitArcs(pts, 0);
+    expect(items.filter(isArc)).toHaveLength(1); // only the tagged half-loop
+    const arc = items.filter(isArc)[0]!;
+    expect(arc.end).toBe(pts[48]!);
+    expect(arc.radius).toBeCloseTo(10, 9);
   });
 });

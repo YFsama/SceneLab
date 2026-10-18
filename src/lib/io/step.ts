@@ -22,12 +22,17 @@
  * Analytic cylinders: faces tagged with Face.source {kind:'cylinder'} (set
  * by the exact boolean output classifier in booleanManifold.ts — it tags
  * every facet of a full cylindrical wall group) are written against a TRUE
- * CYLINDRICAL_SURFACE, one shared surface entity per cylinder.
+ * CYLINDRICAL_SURFACE, one shared surface entity per cylinder. Cones
+ * ({kind:'cone'}, same classifier) get the same treatment on a
+ * CONICAL_SURFACE; sphere/torus tags map to SPHERICAL_SURFACE /
+ * TOROIDAL_SURFACE with their polyline boundary.
  *
  *  - Isolated bands (rim vertices referenced by no other face) collapse to
  *    the canonical OCCT tube: one ADVANCED_FACE whose loop is a closed CIRCLE
  *    EDGE_CURVE per rim plus a LINE seam reused in both directions — a ⌀6
- *    hole wall becomes one face with two circles instead of 55 facets.
+ *    hole wall becomes one face with two circles instead of 55 facets. Cone
+ *    rims use the section radius r(t) = t·tan(halfAngle) at their height;
+ *    the seam runs along a generator (a straight line on the cone).
  *  - Bands whose rims are shared with faceted neighbours (the usual drilled
  *    solid: the caps reference the rim vertices) keep the shared polyline
  *    chord edges as their boundary on the analytic surface. Emitting CIRCLE
@@ -35,8 +40,9 @@
  *    reader splits the shell into pieces with meaningless volumes (measured:
  *    a drilled box came back as 3 solids, +11.8% volume). A faceted boundary
  *    on a true cylinder is legal STEP and round-trips exactly.
- *  - Faces whose tag does not fit two full rims (partial arcs, angled cuts)
- *    keep their own polyline loop on the shared analytic surface.
+ *  - Faces whose tag does not fit two full rims (partial arcs, angled cuts,
+ *    pointed cones) keep their own polyline loop on the shared analytic
+ *    surface.
  */
 import type { SolidBody, Vec3, Face, FaceSource } from '../geometry/types';
 
@@ -44,6 +50,15 @@ import type { SolidBody, Vec3, Face, FaceSource } from '../geometry/types';
 
 /** The cylinder variant of FaceSource (see geometry/types.ts). */
 type CylinderSource = Extract<FaceSource, { kind: 'cylinder' }>;
+/** The cone variant — a band source like a cylinder, with a linear radius law. */
+type ConeSource = Extract<FaceSource, { kind: 'cone' }>;
+/** The sphere variant of FaceSource (fit by the classifier or hand-set). */
+type SphereSource = Extract<FaceSource, { kind: 'sphere' }>;
+/** The torus variant — hand-set only (no classifier producer yet). */
+type TorusSource = Extract<FaceSource, { kind: 'torus' }>;
+
+/** The variants that can form an isolated two-rim band: cylinder or cone. */
+type RevolutionSource = CylinderSource | ConeSource;
 
 /** The source tag of a face when (and only when) it is a usable cylinder. */
 function cylinderSourceOf(face: Face): CylinderSource | null {
@@ -52,6 +67,55 @@ function cylinderSourceOf(face: Face): CylinderSource | null {
   if (!(src.radius > 0)) return null; // NaN/zero/negative — unusable
   if (Math.hypot(src.axis.x, src.axis.y, src.axis.z) < 1e-12) return null;
   return src;
+}
+
+/** Same gate for cones: a finite half angle strictly inside (0, π/2). The
+ *  lower bound also protects the writer: num() formats 6 decimals, so a
+ *  half angle below 1e-6 rad would emit a "0.000000" semi_angle — a
+ *  degenerate cone OCCT cannot rebuild; such faces fall back to the
+ *  faceted path instead. */
+function coneSourceOf(face: Face): ConeSource | null {
+  const src = face.source;
+  if (!src || src.kind !== 'cone') return null;
+  if (!(src.halfAngle >= 1e-6) || !(src.halfAngle < Math.PI / 2)) return null;
+  if (Math.hypot(src.axis.x, src.axis.y, src.axis.z) < 1e-12) return null;
+  return src;
+}
+
+/** The face's tag when it can be emitted as a two-rim band, else null. */
+function revolutionSourceOf(face: Face): RevolutionSource | null {
+  return cylinderSourceOf(face) ?? coneSourceOf(face);
+}
+
+/** Same gate for spheres. */
+function sphereSourceOf(face: Face): SphereSource | null {
+  const src = face.source;
+  if (!src || src.kind !== 'sphere') return null;
+  if (!(src.radius > 0)) return null;
+  return src;
+}
+
+/** Same gate for tori: a positive minor radius that fits inside the major. */
+function torusSourceOf(face: Face): TorusSource | null {
+  const src = face.source;
+  if (!src || src.kind !== 'torus') return null;
+  if (!(src.majorRadius > 0) || !(src.minorRadius > 0) || src.minorRadius > src.majorRadius) return null;
+  if (Math.hypot(src.axis.x, src.axis.y, src.axis.z) < 1e-12) return null;
+  return src;
+}
+
+/**
+ * The radius law of a revolution tag at axial height `t` (measured from the
+ * tag's on-axis reference: the cylinder origin / the cone apex): cylinders
+ * are constant, cones grow as t·tan(halfAngle).
+ */
+function revolutionRadiusAt(src: RevolutionSource, t: number): number {
+  return src.kind === 'cylinder' ? src.radius : t * Math.tan(src.halfAngle);
+}
+
+/** The on-axis reference point of a revolution tag (origin / apex). */
+function revolutionOriginOf(src: RevolutionSource): Vec3 {
+  return src.kind === 'cylinder' ? src.origin : src.apex;
 }
 
 // ---- small vector helpers ---------------------------------------------------
@@ -70,18 +134,21 @@ const unit3 = (a: Vec3): Vec3 => {
   return { x: a.x / l, y: a.y / l, z: a.z / l };
 };
 
-// ---- cylinder rim detection -------------------------------------------------
+// ---- revolution rim detection ----------------------------------------------
 
-/** One detected rim ring of a full cylindrical band face. */
-interface CylinderRim {
-  /** Mean height of the ring along the unit cylinder axis (from the origin). */
+/** One detected rim ring of a full revolution band face (cylinder or cone). */
+interface SurfaceRim {
+  /** Mean height of the ring along the unit surface axis (from the tag's
+   *  on-axis reference: the cylinder origin / the cone apex). */
   t: number;
+  /** Section radius at `t` — the cylinder radius / t·tan(halfAngle). */
+  radius: number;
   /** The ring's vertices (used for the shared-rim guard). */
   verts: Vec3[];
 }
 
 /**
- * Fit tolerance for a face's tessellation against its analytic cylinder (mm):
+ * Fit tolerance for a face's tessellation against its analytic surface (mm):
  * tessellation vertices lie ON the surface (only the chords between them
  * deviate, and only inward), so this merely absorbs floating-point noise and
  * kernel re-tessellation — 0.1 % of the radius with a 0.1 µm floor.
@@ -89,9 +156,11 @@ interface CylinderRim {
 const cylFitTol = (radius: number) => Math.max(1e-4, radius * 1e-3);
 
 /**
- * Detect the two boundary rims of a FULL cylindrical band face. Requirements,
- * all against the fit tolerance above:
- *  - every vertex sits on the cylinder surface (radial distance = radius);
+ * Detect the two boundary rims of a FULL revolution band face (cylinder or
+ * cone), in the frame of the tag's axis line (`lineOrigin` + unit `axis`)
+ * with its radius law `radiusAt(t)` and the fit-tolerance scale `refRadius`.
+ * Requirements, all against the fit tolerance above:
+ *  - every vertex sits on the analytic surface (radial distance = radiusAt(t));
  *  - the vertices split into exactly two groups at the largest gap between
  *    their sorted axial heights (gap > tol, so the band has real extent);
  *  - each group is planar perpendicular to the axis (axial spread ≤ tol);
@@ -104,17 +173,23 @@ const cylFitTol = (radius: number) => Math.max(1e-4, radius * 1e-3);
  * not fit the vertices — returns null and the writer falls back to emitting
  * the face's existing polyline EDGE_LOOP on the analytic surface.
  */
-function detectCylinderRims(verts: Vec3[], cyl: CylinderSource): CylinderRim[] | null {
-  const a = unit3(cyl.axis);
-  const tol = cylFitTol(cyl.radius);
+function detectRevolutionRims(
+  verts: Vec3[],
+  lineOrigin: Vec3,
+  axis: Vec3,
+  radiusAt: (t: number) => number,
+  refRadius: number,
+): SurfaceRim[] | null {
+  const a = unit3(axis);
+  const tol = cylFitTol(refRadius);
 
   const keyed = verts.map((v) => {
-    const d = sub(v, cyl.origin);
+    const d = sub(v, lineOrigin);
     const t = dot(d, a);
     const radial = sub(d, scaled(a, t));
     return { v, t, radialDist: Math.hypot(radial.x, radial.y, radial.z) };
   });
-  if (!keyed.every((p) => Math.abs(p.radialDist - cyl.radius) <= tol)) return null;
+  if (!keyed.every((p) => Math.abs(p.radialDist - radiusAt(p.t)) <= tol)) return null;
 
   keyed.sort((p, q) => p.t - q.t);
   let cut = 0;
@@ -131,7 +206,7 @@ function detectCylinderRims(verts: Vec3[], cyl: CylinderSource): CylinderRim[] |
 
   const refDir = perpendicularUnit(a);
   const side = cross(a, refDir);
-  const rims: CylinderRim[] = [];
+  const rims: SurfaceRim[] = [];
   for (const g of groups) {
     if (g.length < 3) return null; // a rim needs ≥ 3 points to bound a circle
     if (g[g.length - 1]!.t - g[0]!.t > tol) return null; // ring not ⟂ axis
@@ -141,7 +216,7 @@ function detectCylinderRims(verts: Vec3[], cyl: CylinderSource): CylinderRim[] |
       y: g.reduce((s, p) => s + p.v.y, 0) / n,
       z: g.reduce((s, p) => s + p.v.z, 0) / n,
     };
-    const cd = sub(centroid, cyl.origin);
+    const cd = sub(centroid, lineOrigin);
     const cradial = sub(cd, scaled(a, dot(cd, a)));
     if (Math.hypot(cradial.x, cradial.y, cradial.z) > tol) return null; // centroid off the axis
 
@@ -156,7 +231,8 @@ function detectCylinderRims(verts: Vec3[], cyl: CylinderSource): CylinderRim[] |
       maxArc = Math.max(maxArc, angles[i + 1]! - angles[i]!);
     }
     if (maxArc > Math.PI / 2) return null; // partial arc — keep the polyline
-    rims.push({ t: (g[0]!.t + g[n - 1]!.t) / 2, verts: g.map((p) => p.v) });
+    const t = (g[0]!.t + g[n - 1]!.t) / 2;
+    rims.push({ t, radius: radiusAt(t), verts: g.map((p) => p.v) });
   }
   return rims;
 }
@@ -265,6 +341,31 @@ function cylindricalSurface(placementId: number, radius: number): Ent {
   return { id: eid, text: `${ref(eid)}=CYLINDRICAL_SURFACE('',${ref(placementId)},${num(radius)});` };
 }
 
+/**
+ * Format a CONICAL_SURFACE over an AXIS2_PLACEMENT_3D: placement axis along
+ * the cone axis, `radius` the section radius AT the placement location, and
+ * the half angle in radians (the file's angle unit). OCCT reconstructs the
+ * apex at location − axis·(radius / tan(halfAngle)) — the caller keeps the
+ * tag's apex/axis consistent with that reconstruction.
+ */
+function conicalSurface(placementId: number, radius: number, halfAngle: number): Ent {
+  const eid = id();
+  return { id: eid, text: `${ref(eid)}=CONICAL_SURFACE('',${ref(placementId)},${num(radius)},${num(halfAngle)});` };
+}
+
+/** Format a SPHERICAL_SURFACE over an AXIS2_PLACEMENT_3D (the placement
+ *  location is the center; the axis only fixes the parametrization poles). */
+function sphericalSurface(placementId: number, radius: number): Ent {
+  const eid = id();
+  return { id: eid, text: `${ref(eid)}=SPHERICAL_SURFACE('',${ref(placementId)},${num(radius)});` };
+}
+
+/** Format a TOROIDAL_SURFACE over an AXIS2_PLACEMENT_3D (major + minor). */
+function toroidalSurface(placementId: number, majorRadius: number, minorRadius: number): Ent {
+  const eid = id();
+  return { id: eid, text: `${ref(eid)}=TOROIDAL_SURFACE('',${ref(placementId)},${num(majorRadius)},${num(minorRadius)});` };
+}
+
 /** Format a CIRCLE (centre = placement location, radius in the placement plane). */
 function circleCurve(placementId: number, radius: number): Ent {
   const eid = id();
@@ -324,6 +425,47 @@ const sourceKey = (c: CylinderSource): string =>
     c.axis.z.toFixed(6),
     c.radius.toFixed(6),
   ].join(',');
+
+/** Identity key for a cone tag — includes the kind so a cylinder and a cone
+ *  with coincident axis lines never share a surface entity. */
+const coneKey = (c: ConeSource): string =>
+  [
+    'cone',
+    c.apex.x.toFixed(6),
+    c.apex.y.toFixed(6),
+    c.apex.z.toFixed(6),
+    c.axis.x.toFixed(6),
+    c.axis.y.toFixed(6),
+    c.axis.z.toFixed(6),
+    c.halfAngle.toFixed(9), // radians — the small numbers need the digits
+  ].join(',');
+
+/** Identity key for a sphere tag. */
+const sphereKey = (c: SphereSource): string =>
+  ['sphere', c.center.x.toFixed(6), c.center.y.toFixed(6), c.center.z.toFixed(6), c.radius.toFixed(6)].join(',');
+
+/** Identity key for a torus tag. */
+const torusKey = (c: TorusSource): string =>
+  [
+    'torus',
+    c.center.x.toFixed(6),
+    c.center.y.toFixed(6),
+    c.center.z.toFixed(6),
+    c.axis.x.toFixed(6),
+    c.axis.y.toFixed(6),
+    c.axis.z.toFixed(6),
+    c.majorRadius.toFixed(6),
+    c.minorRadius.toFixed(6),
+  ].join(',');
+
+/**
+ * The canonical CONICAL_SURFACE placement reference: a fixed axial distance
+ * from the tag's apex. STEP's cone radius is the section radius AT the
+ * placement location — the surface itself is the same infinite cone for any
+ * positive reference, but the value must be derived from the TAG ALONE so
+ * every face of one cone deduplicates onto one surface entity.
+ */
+const CONE_SURFACE_REF_T = 1;
 
 /**
  * Export a SolidBody as a STEP AP214 file string. Each face is written as a
@@ -426,75 +568,130 @@ export function exportSTEP(body: SolidBody): string {
     return entry;
   };
 
-  /** Cached CYLINDRICAL_SURFACE entity per source key (shared by all facets
-   *  of one cylinder — the classifier tags every facet of a wall group). */
-  const cylSurfaces = new Map<string, number>();
-  const getCylSurface = (cyl: CylinderSource): number => {
-    const key = sourceKey(cyl);
-    const cached = cylSurfaces.get(key);
-    if (cached !== undefined) return cached;
-    const aHat = unit3(cyl.axis);
-    const refDir = perpendicularUnit(aHat);
-    const loc = cartesianPoint(cyl.origin.x, cyl.origin.y, cyl.origin.z);
-    emit(loc.text);
+  /**
+   * Cached analytic surface entities per source key (shared by all facets of
+   * one surface — the classifier tags every facet of a wall group). One cache
+   * for every kind; the keys are kind-prefixed where collisions are possible.
+   */
+  const analyticSurfaces = new Map<string, number>();
+
+  /** Shared placement emitter: CARTESIAN_POINT + axis/ref DIRECTIONs. */
+  const emitPlacement = (loc: Vec3, aHat: Vec3, refDir: Vec3): number => {
+    const locEnt = cartesianPoint(loc.x, loc.y, loc.z);
+    emit(locEnt.text);
     const axisDir = direction(aHat.x, aHat.y, aHat.z);
     emit(axisDir.text);
     const refDEnt = direction(refDir.x, refDir.y, refDir.z);
     emit(refDEnt.text);
-    const placement = axis2Placement(loc.id, axisDir.id, refDEnt.id);
+    const placement = axis2Placement(locEnt.id, axisDir.id, refDEnt.id);
     emit(placement.text);
-    const surf = cylindricalSurface(placement.id, cyl.radius);
+    return placement.id;
+  };
+
+  const getCylSurface = (cyl: CylinderSource): number => {
+    const key = sourceKey(cyl);
+    const cached = analyticSurfaces.get(key);
+    if (cached !== undefined) return cached;
+    const aHat = unit3(cyl.axis);
+    const refDir = perpendicularUnit(aHat);
+    const placementId = emitPlacement(cyl.origin, aHat, refDir);
+    const surf = cylindricalSurface(placementId, cyl.radius);
     emit(surf.text);
-    cylSurfaces.set(key, surf.id);
+    analyticSurfaces.set(key, surf.id);
     return surf.id;
   };
 
   /**
-   * Emit an isolated full cylindrical band as the canonical OCCT tube:
+   * CONICAL_SURFACE for a cone tag: placement on the axis, a fixed reference
+   * distance CONE_SURFACE_REF_T from the apex, so the emitted radius
+   * (t·tan θ) is a pure function of the tag — every facet of one cone shares
+   * the entity. The surface is the same infinite cone regardless of the
+   * reference; the face boundaries carry the true extent.
+   */
+  const getConeSurface = (cone: ConeSource): number => {
+    const key = coneKey(cone);
+    const cached = analyticSurfaces.get(key);
+    if (cached !== undefined) return cached;
+    const aHat = unit3(cone.axis);
+    const refDir = perpendicularUnit(aHat);
+    const loc = add(cone.apex, scaled(aHat, CONE_SURFACE_REF_T));
+    const placementId = emitPlacement(loc, aHat, refDir);
+    const surf = conicalSurface(placementId, CONE_SURFACE_REF_T * Math.tan(cone.halfAngle), cone.halfAngle);
+    emit(surf.text);
+    analyticSurfaces.set(key, surf.id);
+    return surf.id;
+  };
+
+  /** SPHERICAL_SURFACE for a sphere tag (placement at the center; the axis is
+   *  parametrization-only, so a fixed +Z keeps it tag-deterministic). */
+  const getSphereSurface = (sph: SphereSource): number => {
+    const key = sphereKey(sph);
+    const cached = analyticSurfaces.get(key);
+    if (cached !== undefined) return cached;
+    const placementId = emitPlacement(sph.center, { x: 0, y: 0, z: 1 }, { x: 1, y: 0, z: 0 });
+    const surf = sphericalSurface(placementId, sph.radius);
+    emit(surf.text);
+    analyticSurfaces.set(key, surf.id);
+    return surf.id;
+  };
+
+  /** TOROIDAL_SURFACE for a torus tag (placement at the center, axis = tag axis). */
+  const getTorusSurface = (tor: TorusSource): number => {
+    const key = torusKey(tor);
+    const cached = analyticSurfaces.get(key);
+    if (cached !== undefined) return cached;
+    const aHat = unit3(tor.axis);
+    const refDir = perpendicularUnit(aHat);
+    const placementId = emitPlacement(tor.center, aHat, refDir);
+    const surf = toroidalSurface(placementId, tor.majorRadius, tor.minorRadius);
+    emit(surf.text);
+    analyticSurfaces.set(key, surf.id);
+    return surf.id;
+  };
+
+  /**
+   * Emit an isolated full revolution band (cylinder or cone) as the canonical
+   * OCCT tube:
    *
-   *   CYLINDRICAL_SURFACE + EDGE_LOOP(bottom circle +u, seam up,
+   *   {CYLINDRICAL,CONICAL}_SURFACE + EDGE_LOOP(bottom circle +u, seam up,
    *   top circle −u, seam down)
    *
-   * The seam is a LINE at parametric u = 0 (the placement ref_direction
-   * ray) reused in both directions; each rim is ONE closed CIRCLE
-   * EDGE_CURVE whose start and end are the same VERTEX_POINT — the seam
-   * point of its ring, because the circle's param-0 point lies on the
-   * ref_direction ray. The four oriented edges chain vertex-to-vertex and
-   * the cycle is counter-clockwise in the surface's UV rectangle, i.e.
-   * right-hand-rule along the outward radial (natural) surface normal.
-   * When the face's own normal opposes that (a hole wall points inward),
-   * same_sense and the bound orientation flip together.
+   * The seam is a LINE at parametric u = 0 (the placement ref_direction ray)
+   * reused in both directions — on a cone this is a generator, an exact
+   * straight line on the surface; each rim is ONE closed CIRCLE EDGE_CURVE
+   * whose start and end are the same VERTEX_POINT — the seam point of its
+   * ring, because the circle's param-0 point lies on the ref_direction ray.
+   * Rim radii follow the tag's radius law at the rim's height. The four
+   * oriented edges chain vertex-to-vertex and the cycle is counter-clockwise
+   * in the surface's UV rectangle, i.e. right-hand-rule along the outward
+   * radial (natural) surface normal. When the face's own normal opposes that
+   * (a hole wall points inward), same_sense and the bound orientation flip
+   * together.
    */
-  const emitBandedCylinder = (cyl: CylinderSource, rims: CylinderRim[], sense: boolean): number => {
-    const aHat = unit3(cyl.axis);
+  const emitBandedRevolution = (src: RevolutionSource, rims: SurfaceRim[], sense: boolean): number => {
+    const aHat = unit3(src.axis);
     const refDir = perpendicularUnit(aHat);
+    const lineOrigin = revolutionOriginOf(src);
 
-    const centerAt = (t: number): Vec3 => add(cyl.origin, scaled(aHat, t));
-    const seamLow = add(centerAt(rims[0]!.t), scaled(refDir, cyl.radius));
-    const seamHigh = add(centerAt(rims[1]!.t), scaled(refDir, cyl.radius));
+    const centerAt = (t: number): Vec3 => add(lineOrigin, scaled(aHat, t));
+    const seamLow = add(centerAt(rims[0]!.t), scaled(refDir, rims[0]!.radius));
+    const seamHigh = add(centerAt(rims[1]!.t), scaled(refDir, rims[1]!.radius));
 
-    const seam = getEdge(seamLow, seamHigh); // LINE along the axis at u = 0
+    const seam = getEdge(seamLow, seamHigh); // LINE along a generator at u = 0
     const lowV = getVertex(seamLow);
     const highV = getVertex(seamHigh);
 
-    const rimCircle = (t: number, seamVertex: number): number => {
+    const rimCircle = (t: number, radius: number, seamVertex: number): number => {
       const c = centerAt(t);
-      const cpt = cartesianPoint(c.x, c.y, c.z);
-      emit(cpt.text);
-      const ad = direction(aHat.x, aHat.y, aHat.z);
-      emit(ad.text);
-      const rd = direction(refDir.x, refDir.y, refDir.z);
-      emit(rd.text);
-      const placement = axis2Placement(cpt.id, ad.id, rd.id);
-      emit(placement.text);
-      const circ = circleCurve(placement.id, cyl.radius);
+      const placementId = emitPlacement(c, aHat, refDir);
+      const circ = circleCurve(placementId, radius);
       emit(circ.text);
       const ec = edgeCurve(seamVertex, seamVertex, circ.id); // closed edge
       emit(ec.text);
       return ec.id;
     };
-    const lowCircle = rimCircle(rims[0]!.t, lowV);
-    const highCircle = rimCircle(rims[1]!.t, highV);
+    const lowCircle = rimCircle(rims[0]!.t, rims[0]!.radius, lowV);
+    const highCircle = rimCircle(rims[1]!.t, rims[1]!.radius, highV);
 
     const oes = [
       orientedEdge(lowCircle, true), // bottom rim, +u
@@ -508,7 +705,8 @@ export function exportSTEP(body: SolidBody): string {
     const bound = faceOuterBound(loop.id, sense);
     emit(bound.text);
 
-    const af = advancedFace([bound.id], getCylSurface(cyl), sense);
+    const surfaceId = src.kind === 'cylinder' ? getCylSurface(src) : getConeSurface(src);
+    const af = advancedFace([bound.id], surfaceId, sense);
     emit(af.text);
     return af.id;
   };
@@ -524,29 +722,29 @@ export function exportSTEP(body: SolidBody): string {
    * skipped in the main loop and emitted as one face afterwards.
    */
   interface BandPlan {
-    cyl: CylinderSource;
-    rims: CylinderRim[];
+    src: RevolutionSource;
+    rims: SurfaceRim[];
     faces: Set<Face>;
     sense: boolean;
   }
   const bandPlans: BandPlan[] = [];
   const facesInBands = new Set<Face>();
   {
-    const groups = new Map<string, { cyl: CylinderSource; faces: Face[] }>();
+    const groups = new Map<string, { src: RevolutionSource; faces: Face[] }>();
     for (const face of body.faces) {
-      const cyl = cylinderSourceOf(face);
-      if (!cyl) continue;
-      const key = sourceKey(cyl);
-      const group = groups.get(key) ?? { cyl, faces: [] };
+      const src = revolutionSourceOf(face);
+      if (!src) continue;
+      const key = src.kind === 'cylinder' ? sourceKey(src) : coneKey(src);
+      const group = groups.get(key) ?? { src, faces: [] };
       group.faces.push(face);
       groups.set(key, group);
     }
     const otherVertexKeys = new Set<string>();
     for (const face of body.faces) {
-      if (cylinderSourceOf(face)) continue;
+      if (revolutionSourceOf(face)) continue;
       for (const v of face.vertices) otherVertexKeys.add(posKey(v));
     }
-    for (const { cyl, faces } of groups.values()) {
+    for (const { src, faces } of groups.values()) {
       const seen = new Set<string>();
       const verts: Vec3[] = [];
       for (const f of faces) {
@@ -558,17 +756,33 @@ export function exportSTEP(body: SolidBody): string {
           }
         }
       }
-      const rims = detectCylinderRims(verts, cyl);
+      // Rim fit in the tag's own frame (cylinder: origin + constant radius;
+      // cone: apex + t·tan θ, tolerance scaled by the band's widest radius).
+      const aHat = unit3(src.axis);
+      const lineOrigin = revolutionOriginOf(src);
+      let maxR = 0;
+      for (const v of verts) {
+        const d = sub(v, lineOrigin);
+        const radial = sub(d, scaled(aHat, dot(d, aHat)));
+        maxR = Math.max(maxR, Math.hypot(radial.x, radial.y, radial.z));
+      }
+      const rims = detectRevolutionRims(
+        verts,
+        lineOrigin,
+        aHat,
+        (t) => revolutionRadiusAt(src, t),
+        maxR,
+      );
       if (!rims) continue;
       if (rims.some((rim) => rim.verts.some((v) => otherVertexKeys.has(posKey(v))))) continue;
       // Sense from one member facet's own normal/vertex pairing (all
-      // members of a wall group agree: every facet normal is radial).
+      // members of a wall group agree: every facet normal is radial — a
+      // cone's normal is radial·cos θ ∓ axis·sin θ, still radial-positive).
       const member = faces[0]!;
-      const aHat = unit3(cyl.axis);
-      const d0 = sub(member.vertices[0]!, cyl.origin);
+      const d0 = sub(member.vertices[0]!, lineOrigin);
       const radial0 = unit3(sub(d0, scaled(aHat, dot(d0, aHat))));
       const sense = dot(unit3(member.normal), radial0) >= 0;
-      bandPlans.push({ cyl, rims, faces: new Set(faces), sense });
+      bandPlans.push({ src, rims, faces: new Set(faces), sense });
       for (const f of faces) facesInBands.add(f);
     }
   }
@@ -597,7 +811,9 @@ export function exportSTEP(body: SolidBody): string {
     }
     if (loopVs.length < 3) continue;
 
-    const cyl = cylinderSourceOf(face);
+    const rev = revolutionSourceOf(face);
+    const sph = rev ? null : sphereSourceOf(face);
+    const tor = rev || sph ? null : torusSourceOf(face);
 
     // One ORIENTED_EDGE per loop segment; forward only when the traversal
     // matches the stored edge direction.
@@ -617,17 +833,43 @@ export function exportSTEP(body: SolidBody): string {
     const bound = faceOuterBound(loop.id, true);
     emit(bound.text);
 
-    if (cyl) {
-      // Tagged cylinder face outside any isolated band: shared rims with
-      // faceted neighbours, a partial arc, an angled cut, or noise. True
-      // analytic surface (shared per cylinder), faceted polyline boundary —
-      // a planar-approximated boundary on a genuine cylinder is legal STEP
-      // and keeps every edge shared, so OCCT reads one exact solid.
-      const aHat = unit3(cyl.axis);
-      const d = sub(loopVs[0]!, cyl.origin);
+    if (rev) {
+      // Tagged cylinder/cone face outside any isolated band: shared rims with
+      // faceted neighbours, a partial arc, an angled cut, a pointed cone, or
+      // noise. True analytic surface (shared per tag), faceted polyline
+      // boundary — a planar-approximated boundary on a genuine cylinder is
+      // legal STEP and keeps every edge shared, so OCCT reads one exact solid.
+      const aHat = unit3(rev.axis);
+      const lineOrigin = revolutionOriginOf(rev);
+      const d = sub(loopVs[0]!, lineOrigin);
       const radial = unit3(sub(d, scaled(aHat, dot(d, aHat))));
       const sense = dot(unit3(face.normal), radial) >= 0;
-      const af = advancedFace([bound.id], getCylSurface(cyl), sense);
+      const surfaceId = rev.kind === 'cylinder' ? getCylSurface(rev) : getConeSurface(rev);
+      const af = advancedFace([bound.id], surfaceId, sense);
+      emit(af.text);
+      faceIds.push(af.id);
+      continue;
+    }
+    if (sph) {
+      // Sphere-tagged facet: same_sense from the face normal vs the radial at
+      // its first loop vertex (a cavity wall points inward — .F.).
+      const radial = unit3(sub(loopVs[0]!, sph.center));
+      const sense = dot(unit3(face.normal), radial) >= 0;
+      const af = advancedFace([bound.id], getSphereSurface(sph), sense);
+      emit(af.text);
+      faceIds.push(af.id);
+      continue;
+    }
+    if (tor) {
+      // Torus-tagged facet: same_sense from the face normal vs the tube
+      // normal (away from the minor-circle center) at its first loop vertex.
+      const aHat = unit3(tor.axis);
+      const d = sub(loopVs[0]!, tor.center);
+      const radial = sub(d, scaled(aHat, dot(d, aHat)));
+      const minorCenter = add(tor.center, scaled(unit3(radial), tor.majorRadius));
+      const tubeNormal = unit3(sub(loopVs[0]!, minorCenter));
+      const sense = dot(unit3(face.normal), tubeNormal) >= 0;
+      const af = advancedFace([bound.id], getTorusSurface(tor), sense);
       emit(af.text);
       faceIds.push(af.id);
       continue;
@@ -654,7 +896,7 @@ export function exportSTEP(body: SolidBody): string {
   }
 
   for (const band of bandPlans) {
-    faceIds.push(emitBandedCylinder(band.cyl, band.rims, band.sense));
+    faceIds.push(emitBandedRevolution(band.src, band.rims, band.sense));
   }
 
   // ---- Solid + shape representation chain ---------------------------------
@@ -674,7 +916,7 @@ export function exportSTEP(body: SolidBody): string {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const header = `ISO-10303-21;
 HEADER;
-FILE_DESCRIPTION(('SceneLab B-rep export (faceted + analytic cylinders)'),'2;1');
+FILE_DESCRIPTION(('SceneLab B-rep export (faceted + analytic surfaces)'),'2;1');
 FILE_NAME('${escaped(`${body.name}.stp`)}','${timestamp}',(''),(''),'SceneLab','SceneLab','');
 FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));
 ENDSEC;

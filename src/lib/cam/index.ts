@@ -39,6 +39,10 @@ export { fitArcs } from './arcFit';
 export type { ArcSpec } from './arcFit';
 export { topSilhouette, offsetPolygon } from './silhouette';
 export type { Point2, SilhouetteLoop, TopSilhouette } from './silhouette';
+// Clipper-backed region offsetting (multi-loop, round/miter joins) — the
+// robust replacement for single-loop offsetPolygon inside the generators.
+export { offsetRegion } from './offsetRegion';
+export type { RegionComponent, OffsetRegionOptions } from './offsetRegion';
 export { generateOperationToolpath, defaultCamSetup } from './setup';
 export type { CAMSetup, CAMOperation } from './setup';
 export { computeFeedsAndSpeeds } from './feedsSpeeds';

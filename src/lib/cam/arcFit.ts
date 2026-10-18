@@ -156,6 +156,13 @@ function checkSpan(
  * only replace moves from run[0] onward. After an arc ends on run[bestEnd]
  * the next arc starts exactly there — that point is never re-emitted.
  *
+ * TRUE-ARC PASSTHROUGH: a point carrying `arcTo` (a marker set by the
+ * generator from an analytic cylinder tag — ground truth, not a fit) ends a
+ * true arc that replaces every move up to it. The greedy span never extends
+ * across a tagged point; when it lands exactly on one, or when the next
+ * point is tagged, the tag becomes an ArcSpec verbatim after consistency
+ * validation (trueArcSpec below) — no circumcircle, no tolerance spent.
+ *
  * Candidate spans are capped at MAX_SPAN_POINTS: checkSpan is linear in the
  * span, so an uncapped greedy pass is O(n²) per run — a 20k-vertex imported
  * mesh contour froze the main thread for ~3.4 s (review pass #33). The cap
@@ -164,13 +171,61 @@ function checkSpan(
  */
 const MAX_SPAN_POINTS = 512;
 
+/**
+ * Build the ArcSpec for the true arc start → end (the tag rides on the end
+ * point). Returns null when the tag is inconsistent — radius wobble beyond
+ * 1e-6·r between the endpoints, radius outside the sane bounds, a
+ * degenerate (start ≈ end) or over-120° sweep (splitting a true arc is the
+ * GENERATOR's job, mirroring the fitted-arc cap) — so the caller degrades
+ * that one move to the plain polyline path. The center's y is taken from
+ * the end point: arcs live in constant-y runs, and the tag's plane must
+ * agree with the layer it was generated on.
+ */
+function trueArcSpec(start: ToolpathPoint, end: ToolpathPoint): ArcSpec | null {
+  const tag = end.arcTo!;
+  const c = tag.center;
+  const rStart = Math.hypot(start.x - c.x, start.z - c.z);
+  const rEnd = Math.hypot(end.x - c.x, end.z - c.z);
+  if (!(rStart >= MIN_RADIUS) || !(rStart <= MAX_RADIUS)) return null;
+  if (Math.abs(rStart - rEnd) > 1e-6 * rStart) return null;
+  const a0 = Math.atan2(start.z - c.z, start.x - c.x);
+  const a1 = Math.atan2(end.z - c.z, end.x - c.x);
+  let sweep = tag.ccw ? a1 - a0 : a0 - a1;
+  sweep = ((sweep % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  if (sweep <= 1e-9) return null; // degenerate — e.g. an un-split full circle
+  // Note: the sweep cap below is also the direction guard. For any sweep
+  // < 180° the chord necessarily advances along the start tangent implied
+  // by ccw (tangent·chord = r²·sin(sweep) > 0), so a tag whose flag
+  // contradicts the geometry can only describe the complement arc
+  // (2π − θ ≥ 240°) — which the cap rejects here.
+  if (sweep > MAX_SWEEP + 1e-9) return null;
+  return {
+    start,
+    end,
+    center: { x: c.x, y: end.y, z: c.z },
+    ccw: tag.ccw,
+    radius: rStart,
+    sweep,
+  };
+}
+
 function emitRun(run: ToolpathPoint[], tolerance: number, out: Array<ToolpathPoint | ArcSpec>): void {
   out.push(run[0]!);
+  // nextTag[k] = smallest t > k whose point carries a true-arc tag (−1 when
+  // none) — tags bound the greedy extension so a fitted span can never
+  // swallow a tagged endpoint as an intermediate vertex.
+  const nextTag = new Array<number>(run.length).fill(-1);
+  let nt = -1;
+  for (let k = run.length - 1; k >= 0; k--) {
+    nextTag[k] = nt;
+    if (run[k]!.arcTo) nt = k;
+  }
   let pos = 0;
   while (pos < run.length - 1) {
+    const tagEnd = nextTag[pos]!;
+    const eMax = Math.min(run.length - 1, pos + MAX_SPAN_POINTS, tagEnd === -1 ? Infinity : tagEnd);
     let bestEnd = -1;
     let best: { circle: Circle; ccw: boolean; sweep: number } | null = null;
-    const eMax = Math.min(run.length - 1, pos + MAX_SPAN_POINTS);
     for (let e = pos + 2; e <= eMax; e++) {
       // Three-point circumcircle: run start, a middle vertex, candidate end.
       const circle = circumcircle(run[pos]!, run[(pos + e) >> 1]!, run[e]!);
@@ -182,6 +237,16 @@ function emitRun(run: ToolpathPoint[], tolerance: number, out: Array<ToolpathPoi
       best = { circle, ccw: span.ccw, sweep: span.sweep };
     }
     if (best && bestEnd > pos) {
+      if (bestEnd === tagEnd) {
+        // The greedy landed exactly on a true-arc end: the analytic tag is
+        // the better geometry — honour it when it validates.
+        const trueArc = trueArcSpec(run[pos]!, run[bestEnd]!);
+        if (trueArc) {
+          out.push(trueArc);
+          pos = bestEnd;
+          continue;
+        }
+      }
       out.push({
         start: run[pos]!,
         end: run[bestEnd]!,
@@ -193,6 +258,13 @@ function emitRun(run: ToolpathPoint[], tolerance: number, out: Array<ToolpathPoi
       pos = bestEnd;
     } else {
       pos += 1;
+      if (pos === tagEnd) {
+        const trueArc = trueArcSpec(run[pos - 1]!, run[pos]!);
+        if (trueArc) {
+          out.push(trueArc);
+          continue;
+        }
+      }
       out.push(run[pos]!);
     }
   }
@@ -205,12 +277,32 @@ function emitRun(run: ToolpathPoint[], tolerance: number, out: Array<ToolpathPoi
  * run and can never be swallowed by an arc. Every returned point item is the
  * ORIGINAL point object, and an ArcSpec's start/end reference original
  * objects too, so feedRate/rapid context travels with them. A tolerance that
- * is non-positive or non-finite disables fitting (pure polyline pass-through).
+ * is non-positive or non-finite disables fitting (pure polyline
+ * pass-through). Points carrying `arcTo` (generator-marked true arcs from
+ * analytic cylinder tags) pass through as ArcSpecs verbatim after radius/
+ * sweep validation — see emitRun.
  */
 export function fitArcs(points: ToolpathPoint[], tolerance: number): Array<ToolpathPoint | ArcSpec> {
   const out: Array<ToolpathPoint | ArcSpec> = [];
   if (!Number.isFinite(tolerance) || tolerance <= 0) {
-    out.push(...points);
+    // Fitting disabled — but true-arc tags are not fits, they are ground
+    // truth from the generator: honour them (validated) anyway, else a
+    // disabled fitter would silently turn a true circle into three 120°
+    // chords that gouge 6.5 mm at R13 (sag = r·(1 − cos(sweep/2))). Only
+    // the greedy polyline fitting is switched off; tags on rapids/depth
+    // changes are structurally absent.
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]!;
+      const prev = points[i - 1];
+      if (p.arcTo && prev && !prev.rapid && Math.abs(p.y - prev.y) <= FLATNESS) {
+        const arc = trueArcSpec(prev, p);
+        if (arc) {
+          out.push(arc);
+          continue;
+        }
+      }
+      out.push(p);
+    }
     return out;
   }
 

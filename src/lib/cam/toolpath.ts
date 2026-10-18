@@ -2,13 +2,14 @@ import type { Toolpath, ToolpathPoint, CAMParameters, ToolDefinition } from './t
 import type { SolidBody, Vec3 } from '../geometry/types';
 import {
   topSilhouette,
-  offsetPolygon,
   scanlineIntervals,
   subtractIntervals,
   pointInPolygon,
   polygonArea,
   type Point2,
 } from './silhouette';
+import { offsetRegion, type RegionComponent } from './offsetRegion';
+import { planCirclesFromBodies, matchArcRuns, type ArcRun } from './arcSources';
 
 let nextId = 1;
 function genId(prefix: string): string {
@@ -37,7 +38,7 @@ class MoveList {
   }
 
   /** G1 cut at the operation feed rate (or a per-move override). */
-  cut(p: { x: number; y: number; z: number; feedRate?: number }): void {
+  cut(p: { x: number; y: number; z: number; feedRate?: number; arcTo?: ToolpathPoint['arcTo'] }): void {
     this.points.push({ ...p, rapid: false });
   }
 
@@ -102,52 +103,6 @@ function rowPositions(vMin: number, vMax: number, stepover: number): number[] {
 function rampLength(tool: ToolDefinition, descend: number, rowLength: number): number {
   const ideal = Math.max(2 * tool.diameter, descend / Math.tan((15 * Math.PI) / 180));
   return Math.min(ideal, Math.max(rowLength, 0));
-}
-
-/**
- * True when the closed segments a→b and c→d share at least one point — the
- * classic four-orientation test with the collinear/touching cases included,
- * so boundary grazing counts as an intersection (conservative for guards).
- */
-function segmentsIntersect(a: Point2, b: Point2, c: Point2, d: Point2): boolean {
-  const cross = (o: Point2, p: Point2, q: Point2): number =>
-    (p.u - o.u) * (q.v - o.v) - (p.v - o.v) * (q.u - o.u);
-  const d1 = cross(c, d, a);
-  const d2 = cross(c, d, b);
-  const d3 = cross(a, b, c);
-  const d4 = cross(a, b, d);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-    return true;
-  }
-  const onSegment = (p: Point2, q: Point2, e: Point2): boolean =>
-    cross(p, q, e) === 0 &&
-    Math.min(p.u, q.u) <= e.u && e.u <= Math.max(p.u, q.u) &&
-    Math.min(p.v, q.v) <= e.v && e.v <= Math.max(p.v, q.v);
-  return (
-    (d1 === 0 && onSegment(c, d, a)) || (d2 === 0 && onSegment(c, d, b)) ||
-    (d3 === 0 && onSegment(a, b, c)) || (d4 === 0 && onSegment(a, b, d))
-  );
-}
-
-/**
- * Simple-polygon check for one offset ring: every NON-adjacent edge pair is
- * tested (O(n²) — ring vertex counts are small). Adjacent edges always share
- * their common vertex, which is not a self-intersection; anything else,
- * including a mere touch, is. offsetPolygon's miter offsets can self-intersect
- * slightly at sharp concave corners (documented there), and a crossed ring
- * would gouge walls, so this guards every ring before it is emitted.
- */
-function ringSelfIntersects(pts: Point2[]): boolean {
-  const n = pts.length;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 2; j < n; j++) {
-      if (i === 0 && j === n - 1) continue; // the closing pair shares vertex 0
-      if (segmentsIntersect(pts[i]!, pts[(i + 1) % n]!, pts[j]!, pts[(j + 1) % n]!)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 /** Vertex-average centroid — a search target for placement, not the exact area centroid. */
@@ -249,26 +204,6 @@ function helixRevolutions(descend: number, rho: number): number | null {
 /** Polyline segments per helix revolution (≥ 20 keeps the chord error small). */
 const HELIX_SEGMENTS = 24;
 
-/** True when a (CCW-normalised) polygon has no reflex vertex — every
- * consecutive edge cross product keeps the same sign. Concave clearing
- * regions make the offset-ring strategy truncate early, so callers use this
- * to gate the ring family and fall back to the raster. */
-function polygonIsConvex(pts: Point2[]): boolean {
-  let sign = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i]!;
-    const b = pts[(i + 1) % pts.length]!;
-    const c = pts[(i + 2) % pts.length]!;
-    const cross = (b.u - a.u) * (c.v - b.v) - (b.v - a.v) * (c.u - b.u);
-    if (Math.abs(cross) > 1e-12) {
-      const s = Math.sign(cross);
-      if (sign === 0) sign = s;
-      else if (s !== sign) return false;
-    }
-  }
-  return true;
-}
-
 /**
  * Emit the helical entry: `revs` revolutions of polyline cut moves descending
  * uniformly from feedPlane to yLevel, then one full flat revolution AT
@@ -331,22 +266,34 @@ export function generatePocketToolpath(
   const sover = Math.max(0.1, Math.min(params.stepover, tool.diameter * 0.4));
   const safe = safeY(params);
 
-  // Raster region: the silhouette inset by the cutter radius (+ allowance),
-  // with islands grown by the same amount so the tool stays clear of them.
-  let outer: Point2[] | null = null;
-  let islands: Point2[][] = [];
-  if (options.body) {
-    const sil = topSilhouette(options.body);
-    if (sil) {
-      outer = offsetPolygon(sil.outer.points, -(r + allowance));
-      islands = sil.islands
-        .map((l) => offsetPolygon(l.points, r + allowance))
-        .filter((p): p is Point2[] => p !== null);
-    }
+  // The top-view silhouette, computed once: it drives both the cleared-region
+  // erosion and the island keep-out boxes below. Cleared region(s) = the
+  // silhouette eroded by the cutter radius (+ allowance) with islands grown
+  // by the same amount, computed as ONE region offset (clipper-backed)
+  // instead of per-loop miter insets. Three behavioural upgrades over the
+  // legacy offsetPolygon pass:
+  // - concave wall corners erode to rounded fillets (the geometrically exact
+  //   cutter-centre locus; the miter version claimed sharp corners it could
+  //   not reach and could self-intersect into them);
+  // - an island grown into a wall merges with it — the region stays correct
+  //   where the old independent offsets could overlap each other;
+  // - a concave region whose erosion SPLITS (e.g. a slot island dividing the
+  //   pocket) comes back as several components, each machined below (the old
+  //   code silently milled only the single miter ring).
+  // An empty erosion still means the tool does not fit anywhere — the legacy
+  // "tool too large" empty toolpath.
+  const sil = options.body ? topSilhouette(options.body) : null;
+  let regions: RegionComponent[] = [];
+  if (sil) {
+    regions = offsetRegion(
+      sil.outer.points,
+      sil.islands.map((l) => l.points),
+      -(r + allowance),
+    );
   }
-  if (!outer || outer.length < 3) {
+  if (regions.length === 0) {
     if (options.body) {
-      // The tool does NOT fit the silhouette (inset failed or degenerated).
+      // The tool does NOT fit the silhouette (erosion empty or degenerated).
       // Falling back to the bounding-box raster would mill the empty regions
       // of an L/C-shaped part — return an EMPTY toolpath instead; the panel
       // shows the op with no time and the user can pick a smaller tool.
@@ -371,6 +318,7 @@ export function generatePocketToolpath(
     // Degenerate axes are padded to 4 µm so a scanline row still falls
     // strictly inside the polygon (rows are inset 1 µm from the extremes).
     const pad = 4e-6;
+    let outer: Point2[];
     if (u1 - u0 < 1e-9 && v1 - v0 < 1e-9) {
       // Region smaller than the tool: single point.
       outer = [{ u: u0, v: v0 }, { u: u0 + pad, v: v0 }, { u: u0, v: v0 + pad }];
@@ -389,26 +337,38 @@ export function generatePocketToolpath(
         { u: u0, v: v1 },
       ];
     }
+    regions = [{ outer, holes: [] }];
   }
 
-  const vMin = Math.min(...outer.map((p) => p.v));
-  const vMax = Math.max(...outer.map((p) => p.v));
-  // Inset rows by 1 µm: a scanline exactly on an apex vertex of the polygon
-  // finds no crossings, which would drop the clamped first/last rows.
-  const rows = rowPositions(vMin + 1e-6, vMax - 1e-6, sover);
+  const regionRows = regions.map((reg) => {
+    // Inset rows by 1 µm: a scanline exactly on an apex vertex of the polygon
+    // finds no crossings, which would drop the clamped first/last rows.
+    const vMin = Math.min(...reg.outer.map((p) => p.v));
+    const vMax = Math.max(...reg.outer.map((p) => p.v));
+    return rowPositions(vMin + 1e-6, vMax - 1e-6, sover);
+  });
   const levels = depthLevels(params);
   const linkRows = options.linkRows !== false;
 
-  // Axis-aligned bounding boxes of the (already cutter-grown) islands, for the
-  // exact link rejection below.
-  const islandBoxes = islands.map((poly) => {
-    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
-    for (const p of poly) {
-      minU = Math.min(minU, p.u); maxU = Math.max(maxU, p.u);
-      minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v);
-    }
-    return { minU, maxU, minV, maxV };
-  });
+  // Axis-aligned keep-out boxes of the islands grown by r+allowance. These
+  // are deliberately derived from the RAW silhouette islands (bbox expanded
+  // by the growth — exact for a disc dilation) and NOT from the region
+  // components: an island grown into the wall merges with the region
+  // boundary (or splits the region in two) and stops appearing as a
+  // component hole, but links must still never cross it.
+  const islandBoxes = sil
+    ? sil.islands.map((isl) => {
+        let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+        for (const p of isl.points) {
+          minU = Math.min(minU, p.u); maxU = Math.max(maxU, p.u);
+          minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v);
+        }
+        return {
+          minU: minU - r - allowance, maxU: maxU + r + allowance,
+          minV: minV - r - allowance, maxV: maxV + r + allowance,
+        };
+      })
+    : [];
 
   /** True when segment a→b intersects the axis-aligned box (slab clip): a
    * chord grazing the box's boundary counts as intersecting — conservative. */
@@ -431,52 +391,113 @@ export function generatePocketToolpath(
     return clip(a.u, b.u - a.u, box.minU, box.maxU) && clip(a.v, b.v - a.v, box.minV, box.maxV);
   };
 
-  /** True when the straight chord a→b stays inside the raster region (outer
-   * minus islands). Islands are rejected EXACTLY: every island's AABB is
-   * tested against the chord segment, so a narrow island parked at the chord's
-   * start (before the first quarter-sample) can no longer slip through — the
-   * old 3-point sample (t=.25/.5/.75) gouged exactly there when a row's
-   * intervals alternate direction across a narrow slot. The outer boundary is
-   * still only sampled at the quarter/mid points: a strongly concave outline
-   * can push a chord outside between samples, so this stays a conservative
-   * guard — anything doubtful falls back to the retract detour. */
+  /** True when the straight chord a→b stays inside ONE cleared component
+   * (its outer minus islands). Islands are rejected EXACTLY: every island's
+   * grown AABB is tested against the chord segment, so a narrow island
+   * parked at the chord's start (before the first quarter-sample) can no
+   * longer slip through — the old 3-point sample (t=.25/.5/.75) gouged
+   * exactly there when a row's intervals alternate direction across a narrow
+   * slot. All three samples must fall inside the SAME component: components
+   * are separated by material the tool cannot clear (an island grown
+   * through, or a neck narrower than the cutter), so an inter-component
+   * chord ploughs exactly that — reject it and take the retract detour.
+   * Within one component the outer boundary is still only sampled at the
+   * quarter/mid points: a strongly concave outline can push a chord outside
+   * between samples, so this stays a conservative guard; anything doubtful
+   * falls back to the retract detour. */
   const canLink = (a: Point2, b: Point2): boolean => {
     for (const box of islandBoxes) if (segmentHitsBox(a, b, box)) return false;
-    for (const t of [0.25, 0.5, 0.75]) {
-      const p = { u: a.u + (b.u - a.u) * t, v: a.v + (b.v - a.v) * t };
-      if (!pointInPolygon(p, outer)) return false;
-    }
-    return true;
+    const samples = [0.25, 0.5, 0.75].map((t) => ({
+      u: a.u + (b.u - a.u) * t,
+      v: a.v + (b.v - a.v) * t,
+    }));
+    return regions.some(
+      (reg) =>
+        samples.every(
+          (p) =>
+            pointInPolygon(p, reg.outer) &&
+            !reg.holes.some((h) => pointInPolygon(p, h)),
+        ),
+    );
   };
 
   /**
-   * Contour-parallel ring family (pocketStrategy 'offset'). ring_k insets the
-   * cleared region by a further k·stepover — always offset from ring 0, never
-   * iteratively, so miter error cannot accumulate. The sequence stops at the
-   * first ring that offsetPolygon rejects (null ⇒ degenerate), that
-   * self-intersects, or that shrinks below ~a sixteenth of the tool disc.
-   * Built only for island-free, CONVEX clearing regions: on concave outlines
-   * the offsetPolygon centroid-based null guard truncates the ring family
-   * early and the pocket centre would stay uncleared (measured 53.8% area
-   * coverage on an L-shape, pass #34 review) — those fall back to the raster,
-   * which always covers, exactly like island silhouettes do.
+   * Contour-parallel ring family (pocketStrategy 'offset'), clipper-backed so
+   * it now covers CONCAVE outlines and ISLANDS (the legacy offsetPolygon ring
+   * family was gated to island-free convex regions — its centroid-inradius
+   * guard truncated concave shapes at 53.8% swept coverage, pass #34 review).
+   * Ring depth k = the level-0 cleared region eroded by a further k·stepover
+   * — always offset from the base region, never iteratively, so offset error
+   * cannot accumulate. Each depth yields one RegionComponent per connected
+   * piece; every component contributes its outer ring AND one ring per hole
+   * (the grown-island boundary — those are cutting loops too). The family
+   * stops at the first depth that erodes to nothing; a component whose net
+   * area collapses under ~a sixteenth of the tool disc is dropped as dust at
+   * that depth (its remaining core is smaller than the cutter's meaningful
+   * sweep — the same truncation the single-ring era applied to the family).
+   *
+   * Winding (climb under M3 keeps the material on the RIGHT of travel):
+   * - depth-0 outer rings hug the pocket wall with material OUTSIDE the
+   *   loop → CCW puts it on the right — the same direction as the helix
+   *   entry, so the entry and the wall ring agree;
+   * - deeper outer rings engage the uncleared core INSIDE the loop → CW;
+   * - hole rings (grown islands) always carry the island material INSIDE
+   *   the loop → CW at every depth.
+   * reverseLoop keeps the start vertex stable in either direction.
+   * Within a depth the loops are ordered nearest-neighbour from wherever the
+   * tool finished the previous loop (depths themselves stay ordered — an
+   * outer ring must not full-slot into a core a shallower ring has not
+   * cleared yet); the depth-0 loops keep their natural order so the wall
+   * ring always leads.
    */
   const ringPaths: Point2[][] = [];
-  if (params.pocketStrategy === 'offset' && islands.length === 0 && polygonIsConvex(outer)) {
+  let ringFinishCount = 0; // depth-0 loops (wall + island rings) for wallFinishPass
+  if (params.pocketStrategy === 'offset') {
+    // Where the tool stands between loops (a closed loop ends on its start).
+    let pos: Point2 | null = null;
     for (let k = 0; ; k++) {
-      const ring = offsetPolygon(outer, -k * sover); // k = 0 returns a copy
-      if (!ring || ring.length < 3) break;
-      if (ringSelfIntersects(ring)) break; // deeper rings can only be worse
-      if (Math.abs(polygonArea(ring)) < (Math.PI * r * r) / 16) break;
-      // Climb under M3 keeps the material on the RIGHT (see the contour
-      // comment). Ring 0 hugs the pocket wall with material OUTSIDE the loop
-      // → CCW puts it on the right — the same direction as the helix entry,
-      // so the entry and the first ring agree. Every deeper ring engages the
-      // uncleared core INSIDE the loop → CW. reverseLoop keeps the start
-      // vertex stable either way.
-      ringPaths.push(
-        k === 0 || polygonArea(ring) < 0 ? ring : reverseLoop(ring),
-      );
+      const slice =
+        k === 0
+          ? regions // delta≈0: offsetRegion would return the region verbatim — skip the call
+          : regions.flatMap((reg) => offsetRegion(reg.outer, reg.holes, -k * sover));
+      const loops: Point2[][] = [];
+      let kept = 0;
+      for (const comp of slice) {
+        const net =
+          Math.abs(polygonArea(comp.outer)) -
+          comp.holes.reduce((s, h) => s + Math.abs(polygonArea(h)), 0);
+        if (net < (Math.PI * r * r) / 16) continue; // dust at this depth
+        loops.push(k === 0 ? comp.outer : reverseLoop(comp.outer));
+        for (const hole of comp.holes) loops.push(hole); // already CW
+        kept++;
+      }
+      if (kept === 0) break; // deeper rings can only be smaller
+      // Nearest-neighbour ordering of this depth's loops (greedy from the
+      // previous loop's end) reduces retract detours between components.
+      if (pos !== null) {
+        const remaining = [...loops];
+        const ordered: Point2[][] = [];
+        while (remaining.length > 0) {
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < remaining.length; i++) {
+            const d = Math.hypot(remaining[i]![0]!.u - pos!.u, remaining[i]![0]!.v - pos!.v);
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          const next = remaining.splice(best, 1)[0]!;
+          ordered.push(next);
+          pos = next[0]!;
+        }
+        loops.length = 0;
+        loops.push(...ordered);
+      } else {
+        pos = loops[loops.length - 1]![0]!;
+      }
+      if (k === 0) ringFinishCount = loops.length;
+      ringPaths.push(...loops);
     }
   }
   const useOffset = ringPaths.length > 0;
@@ -524,10 +545,13 @@ export function generatePocketToolpath(
           let helixEnd: Point2 | null = null;
           if (params.helixEntry === true) {
             // The wall ring's start sits ON the boundary where no swept disc
-            // fits; the second ring's start (one stepover in) is the nominal
-            // helix centre when that ring exists.
+            // fits; the second loop's start (one stepover in) is the nominal
+            // helix centre when it exists. The swept disc is validated against
+            // the component whose outer contains the nominal point — with
+            // islands or split regions that is where the entry must fit.
             const nominal = ringPaths.length > 1 ? ringPaths[1]![0]! : start;
-            const plan = planHelixEntry(nominal, outer, [], r);
+            const reg = regions.find((rg) => pointInPolygon(nominal, rg.outer)) ?? regions[0]!;
+            const plan = planHelixEntry(nominal, reg.outer, reg.holes, r);
             const revs = plan !== null ? helixRevolutions(feedPlane - yLevel, plan.radius) : null;
             if (plan !== null && revs !== null) {
               const hs: Point2 = { u: plan.center.u + plan.radius, v: plan.center.v };
@@ -572,105 +596,115 @@ export function generatePocketToolpath(
           rowEnd = cutLoop(path, yLevel, feedPlane, rowEnd);
         }
       }
-      // Wall finish pass: the wall ring once more, CCW (climb on the wall
-      // side — material outside the loop sits on the right when CCW). Re-
-      // walking ring 0 is intended — spring-pass semantics, the same idea as
-      // Fusion/Mastercam finish passes.
+      // Wall finish pass: the depth-0 loops once more — the wall ring CCW
+      // (climb on the wall side — material outside the loop sits on the right
+      // when CCW) and every grown-island ring CW (material inside the loop ⇒
+      // climb keeps it on the right). Re-walking them is intended —
+      // spring-pass semantics, the same idea as Fusion/Mastercam finish
+      // passes, and the exact ring set the raster finish uses.
       if (params.wallFinishPass === true) {
-        rowEnd = cutLoop(ringPaths[0]!, yLevel, feedPlane, rowEnd);
+        for (const path of ringPaths.slice(0, ringFinishCount)) {
+          rowEnd = cutLoop(path, yLevel, feedPlane, rowEnd);
+        }
       }
     } else {
       // Where the cutter stands between passes at THIS level (the zigzag
-      // alternates direction, so it is each interval's far end).
-      for (const v of rows) {
-        const base = scanlineIntervals(outer, v);
-        const blocked = islands.flatMap((poly) => scanlineIntervals(poly, v));
-        const intervals = subtractIntervals(base, blocked);
+      // alternates direction, so it is each interval's far end). One raster
+      // sweep per cleared component; the entry/link state flows across them.
+      for (let ri = 0; ri < regions.length; ri++) {
+        const region = regions[ri]!;
+        for (const v of regionRows[ri]!) {
+          const base = scanlineIntervals(region.outer, v);
+          const blocked = region.holes.flatMap((poly) => scanlineIntervals(poly, v));
+          const intervals = subtractIntervals(base, blocked);
 
-        for (const [ua, ub] of intervals) {
-          const uA = forward ? ua : ub;
-          const uB = forward ? ub : ua;
-          // How far along the row the ENTRY moves already cut (the first-entry
-          // ramp may have covered part of it).
-          let cutTo = uA;
+          for (const [ua, ub] of intervals) {
+            const uA = forward ? ua : ub;
+            const uB = forward ? ub : ua;
+            // How far along the row the ENTRY moves already cut (the first-entry
+            // ramp may have covered part of it).
+            let cutTo = uA;
 
-          // Helical first entry: the validated disc sweeps the descent, the
-          // flat true-up circle levels the floor, and the exit links to the
-          // row start (cut when the chord stays inside, else the detour).
-          let helixed = false;
-          if (firstEntry && params.helixEntry === true) {
-            const plan = planHelixEntry({ u: uA, v }, outer, islands, r);
-            const revs = plan !== null ? helixRevolutions(feedPlane - yLevel, plan.radius) : null;
-            if (plan !== null && revs !== null) {
-              const hs: Point2 = { u: plan.center.u + plan.radius, v: plan.center.v };
-              m.rapid({ x: hs.u, y: safe, z: hs.v });
-              m.rapid({ x: hs.u, y: feedPlane, z: hs.v });
-              emitHelixEntry(m, plan, feedPlane, yLevel, revs);
-              if (linkRows && canLink(hs, { u: uA, v })) {
-                m.cut({ x: uA, y: yLevel, z: v });
-              } else {
+            // Helical first entry: the validated disc sweeps the descent, the
+            // flat true-up circle levels the floor, and the exit links to the
+            // row start (cut when the chord stays inside, else the detour).
+            let helixed = false;
+            if (firstEntry && params.helixEntry === true) {
+              const plan = planHelixEntry({ u: uA, v }, region.outer, region.holes, r);
+              const revs = plan !== null ? helixRevolutions(feedPlane - yLevel, plan.radius) : null;
+              if (plan !== null && revs !== null) {
+                const hs: Point2 = { u: plan.center.u + plan.radius, v: plan.center.v };
                 m.rapid({ x: hs.u, y: safe, z: hs.v });
-                m.rapid({ x: uA, y: safe, z: v });
-                m.rapid({ x: uA, y: feedPlane, z: v });
-                m.plunge({ x: uA, y: yLevel, z: v });
-              }
-              // The row itself is still uncut (the helix disc swept a circle
-              // off the row), so cutTo stays at uA.
-              helixed = true;
-              firstEntry = false;
-            }
-          }
-
-          if (!helixed) {
-            if (linkRows && rowEnd && canLink(rowEnd, { u: uA, v })) {
-              // Row link: cut straight to the next row's start at the same level.
-              // No retract, no plunge — the saved rapid detour is where the
-              // estimated-time drop comes from.
-              m.cut({ x: uA, y: yLevel, z: v });
-            } else {
-              // Full entry: retract VERTICALLY from the previous row end (never
-              // a diagonal rapid below safe height), traverse at safe, drop to
-              // the feed plane, then enter.
-              if (rowEnd) m.rapid({ x: rowEnd.u, y: safe, z: rowEnd.v });
-              m.rapid({ x: uA, y: safe, z: v });
-              if (firstEntry) {
-                // Rapid to the FEED PLANE, not the stock surface — a G0 touching
-                // the exact estimated surface crashes when the estimate is a hair
-                // high; the ramp below starts from here.
-                m.rapid({ x: uA, y: feedPlane, z: v });
-                const ramp = rampLength(tool, yPrev - yLevel, Math.abs(uB - uA));
-                if (ramp > 1e-6) {
-                  const dir = Math.sign(uB - uA) || 1;
-                  const uRamp = uA + dir * ramp;
-                  m.cut({ x: uRamp, y: yLevel, z: v });
-                  cutTo = uRamp;
+                m.rapid({ x: hs.u, y: feedPlane, z: hs.v });
+                emitHelixEntry(m, plan, feedPlane, yLevel, revs);
+                if (linkRows && canLink(hs, { u: uA, v })) {
+                  m.cut({ x: uA, y: yLevel, z: v });
                 } else {
+                  m.rapid({ x: hs.u, y: safe, z: hs.v });
+                  m.rapid({ x: uA, y: safe, z: v });
+                  m.rapid({ x: uA, y: feedPlane, z: v });
                   m.plunge({ x: uA, y: yLevel, z: v });
                 }
+                // The row itself is still uncut (the helix disc swept a circle
+                // off the row), so cutTo stays at uA.
+                helixed = true;
                 firstEntry = false;
-              } else {
-                m.rapid({ x: uA, y: feedPlane, z: v });
-                m.plunge({ x: uA, y: yLevel, z: v });
               }
             }
+
+            if (!helixed) {
+              if (linkRows && rowEnd && canLink(rowEnd, { u: uA, v })) {
+                // Row link: cut straight to the next row's start at the same level.
+                // No retract, no plunge — the saved rapid detour is where the
+                // estimated-time drop comes from.
+                m.cut({ x: uA, y: yLevel, z: v });
+              } else {
+                // Full entry: retract VERTICALLY from the previous row end (never
+                // a diagonal rapid below safe height), traverse at safe, drop to
+                // the feed plane, then enter.
+                if (rowEnd) m.rapid({ x: rowEnd.u, y: safe, z: rowEnd.v });
+                m.rapid({ x: uA, y: safe, z: v });
+                if (firstEntry) {
+                  // Rapid to the FEED PLANE, not the stock surface — a G0 touching
+                  // the exact estimated surface crashes when the estimate is a hair
+                  // high; the ramp below starts from here.
+                  m.rapid({ x: uA, y: feedPlane, z: v });
+                  const ramp = rampLength(tool, yPrev - yLevel, Math.abs(uB - uA));
+                  if (ramp > 1e-6) {
+                    const dir = Math.sign(uB - uA) || 1;
+                    const uRamp = uA + dir * ramp;
+                    m.cut({ x: uRamp, y: yLevel, z: v });
+                    cutTo = uRamp;
+                  } else {
+                    m.plunge({ x: uA, y: yLevel, z: v });
+                  }
+                  firstEntry = false;
+                } else {
+                  m.rapid({ x: uA, y: feedPlane, z: v });
+                  m.plunge({ x: uA, y: yLevel, z: v });
+                }
+              }
+            }
+            if (Math.abs(uB - cutTo) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
+            rowEnd = { u: uB, v };
+            forward = !forward;
           }
-          if (Math.abs(uB - cutTo) > 1e-6) m.cut({ x: uB, y: yLevel, z: v });
-          rowEnd = { u: uB, v };
-          forward = !forward;
         }
       }
       // Wall finish pass (raster): after clearing the level, one extra loop
-      // along the wall-side boundary — the cleared-region boundary itself,
-      // CCW (material outside the loop ⇒ climb keeps it on the right) — plus
-      // one loop around every grown island, CW (material inside the loop ⇒
-      // climb keeps it on the right). Islands the tool cannot fit were
-      // already dropped from `islands`.
+      // along the wall-side boundary of every component — the cleared-region
+      // boundary itself, CCW (material outside the loop ⇒ climb keeps it on
+      // the right) — plus one loop around every grown island, CW (material
+      // inside the loop ⇒ climb keeps it on the right). Islands the tool
+      // cannot fit never made it into the region.
       if (params.wallFinishPass === true) {
-        const wallLoop = polygonArea(outer) > 0 ? [...outer] : reverseLoop(outer);
-        rowEnd = cutLoop(wallLoop, yLevel, feedPlane, rowEnd);
-        for (const island of islands) {
-          const islandLoop = polygonArea(island) > 0 ? reverseLoop(island) : island;
-          rowEnd = cutLoop(islandLoop, yLevel, feedPlane, rowEnd);
+        for (const region of regions) {
+          const wallLoop = polygonArea(region.outer) > 0 ? [...region.outer] : reverseLoop(region.outer);
+          rowEnd = cutLoop(wallLoop, yLevel, feedPlane, rowEnd);
+          for (const island of region.holes) {
+            const islandLoop = polygonArea(island) > 0 ? reverseLoop(island) : island;
+            rowEnd = cutLoop(islandLoop, yLevel, feedPlane, rowEnd);
+          }
         }
       }
     }
@@ -813,6 +847,16 @@ function makeTabProfile(
  * from an upper-envelope profile (overlapping tabs, or a ramp entry crossing
  * a tab flank). The tool is assumed to already stand at (fromS, yOf(fromS));
  * only positions strictly inside (fromS, toS] are emitted.
+ *
+ * True-arc spans (contour only; empty default keeps the legacy polyline
+ * behaviour for every other caller): positions inside a span are generated
+ * ON the analytic circle, vertex stops strictly inside a span are dropped
+ * while the profile is flat (they would only slice the arc into chords), and
+ * a flat move fully inside one span is tagged `arcTo` for the post. Where
+ * the profile MOVES (ramp descent, tab flank) the stops stay so the straight
+ * chords remain vertex-short — a linear interpolation along a descending arc
+ * is a helical move the flat-only G2/G3 contract cannot express, so it
+ * degrades to on-circle polyline points by design.
  */
 function cutProfiledSpan(
   m: MoveList,
@@ -823,10 +867,19 @@ function cutProfiledSpan(
   toS: number,
   yOf: (s: number) => number,
   stops: number[],
+  spans: ArcSpan[] = [],
 ): void {
-  const cutAt = (s: number, y: number): void => {
-    const p = s >= L - 1e-9 ? path[0]! : loopPointAt(path, arcs, L, s);
-    m.cut({ x: p.u, y, z: p.v });
+  const posAt = (s: number): Point2 => arcSpanPointAt(spans, s) ?? loopPointAt(path, arcs, L, s);
+  /** The span fully containing the move [a, b], if any. */
+  const spanOver = (a: number, b: number): ArcSpan | undefined =>
+    b > a + 1e-9 ? spans.find((sp) => a >= sp.s0 - 1e-7 && b <= sp.s1 + 1e-7) : undefined;
+  const cutAt = (s: number, y: number, arc?: ArcSpan): void => {
+    const p = posAt(s);
+    if (arc) {
+      m.cut({ x: p.u, y, z: p.v, arcTo: { center: { x: arc.cu, y, z: arc.cv }, ccw: arc.ccw } });
+    } else {
+      m.cut({ x: p.u, y, z: p.v });
+    }
   };
   let prevS = fromS;
   let prevY = yOf(fromS);
@@ -844,11 +897,40 @@ function cutProfiledSpan(
         return emitTo(s);
       }
     }
-    cutAt(s, y);
+    // Arc tag only on verified-flat moves (see the doc comment): emitTo has
+    // just proven the profile linear over [prevS, s], so equal endpoint
+    // heights make it constant.
+    cutAt(s, y, Math.abs(y - prevY) <= 1e-9 ? spanOver(prevS, s) : undefined);
     prevS = s;
     prevY = y;
   };
-  for (const s of stops) emitTo(s);
+  // Span ends become stops so every arc lands exactly on its boundary point;
+  // interior stops are dropped later while flat (the walk below). Adjacent
+  // spans share a boundary s, so dedupe after the sort (the 1e-7 rule of
+  // spanStops — a duplicate would emit a zero-length cut move).
+  const allStops = [...stops];
+  if (spans.length > 0) {
+    for (const sp of spans) {
+      for (const b of [sp.s0, sp.s1]) {
+        if (b > fromS + 1e-9 && b < toS - 1e-9) allStops.push(b);
+      }
+    }
+    allStops.sort((a, b) => a - b);
+    for (let i = allStops.length - 1; i > 0; i--) {
+      if (allStops[i]! - allStops[i - 1]! <= 1e-7) allStops.splice(i, 1);
+    }
+  }
+  for (const s of allStops) {
+    if (
+      spans.length > 0 &&
+      s > prevS + 1e-9 &&
+      Math.abs(yOf(s) - prevY) <= 1e-9 &&
+      s < (spanOver(prevS, s)?.s1 ?? -Infinity) - 1e-7
+    ) {
+      continue; // interior of a flat true-arc span — chord-fodder, skip
+    }
+    emitTo(s);
+  }
   emitTo(toS);
 }
 
@@ -874,6 +956,139 @@ function spanStops(
   return out.filter((s, i) => i === 0 || s - out[i - 1]! > 1e-7);
 }
 
+/**
+ * One true-arc replacement interval of a contour loop, in the loop's
+ * arc-length parameterization: the polyline over (s0, s1] IS the analytic
+ * circle (center (cu, cv), radius r) travelled in the `ccw` direction, with
+ * `th0`/`sweep` mapping arc length to angle. Ground truth comes from the
+ * matched cylinder face tag (see arcSources), so points snapped by
+ * arcSpanPointAt carry the tag's exact radius — no re-fit, no tolerance
+ * budget spent.
+ */
+interface ArcSpan {
+  s0: number;
+  s1: number;
+  cu: number;
+  cv: number;
+  r: number;
+  ccw: boolean;
+  /** Start angle (rad, atan2 convention in the (u, v) plane). */
+  th0: number;
+  /** Angular width of this span (rad, positive). */
+  sweep: number;
+}
+
+/** Sweep cap for true-arc spans — the same 120° ceiling fitArcs applies to
+ * fitted arcs, keeping every emitted G2/G3 away from the full-circle regime
+ * where near-coincident endpoints are ambiguous for controllers (GRBL). */
+const ARC_SPAN_MAX_SWEEP = (120 * Math.PI) / 180;
+
+/** Directed angular step from angle a to b in the given direction, in [0, 2π). */
+function directedAngle(a: number, b: number, ccw: boolean): number {
+  let d = ccw ? b - a : a - b;
+  d = ((d % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  return d;
+}
+
+/**
+ * Build the true-arc span plan of one oriented loop from its matched runs.
+ * Each run becomes an interval of the loop's arc-length axis, then:
+ * - a run wrapping the loop seam splits at L (the emission machinery never
+ *   wraps mid-span, and the seam vertex is a shared, exactly-on-circle
+ *   point);
+ * - every interval is clipped at the profile `breaks` (tab edges — an arc
+ *   must never span a height lift, and the tab's own widths keep their
+ *   exact positions along the path);
+ * - every surviving piece is split into ≤120° sub-spans (a full circle
+ *   becomes 3 arcs), aligning with the post-processor's sweep cap.
+ * Degenerate pieces (no length or no sweep) are dropped — the polyline
+ * fallback covers them.
+ */
+function planLoopArcSpans(
+  path: Point2[],
+  arcs: number[],
+  L: number,
+  breaks: number[],
+  runs: ArcRun[],
+): ArcSpan[] {
+  const n = path.length;
+  if (n < 2 || runs.length === 0) return [];
+  /** Raw interval of one run piece: [s0, s1] with its start angle and sweep. */
+  const pieces: Array<{ s0: number; s1: number; th0: number; sweep: number; run: ArcRun }> = [];
+  for (const run of runs) {
+    const c = run.circle;
+    const th = (i: number): number => {
+      const p = path[i % n]!;
+      return Math.atan2(p.v - c.cv, p.u - c.cu);
+    };
+    const from = run.from;
+    const to = run.to;
+    if (from === 0 && to === n - 1) {
+      // Full ring anchored at the loop start (the all-on case): one interval
+      // over the whole loop, closing edge included. th(to) is th(from) so
+      // the directed difference would read 0 — force the full 2π turn.
+      pieces.push({ s0: arcs[from]!, s1: L, th0: th(from), sweep: 2 * Math.PI, run });
+    } else if (to < n) {
+      const sweep = directedAngle(th(from), th(to), run.ccw);
+      pieces.push({ s0: arcs[from]!, s1: arcs[to]!, th0: th(from), sweep, run });
+    } else {
+      // Wraps the seam: two pieces joined at L (the seam vertex is a shared,
+      // exactly-on-circle point).
+      const sweepA = directedAngle(th(from), th(n - 1), run.ccw);
+      const sweepB = directedAngle(th(0), th(to), run.ccw);
+      pieces.push({ s0: arcs[from]!, s1: L, th0: th(from), sweep: sweepA, run });
+      pieces.push({ s0: 0, s1: arcs[to - n]!, th0: th(0), sweep: sweepB, run });
+    }
+  }
+
+  const spans: ArcSpan[] = [];
+  for (const p of pieces) {
+    if (!(p.sweep > 1e-9) || p.s1 - p.s0 <= 1e-9) continue;
+    // Split positions: span ends, tab breaks inside, and the equal 120° cuts.
+    const cuts = [p.s0, p.s1];
+    for (const b of breaks) {
+      if (b > p.s0 + 1e-7 && b < p.s1 - 1e-7) cuts.push(b);
+    }
+    const k = Math.ceil(p.sweep / ARC_SPAN_MAX_SWEEP - 1e-9);
+    for (let i = 1; i < k; i++) cuts.push(p.s0 + ((p.s1 - p.s0) * i) / k);
+    cuts.sort((a, b) => a - b);
+    for (let i = 1; i < cuts.length; i++) {
+      const s0 = cuts[i - 1]!;
+      const s1 = cuts[i]!;
+      if (s1 - s0 <= 1e-9) continue;
+      const f0 = (s0 - p.s0) / (p.s1 - p.s0);
+      const f1 = (s1 - p.s0) / (p.s1 - p.s0);
+      const sweep = p.sweep * (f1 - f0);
+      if (sweep <= 1e-9) continue;
+      spans.push({
+        s0, s1,
+        cu: p.run.circle.cu, cv: p.run.circle.cv, r: p.run.circle.r,
+        ccw: p.run.ccw,
+        th0: p.th0 + (p.run.ccw ? 1 : -1) * p.sweep * f0,
+        sweep,
+      });
+    }
+  }
+  return spans;
+}
+
+/**
+ * Position on the loop at arc length s, true-arc aware: inside a span the
+ * point is generated ON the analytic circle (angle interpolated by arc
+ * length — exact at span ends, where every emitted point of consequence
+ * sits); outside, null tells the caller to use the polyline interpolation.
+ */
+function arcSpanPointAt(spans: ArcSpan[], s: number): Point2 | null {
+  for (const sp of spans) {
+    if (s >= sp.s0 - 1e-7 && s <= sp.s1 + 1e-7) {
+      const f = Math.min(1, Math.max(0, (s - sp.s0) / (sp.s1 - sp.s0)));
+      const th = sp.th0 + (sp.ccw ? 1 : -1) * sp.sweep * f;
+      return { u: sp.cu + sp.r * Math.cos(th), v: sp.cv + sp.r * Math.sin(th) };
+    }
+  }
+  return null;
+}
+
 /** Generate a contour toolpath around a body's top-view silhouette. */
 export function generateContourToolpath(
   body: SolidBody,
@@ -897,7 +1112,6 @@ export function generateContourToolpath(
   };
   if (!sil) return empty;
 
-  // Cutter compensation: outside the outer loop, inside the islands.
   const offset = tool.diameter / 2 + (options.allowance ?? params.allowance ?? 0);
 
   // Cut direction under an M3 spindle: climb milling keeps the material on
@@ -907,22 +1121,70 @@ export function generateContourToolpath(
   // docs/cnc-algorithms.md). The tool runs OUTSIDE the part on the outer
   // loop, so the enclosed material sits on the right when the loop is CW;
   // island loops have the material OUTSIDE, so climb keeps them CCW
-  // (exactly what offsetPolygon returns: every silhouette loop is
-  // normalised CCW). 'conventional' flips both windings; the start vertex is
+  // (every loop fed to orient() below arrives CCW: silhouette loops are
+  // normalised CCW, and the eroded island holes are reversed back to CCW
+  // before orient). 'conventional' flips both windings; the start vertex is
   // preserved either way so the entry point never moves. (Pass #33 shipped
   // this inverted — corrected here, see CHANGELOG 0.28.0.)
   const conventional = params.direction === 'conventional';
   const orient = (loop: Point2[], island: boolean): Point2[] =>
     island === conventional ? reverseLoop(loop) : loop;
 
+  // Cutter compensation: outside the outer loop, inside the islands. Computed
+  // as ONE region offset (clipper-backed) with miter joins, keeping the
+  // legacy true-miter geometry: every offset edge sits exactly r+allowance
+  // off its wall, with corners only ever adding clearance. Region semantics
+  // also make the degenerate cases honest — an island too small for the tool
+  // is swallowed by the region (no path, exactly the legacy null-skip), and
+  // an island grown into the nearby outer wall merges with it so the emitted
+  // path wraps around the island instead of the two independent legacy loops
+  // crossing each other over the wall.
+  const comps = offsetRegion(
+    sil.outer.points,
+    sil.islands.map((l) => l.points),
+    offset,
+    { joinType: 'miter' },
+  );
   const paths: Point2[][] = [];
-  const outerPath = offsetPolygon(sil.outer.points, offset);
-  if (outerPath) paths.push(orient(outerPath, false));
-  for (const island of sil.islands) {
-    const p = offsetPolygon(island.points, -offset);
-    if (p) paths.push(orient(p, true)); // null ⇒ tool cannot fit the hole; skip it
+  const pathIsland: boolean[] = [];
+  for (const comp of comps) {
+    paths.push(orient(comp.outer, false));
+    pathIsland.push(false);
+    for (const hole of comp.holes) {
+      // Eroded island loop (CW from offsetRegion → CCW to match the legacy
+      // orient() input winding, start vertex preserved). Holes narrower than
+      // a sixteenth of the tool disc are sub-tool debris — skip them, the
+      // same threshold the pocket ring family uses for dust.
+      if (-polygonArea(hole) < (Math.PI * (tool.diameter / 2) ** 2) / 16) continue;
+      paths.push(orient(reverseLoop(hole), true));
+      pathIsland.push(true);
+    }
   }
   if (paths.length === 0) return empty;
+
+  // True-arc recovery (P2b): analytic vertical-cylinder wall tags are the
+  // ground truth the discretized silhouette approximates. Candidate circles
+  // are the tags adjusted to the TOOL-CENTRE locus of each oriented loop —
+  // outer loops run outside the wall (r + offset), island loops inside the
+  // hole (r − offset) — so a matched run can be replaced by an arc on
+  // exactly that circle and the emitted radius is the analytic r ± offset,
+  // not a re-fit. Matching tolerance: the 20 µm floor widened by the worst
+  // miter-overshoot the loop's own vertex density can produce on a circular
+  // run (offset·(1/cos(π/n) − 1) — exact for a full n-gon circle,
+  // conservative for partial arcs, floored at n = 8 for the coarsest brep
+  // faceting) plus 10 µm slack for the clipper quantization and tag fit.
+  // Bodies without cylinder tags (brep primitives, imported meshes) match
+  // nothing and keep the pure polyline output byte-for-byte.
+  const wallCircles = planCirclesFromBodies([body]);
+  const loopRuns: ArcRun[][] = paths.map((path, i) => {
+    if (wallCircles.length === 0) return [];
+    const candidates = wallCircles
+      .map((c) => ({ cu: c.cu, cv: c.cv, r: pathIsland[i] ? c.r - offset : c.r + offset }))
+      .filter((c) => c.r > 1e-6);
+    if (candidates.length === 0) return [];
+    const tol = Math.max(0.02, offset * (1 / Math.cos(Math.PI / Math.max(path.length, 8)) - 1) + 0.01);
+    return matchArcRuns(path, candidates, tol);
+  });
 
   const levels = depthLevels(params);
   const tabs = validTabs(params.tabs);
@@ -937,8 +1199,8 @@ export function generateContourToolpath(
     const yPrev = li === 0 ? params.stockTop : levels[li - 1]!;
     const feedPlane = li === 0 ? params.stockTop + 1 : yPrev + 1;
 
-    for (const path of paths) {
-      const start = path[0]!;
+    for (let pi = 0; pi < paths.length; pi++) {
+      const path = paths[pi]!;
       const arcs = loopArcs(path);
       const L = loopLength(path, arcs);
 
@@ -950,15 +1212,24 @@ export function generateContourToolpath(
           : { yAt: (): number => yLevel, breaks: [] as number[] };
       const yAt = profile.yAt;
 
-      m.rapid({ x: start.u, y: safe, z: start.v });
-      m.rapid({ x: start.u, y: feedPlane, z: start.v });
+      // True-arc spans for THIS level: matched runs clipped at the tab
+      // breaks of this level's profile and split into ≤120° pieces.
+      const spans = planLoopArcSpans(path, arcs, L, profile.breaks, loopRuns[pi]!);
+      // Loop start snapped onto the analytic circle when a span covers s=0 —
+      // the plunge, the arc endpoints and the retract all agree exactly.
+      const startP = arcSpanPointAt(spans, 0) ?? path[0]!;
+
+      m.rapid({ x: startP.u, y: safe, z: startP.v });
+      m.rapid({ x: startP.u, y: feedPlane, z: startP.v });
 
       let cutFrom = 0;
       if (params.rampEntry === true && li === 0) {
         // Ramp the first-level entry: descend along the path, following its
         // vertices so the move never chords across the offset loop (a chord
         // of a convex section would gouge the wall by its sagitta), lifted
-        // over any tab in the way.
+        // over any tab in the way. Inside a true-arc span the ramp vertices
+        // stay ON the circle (straight helical chords between neighbours —
+        // the flat-only G2/G3 contract cannot express a descending arc).
         const ramp = rampLength(tool, yPrev - yLevel, L);
         if (ramp > 1e-6) {
           const descent = (s: number): number => feedPlane + (yLevel - feedPlane) * (s / ramp);
@@ -968,16 +1239,17 @@ export function generateContourToolpath(
             // The mid-ramp stop guarantees the descent is visible as (≥2)
             // strictly-descending cut moves even on long featureless edges.
             spanStops(path, arcs, 0, ramp, profile.breaks, [ramp / 2]),
+            spans,
           );
           cutFrom = ramp;
         } else {
-          m.plunge({ x: start.u, y: Math.min(yAt(0), feedPlane), z: start.v });
+          m.plunge({ x: startP.u, y: Math.min(yAt(0), feedPlane), z: startP.v });
         }
       } else {
         // Legacy vertical entry; the plunge target rides a tab when the loop
         // start happens to sit on one (min keeps a degenerate tab-above-feed-
         // plane spec from plunging upward).
-        m.plunge({ x: start.u, y: Math.min(yAt(0), feedPlane), z: start.v });
+        m.plunge({ x: startP.u, y: Math.min(yAt(0), feedPlane), z: startP.v });
       }
 
       // One full revolution from wherever the entry left the tool, closing
@@ -986,6 +1258,7 @@ export function generateContourToolpath(
         cutProfiledSpan(
           m, path, arcs, L, cutFrom, L, yAt,
           spanStops(path, arcs, cutFrom, L, profile.breaks),
+          spans,
         );
       }
       // Spring pass: one extra revolution at the final depth with no retract
@@ -996,6 +1269,7 @@ export function generateContourToolpath(
         cutProfiledSpan(
           m, path, arcs, L, 0, L, yAt,
           spanStops(path, arcs, 0, L, profile.breaks),
+          spans,
         );
       } else if (cutFrom > 1e-9 && li === levels.length - 1) {
         // Single-level ramp entry leaves the entry wedge [0, ramp] above
@@ -1007,9 +1281,10 @@ export function generateContourToolpath(
         cutProfiledSpan(
           m, path, arcs, L, 0, cutFrom, yAt,
           spanStops(path, arcs, 0, cutFrom, profile.breaks),
+          spans,
         );
       }
-      m.rapid({ x: start.u, y: safe, z: start.v });
+      m.rapid({ x: startP.u, y: safe, z: startP.v });
     }
   }
 

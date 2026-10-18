@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, saveToFile, loadFromFile, defaultDrawingViewPlacements, sanitizeDrawingViewPlacements, type SerializedDrawing, type SerializedCam } from './studio3d';
+import { serializeProject, deserializeFeatures, deserializeReferenceGeometry, deserializeDrawing, deserializeCam, deserializeDirectBodies, saveToFile, loadFromFile, defaultDrawingViewPlacements, sanitizeDrawingViewPlacements, type SerializedDrawing, type SerializedCam, type ProjectFile } from './studio3d';
 import { createBox, computeVolume } from '../geometry/brep';
+import type { Face, SolidBody } from '../geometry/types';
 import { FeatureTree, createSketchFeature, createExtrudeFeature } from '../features/tree';
 import { createSketch, addRectangle } from '../sketch/engine';
 import { standardPlanes, makeAxis, makePoint, makeCoordinateSystem } from '../geometry/referenceGeometry';
@@ -626,5 +627,165 @@ describe('CAM setup serialization', () => {
     };
     const back = deserializeCam(project);
     expect(back.operations[0]!.enabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Face.source serialization (P2a): direct bodies carry analytic-surface tags
+// through save/load; the loader defends against unknown kinds (future file
+// versions) and malformed numbers by dropping the tag and keeping geometry.
+// ---------------------------------------------------------------------------
+
+describe('face source serialization (direct bodies)', () => {
+  /** A small solid whose three faces carry cone / sphere / torus / plane tags. */
+  function taggedBody(): SolidBody {
+    const faces: Face[] = [
+      {
+        id: 'coneFace',
+        vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+        normal: { x: 0, y: 0, z: 1 },
+        source: { kind: 'cone', apex: { x: 0, y: 3, z: 0 }, axis: { x: 0, y: -1, z: 0 }, halfAngle: Math.PI / 6 },
+      },
+      {
+        id: 'sphereFace',
+        vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+        normal: { x: 0, y: 0, z: 1 },
+        source: { kind: 'sphere', center: { x: 1, y: 2, z: 3 }, radius: 5 },
+      },
+      {
+        id: 'torusFace',
+        vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+        normal: { x: 0, y: 0, z: 1 },
+        source: { kind: 'torus', center: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, majorRadius: 10, minorRadius: 2 },
+      },
+      {
+        id: 'planeFace',
+        vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+        normal: { x: 0, y: 0, z: 1 },
+        source: { kind: 'plane', point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 0, z: 1 } },
+      },
+    ];
+    return { id: 'b1', name: 'Tagged', vertices: [], faces, edges: [] };
+  }
+
+  it('round-trips cone/sphere/torus/plane tags through save/load', () => {
+    const project = serializeProject('Tags', [], [], [taggedBody()]);
+    const loaded = loadFromFile(saveToFile(project));
+    const bodies = deserializeDirectBodies(loaded);
+    expect(bodies).toHaveLength(1);
+    const kinds = bodies[0]!.faces.map((f) => f.source?.kind);
+    expect(kinds).toEqual(['cone', 'sphere', 'torus', 'plane']);
+    const cone = bodies[0]!.faces[0]!.source!;
+    if (cone.kind !== 'cone') throw new Error('expected cone');
+    expect(cone.apex).toEqual({ x: 0, y: 3, z: 0 });
+    expect(cone.axis).toEqual({ x: 0, y: -1, z: 0 });
+    expect(cone.halfAngle).toBeCloseTo(Math.PI / 6, 12);
+    const torus = bodies[0]!.faces[2]!.source!;
+    if (torus.kind !== 'torus') throw new Error('expected torus');
+    expect(torus.majorRadius).toBe(10);
+    expect(torus.minorRadius).toBe(2);
+  });
+
+  it('old-format files (cylinder-only tags, no source) load unchanged', () => {
+    // Snapshot of the pre-cone format: a drilled-box era body whose wall
+    // carries only the cylinder tag shape that has serialization assets.
+    const legacyJson = JSON.stringify({
+      version: 1,
+      name: 'Old',
+      features: [],
+      bodies: [],
+      directBodies: [
+        {
+          id: 'old1',
+          name: 'Drilled',
+          vertices: [
+            { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 },
+          ],
+          faces: [
+            {
+              id: 'wall',
+              vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+              normal: { x: 0, y: 0, z: 1 },
+              source: { kind: 'cylinder', origin: { x: 0, y: 5, z: 0 }, axis: { x: 0, y: 1, z: 0 }, radius: 3 },
+            },
+            {
+              id: 'cap',
+              vertices: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+              normal: { x: 0, y: -1, z: 0 },
+            },
+          ],
+          edges: [],
+        },
+      ],
+      metadata: { created: '', modified: '', appVersion: '' },
+    });
+    const bodies = deserializeDirectBodies(loadFromFile(legacyJson));
+    expect(bodies).toHaveLength(1);
+    const src = bodies[0]!.faces[0]!.source;
+    expect(src && src.kind === 'cylinder' && src.radius === 3 && src.origin.y === 5).toBe(true);
+    expect(bodies[0]!.faces[1]!.source).toBeUndefined();
+    // Face objects with valid/no tags pass through untouched: the loaded body
+    // IS the parsed JSON object, its faces array unreplaced.
+    const parsed = loadFromFile(legacyJson);
+    expect(deserializeDirectBodies(parsed)[0]).toBe(parsed.directBodies![0]);
+  });
+
+  it('drops unknown source kinds defensively, keeping the geometry', () => {
+    const box = createBox(4, 4, 4);
+    for (const f of box.faces) {
+      f.source = { kind: 'plane', point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 0, z: 1 } };
+    }
+    // Corrupt the parsed JSON the way a newer file version would carry an
+    // unknown kind (the typed layer cannot even express it).
+    const raw = JSON.parse(saveToFile(serializeProject('Future', [], [], [box]))) as {
+      directBodies: Array<{ faces: Array<{ source?: { kind: string } }> }>;
+    };
+    for (const f of raw.directBodies[0]!.faces) f.source!.kind = 'hyperboloid';
+    const bodies = deserializeDirectBodies(raw as unknown as ProjectFile);
+    expect(bodies[0]!.faces).toHaveLength(6); // geometry survives
+    expect(bodies[0]!.faces.every((f) => f.source === undefined)).toBe(true);
+    expect(computeVolume(bodies[0]!)).toBeCloseTo(64, 3);
+  });
+
+  it('drops malformed known-kind tags (NaN radius, zero axis, bad angles)', () => {
+    const box = createBox(4, 4, 4);
+    const srcs: unknown[] = [
+      { kind: 'cylinder', origin: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, radius: Number.NaN },
+      { kind: 'cylinder', origin: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 0, z: 0 }, radius: 1 },
+      { kind: 'cone', apex: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, halfAngle: 2 }, // ≥ π/2
+      { kind: 'sphere', center: { x: 0, y: 0, z: 0 }, radius: -5 },
+      { kind: 'torus', center: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, majorRadius: 2, minorRadius: 3 },
+      'not even an object',
+    ];
+    const raw = JSON.parse(saveToFile(serializeProject('Junk', [], [], [box]))) as {
+      directBodies: Array<{ faces: Array<{ source?: unknown }> }>;
+    };
+    raw.directBodies[0]!.faces.forEach((f, i) => {
+      f.source = srcs[i % srcs.length];
+    });
+    const bodies = deserializeDirectBodies(raw as unknown as ProjectFile);
+    expect(bodies[0]!.faces.every((f) => f.source === undefined)).toBe(true);
+    expect(computeVolume(bodies[0]!)).toBeCloseTo(64, 3);
+  });
+
+  it('drops non-positive cone half angles and zero sphere radii', () => {
+    // Review gap: the (0, π/2) cone gate and the radius > 0 sphere gate
+    // exist in sanitizeFaceSource but had no coverage at the exact
+    // boundaries (halfAngle 0 / negative, radius 0).
+    const box = createBox(4, 4, 4);
+    const srcs: unknown[] = [
+      { kind: 'cone', apex: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, halfAngle: 0 },
+      { kind: 'cone', apex: { x: 0, y: 0, z: 0 }, axis: { x: 0, y: 1, z: 0 }, halfAngle: -0.2 },
+      { kind: 'sphere', center: { x: 0, y: 0, z: 0 }, radius: 0 },
+    ];
+    const raw = JSON.parse(saveToFile(serializeProject('Junk2', [], [], [box]))) as {
+      directBodies: Array<{ faces: Array<{ source?: unknown }> }>;
+    };
+    raw.directBodies[0]!.faces.forEach((f, i) => {
+      f.source = srcs[i % srcs.length]!;
+    });
+    const bodies = deserializeDirectBodies(raw as unknown as ProjectFile);
+    expect(bodies[0]!.faces.every((f) => f.source === undefined)).toBe(true);
+    expect(computeVolume(bodies[0]!)).toBeCloseTo(64, 3);
   });
 });

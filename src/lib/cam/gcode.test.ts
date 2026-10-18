@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { generateGCode, generateMultiToolGCode, estimateMachiningTime } from './gcode';
 import { generateContourToolpath } from './toolpath';
 import { createCylinder, createBox } from '../geometry/brep';
+import { taggedCylinderBody } from './arcSources.test';
 import type { Toolpath, ToolpathPoint } from './types';
 
 const em6 = { id: 'em-6mm', name: '6mm Endmill', diameter: 6, flutes: 2, type: 'endmill' as const, fluteLength: 20, overallLength: 50, material: 'carbide' as const };
@@ -610,5 +611,101 @@ describe('G2/G3 arc fitting — straight parts and breaks', () => {
     }
     // The GRBL peck expansion is untouched by the arc filter.
     expect(generateGCode(drillTp, 'grbl')).toContain('G1 Z3.000 F500');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G2/G3 TRUE arcs (P2b): contour loops recovered from analytic cylinder
+// face tags post straight from the tag geometry — radius exactly wall r ±
+// offset, centers exactly the tag axis — no re-fit, no tolerance budget.
+// ---------------------------------------------------------------------------
+
+describe('G2/G3 true arcs — analytic cylinder passthrough', () => {
+  // ⌀20 tagged boss, 55-gon wall: offset 3 → arcs at exactly R13.
+  const bossTp = (): Toolpath =>
+    generateContourToolpath(taggedCylinderBody(10, 20, 55), em6, {
+      ...PARAMS,
+      depthOfCut: 20,
+      stockTop: 20,
+      stockBottom: 0,
+    });
+
+  it('⌀20 outer contour: 3 G2 arcs per layer at exactly R13.0000, G1 collapses ~50×', () => {
+    const tp = bossTp();
+    const fitted = generateGCode(tp);
+    const count = (g: string, re: RegExp) => g.split('\n').filter((l) => re.test(l)).length;
+
+    // The untagged twin is the "before": the 55-gon polyline posts ~56 G1s
+    // (fitArcs cannot merge a 55-gon at r13 within the default 0.01 mm).
+    const before = generateGCode(
+      generateContourToolpath(taggedCylinderBody(10, 20, 55, { tagWalls: false }), em6, {
+        ...PARAMS, depthOfCut: 20, stockTop: 20, stockBottom: 0,
+      }),
+    );
+    expect(count(before, /^G1 /)).toBeGreaterThanOrEqual(50);
+    expect(count(before, /^G[23] /)).toBe(0);
+
+    // True-arc mode: plunge + exactly three 120° arcs.
+    expect(count(fitted, /^G1 /)).toBe(1);
+    expect(count(fitted, /^G2 /)).toBe(3);
+    expect(count(fitted, /^G3 /)).toBe(0);
+
+    // Disabling the FITTER does not disable ground truth: the tags survive
+    // (they are not fits — see fitArcs' disabled branch).
+    expect(count(generateGCode(tp, 'grbl', { arcTolerance: 0 }), /^G2 /)).toBe(3);
+
+    // The arcs carry the analytic geometry: centers on the tag axis (0,0),
+    // radii exactly 13 — the endpoints were generated ON that circle, so
+    // the 4-decimal print round-trips within its quantum.
+    const arcs = parseMoves(fitted).filter((m) => m.code === 'G2');
+    for (const a of arcs) {
+      expect(a.center).toBeDefined();
+      expect(Math.hypot(a.center!.x, a.center!.y)).toBeLessThan(1e-3);
+      const rStart = Math.hypot(a.start.x - a.center!.x, a.start.y - a.center!.y);
+      const rEnd = Math.hypot(a.end.x - a.center!.x, a.end.y - a.center!.y);
+      expect(Math.abs(rStart - 13)).toBeLessThan(1e-3);
+      expect(Math.abs(rStart - rEnd)).toBeLessThan(1e-3); // GRBL error-33 guard
+    }
+    // F modality unchanged: plunge F500 then one F1000 on the first arc.
+    expect(fitted.match(/ F\d+/g)).toHaveLength(2);
+  });
+
+  it('tube: outer arcs post G2 at 15+3, island arcs G3 at 6−3 — climb convention', () => {
+    const tp = generateContourToolpath(taggedCylinderBody(15, 20, 48, { innerRadius: 6 }), em6, {
+      ...PARAMS, depthOfCut: 20, stockTop: 20, stockBottom: 0,
+    });
+    const arcs = parseMoves(generateGCode(tp)).filter((m) => m.code === 'G2' || m.code === 'G3');
+    expect(arcs).toHaveLength(6);
+    const rad = (m: ParsedMove): number => Math.hypot(m.start.x - m.center!.x, m.start.y - m.center!.y);
+    const outer = arcs.filter((a) => rad(a) > 10);
+    const island = arcs.filter((a) => rad(a) < 10);
+    expect(outer).toHaveLength(3);
+    expect(island).toHaveLength(3);
+    for (const a of outer) {
+      expect(a.code).toBe('G2'); // climb outer = CW
+      expect(rad(a)).toBeCloseTo(18, 3);
+    }
+    for (const a of island) {
+      expect(a.code).toBe('G3'); // climb island = CCW
+      expect(rad(a)).toBeCloseTo(3, 3);
+    }
+  });
+
+  it('estimateMachiningTime walks arc length r·sweep for tagged moves', () => {
+    // Synthetic half-circle arc move: time = π·r / feed, not chord / feed.
+    const c = { x: 0, y: 5, z: 0 };
+    const tp = makeToolpath({
+      points: [
+        { x: 10, y: 5, z: 0, rapid: false },
+        { x: -10, y: 5, z: 0, rapid: false, arcTo: { center: c, ccw: true } },
+      ],
+    });
+    // Chord 20 mm; arc π·10 ≈ 31.4 mm at F1000 → 0.0314 min vs 0.02.
+    expect(estimateMachiningTime(tp)).toBeCloseTo((Math.PI * 10) / 1000, 9);
+
+    // The full boss: one plunge + one analytic revolution (2π·13) at cut
+    // feed — the estimate must account for the full arc, not the chords.
+    const boss = bossTp();
+    expect(estimateMachiningTime(boss)).toBeGreaterThanOrEqual((2 * Math.PI * 13) / 1000 - 1e-9);
   });
 });

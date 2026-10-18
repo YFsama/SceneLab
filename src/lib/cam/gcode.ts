@@ -315,6 +315,21 @@ export function generateMultiToolGCode(
 
 const RAPID_RATE = 5000; // mm/min
 
+/** Directed sweep (rad, in [0, 2π)) from a to b around center in the
+ * scene (x, z) planning plane — the flat G17 plane every arc lives in. */
+function arcSweep(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  center: { x: number; z: number },
+  ccw: boolean,
+): number {
+  const a0 = Math.atan2(a.z - center.z, a.x - center.x);
+  const a1 = Math.atan2(b.z - center.z, b.x - center.x);
+  let d = ccw ? a1 - a0 : a0 - a1;
+  d = ((d % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  return d;
+}
+
 /** Estimate machining time in minutes. Returns 0 for non-positive feed rates. */
 export function estimateMachiningTime(toolpath: Toolpath): number {
   let totalTime = 0;
@@ -322,14 +337,21 @@ export function estimateMachiningTime(toolpath: Toolpath): number {
   // Walk the moves in execution order so each segment's length reflects the
   // real motion (including rapid↔cut transitions). Rapids move at the rapid
   // rate; cuts at the per-move or default feed rate (guarding feed > 0).
-  // Times are computed from the ORIGINAL polyline even when the post emits
-  // fitted arcs: a chord understates its arc by Δθ²/24 per segment, well
-  // under 0.01 % at CAM subdivision densities — the estimate's accuracy is
-  // unchanged by arc filtering.
+  // Moves tagged `arcTo` (true arcs from analytic cylinder tags) are
+  // measured along the ARC — r·sweep. The old chord-walk was fine while
+  // arcs were a post-only re-fit over dense polylines (chord understates
+  // its arc by Δθ²/24 per segment, < 0.01 % at CAM densities), but a true
+  // 120° arc move stores only its two endpoints: the chord would understate
+  // by 4.7 %, so the tag is what keeps the estimate honest.
   const moves = toolpath.points;
   for (let i = 1; i < moves.length; i++) {
+    const prev = moves[i - 1]!;
     const curr = moves[i]!;
-    const seg = distance(moves[i - 1]!, curr);
+    const tag = curr.arcTo;
+    const seg = tag
+      ? Math.hypot(prev.x - tag.center.x, prev.z - tag.center.z) *
+        arcSweep(prev, curr, tag.center, tag.ccw)
+      : distance(prev, curr);
     if (curr.rapid) {
       totalTime += seg / RAPID_RATE;
     } else {
