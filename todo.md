@@ -78,9 +78,9 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - [x] ~~锥面/沉头孔溯源~~（2026-10-14 Unreleased：FaceSource 扩为 plane/cylinder/cone/sphere/torus 联合；cone 完整链路（分类器两阶段定轴 + createRevolve 构造打标 + STEP CONICAL_SURFACE/CIRCLE + OCCT 往返 <0.05%）；sphere 代数拟合；torus/plane 就绪无生产者。**剩 tree.ts 沉头孔特征侧直接打标未做**——分类器已覆盖 revolve/倒角路径）
 - [ ] **环形（多环）cap 面**：孔穿透的平面 cap 目前保持刻面内边界——Face 模型支持多环后，⌀ 孔的 STEP 才能完全收缩（当前孤立带 11.6×、共享轮辋仍刻面）
 - [ ] **锥分类器保守区**：被切割成多行顶点的锥壁、45° 临界二面角光滑合并组不打标；尖锥 STEP 走弦边界不成 CIRCLE 管形（记录为已知限制）
-- [ ] 球面分类窄窗：短圆柱带（L≲1.2r）在圆柱拟合病态时可错标 sphere（法向门 0.85 挡不住；正常路径负例已钉）；horn torus 顶点恰落轴时 STEP same_sense 退化（无生产者，理论）
-- [ ] **斜轴解析分类端到端不通**（2026-10-14 实测）：jacobiEigen 修复后斜向法向散布已能收敛出正确轴，但 fromManifold 输出去抽稀把旋转体壁面合并成 ~60° 弧的大面，相邻二面角超过 smooth-group 阈值 → 组链断裂 → 斜壁不打标（轴对齐对照 24 tag / 斜向 0）。缓解已做：translateBody/rotateBody 现在携带并变换解析标签（先分类后旋转可保住 tag）；根治需查 fromManifold 的合并阈值或旋转前分类
-- [ ] createRevolve 输出过不了 exact 布尔（'empty-exact-result'，含轴对齐轮廓）——revolve 体只能走构造打标路径，不能参与重分类（2026-10-14 实测记录）
+- [ ] 球面分类窄窗：短圆柱带（L≲1.2r）在圆柱拟合病态时可错标 sphere（法向门 0.85 挡不住；**整环**带负例已钉，**弧形**带（覆盖<300° 单行壁）负例未钉——探针实测 h=5/r=10 错标 R=10.31、h=12 错标 R=11.66，为既有行为非回归）；horn torus 顶点恰落轴时 STEP same_sense 退化（无生产者，理论）
+- [x] ~~斜轴解析分类端到端不通~~（2026-10-14 pass#37 修复：真根因是圆拟合验证不容忍镶嵌壁弦点（弦高>0.1%·r 容差）而非分组断链；严格 Kåsa 先行零漂移 + 最小包围圆+局部弦高容忍兜底；斜钻金测钉死 axis/radius/单共享 tag。锥/球弦容忍已于同日补齐（fitRingChordTolerant 聚簇+平面内拟合、球外接参考+组级面片弦高；斜钻锥 tag <1e-4 金测））
+- [x] ~~createRevolve 输出过不了 exact 布尔~~（2026-10-14 pass#37 修复：扫掠绕向朝内（体积 −390 被绝对值掩盖）+ manifold-3d@3.5.1 无 invert() 方法（TypeError 被 catch 吞）；源头规范 profile 朝向 + 纯 JS 翻绕向 + 轴上退化带跳过/极点扇三角化。**残留**：revolve 体与全包含盒的 intersect 仍返回空（union/difference/部分重叠 intersect 正常、原生圆柱同场景正常）——疑似 manifold-3d 边缘行为，待深挖）
 - [ ] **凹边精确圆角**：选到 reflex 边时精确路径整体拒绝→覆盖层回退（减材刀具无法加材）；需要加材侧补偿或真 rolling-ball
 - [ ] **非凸抽壳 Worker 化**：同步 res-40 体素内部体 ~0.2s（签名约束为同步）
 - [ ] **隐藏线消除**（工程图审计 B5，L）：深度分类投影段 + 虚线隐藏样式——圆柱/剖切的线汤可读性
@@ -113,16 +113,20 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 ### E2. CAM 后续（pass #34 后；算法细节见 docs/cnc-algorithms.md）
 
 - [x] ~~Engrave 雕刻 + 单线字文本~~（pass #35 完成：固定深度 E1 + Hershey 文本→刀路全链；下一步 E2 真 V-carve 变深）
-- [ ] **Adaptive/trochoidal 摆线粗加工 v1**（#35 候选：参考刀路偏移法+角落局部 trochoid；前置=多环 Clipper offset 基建 ✅ 已落地 `cam/offsetRegion.ts`（2026-10-14，Unreleased）；验收=5 金样无过切、啮合角≤目标×1.2、弧段>60%）
+- [x] ~~Adaptive/trochoidal 摆线粗加工 v1~~（2026-10-22 Unreleased：`cam/trochoid.ts` 参考路径偏移法 + 角落轨道链；7 金样 0 过切/啮合 26–35°/弧占比 75–91%/确定性；审查 P1（分裂分量 dust 层谱系失效裸插）已修并加裸插检测器；UI 中英接线；v2 候选=啮合面积闭环、KeepToolDownRatio、真摆线坡）
 - [ ] **Rest machining heightmap v1**（#35 候选：Float32 worker 2.6MB@0.25mm；残料行区间直接接现有 scanline 管线，零新依赖；验收=空切率<40%）
 - [x] ~~环切扩展到凹形区域~~（2026-10-14 Unreleased：Clipper 区域偏置落地，凹形+岛屿环切、腐蚀分裂分量独立加工；L 件环族覆盖 53.8%→100%）
-- [ ] 岛屿口袋的螺旋下刀名义点优化（offset+helix+岛时名义点落在岛环上、向质心搜索全程入岛 → 恒回退线性坡；安全但次优，审查 P3）
-- [ ] 轮廓补偿可选切换 round join（offsetRegion 已支持，行为变化：需同步改 index.test.ts 的盒轮廓 4 顶点断言）
+- [x] ~~岛屿口袋的螺旋下刀名义点优化~~（2026-10-22 Unreleased：多候选名义点（4 分位+分量内切圆心），tube 螺旋下刀金测钉死，无岛行为不变）
+- [x] ~~轮廓补偿切换 round join~~（2026-10-22 Unreleased：默认 round + arcTolerance 0.005，盒轮廓四角 1×90° G2；断言已按新几何重导出）
 - [ ] 对刀原点选择 UI（G54 已有输出开关；原点拾取/WCS 预览未做）
+- [ ] tab 跨弧角的 kink 剪断直测（round join 后 tab 落位测试都在直边上；#33 ramp×tab 二分只部分覆盖）
 - [x] ~~Setup sheet 工艺卡~~ / ~~毛坯可视化+按刀着色~~ / ~~G81/G82+G54~~ / ~~钻孔编辑重探~~ / ~~保名后缀~~ / ~~侧壁精光~~ / ~~环切+螺旋下刀（凸形）~~（pass #34 完成）
 - [x] ~~顺铣方向翻正~~（pass #34 审查以切屑仿真纠正 M3=材料在右；v0.28.0 生效）
 
 ### E. 基础设施 / 流程
+
+- [x] ~~SMLib Rust 侧服务 P3 v1~~（2026-10-22 Unreleased：src-tauri/src/sm 三命令（status/primitive/boolean）+ vendor/smmesh.cpp 面溯源 shim + fetch 脚本 + smClient 前端客户端；cargo 25/25 双模式、体积对解析值精确、tag<1e-9、无 DLL 降级。**纯 lib 层未接 UI**）
+- [ ] SMLib 服务跟进：①UI/特征树接线（图元创建走 SMLib 精确 tag、布尔回退链插入 SMLib 档）②2000+ 循环长 soak 泄漏复测（500 次 delta 0.3–1MB 判噪声，未彻底排除 <2KB/cycle 缓存增长）③extract 内孔环（多环面）④布尔新建面的 tag 生成（现无，内核行为）⑤sm_status 内核真实版本号
 
 - [ ] **NSIS 安装器实机验证**（pass #32）：currentUser/SimpChinese+English/语言选择器——v0.26.0 CI 已成功产出 `x64-setup.exe`（构建管线走通），剩下载实机确认安装界面与每用户安装行为；附带修复 release.yml 便携版上传硬编码 0.1.0 文件名的遗留 bug（曾致 v0.26.0 首次出包失败，a0f88ab）
 - [ ] **工程图导出分辨率随窗口**（pass #32 行为升级）：DrawingCanvas 背衬跟随容器（原固定 800 逻辑分辨率）——小窗导出可低于旧分辨率；如需稳定输出可加导出最小分辨率钳制

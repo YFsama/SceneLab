@@ -305,6 +305,47 @@ export function createRevolve(params: RevolveParams): SolidBody {
   const dir = normalize(axis.direction);
   const origin = axis.origin;
 
+  // Outward-winding canonicalisation: the sweep generates each band quad as
+  // [p_s, pNext_s, pNext_{s+1}, p_{s+1}], whose normal is cross(Δp, e_θ)·rΔ =
+  // (Δr·e_z − Δz·e_r)·rΔ in the local (radial e_r, axis e_z) frame with a
+  // right-handed +angle sweep — that points OUT of the solid only when the
+  // profile's signed area in (e_r, e_z) is NEGATIVE (interior to the right
+  // of each edge). Profiles wound the other way swept inward: Manifold read
+  // the revolved bands at volume −390 and every exact boolean on a revolve
+  // fell back to the voxel path (the kernel's own signed volume is
+  // absolute-valued, so nothing else noticed). Reverse once, up front, so
+  // rings, caps, tags and windings are all built from the canonical order.
+  const e_r0 = (() => {
+    // The profile lies in a half-plane bounded by the axis, so every
+    // OFF-axis point shares the same radial direction — derive the basis
+    // from the first point that has one. The old arbitrary fallback
+    // (profile[0] on the axis ⇒ pick any ⟂ vector) is perpendicular to the
+    // profile plane for sketches like [(0,0,0),(5,0,0),(5,0,2),(0,0,2)]
+    // around z: every projection collapses to r = 0, the signed area reads
+    // 0, no reverse happens and the sweep stays inward-wound (review P2-1 —
+    // reachable from the sketch revolve with the first point on the axis).
+    for (const p of profile) {
+      const rel = { x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z };
+      const along = rel.x * dir.x + rel.y * dir.y + rel.z * dir.z;
+      const perp = { x: rel.x - dir.x * along, y: rel.y - dir.y * along, z: rel.z - dir.z * along };
+      const len = Math.hypot(perp.x, perp.y, perp.z);
+      if (len >= 1e-10) return { x: perp.x / len, y: perp.y / len, z: perp.z / len };
+    }
+    // Entirely on the axis — the sweep is degenerate; any basis is inert.
+    return { x: 1, y: 0, z: 0 };
+  })();
+  let signedArea = 0;
+  for (let i = 0; i < n; i++) {
+    const a = profile[i]!;
+    const b = profile[(i + 1) % n]!;
+    const ra = (a.x - origin.x) * e_r0.x + (a.y - origin.y) * e_r0.y + (a.z - origin.z) * e_r0.z;
+    const za = (a.x - origin.x) * dir.x + (a.y - origin.y) * dir.y + (a.z - origin.z) * dir.z;
+    const rb = (b.x - origin.x) * e_r0.x + (b.y - origin.y) * e_r0.y + (b.z - origin.z) * e_r0.z;
+    const zb = (b.x - origin.x) * dir.x + (b.y - origin.y) * dir.y + (b.z - origin.z) * dir.z;
+    signedArea += ra * zb - rb * za;
+  }
+  const profileLoop = signedArea * Math.sign(angle) > 0 ? [...profile].reverse() : profile;
+
   const vertices: Vec3[] = [];
   const faces: Face[] = [];
 
@@ -323,7 +364,7 @@ export function createRevolve(params: RevolveParams): SolidBody {
     const sin = Math.sin(a);
     const ring: Vec3[] = [];
 
-    for (const p of profile) {
+    for (const p of profileLoop) {
       // Translate point relative to axis origin
       const rel = { x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z };
       // Project onto axis to get parallel component
@@ -359,23 +400,53 @@ export function createRevolve(params: RevolveParams): SolidBody {
 
   // Side faces, wrapping the profile loop (pNext) so the cross-section closes.
   // On a full turn the band after the last ring wraps back to ring 0.
-  // Faces are indexed s·n + p (caps are pushed after this loop), so each
-  // profile edge's band is a strided slice — tagged below from the exact
-  // revolve geometry (revolveBandSource).
+  // Tags ride along per emitted face (pendingTags) — the old s·n + p index
+  // arithmetic breaks once a band is skipped.
   const bandSources: Array<FaceSource | null> = [];
   for (let p = 0; p < n; p++) {
     const pNext = (p + 1) % n;
-    bandSources.push(revolveBandSource(profile[p]!, profile[pNext]!, origin, dir));
+    bandSources.push(revolveBandSource(profileLoop[p]!, profileLoop[pNext]!, origin, dir));
   }
+  // Squared distance of a profile point from the revolve axis.
+  const radialLenSq = (p: Vec3): number => {
+    const rel = { x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z };
+    const along = rel.x * dir.x + rel.y * dir.y + rel.z * dir.z;
+    const px = rel.x - dir.x * along, py = rel.y - dir.y * along, pz = rel.z - dir.z * along;
+    return px * px + py * py + pz * pz;
+  };
+  const pendingTags: Array<FaceSource | null> = [];
   for (let s = 0; s < segments; s++) {
     const nextRing = (s + 1) % ringCount;
     for (let p = 0; p < n; p++) {
       const pNext = (p + 1) % n;
+      // An edge with BOTH endpoints on the axis sweeps to a zero-area quad
+      // (every generated vertex lands on the axis line). Emitting it poisons
+      // the mesh with degenerate faces whose coincident edges read as
+      // non-manifold, so every exact boolean on the body falls back to the
+      // voxel path (32 degenerate quads → 3 non-manifold edges on the
+      // classic on-axis rectangle profile). The band contributes no surface
+      // — skip it. An edge with ONE endpoint on the axis sweeps a valid
+      // triangular band (the disc caps of a solid revolve) — but the raw
+      // quad carries the axis point twice (it is rotation-invariant), whose
+      // degenerate closing edge checkManifold counts as a 32-face
+      // "non-manifold" self-edge. Collapse it into an actual triangle.
+      const pOn = radialLenSq(profileLoop[p]!) < 1e-20;
+      const qOn = radialLenSq(profileLoop[pNext]!) < 1e-20;
+      if (pOn && qOn) continue;
       const v0 = vertices[s * n + p]!;
       const v1 = vertices[s * n + pNext]!;
       const v2 = vertices[nextRing * n + pNext]!;
       const v3 = vertices[nextRing * n + p]!;
-      faces.push({ id: genId('face'), vertices: [v0, v1, v2, v3], normal: computeFaceNormal(v0, v1, v2) });
+      if (qOn) {
+        // v2 ≡ v1 (axis point does not move between rings): [v0, v1, v3].
+        faces.push({ id: genId('face'), vertices: [v0, v1, v3], normal: computeFaceNormal(v0, v1, v3) });
+      } else if (pOn) {
+        // v3 ≡ v0: [v0, v1, v2].
+        faces.push({ id: genId('face'), vertices: [v0, v1, v2], normal: computeFaceNormal(v0, v1, v2) });
+      } else {
+        faces.push({ id: genId('face'), vertices: [v0, v1, v2, v3], normal: computeFaceNormal(v0, v1, v2) });
+      }
+      pendingTags.push(bandSources[p]!);
     }
   }
 
@@ -424,12 +495,12 @@ export function createRevolve(params: RevolveParams): SolidBody {
   alignWindingToNormal(faces);
 
   // Apply the analytic band tags AFTER winding alignment (which may reverse
-  // vertex loops — the tag is pure geometry and survives that).
-  for (let s = 0; s < segments; s++) {
-    for (let p = 0; p < n; p++) {
-      const src = bandSources[p]!;
-      if (src) faces[s * n + p]!.source = src;
-    }
+  // vertex loops — the tag is pure geometry and survives that). Side faces
+  // were pushed first, caps after, and alignWindingToNormal does not reorder
+  // — pendingTags stays index-aligned with the leading block of `faces`.
+  for (let i = 0; i < pendingTags.length; i++) {
+    const src = pendingTags[i]!;
+    if (src) faces[i]!.source = src;
   }
 
   return {

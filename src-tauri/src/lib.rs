@@ -5,6 +5,31 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod sm;
+
+/// Kernel availability for the exact-geometry (SMLib) service. Never rejects:
+/// without the native DLLs it answers { available: false, error } so the
+/// frontend can cache-and-fall-back to the JS geometry path.
+#[tauri::command]
+fn sm_status() -> sm::SmStatusWire {
+    sm::status_impl()
+}
+
+/// Build one exact primitive and return its tessellation with per-face
+/// analytic provenance. Resolves with { ok: false, error } on kernel or
+/// parameter errors (never rejects; the frontend classifies via `ok`).
+#[tauri::command]
+fn sm_primitive(req: sm::SmPrimitiveReq) -> sm::SmResultWire {
+    sm::primitive_impl(&req)
+}
+
+/// Exact two-body boolean (union / difference / intersect). Same envelope
+/// contract as sm_primitive.
+#[tauri::command]
+fn sm_boolean(req: sm::SmBooleanReq) -> sm::SmResultWire {
+    sm::boolean_impl(&req)
+}
+
 /// How many autosave snapshots to keep before pruning the oldest.
 const AUTOSAVE_KEEP: usize = 20;
 
@@ -186,6 +211,9 @@ pub fn run() {
             save_project_file,
             open_project_file,
             save_text_file,
+            sm_status,
+            sm_primitive,
+            sm_boolean,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

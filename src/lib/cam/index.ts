@@ -43,6 +43,10 @@ export type { Point2, SilhouetteLoop, TopSilhouette } from './silhouette';
 // robust replacement for single-loop offsetPolygon inside the generators.
 export { offsetRegion } from './offsetRegion';
 export type { RegionComponent, OffsetRegionOptions } from './offsetRegion';
+// Adaptive (trochoidal) clearing planner — the pocketStrategy 'adaptive'
+// geometry core, exported for direct testing/telemetry.
+export { planAdaptiveClearing, minOrbitRadius } from './trochoid';
+export type { AdaptiveClearingOptions, AdaptiveClearingPlan, AdaptiveEntryOrbit } from './trochoid';
 export { generateOperationToolpath, defaultCamSetup } from './setup';
 export type { CAMSetup, CAMOperation } from './setup';
 export { computeFeedsAndSpeeds } from './feedsSpeeds';

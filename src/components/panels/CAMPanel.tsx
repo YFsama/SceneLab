@@ -71,6 +71,7 @@ function stripOpExtras(p: CAMParameters): CAMParameters {
   delete out['springPass'];
   delete out['rampEntry'];
   delete out['pocketStrategy'];
+  delete out['adaptiveEngagementDeg'];
   delete out['helixEntry'];
   delete out['wallFinishPass'];
   delete out['drillCycle'];
@@ -222,7 +223,10 @@ export function CAMPanel() {
 
   // Pocket-only drafts (pass #34, same omit/undefined rule; the strategy
   // select is always-concrete like `direction` — 'raster' is the default).
-  const [pocketStrategy, setPocketStrategy] = useState<'raster' | 'offset'>('raster');
+  // adaptiveEngagement rides along only for the adaptive strategy (pass #37),
+  // the way dwellSeconds rides only for the dwell drill cycle.
+  const [pocketStrategy, setPocketStrategy] = useState<'raster' | 'offset' | 'adaptive'>('raster');
+  const [adaptiveEngagement, setAdaptiveEngagement] = useState(30);
   const [helixEntry, setHelixEntry] = useState(false);
   const [wallFinishPass, setWallFinishPass] = useState(false);
   // Drill-only drafts (pass #34): the cycle select is always-concrete
@@ -403,12 +407,18 @@ export function CAMPanel() {
     }
     if (operation === 'pocket') {
       out.pocketStrategy = pocketStrategy; // select — always concrete ('raster' default)
+      if (pocketStrategy === 'adaptive') {
+        out.adaptiveEngagementDeg = adaptiveEngagement; // always concrete (30 default)
+      } else if (mode === 'update') {
+        out.adaptiveEngagementDeg = undefined;
+      }
       if (helixEntry) out.helixEntry = true;
       else if (mode === 'update') out.helixEntry = undefined;
       if (wallFinishPass) out.wallFinishPass = true;
       else if (mode === 'update') out.wallFinishPass = undefined;
     } else if (mode === 'update') {
       out.pocketStrategy = undefined;
+      out.adaptiveEngagementDeg = undefined;
       out.helixEntry = undefined;
       out.wallFinishPass = undefined;
     }
@@ -525,6 +535,7 @@ export function CAMPanel() {
     setSpringPass(!!op.params.springPass);
     setRampEntry(!!op.params.rampEntry);
     setPocketStrategy(op.params.pocketStrategy ?? 'raster');
+    setAdaptiveEngagement(op.params.adaptiveEngagementDeg ?? 30);
     setHelixEntry(!!op.params.helixEntry);
     setWallFinishPass(!!op.params.wallFinishPass);
     setDrillCycle(op.params.drillCycle ?? 'peck');
@@ -1039,7 +1050,8 @@ export function CAMPanel() {
            * selectable even when the pocket has through holes (the generator
            * falls back to raster itself; the title says so, no UI coupling) —
            * plus helix entry and wall finish switches (omit/undefined rule,
-           * see opParams). */}
+           * see opParams). The adaptive strategy (pass #37) adds its
+           * engagement-angle input, shown only while selected. */}
           {operation === 'pocket' && (
             <div className="space-y-1.5 rounded bg-surface p-2">
               <div>
@@ -1047,14 +1059,33 @@ export function CAMPanel() {
                 <select
                   id="cam-pocket-strategy"
                   value={pocketStrategy}
-                  onChange={(e) => setPocketStrategy(e.target.value === 'offset' ? 'offset' : 'raster')}
+                  onChange={(e) => setPocketStrategy(
+                    e.target.value === 'offset' ? 'offset' : e.target.value === 'adaptive' ? 'adaptive' : 'raster',
+                  )}
                   title={t('cam.offsetHint')}
                   className="w-full px-2 py-1 bg-surface border border-panel-border rounded text-text-primary"
                 >
                   <option value="raster">{t('cam.raster')}</option>
                   <option value="offset">{t('cam.offset')}</option>
+                  <option value="adaptive">{t('cam.adaptive')}</option>
                 </select>
               </div>
+              {pocketStrategy === 'adaptive' && (
+                <div>
+                  <label htmlFor="cam-adaptive-engagement" className="text-text-muted text-[10px]">{t('cam.adaptiveEngagement')}</label>
+                  <input
+                    id="cam-adaptive-engagement"
+                    type="number"
+                    min={5}
+                    max={60}
+                    step={1}
+                    value={adaptiveEngagement}
+                    onChange={(e) => setAdaptiveEngagement(Number(e.target.value))}
+                    title={t('cam.adaptiveHint')}
+                    className="w-full px-1 py-1 bg-surface border border-panel-border rounded text-text-primary"
+                  />
+                </div>
+              )}
               <div className="flex flex-wrap gap-3">
                 <label htmlFor="cam-helix-entry" className="flex items-center gap-1.5 text-text-secondary">
                   <input

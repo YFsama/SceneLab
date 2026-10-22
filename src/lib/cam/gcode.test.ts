@@ -496,7 +496,7 @@ describe('G2/G3 arc fitting — round parts', () => {
     const tp = cylinderTp();
     const arcs = parseMoves(generateGCode(tp)).filter((m) => m.code === 'G2' || m.code === 'G3');
     expect(arcs.length).toBeGreaterThanOrEqual(3);
-    const trueRadius = 15 + 3 / Math.cos(Math.PI / 128); // miter offset vertex radius
+    const trueRadius = 15 + 3; // round-join offset: vertices ON the true offset circle
     let cursor = 0;
     for (const a of arcs) {
       const s = findPointIdx(tp, a.start, cursor);
@@ -539,7 +539,10 @@ describe('G2/G3 arc fitting — round parts', () => {
 });
 
 describe('G2/G3 arc fitting — straight parts and breaks', () => {
-  it('box contour stays pure G1 — straight walls never become arcs', () => {
+  it('box contour posts one G2 per corner at the tool radius — straight walls stay G1', () => {
+    // Round-join cutter compensation sweeps a true quarter circle of radius
+    // r + allowance about each box corner; the arc filter re-merges each
+    // corner's join polyline into a single G2 (climb runs the outer loop CW).
     const tp = generateContourToolpath(createBox(50, 10, 30), em6, {
       ...PARAMS,
       depthOfCut: 10,
@@ -547,9 +550,40 @@ describe('G2/G3 arc fitting — straight parts and breaks', () => {
       stockBottom: 0,
     });
     const g = generateGCode(tp);
-    expect(g.match(/^G[23] /gm)).toBeNull();
     expect(g.match(/^G1 /gm)).not.toBeNull();
-    expect(g.match(/^G1 /gm)!.length).toBeGreaterThan(0);
+    const arcs = parseMoves(g).filter((m) => m.code === 'G2' || m.code === 'G3');
+    // One level → exactly four corner arcs, all G2 (CW), radius = offset.
+    expect(arcs).toHaveLength(4);
+    const offset = em6.diameter / 2; // PARAMS carries no allowance
+    const centers = arcs.map((a) => a.center!);
+    for (const c of centers) {
+      expect([25, -25]).toContain(Math.round(c.x));
+      expect([15, -15]).toContain(Math.round(c.y));
+    }
+    expect(new Set(centers.map((c) => `${Math.round(c.x)},${Math.round(c.y)}`)).size).toBe(4);
+    for (const a of arcs) {
+      expect(a.code).toBe('G2');
+      const rStart = Math.hypot(a.start.x - a.center!.x, a.start.y - a.center!.y);
+      expect(rStart).toBeCloseTo(offset, 2);
+      // Each arc sweeps the quarter corner (~90°, never a stray sliver).
+      const u0 = Math.atan2(a.start.y - a.center!.y, a.start.x - a.center!.x);
+      const u1 = Math.atan2(a.end.y - a.center!.y, a.end.x - a.center!.x);
+      let sweep = u0 - u1; // CW
+      sweep = ((sweep % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+      expect(sweep).toBeCloseTo(Math.PI / 2, 1);
+    }
+    // With arc fitting disabled (arcTolerance 0) the corners degrade to the
+    // offset polyline — no G2/G3 anywhere — and every corner point sits
+    // within the offsetter's 5 µm arcTolerance budget of the true arc.
+    const plain = generateGCode(tp, 'grbl', { arcTolerance: 0 });
+    expect(plain.match(/^G[23] /gm)).toBeNull();
+    for (const p of tp.points) {
+      const du = Math.abs(p.x) - 25;
+      const dv = Math.abs(p.z) - 15;
+      if (du > 0 && dv > 0) {
+        expect(Math.abs(Math.hypot(du, dv) - offset)).toBeLessThanOrEqual(0.005 + 1e-6);
+      }
+    }
   });
 
   it('arcs never span a rapid or a depth change', () => {

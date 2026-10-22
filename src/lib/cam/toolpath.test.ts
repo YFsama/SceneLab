@@ -11,7 +11,28 @@ import { booleanOpManifold, warmUpBooleanEngine } from '../geometry/booleanManif
 import { translateBody } from '../geometry/operations';
 import { taggedCylinderBody } from './arcSources.test';
 import type { ToolDefinition, CAMParameters, Toolpath, ToolpathPoint } from './types';
-import { polygonArea, topSilhouette, offsetPolygon, pointInPolygon, type Point2 } from './silhouette';
+import { polygonArea, topSilhouette, pointInPolygon, type Point2 } from './silhouette';
+import { offsetRegion } from './offsetRegion';
+
+/**
+ * Round-join offset geometry of the 50×30 test box with the ⌀6 tool (r = 3):
+ * straight runs on the 56×36 rectangle (|x| ≤ 28 / |z| ≤ 18) plus a quarter
+ * arc of radius r about each box corner (±25, ±15). Loop perimeter
+ * L = 2·(50 + 30) + 2π·r (the four miter corner legs r+r replaced by π/2·r).
+ */
+const ROUND_R = 3;
+const ROUND_L = 2 * (50 + 30) + 2 * Math.PI * ROUND_R;
+
+/** True when (x, z) lies on that round-join offset loop (chords of the join
+ *  arcs may dip 5 µm inside — the offsetter's arcTolerance). */
+const onOffsetLoop = (x: number, z: number): boolean => {
+  const onV = Math.abs(Math.abs(x) - 28) < 1e-6 && Math.abs(z) <= 15 + 1e-6;
+  const onH = Math.abs(Math.abs(z) - 18) < 1e-6 && Math.abs(x) <= 25 + 1e-6;
+  if (onV || onH) return true;
+  const du = Math.abs(x) - 25;
+  const dv = Math.abs(z) - 15;
+  return du > 0 && dv > 0 && Math.abs(Math.hypot(du, dv) - ROUND_R) < 2e-3;
+};
 
 const tool: ToolDefinition = {
   id: 'em-6mm',
@@ -625,10 +646,11 @@ describe('generatePocketToolpath', () => {
 describe('generateContourToolpath', () => {
   // The audit case: cylinder(15, 20, 32) — was a rectangle through the
   // extremes; must be a 32-segment loop outside radius 15 by the cutter
-  // radius. With a true MITER offset the polygon EDGES sit exactly 3 mm off
-  // the 32-gon's flats and the vertices overshoot slightly
-  // (apothem'/cos(π/32) ≈ 18.015) — both directions safe for the wall.
-  it('cylinder contour is a 32-gon offset by the cutter radius', () => {
+  // radius. With ROUND joins the loop is the 32 offset flats joined by 32
+  // corner arcs of radius r about the 32-gon's vertices — every point sits
+  // exactly r off the silhouette (the geometrically exact cutter-centre
+  // locus; the legacy miter vertices overshot to 18.016 instead).
+  it('cylinder contour is the 32-gon offset by the cutter radius, corners rounded', () => {
     const body = createCylinder(15, 20, 32);
     const tp = generateContourToolpath(body, tool, {
       ...params,
@@ -638,10 +660,26 @@ describe('generateContourToolpath', () => {
     });
     const offset = tool.diameter / 2;
     const distinct = new Set(tp.cuttingMoves.map((p) => `${p.x.toFixed(3)},${p.z.toFixed(3)}`));
-    expect(distinct.size).toBe(32);
+    // 32 flats + 32 discretized corner arcs — many more than the miter 32,
+    // and the loop perimeter is the n-gon perimeter plus a full 2π·r.
+    expect(distinct.size).toBeGreaterThanOrEqual(64);
+    const run = contourRuns(tp)[0]!;
+    expect(planarArc(run)).toBeCloseTo(2 * 32 * 15 * Math.sin(Math.PI / 32) + 2 * Math.PI * offset, 1);
     for (const p of tp.cuttingMoves) {
-      expect(Math.hypot(p.x, p.z)).toBeGreaterThanOrEqual(15 + offset - 0.01);
-      expect(Math.hypot(p.x, p.z)).toBeLessThanOrEqual(15 + offset + 0.02);
+      // Never outside the true offset circle by more than quantization…
+      expect(Math.hypot(p.x, p.z)).toBeLessThanOrEqual(15 + offset + 2e-3);
+      // …and never closer than r − ε to the 32-gon silhouette (cutter
+      // compensation holds on the flats AND the corner arcs).
+      const dSil = Math.min(
+        ...Array.from({ length: 32 }, (_, i) => {
+          const a0 = ((2 * Math.PI * i) / 32);
+          const v = { u: 15 * Math.cos(a0), v: 15 * Math.sin(a0) };
+          const a1 = (2 * Math.PI * (i + 1)) / 32;
+          const w = { u: 15 * Math.cos(a1), v: 15 * Math.sin(a1) };
+          return distToSegment({ u: p.x, v: p.z }, v, w);
+        }),
+      );
+      expect(dSil).toBeGreaterThanOrEqual(offset - 0.01);
     }
     assertPlungeFeeds(tp, params.plungeRate);
   });
@@ -655,11 +693,10 @@ describe('generateContourToolpath', () => {
       stockBottom: 0,
     });
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
-    // True miter: every offset EDGE lies exactly r outside a wall — the path
-    // rectangle is (25+r) × (15+r) and the corners are mitered out to
-    // r·√2 diagonally. (The old normalized-bisector version left the edges
-    // only r·cos45° out — a 0.88 mm gouge into every wall this test used
-    // to bless.)
+    // Round join: every offset EDGE sits exactly r outside a wall, and the
+    // four corners sweep true quarter arcs of radius r about the box corners
+    // — every point clears the wall by exactly the full radius (the legacy
+    // miter version overshot each corner diagonally to r·√2 instead).
     const r = tool.diameter / 2;
     const us = tp.cuttingMoves.map((p) => Math.abs(p.x));
     const vs = tp.cuttingMoves.map((p) => Math.abs(p.z));
@@ -716,8 +753,10 @@ describe('generateContourToolpath — cut direction (climb/conventional)', () =>
     // this inverted; 0.28.0 fixes it.
     expect(aC).toBeLessThan(0);
     expect(aV).toBeGreaterThan(0);
-    // Same offset rectangle either way: (50 + 2r) × (30 + 2r), same start.
-    expect(Math.abs(aC)).toBeCloseTo(56 * 36, 1);
+    // Same offset rectangle either way: (50 + 2r) × (30 + 2r) with the four
+    // corners rounded at radius r — the shoelace area is the miter rectangle
+    // minus the four (1 − π/4)·r² corner bits, same start either way.
+    expect(Math.abs(aC)).toBeCloseTo(56 * 36 - (4 - Math.PI) * 3 * 3, 0); // chords of the join arcs shave ~0.06 mm²
     expect(aC).toBeCloseTo(-aV, 6);
     expect(contourRuns(conv)[0]![0]!.x).toBeCloseTo(contourRuns(climb)[0]![0]!.x, 6);
     expect(contourRuns(conv)[0]![0]!.z).toBeCloseTo(contourRuns(climb)[0]![0]!.z, 6);
@@ -744,18 +783,15 @@ describe('generateContourToolpath — cut direction (climb/conventional)', () =>
 });
 
 describe('generateContourToolpath — holding tabs', () => {
-  // Box 50×10×30 → offset rectangle 56 × 36 (perimeter 184, 4 vertices);
-  // levels [8,6,4,2,0] with depthOfCut 2, final level 0, tabTop = 0 + 3.
+  // Box 50×10×30 → offset loop 56 × 36 with the four corners rounded at
+  // radius 3 (perimeter ROUND_L = 2·(50+30) + 2π·3 ≈ 178.85); levels
+  // [8,6,4,2,0] with depthOfCut 2, final level 0, tabTop = 0 + 3.
   const box = createBox(50, 10, 30);
   const base = { ...params, depthOfCut: 2, stockTop: 10, stockBottom: 0 };
   const tabs = { count: 2, height: 3, width: 6 };
 
-  /** True when (x, z) lies on the 56 × 36 offset rectangle boundary. */
-  const onOffsetRect = (x: number, z: number): boolean => {
-    const onV = Math.abs(Math.abs(x) - 28) < 1e-6 && Math.abs(z) <= 18 + 1e-6;
-    const onH = Math.abs(Math.abs(z) - 18) < 1e-6 && Math.abs(x) <= 28 + 1e-6;
-    return onV || onH;
-  };
+  /** True when (x, z) lies on the round-join offset loop boundary. */
+  const onOffsetRect = onOffsetLoop;
 
   it('rides 3D tabs on sub-tabTop levels: flat top at tabTop, ground elsewhere', () => {
     const tp = generateContourToolpath(box, tool, { ...base, tabs });
@@ -776,9 +812,10 @@ describe('generateContourToolpath — holding tabs', () => {
     const spans = liftedArcs(final, 0);
     expect(spans).toHaveLength(2);
     for (const [s0, s1] of spans) expect(s1 - s0).toBeCloseTo(6, 6);
-    // …centred evenly by arc length (perimeter 184 → 92 apart)…
+    // …and the tabs sit centred evenly by arc length (perimeter ROUND_L →
+    // ROUND_L/2 apart)…
     const centers = spans.map(([s0, s1]) => (s0 + s1) / 2).sort((a, b) => a - b);
-    expect(centers[1]! - centers[0]!).toBeCloseTo(92, 6);
+    expect(centers[1]! - centers[0]!).toBeCloseTo(ROUND_L / 2, 1);
 
     // …and the Y truth along the arc: the flat window (6 mm tab − two 2 mm
     // ramps) sits at exactly tabTop, everything outside the intervals at
@@ -823,8 +860,8 @@ describe('generateContourToolpath — holding tabs', () => {
 
   it('wraps overlapping tab intervals across the loop seam without gouging', () => {
     // width > L/count is the only way an interval can cross the seam (centres
-    // sit half a spacing away from it); with count 3 / width 64 on the 184 mm
-    // loop the tabs overlap and must merge into one continuous ride.
+    // sit half a spacing away from it); with count 3 / width 64 on the ROUND_L
+    // ≈ 178.85 mm loop the tabs overlap and must merge into one continuous ride.
     const tp = generateContourToolpath(box, tool, {
       ...base, depthOfCut: 10, tabs: { count: 3, height: 3, width: 64 },
     });
@@ -860,9 +897,9 @@ describe('generateContourToolpath — spring pass', () => {
 
     const p = contourRuns(plain);
     const s = contourRuns(spring);
-    expect(planarArc(p[0]!)).toBeCloseTo(184, 6); // one revolution = perimeter
-    expect(planarArc(s[0]!)).toBeCloseTo(184, 6); // non-final level unchanged
-    expect(planarArc(s[1]!)).toBeCloseTo(2 * 184, 6); // final level: two revolutions
+    expect(planarArc(p[0]!)).toBeCloseTo(ROUND_L, 1); // one revolution = perimeter
+    expect(planarArc(s[0]!)).toBeCloseTo(ROUND_L, 1); // non-final level unchanged
+    expect(planarArc(s[1]!)).toBeCloseTo(2 * ROUND_L, 1); // final level: two revolutions
     for (const pt of s[1]!) expect(pt.y).toBeCloseTo(0, 6);
   });
 
@@ -883,11 +920,7 @@ describe('generateContourToolpath — spring pass', () => {
 
 describe('generateContourToolpath — ramp entry', () => {
   const body = createBox(50, 10, 30);
-  const onOffsetRect = (x: number, z: number): boolean => {
-    const onV = Math.abs(Math.abs(x) - 28) < 1e-6 && Math.abs(z) <= 18 + 1e-6;
-    const onH = Math.abs(Math.abs(z) - 18) < 1e-6 && Math.abs(x) <= 28 + 1e-6;
-    return onV || onH;
-  };
+  const onOffsetRect = onOffsetLoop; // round-join loop (straight runs + corner arcs)
 
   it('descends along the path on the first level; deeper levels still plunge', () => {
     const tp = generateContourToolpath(body, tool, {
@@ -935,9 +968,10 @@ describe('generateContourToolpath — ramp entry', () => {
     expect(b.z).toBeCloseTo(a.z, 9);
     expect(b.y).toBeCloseTo(0, 6);
     expect(b.feedRate).toBe(params.plungeRate);
-    // Classic structure: plunge + 3 vertex cuts + closure, one run.
+    // Classic structure: plunge + the loop's vertex cuts + closure, one run,
+    // and the run covers exactly one revolution of the round-join loop.
     expect(contourRuns(tp)).toHaveLength(1);
-    expect(tp.cuttingMoves).toHaveLength(5);
+    expect(planarArc(contourRuns(tp)[0]!)).toBeCloseTo(ROUND_L, 1);
   });
 });
 
@@ -947,7 +981,7 @@ describe('generateContourToolpath — review pass #33 regressions', () => {
     // [rampLen, L], so without a closing re-cut of the entry span the part
     // would stay attached to the stock by the ramp wedge — the exact failure
     // mode holding tabs exist to prevent.
-    const body = createBox(50, 10, 30); // offset loop = mitered rect ±28/±18, L = 184
+    const body = createBox(50, 10, 30); // offset loop = rounded rect, straight ±28/±18, L = ROUND_L
     const tp = generateContourToolpath(body, tool, {
       ...params, depthOfCut: 10, stockTop: 10, stockBottom: 0, rampEntry: true,
     });
@@ -959,7 +993,7 @@ describe('generateContourToolpath — review pass #33 regressions', () => {
         covered += Math.hypot(b.x - a.x, b.z - a.z);
       }
     }
-    expect(covered).toBeGreaterThanOrEqual(184 - 1e-6);
+    expect(covered).toBeGreaterThanOrEqual(ROUND_L - 5e-2); // join-arc chords shave ~0.003 mm off the true arc length
     // …and the wedge cleanup must NOT fire when a spring pass already covers
     // the full loop: the spring revolution [0, L] swallows the wedge, so the
     // total full-depth coverage is exactly two loops minus the diagonal ramp
@@ -975,8 +1009,8 @@ describe('generateContourToolpath — review pass #33 regressions', () => {
         springCovered += Math.hypot(b.x - a.x, b.z - a.z);
       }
     }
-    const rampLen = Math.min(Math.max(2 * tool.diameter, 10 / Math.tan((15 * Math.PI) / 180)), 184);
-    expect(springCovered).toBeCloseTo(2 * 184 - rampLen, 6);
+    const rampLen = Math.min(Math.max(2 * tool.diameter, 10 / Math.tan((15 * Math.PI) / 180)), ROUND_L);
+    expect(springCovered).toBeCloseTo(2 * ROUND_L - rampLen, 1);
   });
 
   it('ramp × tab: emitted chords never ride above the true envelope (two-sided bisection)', () => {
@@ -992,14 +1026,20 @@ describe('generateContourToolpath — review pass #33 regressions', () => {
     };
     const tp = generateContourToolpath(body, tool, spec);
 
-    // Offset loop for XY → arc-length mapping (mitered rect, straight edges:
-    // consecutive emitted stops never straddle a corner, so arc-length lerp
+    // Offset loop for XY → arc-length mapping: the generator's own round-join
+    // region offset (straight edges + corner-arc polylines — emitted stops
+    // are loop vertices or interpolated along its edges, so arc-length lerp
     // between them is exact).
     const sil = topSilhouette(body);
     expect(sil).not.toBeNull();
-    const path = offsetPolygon(sil!.outer.points, tool.diameter / 2);
-    expect(path).not.toBeNull();
-    const loop = path!;
+    const comps = offsetRegion(
+      sil!.outer.points,
+      sil!.islands.map((l) => l.points),
+      tool.diameter / 2,
+      { arcTolerance: 0.005 },
+    );
+    expect(comps.length).toBeGreaterThanOrEqual(1);
+    const loop = comps[0]!.outer;
     const cum: number[] = [0];
     for (let i = 1; i < loop.length; i++) {
       cum.push(cum[i - 1]! + Math.hypot(loop[i]!.u - loop[i - 1]!.u, loop[i]!.v - loop[i - 1]!.v));
@@ -1454,6 +1494,39 @@ describe('generatePocketToolpath — helical entry', () => {
     expect(wall).toBeDefined();
     expect(wall!.start.u).toBeCloseTo(-22, 6);
     expect(wall!.start.v).toBeCloseTo(-12, 6);
+  });
+
+  it('offset strategy helixes into an ISLAND annulus too (multi-candidate nominal)', () => {
+    // The tube pocket: the legacy nominal (ringPaths[1] = the grown-island
+    // ring start) marches from the island boundary straight across the
+    // island toward the outer centroid — every candidate disc overlaps the
+    // island, helixRadiusAt stays null and the entry silently degraded to
+    // the linear ramp. The nominal is now searched over the seed ring's
+    // quartile starts plus each component's max-inscribed-circle centre, so
+    // the annulus gets a true helix in the free gap.
+    const tube = createTube(15, 6, 20, 32);
+    const small = { ...tool, diameter: 3, fluteLength: 12 };
+    const tubeSpec = {
+      ...params, depthOfCut: 2, stockTop: 20, stockBottom: 0,
+      pocketStrategy: 'offset' as const, helixEntry: true,
+    };
+    const bounds = { min: { x: -15, y: 0, z: -15 }, max: { x: 15, y: 20, z: 15 } };
+    const tp = generatePocketToolpath(bounds, small, tubeSpec, { body: tube });
+    const helix = recoverHelixEntry(tp, 18);
+    expect(helix.revs).toBeGreaterThanOrEqual(1);
+    expect(helix.descent.length).toBeGreaterThanOrEqual(20 * helix.revs);
+    expect(helix.flat.length).toBeGreaterThanOrEqual(20);
+    for (const p of helix.flat) expect(p.y).toBeCloseTo(18, 9);
+    // The swept disc (radius r + ρ) fits the annular cleared region exactly:
+    // outer 15 − 1.5 = 13.5, island grown 6 + 1.5 = 7.5.
+    const R = 1.5 + helix.radius;
+    const cd = Math.hypot(helix.center.u, helix.center.v);
+    expect(cd - R).toBeGreaterThanOrEqual(7.5 - 1e-6);
+    expect(cd + R).toBeLessThanOrEqual(13.5 + 1e-6);
+    assertPlungeFeeds(tp, params.plungeRate);
+    // Deterministic: a second run plans the identical points.
+    const again = generatePocketToolpath(bounds, small, tubeSpec, { body: tube });
+    expect(again.points).toEqual(tp.points);
   });
 
   it('falls back to the legacy linear ramp when the disc cannot fit (narrow slot)', () => {

@@ -18,3 +18,5 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
+# Runtime DLL loading for the SMLib exact-geometry service (see src/sm/).
+libloading = "0.8"

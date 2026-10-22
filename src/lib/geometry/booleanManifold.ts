@@ -28,7 +28,6 @@ interface ManifoldInstance {
   volume(): number;
   numTri(): number;
   getMesh(): ManifoldMesh;
-  invert(): ManifoldInstance;
   /** Boolean ops (instance methods in Manifold 3.x). */
   add(other: ManifoldInstance): ManifoldInstance;
   subtract(other: ManifoldInstance): ManifoldInstance;
@@ -687,7 +686,7 @@ function facePrismManifold(
   const verts = [...front, ...back];
   const m = ring.length;
   const backStart = m;
-  const tris: number[] = [];
+  let tris: number[] = [];
   const pushTri = (a: number, b: number, c: number) => tris.push(a, b, c);
   // Front cap: triangles inherit the ring's winding, whose normal is ≈ +n —
   // flip the (numerically) inverted ones only. brep's triangulator returns
@@ -715,18 +714,51 @@ function facePrismManifold(
   }
   const positions: number[] = [];
   for (const v of verts) positions.push(v.x, v.y, v.z);
+  // Orientation fixed in JS (signed volume + winding flip) — manifold-3d
+  // 3.5.1 has no instance invert() and the old call threw for any
+  // inward-wound prism footprint.
+  if (signedVolume6(positions, tris) < 0) tris = flipWinding(tris);
   try {
     const mesh = new mod.Mesh({
       numProp: 3,
       vertProperties: new Float32Array(positions),
       triVerts: new Uint32Array(tris),
     });
-    const prism = mod.Manifold.ofMesh(mesh);
-    if (prism.volume() < 0) prism.invert();
-    return prism;
+    return mod.Manifold.ofMesh(mesh);
   } catch {
     return null;
   }
+}
+
+/** Signed volume ×6 of a triangle soup (Σ det[a,b,c]) — negative when the
+ *  winding faces inward. Manifold needs outward winding; manifold-3d 3.5.1
+ *  exposes NO instance invert(), so orientation is fixed here in JS by
+ *  reversing every triangle before the mesh is built. */
+function signedVolume6(positions: number[], tris: number[]): number {
+  let sum = 0;
+  for (let t = 0; t < tris.length; t += 3) {
+    const i = tris[t]! * 3, j = tris[t + 1]! * 3, k = tris[t + 2]! * 3;
+    const ax = positions[i]!, ay = positions[i + 1]!, az = positions[i + 2]!;
+    const bx = positions[j]!, by = positions[j + 1]!, bz = positions[j + 2]!;
+    const cx = positions[k]!, cy = positions[k + 1]!, cz = positions[k + 2]!;
+    sum +=
+      ax * (by * cz - cy * bz) -
+      bx * (ay * cz - cy * az) +
+      cx * (ay * bz - by * az);
+  }
+  return sum;
+}
+
+/** Reverse every triangle's winding (b↔c) — the JS equivalent of the
+ *  Manifold invert() this library version does not expose. */
+function flipWinding(tris: number[]): number[] {
+  const out = new Array<number>(tris.length);
+  for (let t = 0; t < tris.length; t += 3) {
+    out[t] = tris[t]!;
+    out[t + 1] = tris[t + 2]!;
+    out[t + 2] = tris[t + 1]!;
+  }
+  return out;
 }
 
 /** Deduplicate the per-face vertex soup into a shared vertex buffer. */
@@ -745,7 +777,7 @@ function toManifold(mod: ManifoldModule, body: SolidBody): ManifoldInstance | nu
     return i;
   };
 
-  const tris: number[] = [];
+  let tris: number[] = [];
   for (const face of body.faces) {
     const n = face.vertices.length;
     if (n < 3) continue;
@@ -757,6 +789,10 @@ function toManifold(mod: ManifoldModule, body: SolidBody): ManifoldInstance | nu
     }
   }
   if (tris.length === 0) return null;
+  // Inward-wound input (e.g. pre-fix revolves, mirrored imports) is flipped
+  // here — the old `m.invert()` call threw (no such method in manifold-3d
+  // 3.5.1) and silently routed every such body to the voxel fallback.
+  if (signedVolume6(positions, tris) < 0) tris = flipWinding(tris);
 
   const mesh = new mod.Mesh({
     numProp: 3,
@@ -764,9 +800,7 @@ function toManifold(mod: ManifoldModule, body: SolidBody): ManifoldInstance | nu
     triVerts: new Uint32Array(tris),
   });
   try {
-    const m = mod.Manifold.ofMesh(mesh);
-    if (m.volume() < 0) m.invert();
-    return m;
+    return mod.Manifold.ofMesh(mesh);
   } catch {
     return null; // non-manifold input → voxel fallback
   }
@@ -1059,6 +1093,157 @@ function fitCircle2D(pts: Array<{ x: number; y: number }>): { cx: number; cy: nu
   return { cx, cy, radius: Math.sqrt(r2) };
 }
 
+/** Minimum enclosing circle (Welzl, randomized incremental) of 2D points —
+ *  the circumscribed circle of a tessellated ring. Determined by the outer
+ *  points alone, so chord-interior vertices cannot bias it (a Kåsa fit
+ *  averages them in and under-reports both radius and center precision). */
+function minEnclosingCircle2D(pts: Array<{ x: number; y: number }>): { cx: number; cy: number; radius: number } {
+  const P = pts.slice();
+  // Deterministic shuffle (the algorithm is expected-linear for random order;
+  // a fixed seed keeps classifier output reproducible run-to-run). Math.imul
+  // keeps the multiply in exact int32 domain — plain * overflows past 2^53
+  // and degrades the low bits the modulo feeds on.
+  let seed = 0x2f6e2b1;
+  for (let i = P.length - 1; i > 0; i--) {
+    seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+    const j = seed % (i + 1);
+    [P[i], P[j]] = [P[j]!, P[i]!];
+  }
+  const dist2 = (p: { x: number; y: number }, c: { cx: number; cy: number; r: number }) => {
+    const dx = p.x - c.cx, dy = p.y - c.cy;
+    return dx * dx + dy * dy;
+  };
+  const from2 = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return { cx, cy, r: Math.hypot(dx, dy) / 2 };
+  };
+  const from3 = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) => {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-12) {
+      // Collinear — the widest pair carries the circle.
+      const c2 = from2(a, b);
+      const c3 = from2(b, c);
+      const c1 = from2(a, c);
+      return c1.r >= c2.r && c1.r >= c3.r ? c1 : c2.r >= c3.r ? c2 : c3;
+    }
+    const cx = ((a.x * a.x + a.y * a.y) * (b.y - c.y) + (b.x * b.x + b.y * b.y) * (c.y - a.y) + (c.x * c.x + c.y * c.y) * (a.y - b.y)) / d;
+    const cy = ((a.x * a.x + a.y * a.y) * (c.x - b.x) + (b.x * b.x + b.y * b.y) * (a.x - c.x) + (c.x * c.x + c.y * c.y) * (b.x - a.x)) / d;
+    return { cx, cy, r: Math.hypot(a.x - cx, a.y - cy) };
+  };
+  let c = { cx: P[0]!.x, cy: P[0]!.y, r: 0 };
+  for (let i = 1; i < P.length; i++) {
+    if (dist2(P[i]!, c) <= c.r * c.r) continue;
+    c = { cx: P[i]!.x, cy: P[i]!.y, r: 0 };
+    for (let j = 0; j < i; j++) {
+      if (dist2(P[j]!, c) <= c.r * c.r) continue;
+      c = from2(P[i]!, P[j]!);
+      for (let k = 0; k < j; k++) {
+        if (dist2(P[k]!, c) <= c.r * c.r) continue;
+        c = from3(P[i]!, P[j]!, P[k]!);
+      }
+    }
+  }
+  return { cx: c.cx, cy: c.cy, radius: c.r };
+}
+
+/**
+ * Chord-tolerant cylinder verification: the Kåsa path above demands every
+ * vertex ON the circle at 0.1%, which only holds while every vertex is a
+ * ring vertex. A boolean that crosses the wall obliquely (a drilled
+ * oblique axis) leaves NEW rim vertices ON the tessellated wall's facet
+ * chords — legitimately up to one chord sagitta INSIDE the circumscribed
+ * circle (r·(1−cos(π/n)) = 0.0053 at r 2.5 / 48 facets, twice the 0.1%
+ * tolerance) and those vertices poisoned the whole fit. Recover the
+ * circumscribed circle via minimum enclosing circle (pinned by the ring
+ * vertices, immune to interior points), then accept every vertex that is
+ * either on it or inside it by at most the local chord sagitta implied by
+ * the ring's own angular step there. Returns the fitted center/radius, or
+ * null when no such consistent ring exists.
+ *
+ * `kasa` (the failed strict fit) supplies the pre-gate reference centre: a
+ * passable group's radial spread around it can never exceed the coarsest
+ * legitimate chord depth (ring step ≤ 60° by the coverage gate ⇒ ≤ 13.4% of
+ * the radius, plus fit bias slack) — huge non-cylindrical groups (half a
+ * sphere, ~2k verts) are rejected by two passes over the points instead of
+ * paying the enclosing-circle search (measured 15% of a sphere-union
+ * fromManifold otherwise).
+ */
+function fitCircleWithChordTolerance(
+  pts2: Array<{ x: number; y: number }>,
+  kasa: { cx: number; cy: number; radius: number },
+): { cx: number; cy: number; radius: number; angles: number[] } | null {
+  let minD = Infinity, maxD = 0;
+  for (const p of pts2) {
+    const d = Math.hypot(p.x - kasa.cx, p.y - kasa.cy);
+    if (d < minD) minD = d;
+    if (d > maxD) maxD = d;
+  }
+  if (maxD <= 0 || maxD - minD > 0.16 * maxD) return null; // spread dwarfs any chord sagitta
+  const mec = minEnclosingCircle2D(pts2);
+  const tol = analyticFitTol(mec.radius);
+  // Ring vertices: on the circumscribed circle within the analytic tol.
+  const ringAngles: number[] = [];
+  for (const p of pts2) {
+    const dx = p.x - mec.cx, dy = p.y - mec.cy;
+    if (Math.abs(Math.hypot(dx, dy) - mec.radius) <= tol) ringAngles.push(Math.atan2(dy, dx));
+  }
+  if (ringAngles.length < 8 || !coversFullRing(ringAngles)) return null;
+  ringAngles.sort((a, b) => a - b);
+  // Every vertex inside by at most its local chord sagitta (see
+  // chordInteriorOk; mostly formality on the "outside" branch — the MEC
+  // contains every input point by construction, so a genuinely-outside
+  // vertex REDEFINES the circle instead of tripping that check — adversarial
+  // inflation is bounded upstream by the radial spread pre-gate (≤16% ⇒
+  // ≤ ~0.9% radius inflation), and legit chord interiors sit strictly
+  // inside. The strict-Kåsa radius stays the reference for the clean-input
+  // fast path above.)
+  if (!chordInteriorOk(pts2, mec.cx, mec.cy, mec.radius, ringAngles, tol)) return null;
+  return { cx: mec.cx, cy: mec.cy, radius: mec.radius, angles: ringAngles };
+}
+
+/** Shared chord-interior acceptance for a fitted circle (cx, cy, radius):
+ *  every point of `pts2` is either ON the circle (within `tol`) or inside it
+ *  by at most the local chord sagitta — the chord between the enclosing pair
+ *  of `ringAngles` (sorted, ≥ 2 entries) at angular width Δ dips
+ *  radius·(1−cos(Δ/2)), which is the deepest a facet-chord vertex can sit
+ *  while still belonging to the tessellated wall. Points outside the circle
+ *  are never legitimate. Deterministic: pure arithmetic over the sorted ring
+ *  angles (binary search into the same interval every run). */
+function chordInteriorOk(
+  pts2: Array<{ x: number; y: number }>,
+  cx: number,
+  cy: number,
+  radius: number,
+  ringAngles: number[],
+  tol: number,
+): boolean {
+  const TWO_PI = 2 * Math.PI;
+  for (const p of pts2) {
+    const dx = p.x - cx, dy = p.y - cy;
+    const d = Math.hypot(dx, dy);
+    if (d > radius + tol) return false; // outside the wall — never legitimate
+    if (d >= radius - tol) continue; // on the ring
+    const theta = Math.atan2(dy, dx);
+    // Find the cyclic ring interval containing theta (ringAngles is sorted
+    // and has ≥ 2 entries).
+    let lo = 0, hi = ringAngles.length - 1;
+    let width: number;
+    if (theta < ringAngles[0]! || theta > ringAngles[hi]!) {
+      width = ringAngles[0]! + TWO_PI - ringAngles[hi]!;
+    } else {
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (ringAngles[mid]! <= theta) lo = mid; else hi = mid;
+      }
+      width = ringAngles[hi]! - ringAngles[lo]!;
+    }
+    const sagitta = radius * (1 - Math.cos(Math.min(width, Math.PI) / 2));
+    if (radius - d > sagitta + tol) return false;
+  }
+  return true;
+}
+
 /**
  * Tag `Face.source` on face groups that lie on a common analytic surface.
  *
@@ -1213,6 +1398,27 @@ function tagCylinderSources(faces: Face[]): void {
           continue;
         }
       }
+      // Chord-tolerant retry (obliquely-cut walls carry rim vertices ON the
+      // facet chords, inside the circumscribed circle — see the helper's
+      // contract). Only reached when the strict fit failed, so clean walls
+      // keep the bit-exact Kåsa result above.
+      const chordFit = fit ? fitCircleWithChordTolerance(pts2, fit) : null;
+      if (chordFit) {
+        let tSum = 0;
+        for (const v of verts) tSum += vDot(axis, vSub(v, c0));
+        const { cx, cy, radius } = chordFit;
+        const origin = {
+          x: c0.x + axis.x * (tSum / verts.length) + e1.x * cx + e2.x * cy,
+          y: c0.y + axis.y * (tSum / verts.length) + e1.y * cx + e2.y * cy,
+          z: c0.z + axis.z * (tSum / verts.length) + e1.z * cx + e2.z * cy,
+        };
+        const source: FaceSource = { kind: 'cylinder', origin, axis: { ...axis }, radius };
+        for (const fi of members) {
+          const f = faces[fi]!;
+          if (!f.source) f.source = source;
+        }
+        continue;
+      }
     }
 
     // ---- 2. cone: two section rings with linearly varying radius. --------
@@ -1297,15 +1503,16 @@ function fitConeSource(faces: Face[], members: number[], verts: Vec3[], axisDir:
   const e1 = vNormalize(vCross(axisRough, ref));
   const e2 = vCross(axisRough, e1);
   const axialT = (v: Vec3): number => vDot(vSub(v, centroidA), axisRough);
-  const fitRing = (section: Vec3[]): { center: Vec3; radius: number } | null => {
-    if (section.length < CONE_MIN_RING_VERTS) return null;
-    // Ring planarity ⟂ axis — a section spanning several vertex rows is a
-    // cut-up wall, not a section circle.
-    const ts = section.map(axialT).sort((a, b) => a - b);
-    // The ring's own centroid carries its axial position (and, for a full
-    // ring, lies ON the axis) — the 2D fit only recovers the radial offsets.
-    const centroid = centroidOf(section);
-    const pts2 = section.map((v) => {
+  /** Strict fit of one planar point cluster: Kåsa circle + planarity ⟂ axis
+   *  (a cluster spanning several vertex rows is a cut-up wall, not a section
+   *  circle) + every vertex ON the circle at 0.1%. The ring's own centroid
+   *  carries its axial position (and, for a full ring, lies ON the axis) —
+   *  the 2D fit only recovers the radial offsets. */
+  const fitPlanarRing = (cluster: Vec3[]): { center: Vec3; radius: number } | null => {
+    if (cluster.length < CONE_MIN_RING_VERTS) return null;
+    const ts = cluster.map(axialT).sort((a, b) => a - b);
+    const centroid = centroidOf(cluster);
+    const pts2 = cluster.map((v) => {
       const r = vSub(v, centroid);
       const rad = vSub(r, vScale(axisRough, vDot(axisRough, r)));
       return { x: vDot(rad, e1), y: vDot(rad, e2) };
@@ -1326,6 +1533,94 @@ function fitConeSource(faces: Face[], members: number[], verts: Vec3[], axisDir:
       radius: fit.radius,
     };
   };
+  /**
+   * Chord-tolerant ring fallback for a section whose strict fit failed: an
+   * oblique boolean cut leaves rim vertices ON the wall facets BETWEEN the
+   * ring rows, so the section can mix its true ring row with off-row arc
+   * points (possibly several arcs at different heights) — and the rim
+   * contamination also bends the stage-1 centroid line, so the refined
+   * `axisRough` itself can sit ~10° off the true axis and the strict
+   * planarity/circle gates fail even on a perfectly clean ring row. Cluster
+   * the section axially at gaps above 2% of its spread (the row separations
+   * dwarf any tilt-induced spread), then fit each cluster INDEPENDENTLY of
+   * the sectioning axis: a least-squares plane (the cluster covariance's
+   * smallest eigenvector) with the Kåsa circle fitted in that plane's own
+   * basis, accepting vertices ON the circle at 0.1% as the ring and vertices
+   * inside it within the local chord sagitta implied by the ring's own
+   * angular step (the same rule as the cylinder chord path). Clusters are
+   * tried most-vertices-first, ties by lower axial position. Clean sections
+   * never get here (the strict fit above keeps its exact result).
+   */
+  const fitRingChordTolerant = (section: Vec3[]): { center: Vec3; radius: number } | null => {
+    if (section.length < 2 * CONE_MIN_RING_VERTS) return null;
+    const keyed = section.map((v) => ({ v, t: axialT(v) })).sort((a, b) => a.t - b.t);
+    const spread = keyed[keyed.length - 1]!.t - keyed[0]!.t;
+    if (!(spread > 0)) return null;
+    const gapEps = Math.max(0.02 * spread, 1e-9);
+    const clusters: Vec3[][] = [];
+    let run: Vec3[] = [keyed[0]!.v];
+    for (let i = 1; i < keyed.length; i++) {
+      if (keyed[i]!.t - keyed[i - 1]!.t > gapEps) {
+        clusters.push(run);
+        run = [];
+      }
+      run.push(keyed[i]!.v);
+    }
+    clusters.push(run);
+    clusters.sort((a, b) => b.length - a.length || axialT(a[0]!) - axialT(b[0]!));
+    for (const cluster of clusters) {
+      if (cluster.length < CONE_MIN_RING_VERTS) continue;
+      // Least-squares plane of the cluster (own basis — immune to axisRough).
+      const centroid = centroidOf(cluster);
+      let sxx = 0, sxy = 0, sxz = 0, syy = 0, syz = 0, szz = 0;
+      for (const v of cluster) {
+        const r = vSub(v, centroid);
+        sxx += r.x * r.x; sxy += r.x * r.y; sxz += r.x * r.z;
+        syy += r.y * r.y; syz += r.y * r.z; szz += r.z * r.z;
+      }
+      const eig = jacobiEigen([sxx, sxy, sxz, syy, syz, szz]);
+      if (!eig) continue;
+      const nrm = eig.vectors[0]!; // ring plane normal
+      if (Math.abs(vDot(nrm, axisRough)) < 0.5) continue; // not a section plane
+      const ref3 = Math.abs(nrm.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+      const b1 = vNormalize(vCross(nrm, ref3));
+      const b2 = vCross(nrm, b1);
+      const pts2 = cluster.map((v) => {
+        const r = vSub(v, centroid);
+        return { x: vDot(r, b1), y: vDot(r, b2) };
+      });
+      const fit = fitCircle2D(pts2);
+      if (!fit) continue;
+      const tol = analyticFitTol(fit.radius);
+      let flat = true;
+      for (const v of cluster) {
+        if (Math.abs(vDot(vSub(v, centroid), nrm)) > tol) {
+          flat = false;
+          break;
+        }
+      }
+      if (!flat) continue; // spans several rows / a cut-up wall — not a ring
+      const ringAngles: number[] = [];
+      for (const p of pts2) {
+        const dx = p.x - fit.cx, dy = p.y - fit.cy;
+        if (Math.abs(Math.hypot(dx, dy) - fit.radius) <= tol) ringAngles.push(Math.atan2(dy, dx));
+      }
+      if (ringAngles.length < CONE_MIN_RING_VERTS) continue;
+      ringAngles.sort((a, b) => a - b);
+      if (!chordInteriorOk(pts2, fit.cx, fit.cy, fit.radius, ringAngles, tol)) continue;
+      return {
+        center: {
+          x: centroid.x + b1.x * fit.cx + b2.x * fit.cy,
+          y: centroid.y + b1.y * fit.cx + b2.y * fit.cy,
+          z: centroid.z + b1.z * fit.cx + b2.z * fit.cy,
+        },
+        radius: fit.radius,
+      };
+    }
+    return null;
+  };
+  const fitRing = (section: Vec3[]): { center: Vec3; radius: number } | null =>
+    fitPlanarRing(section) ?? fitRingChordTolerant(section);
 
   const ringA = fitRing(sections[0]!);
   const ringB = fitRing(sections[1]!);
@@ -1363,9 +1658,15 @@ function fitConeSource(faces: Face[], members: number[], verts: Vec3[], axisDir:
   const axisCanonical = tSum < 0 ? vNeg(axis) : axis;
 
   // Verify EVERY group vertex lies on the cone (same 0.1 % standard), on one
-  // side of the apex, and that the ring wraps ≥300°.
+  // side of the apex, and that the ring wraps ≥300°. The angular basis is
+  // rebuilt ⟂ the FINAL axis (the sectioning basis e1/e2 belongs to the
+  // rough axis; when rim contamination tilted it, mixing the two would
+  // distort the coverage gaps).
   const tanH = Math.tan(halfAngle);
   const tol = analyticFitTol(Math.max(r1, r2));
+  const refF = Math.abs(axisCanonical.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const f1 = vNormalize(vCross(axisCanonical, refF));
+  const f2 = vCross(axisCanonical, f1);
   const angles: number[] = [];
   for (const v of verts) {
     const d = vSub(v, apex);
@@ -1374,20 +1675,37 @@ function fitConeSource(faces: Face[], members: number[], verts: Vec3[], axisDir:
     const rd = vLen(radial);
     if (t < -tol) return null; // band straddles the apex — not a cone band
     if (Math.abs(rd - t * tanH) > tol) return null;
-    if (rd > tol) angles.push(Math.atan2(vDot(radial, e2), vDot(radial, e1)));
+    if (rd > tol) angles.push(Math.atan2(vDot(radial, f2), vDot(radial, f1)));
   }
   if (!coversFullRing(angles)) return null;
 
   // Facet normals: a cone facet's normal is exactly radial·cos θ ∓ axis·sin θ,
   // so |n·axis| ≈ sin θ with ONE sign across the group. Sphere bands (whose
   // two rings are always cospherical) fail here, as do tori and freeforms.
+  // Area-weighted: an oblique cut leaves a few tiny retriangulation slivers
+  // at the rim whose vertices all lie on the cone but whose plane bridges to
+  // the cutter wall — those are not cone tangents, but at <1% of the group
+  // area they are not a sphere signature either; a disguised band violates
+  // on ~100% of the area and stays rejected.
   const sinH = Math.sin(halfAngle);
   const refAxial = vDot(faces[members[0]!]!.normal, axisCanonical);
   if (refAxial === 0) return null;
+  let weight = 0;
+  let violating = 0;
   for (const fi of members) {
-    const a = vDot(faces[fi]!.normal, axisCanonical);
-    if (a * refAxial <= 0 || Math.abs(Math.abs(a) - sinH) > 0.05) return null;
+    const f = faces[fi]!;
+    const a = vDot(f.normal, axisCanonical);
+    const w = vLen(vCross(vSub(f.vertices[1]!, f.vertices[0]!), vSub(f.vertices[2]!, f.vertices[0]!)));
+    weight += w;
+    if (a * refAxial <= 0 || Math.abs(Math.abs(a) - sinH) > 0.05) violating += w;
   }
+  // The 5% area budget is deliberately generous: the real contamination is
+  // boolean dust (probe-measured ~1e-12 of the area — a couple of sliver
+  // facets at a drill rim whose normals are pure transition garbage), which
+  // an all-or-nothing guard would reject whole legitimate groups over. A
+  // systematically disguised band violates on ~100% of the area and stays
+  // rejected; no real geometry has been found that slips through under 5%.
+  if (weight <= 0 || violating > 0.05 * weight) return null;
 
   return { kind: 'cone', apex, axis: axisCanonical, halfAngle };
 }
@@ -1443,9 +1761,82 @@ function fitSphereSource(faces: Face[], members: number[], verts: Vec3[]): FaceS
   for (const v of verts) extent = Math.max(extent, vLen(vSub(v, centroid)));
   if (radius > 20 * extent) return null;
   const tol = analyticFitTol(radius);
+  let taggedRadius = radius;
+  let verified = true;
   for (const v of verts) {
-    if (Math.abs(vLen(vSub(v, center)) - radius) > tol) return null;
+    if (Math.abs(vLen(vSub(v, center)) - radius) > tol) {
+      verified = false;
+      break;
+    }
   }
+  if (!verified) {
+    /**
+     * Chord-tolerant retry for a group whose strict equidistance gate
+     * failed: a boolean that slices the sphere (a box cut, an oblique
+     * drill) leaves rim vertices ON the tessellation's facet CHORD planes —
+     * strictly inside the true sphere by up to one facet sagitta — and a
+     * plain Kåsa fit averages them in. Mirror the cylinder path's recovery:
+     * (1) a radial-spread pre-gate rejects groups no chord interpretation
+     * could explain, (2) the reference radius is the CIRCUMSCRIBED distance
+     * from the fitted centre (pinned by the on-sphere ring vertices, immune
+     * to chord-interior points — the 3-D sibling of the minimum enclosing
+     * circle), and (3) each vertex is accepted either ON that sphere within
+     * 0.1% or inside it by at most the chord sagitta of the group's own
+     * coarsest member face (r·(1−cos(Δ/2)) with Δ the face's angular
+     * diameter about the centre — no facet vertex can sit deeper than its
+     * own facet's chord plane). Deterministic: pure maxima over the fixed
+     * face list. Clean spheres never get here (the strict fit above keeps
+     * its exact result).
+     */
+    let minD = Infinity;
+    let maxD = 0;
+    for (const v of verts) {
+      const d = vLen(vSub(v, center));
+      if (d < minD) minD = d;
+      if (d > maxD) maxD = d;
+    }
+    if (maxD > 0 && maxD - minD <= 0.16 * maxD) {
+      let rRef = 0;
+      for (const v of verts) rRef = Math.max(rRef, vLen(vSub(v, center)));
+      const tolRef = analyticFitTol(rRef);
+      // Group-wide chord allowance: the deepest sagitta among the member
+      // faces (their angular diameter about the centre). Every legitimate
+      // chord-interior vertex lies on the chord plane of a facet no larger
+      // than the group's own coarsest one — the honest bound this mesh can
+      // vouch for. (Per-vertex star bounds are useless here: the boolean's
+      // re-triangulation fans the cut rim into small triangles whose
+      // diameter says nothing about the original facet the rim bisected.)
+      const dirOf = new Map<Vec3, Vec3>();
+      for (const v of verts) {
+        const d = vSub(v, center);
+        const len = vLen(d);
+        dirOf.set(v, len > 1e-12 ? vScale(d, 1 / len) : { x: 0, y: 0, z: 0 });
+      }
+      let diam = 0;
+      for (const fi of members) {
+        const vs = faces[fi]!.vertices;
+        for (let i = 0; i < vs.length; i++) {
+          for (let j = i + 1; j < vs.length; j++) {
+            diam = Math.max(
+              diam,
+              Math.acos(Math.max(-1, Math.min(1, vDot(dirOf.get(vs[i]!)!, dirOf.get(vs[j]!)!)))),
+            );
+          }
+        }
+      }
+      const allow = rRef * (1 - Math.cos(Math.min(diam, Math.PI) / 2));
+      const limit = Math.max(tolRef, allow);
+      verified = true;
+      for (const v of verts) {
+        if (Math.abs(vLen(vSub(v, center)) - rRef) > limit) {
+          verified = false;
+          break;
+        }
+      }
+      if (verified) taggedRadius = rRef;
+    }
+  }
+  if (!verified) return null;
   for (const fi of members) {
     const f = faces[fi]!;
     const radial = vSub(f.vertices[0]!, center);
@@ -1453,7 +1844,7 @@ function fitSphereSource(faces: Face[], members: number[], verts: Vec3[]): FaceS
     if (len < 1e-12) return null;
     if (Math.abs(vDot(f.normal, vScale(radial, 1 / len))) < 0.85) return null;
   }
-  return { kind: 'sphere', center, radius };
+  return { kind: 'sphere', center, radius: taggedRadius };
 }
 
 /** Eigen decomposition of a symmetric 3×3 matrix (cyclic Jacobi rotations).

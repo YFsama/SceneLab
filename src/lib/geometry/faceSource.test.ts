@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { warmUpBooleanEngine, booleanOpManifold } from './booleanManifold';
-import { createBox, createCone, createCylinder, createSphere, createRevolve, computeVolume } from './brep';
+import { createBox, createCone, createCylinder, createSphere, createRevolve, computeVolume, checkManifold } from './brep';
 import { translateBody, rotateBody } from './operations';
+import { booleanOp, lastBooleanFallbackReason } from './boolean';
 import type { Face, FaceSource, SolidBody } from './types';
 
 // ---------------------------------------------------------------------------
@@ -260,10 +261,7 @@ describe('revolve band tagging (brep.createRevolve)', () => {
 // Rigid transforms must carry analytic sources with the mesh (found during
 // the P2a review-disposition probes: translateBody/rotateBody used to DROP
 // face.source — and body colour/opacity/material — silently degrading STEP
-// export and CAM arcs). End-to-end oblique CLASSIFICATION is a separate,
-// still-open limitation: fromManifold's output decimation over-merges
-// rotated walls into ~60° arcs whose adjacent dihedral exceeds the smooth
-// group threshold, so oblique groups never form — see todo.md.
+// export and CAM arcs).
 // ---------------------------------------------------------------------------
 
 describe('rigid transforms carry analytic sources', () => {
@@ -357,5 +355,256 @@ describe('negative guards (sphere disguise / short bands)', () => {
     expect(short).not.toBeNull();
     expect(facesTagged(short!, 'sphere').length).toBe(0);
     expect(facesTagged(short!, 'cylinder').length).toBeGreaterThanOrEqual(8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Oblique-axis end-to-end classification (pass #37). The failing ingredient
+// is not the axis or the smooth groups — an obliquely-drilled wall still
+// forms one group with exact normals — but the boolean's NEW rim vertices:
+// they sit ON the tessellated wall's facet chords, strictly inside the
+// circumscribed circle by up to the chord sagitta (r·(1−cos(π/n)) =
+// 0.0053 at r 2.5 / 48 facets), which the "every vertex ON the circle at
+// 0.1%" gate rejected. The classifier now recovers the circumscribed circle
+// (minimum enclosing circle — pinned by the ring vertices, immune to
+// interior chord points) and accepts chord-interior vertices within the
+// sagitta implied by the ring's own angular step.
+// ---------------------------------------------------------------------------
+
+describe('oblique cylinder wall classification (drilled after rotation)', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  /** ⌀5 cylinder rotated so +Y → (1,1,1)/√3 (Rodrigues about (1,0,−1)/√2 by
+   *  acos(1/√3)), then drilled OBLIQUELY through the wall by a world-Y ⌀1
+   *  cutter at (0.9, 0.9, 0.9) — a point on the rotated axis. The drill rim
+   *  crosses the wall facet interiors, so the output mixes exact ring
+   *  vertices with chord-interior rim vertices. */
+  const obliqueDrilled = () => {
+    const body = rotateBody(
+      createCylinder(2.5, 12, 48),
+      { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1 / Math.SQRT2, y: 0, z: -1 / Math.SQRT2 } },
+      Math.acos(1 / Math.sqrt(3)),
+    );
+    const drill = translateBody(createCylinder(0.5, 40, 48), { x: 0.9, y: -19.1, z: 0.9 });
+    return booleanOpManifold(body, drill, 'difference');
+  };
+
+  it('the oblique drilled wall still carries a cylinder tag: axis ∥ (1,1,1)/√3, radius ≈ 2.5', () => {
+    const out = obliqueDrilled();
+    expect(out).not.toBeNull();
+    const tagged = facesTagged(out!, 'cylinder');
+    // The drill's own ⌀1 wall also tags (radius 0.5) — the oblique cut
+    // crosses it on chords too. Separate the ⌀5 body wall by radius.
+    const wall = tagged.filter(({ src }) => src.kind === 'cylinder' && Math.abs(src.radius - 2.5) < 0.1);
+    expect(wall.length).toBeGreaterThanOrEqual(8);
+    expect(tagged.length).toBeGreaterThanOrEqual(wall.length + 8); // drill wall tags too
+    const n = { x: 1 / Math.sqrt(3), y: 1 / Math.sqrt(3), z: 1 / Math.sqrt(3) };
+    for (const { src } of wall) {
+      if (src.kind !== 'cylinder') continue;
+      // Radius from the ring vertices (MEC) — exact up to float32 output
+      // quantisation, NOT biased by the chord-interior rim vertices.
+      expect(src.radius).toBeCloseTo(2.5, 4);
+      const par = Math.abs(src.axis.x * n.x + src.axis.y * n.y + src.axis.z * n.z);
+      expect(par).toBeCloseTo(1, 6);
+    }
+    // One shared tag for the whole wall group.
+    expect(new Set(wall.map((t) => t.src)).size).toBe(1);
+  });
+
+  it('every tagged face is radial: normal ⟂ axis and vertices within the chord sagitta of the wall', () => {
+    const out = obliqueDrilled()!;
+    const tagged = facesTagged(out, 'cylinder').filter(
+      ({ src }) => src.kind === 'cylinder' && Math.abs(src.radius - 2.5) < 0.1,
+    );
+    expect(tagged.length).toBeGreaterThanOrEqual(8);
+    const n = { x: 1 / Math.sqrt(3), y: 1 / Math.sqrt(3), z: 1 / Math.sqrt(3) };
+    // 48 facets → chord sagitta 2.5·(1−cos(3.75°)) ≈ 0.00535; allow that
+    // much INSIDE the fitted radius plus fit slack, nothing outside.
+    const sag = 2.5 * (1 - Math.cos(Math.PI / 48));
+    for (const { face, src } of tagged) {
+      if (src.kind !== 'cylinder') continue;
+      expect(Math.abs(face.normal.x * src.axis.x + face.normal.y * src.axis.y + face.normal.z * src.axis.z))
+        .toBeLessThan(1e-3);
+      // Wall faces are also geometrically radial about the TRUE axis.
+      expect(Math.abs(face.normal.x * n.x + face.normal.y * n.y + face.normal.z * n.z)).toBeLessThan(1e-3);
+      for (const v of face.vertices) {
+        const dx = v.x - src.origin.x;
+        const dy = v.y - src.origin.y;
+        const dz = v.z - src.origin.z;
+        const t = dx * src.axis.x + dy * src.axis.y + dz * src.axis.z;
+        const dist = Math.hypot(dx - src.axis.x * t, dy - src.axis.y * t, dz - src.axis.z * t);
+        expect(dist - src.radius).toBeLessThanOrEqual(1e-3); // never outside the wall
+        expect(src.radius - dist).toBeLessThanOrEqual(sag + 1e-3); // at most a chord depth inside
+      }
+    }
+  });
+
+  it('axis-aligned control on the same construction still tags (zero drift)', () => {
+    const body = createCylinder(2.5, 12, 48);
+    const drill = translateBody(createCylinder(0.5, 40, 48), { x: 0.9, y: -19.1, z: 0.9 });
+    const out = booleanOpManifold(body, drill, 'difference');
+    expect(out).not.toBeNull();
+    // The world-Y drill is parallel to the body axis here (never touches the
+    // wall): the wall passes through the boolean untouched and tags exactly
+    // as it always has. (The drill's own off-axis hole wall also tags, at
+    // radius 0.5 — separate it by radius.)
+    const tagged = facesTagged(out!, 'cylinder');
+    const outer = tagged.filter(({ src }) => src.kind === 'cylinder' && Math.abs(src.radius - 2.5) < 0.1);
+    expect(outer.length).toBeGreaterThanOrEqual(8);
+    for (const { src } of outer) {
+      if (src.kind !== 'cylinder') continue;
+      expect(src.radius).toBeCloseTo(2.5, 6);
+      expect(Math.abs(Math.abs(src.axis.y) - 1)).toBeLessThan(1e-9);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createRevolve through the exact boolean path (pass #37). Revolves used to
+// be the one manifold-clean primitive the exact engine could never take:
+// their sweep winds inward (Manifold reads volume −390 on the ⌀5→⌀2.5
+// revolved bands), and toManifold tried to fix that with
+// ManifoldInstance.invert() — a method manifold-3d 3.5.1 simply does not
+// expose, so every revolve boolean threw, fell back to the 6760-face voxel
+// mesh and reported 'empty-exact-result'. The sweep now canonicalises the
+// profile to outward winding at construction, and toManifold flips winding
+// in JS (no invert() anywhere).
+// ---------------------------------------------------------------------------
+
+describe('createRevolve survives the exact boolean path', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  const revolvedBandsBody = () =>
+    createRevolve({
+      profile: [
+        { x: 2.5, y: 0, z: 0 },
+        { x: 5, y: 0, z: 0 },
+        { x: 2.5, y: 0, z: 15 },
+      ],
+      axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } },
+      angle: Math.PI * 2,
+    });
+
+  /** Box strictly covering xy ∈ [−8, 8] between z-levels (createBox is
+   *  x/z-centred with y ∈ [0, h], so the translate re-centres y and lifts z). */
+  const zBox = (zLo: number, zHi: number) =>
+    translateBody(createBox(16, 16, zHi - zLo), { x: 0, y: -8, z: (zLo + zHi) / 2 });
+
+  /** Box overlapping the revolve's top half: z ∈ [5, 21]. */
+  const topBox = () => zBox(5, 21);
+
+  /** Box covering the revolve's lower part: z ∈ [−1, 10]. The z = 10 cut
+   *  plane sits strictly below the cone/cylinder seam edge at z = 15, so the
+   *  two bands end up in SEPARATE smooth groups and each is classified on
+   *  its own merits (a cut above the seam would join them — a 9.46° dihedral
+   *  — into one group no single analytic surface fits). */
+  const lowerBox = () => zBox(-1, 10);
+
+  it('the constructed revolve is wound outward (signed volume positive)', async () => {
+    const { triangulateFace } = await import('./brep');
+    const body = revolvedBandsBody();
+    let vol6 = 0;
+    for (const f of body.faces) {
+      for (const [a, b, c] of triangulateFace(f.vertices)) {
+        vol6 +=
+          a.x * (b.y * c.z - c.y * b.z) -
+          b.x * (a.y * c.z - c.y * a.z) +
+          c.x * (a.y * b.z - b.y * a.z);
+      }
+    }
+    expect(vol6).toBeGreaterThan(0); // inward winding would read −6×390.18
+  });
+
+  it('intersect / difference / union with an overlapping box all take the exact path', () => {
+    for (const op of ['intersect', 'difference', 'union'] as const) {
+      const r = booleanOp(revolvedBandsBody(), topBox(), op);
+      expect(r).not.toBeNull();
+      expect(lastBooleanFallbackReason()).toBeNull();
+      expect(r!.faces.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('the classifier recovers the analytic bands from the boolean output', () => {
+    const body = booleanOpManifold(revolvedBandsBody(), lowerBox(), 'intersect');
+    expect(body).not.toBeNull();
+    const cones = facesTagged(body!, 'cone');
+    const cylinders = facesTagged(body!, 'cylinder');
+    expect(cones.length).toBeGreaterThanOrEqual(8);
+    expect(cylinders.length).toBeGreaterThanOrEqual(8);
+    const cone = cones[0]!.src;
+    if (cone.kind !== 'cone') throw new Error('expected cone');
+    expect(cone.apex.z).toBeCloseTo(30, 5); // r(z) = 5 − z/6 degenerates at 30
+    expect(cone.halfAngle).toBeCloseTo(Math.atan(1 / 6), 6);
+    const cyl = cylinders[0]!.src;
+    if (cyl.kind !== 'cylinder') throw new Error('expected cylinder');
+    expect(cyl.radius).toBeCloseTo(2.5, 5);
+    expect(Math.abs(Math.abs(cyl.axis.z) - 1)).toBeLessThan(1e-6);
+    // Intersect volume sanity: full revolve 390.18; the z ∈ [0,10] part keeps
+    // the full ⌀5 cylinder band and most of the cone — non-trivial but
+    // strictly less than the whole.
+    expect(computeVolume(body!)).toBeGreaterThan(100);
+    expect(computeVolume(body!)).toBeLessThan(390);
+  });
+
+  it('existing construction tags survive (no regression in band tagging)', () => {
+    const body = revolvedBandsBody();
+    expect(facesTagged(body, 'cone').length).toBe(32);
+    expect(facesTagged(body, 'cylinder').length).toBe(32);
+    expect(computeVolume(body)).toBeCloseTo(390.181, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review-disposition golden (P2 of the kernel-fix review): the winding
+// normalisation must hold when the profile's FIRST point sits on the axis.
+// ---------------------------------------------------------------------------
+
+describe('revolve winding with on-axis first profile point', () => {
+  beforeAll(async () => {
+    await warmUpBooleanEngine();
+  });
+
+  it('normalizes outward winding from an on-axis first point (exact path, tagged wall)', () => {
+    // The old fallback basis was perpendicular to this profile's plane, every
+    // r-projection collapsed to 0, the signed area read 0, no reverse
+    // happened and the sweep stayed inward-wound — exact booleans fell back
+    // to the voxel path. This is the classic sketch revolve shape: rectangle
+    // starting on the axis (solid ⌀10 h2 disc), swept around z.
+    const body = createRevolve({
+      profile: [
+        { x: 0, y: 0, z: 0 },
+        { x: 5, y: 0, z: 0 },
+        { x: 5, y: 0, z: 2 },
+        { x: 0, y: 0, z: 2 },
+      ],
+      axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } },
+      angle: Math.PI * 2,
+    });
+    const box = translateBody(createBox(20, 20, 20), { x: -10, y: -10, z: -10 });
+    // The mesh itself is clean: watertight 2-manifold (the degenerate on-axis
+    // band is skipped, the pole fans collapse to triangles).
+    const cm = checkManifold(body);
+    expect(cm.isManifold).toBe(true);
+    expect(cm.boundaryEdges).toBe(0);
+    expect(cm.nonManifoldEdges).toBe(0);
+    // Union and difference run the EXACT path (no fallback reason) and the
+    // wall recovers its analytic tag from the rebuilt output.
+    // (Known residual, tracked in todo.md: intersect of a revolve with a
+    // fully containing box still returns empty — union/difference/partial
+    // intersects work; primitive cylinders in the same containment work.)
+    const uni = booleanOpManifold(body, box, 'union');
+    expect(uni).not.toBeNull();
+    expect(lastBooleanFallbackReason()).toBeNull();
+    const drilled = booleanOpManifold(body, translateBody(createBox(1, 1, 1), { x: -0.5, y: -0.5, z: -0.5 }), 'difference');
+    expect(drilled).not.toBeNull();
+    expect(lastBooleanFallbackReason()).toBeNull();
+    const tagged = facesTagged(drilled!, 'cylinder');
+    expect(tagged.length).toBeGreaterThanOrEqual(8);
+    const src = tagged[0]!.src;
+    if (src.kind === 'cylinder') expect(src.radius).toBeCloseTo(5, 3);
   });
 });

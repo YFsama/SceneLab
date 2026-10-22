@@ -9,6 +9,7 @@ import {
   type Point2,
 } from './silhouette';
 import { offsetRegion, type RegionComponent } from './offsetRegion';
+import { planAdaptiveClearing, type AdaptiveClearingPlan } from './trochoid';
 import { planCirclesFromBodies, matchArcRuns, type ArcRun } from './arcSources';
 
 let nextId = 1;
@@ -199,6 +200,40 @@ function helixRevolutions(descend: number, rho: number): number | null {
   if (!(pitch > 1e-9)) return null;
   const revs = Math.ceil(descend / pitch - 1e-9);
   return revs >= 1 && revs <= 3 ? revs : null;
+}
+
+/**
+ * Approximate max-inscribed-circle centre of one region component: a fixed
+ * 24×24 grid over the component's bbox, maximising the exact containment
+ * radius (distanceToRegionBoundary) among inside samples. The grid is fine
+ * relative to tool-scale annuli (a 6 mm gap spans ~5 cells), deterministic
+ * (lexicographic i/j scan, strict > keeps the first maximum), and cheap
+ * (~600 samples × boundary edges). Returns null when no grid sample falls
+ * strictly inside the component.
+ */
+function maxInscribedCenter(reg: RegionComponent): Point2 | null {
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const p of reg.outer) {
+    minU = Math.min(minU, p.u); maxU = Math.max(maxU, p.u);
+    minV = Math.min(minV, p.v); maxV = Math.max(maxV, p.v);
+  }
+  if (!(maxU > minU) || !(maxV > minV)) return null;
+  const N = 24;
+  let best: Point2 | null = null;
+  let bestD = -1;
+  for (let i = 0; i <= N; i++) {
+    for (let j = 0; j <= N; j++) {
+      const c = { u: minU + ((maxU - minU) * i) / N, v: minV + ((maxV - minV) * j) / N };
+      if (!pointInPolygon(c, reg.outer)) continue;
+      if (reg.holes.some((h) => pointInPolygon(c, h))) continue;
+      const d = distanceToRegionBoundary(c, reg.outer, reg.holes);
+      if (d > bestD + 1e-12) {
+        bestD = d;
+        best = c;
+      }
+    }
+  }
+  return best;
 }
 
 /** Polyline segments per helix revolution (≥ 20 keeps the chord error small). */
@@ -503,6 +538,26 @@ export function generatePocketToolpath(
   const useOffset = ringPaths.length > 0;
 
   /**
+   * Adaptive (trochoidal) clearing plan (pocketStrategy 'adaptive'): the
+   * reference walks — medial trochoid chain first, direct crescent rings
+   * outward, wall ring last — are computed ONCE because the 2D clearing
+   * domain is identical at every depth level; each level re-walks them.
+   * The empty-region semantics are shared with the strategies above (the
+   * tool-too-large early return already happened), so an empty plan here
+   * would mean "no ring at all fits" — impossible for a non-empty region —
+   * and the raster fallback below stands as the defensive net.
+   */
+  const adaptivePlan: AdaptiveClearingPlan | null =
+    params.pocketStrategy === 'adaptive'
+      ? planAdaptiveClearing(regions, {
+          toolDiameter: tool.diameter,
+          stepoverCap: params.stepover,
+          engagementDeg: params.adaptiveEngagementDeg,
+        })
+      : null;
+  const useAdaptive = adaptivePlan !== null && adaptivePlan.paths.length > 0;
+
+  /**
    * Cut one full closed loop at yLevel, entering from wherever the tool
    * stands: a straight cut link when the chord stays inside the region
    * (everything between already-cleared passes), otherwise the standard
@@ -536,7 +591,123 @@ export function generatePocketToolpath(
     // the first entry and after each level-end retract.
     let rowEnd: Point2 | null = null;
 
-    if (useOffset) {
+    if (adaptivePlan !== null && useAdaptive) {
+      /**
+       * One adaptive walk path: linked cut when the chord guard accepts it
+       * (everything between consecutive reference walks is already swept),
+       * otherwise the standard retract→traverse→feed-plane→plunge detour.
+       * Path points ride at yLevel; the planner guarantees every point and
+       * chord inside the tool-centre domain (see cam/trochoid.ts).
+       */
+      /**
+       * Helical descent along an entry orbit (≤32 revolutions — deep
+       * adaptive levels routinely need more than the legacy 3 at the small
+       * orbit radius; a straight ramp cannot follow an orbit chain).
+       */
+      const emitOrbitEntry = (eo: { center: Point2; radius: number }): Point2 => {
+        const pitch = 2 * Math.PI * eo.radius * Math.tan((15 * Math.PI) / 180);
+        const revs = pitch > 1e-9
+          ? Math.min(32, Math.max(1, Math.ceil((feedPlane - yLevel) / pitch - 1e-9)))
+          : 1;
+        const hs: Point2 = { u: eo.center.u + eo.radius, v: eo.center.v };
+        m.rapid({ x: hs.u, y: safe, z: hs.v });
+        m.rapid({ x: hs.u, y: feedPlane, z: hs.v });
+        emitHelixEntry(m, eo, feedPlane, yLevel, revs);
+        return hs;
+      };
+
+      const cutAdaptivePath = (path: Point2[], pi: number): Point2 => {
+        const start = path[0]!;
+        // Finish (depth-0 wall-side) paths never take links: the last corner
+        // hand-off chord would cross the still-uncut corner wedge left for
+        // the finish pass itself (measured ~38° equivalent vs the budget's
+        // 36°); the finish entry takes the retract detour instead.
+        const isFinish = pi >= adaptivePlan.finishFrom;
+        const linkDist =
+          rowEnd !== null ? Math.hypot(start.u - rowEnd.u, start.v - rowEnd.v) : Infinity;
+        if (
+          rowEnd !== null && linkRows && !isFinish && canLink(rowEnd, start) &&
+          linkDist <= adaptivePlan.linkMax
+        ) {
+          m.cut({ x: start.u, y: yLevel, z: start.v });
+        } else {
+          if (rowEnd !== null) m.rapid({ x: rowEnd.u, y: safe, z: rowEnd.v });
+          // A virgin entry (a component's first chain — split lobes, the
+          // medial remnant) must not plunge straight into uncut material:
+          // descend along the path's own first orbit instead (doc §1.4
+          // re-entry rule). NOTE: this intentionally overrides the legacy
+          // params.helixEntry / rampEntry switches — a vertical or linear
+          // ramp entry into a virgin core is a full-slot engagement by
+          // definition, so the orbit helix is the safe direction regardless
+          // of how those legacy entries are set. Only the first level:
+          // deeper levels plunge through air above already-cleared ground.
+          const eo = adaptivePlan.pathEntries[pi] ?? null;
+          if (li === 0 && eo !== null) {
+            const hs = emitOrbitEntry(eo);
+            m.cut({ x: start.u, y: yLevel, z: start.v });
+            void hs;
+          } else {
+            m.rapid({ x: start.u, y: safe, z: start.v });
+            m.rapid({ x: start.u, y: feedPlane, z: start.v });
+            m.plunge({ x: start.u, y: yLevel, z: start.v });
+          }
+        }
+        for (let i = 1; i < path.length; i++) {
+          const p = path[i]!;
+          m.cut({ x: p.u, y: yLevel, z: p.v });
+        }
+        return path[path.length - 1]!;
+      };
+
+      for (let pi = 0; pi < adaptivePlan.paths.length; pi++) {
+        const path = adaptivePlan.paths[pi]!;
+        if (firstEntry) {
+          firstEntry = false;
+          const start = path[0]!;
+          if (params.helixEntry === true) {
+            // Helix placement ladder (same shape as the offset branch): the
+            // first walk's start, then the chain's entry-orbit centre (it
+            // sits at the erosion boundary where room = the erosion depth),
+            // then every component's max-inscribed centre. Falls through to
+            // cutAdaptivePath's own orbit descent when no ≤3-rev plan exists.
+            let helix: { center: Point2; radius: number } | null = null;
+            const seeds: Point2[] = [start];
+            if (adaptivePlan.entryOrbit) seeds.push(adaptivePlan.entryOrbit.center);
+            for (const cand of seeds) {
+              const reg = regions.find((rg) => pointInPolygon(cand, rg.outer)) ?? regions[0]!;
+              helix = planHelixEntry(cand, reg.outer, reg.holes, r);
+              if (helix !== null) break;
+            }
+            if (helix === null) {
+              for (const reg of regions) {
+                const c = maxInscribedCenter(reg);
+                if (!c) continue;
+                helix = planHelixEntry(c, reg.outer, reg.holes, r);
+                if (helix !== null) break;
+              }
+            }
+            const revs = helix !== null ? helixRevolutions(feedPlane - yLevel, helix.radius) : null;
+            if (helix !== null && revs !== null) {
+              const hs: Point2 = { u: helix.center.u + helix.radius, v: helix.center.v };
+              m.rapid({ x: hs.u, y: safe, z: hs.v });
+              m.rapid({ x: hs.u, y: feedPlane, z: hs.v });
+              emitHelixEntry(m, helix, feedPlane, yLevel, revs);
+              rowEnd = hs;
+            }
+          }
+          rowEnd = cutAdaptivePath(path, pi);
+        } else {
+          rowEnd = cutAdaptivePath(path, pi);
+        }
+      }
+      // Wall finish pass: re-walk the depth-0 (wall-side) loops — spring-pass
+      // semantics, the same idea as the offset strategy's finish.
+      if (params.wallFinishPass === true) {
+        for (let pi = adaptivePlan.finishFrom; pi < adaptivePlan.paths.length; pi++) {
+          rowEnd = cutAdaptivePath(adaptivePlan.paths[pi]!, pi);
+        }
+      }
+    } else if (useOffset) {
       // Contour-parallel clearing: wall ring first, then inward ring by ring.
       for (const path of ringPaths) {
         if (firstEntry) {
@@ -544,14 +715,32 @@ export function generatePocketToolpath(
           const start = path[0]!;
           let helixEnd: Point2 | null = null;
           if (params.helixEntry === true) {
-            // The wall ring's start sits ON the boundary where no swept disc
-            // fits; the second loop's start (one stepover in) is the nominal
-            // helix centre when it exists. The swept disc is validated against
-            // the component whose outer contains the nominal point — with
-            // islands or split regions that is where the entry must fit.
-            const nominal = ringPaths.length > 1 ? ringPaths[1]![0]! : start;
-            const reg = regions.find((rg) => pointInPolygon(nominal, rg.outer)) ?? regions[0]!;
-            const plan = planHelixEntry(nominal, reg.outer, reg.holes, r);
+            // The nominal helix seed is searched over deterministic
+            // candidates: the seed ring's quartile starts (the historical
+            // nominal is quartile 0), then every component's grid-sampled
+            // max-inscribed-circle centre. With islands, the second loop's
+            // start sits ON the grown island — every march candidate toward
+            // the outer centroid crosses the island and the whole seed
+            // family fails; the inscribed centre of the annular free gap is
+            // what recovers a placeable swept disc. First candidate whose
+            // plan is non-null wins; when they all fail, the linear ramp
+            // fallback below stands (unchanged semantics).
+            const seedRing = ringPaths.length > 1 ? ringPaths[1]! : path;
+            let plan: { center: Point2; radius: number } | null = null;
+            for (const q of [0, 0.25, 0.5, 0.75]) {
+              const cand = seedRing[Math.min(seedRing.length - 1, Math.floor(q * seedRing.length))]!;
+              const reg = regions.find((rg) => pointInPolygon(cand, rg.outer)) ?? regions[0]!;
+              plan = planHelixEntry(cand, reg.outer, reg.holes, r);
+              if (plan !== null) break;
+            }
+            if (plan === null) {
+              for (const reg of regions) {
+                const c = maxInscribedCenter(reg);
+                if (!c) continue;
+                plan = planHelixEntry(c, reg.outer, reg.holes, r);
+                if (plan !== null) break;
+              }
+            }
             const revs = plan !== null ? helixRevolutions(feedPlane - yLevel, plan.radius) : null;
             if (plan !== null && revs !== null) {
               const hs: Point2 = { u: plan.center.u + plan.radius, v: plan.center.v };
@@ -1131,19 +1320,25 @@ export function generateContourToolpath(
     island === conventional ? reverseLoop(loop) : loop;
 
   // Cutter compensation: outside the outer loop, inside the islands. Computed
-  // as ONE region offset (clipper-backed) with miter joins, keeping the
-  // legacy true-miter geometry: every offset edge sits exactly r+allowance
-  // off its wall, with corners only ever adding clearance. Region semantics
-  // also make the degenerate cases honest — an island too small for the tool
-  // is swallowed by the region (no path, exactly the legacy null-skip), and
-  // an island grown into the nearby outer wall merges with it so the emitted
-  // path wraps around the island instead of the two independent legacy loops
-  // crossing each other over the wall.
+  // as ONE region offset (clipper-backed) with default ROUND joins — for a
+  // disc cutter the round join is the geometrically exact offset: sweeping
+  // the cutter around a convex corner traces exactly a quarter(+) circle of
+  // radius r+allowance, which the G-code arc filter posts as G2/G3. (The
+  // legacy miter join overshot every corner by up to r·(√2−1)·… — claimed
+  // sharp corners the round tool never cut, and its 3.5·delta cap could
+  // extend the pass past the rim on obtuse angles.) arcTolerance 0.005
+  // (¼ of the library default) keeps each join polyline's chords within the
+  // 0.01 mm budget the arc fitter needs to re-merge the corner into ONE
+  // G2/G3. Region semantics also make the degenerate cases honest — an
+  // island too small for the tool is swallowed by the region (no path,
+  // exactly the legacy null-skip), and an island grown into the nearby outer
+  // wall merges with it so the emitted path wraps around the island instead
+  // of the two independent legacy loops crossing each other over the wall.
   const comps = offsetRegion(
     sil.outer.points,
     sil.islands.map((l) => l.points),
     offset,
-    { joinType: 'miter' },
+    { arcTolerance: 0.005 },
   );
   const paths: Point2[][] = [];
   const pathIsland: boolean[] = [];
@@ -1169,12 +1364,14 @@ export function generateContourToolpath(
   // hole (r − offset) — so a matched run can be replaced by an arc on
   // exactly that circle and the emitted radius is the analytic r ± offset,
   // not a re-fit. Matching tolerance: the 20 µm floor widened by the worst
-  // miter-overshoot the loop's own vertex density can produce on a circular
-  // run (offset·(1/cos(π/n) − 1) — exact for a full n-gon circle,
-  // conservative for partial arcs, floored at n = 8 for the coarsest brep
-  // faceting) plus 10 µm slack for the clipper quantization and tag fit.
-  // Bodies without cylinder tags (brep primitives, imported meshes) match
-  // nothing and keep the pure polyline output byte-for-byte.
+  // offset overshoot the loop's own vertex density can produce on a circular
+  // run (the historical miter bound offset·(1/cos(π/n) − 1), exact for a
+  // full n-gon circle — with round joins the offset vertices sit ON the
+  // true circle and only the join chords deviate, by the 5 µm arcTolerance
+  // above, so this stays a conservative ceiling) plus 10 µm slack for the
+  // clipper quantization and tag fit. Bodies without cylinder tags (brep
+  // primitives, imported meshes) match nothing and keep the pure polyline
+  // output byte-for-byte.
   const wallCircles = planCirclesFromBodies([body]);
   const loopRuns: ArcRun[][] = paths.map((path, i) => {
     if (wallCircles.length === 0) return [];

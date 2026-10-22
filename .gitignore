@@ -46,6 +46,17 @@ src-tauri/gen/
 src-tauri/WixTools/
 src-tauri/Frameworks/
 
+# ─── SMLib exact-geometry kernel (P3) ─────────────────────────
+# NVIDIA usd-brep binaries are fetched at build time by
+# scripts/fetch-sm-lib.ps1 (Apache-2.0) and NEVER committed.
+src-tauri/sm-lib/
+scripts/7zr.exe
+*.7z
+src-tauri/vendor/*.dll
+src-tauri/vendor/*.lib
+src-tauri/vendor/*.obj
+src-tauri/vendor/*.exp
+
 # ─── OS cruft ─────────────────────────────────────────────────
 .DS_Store
 .DS_Store?

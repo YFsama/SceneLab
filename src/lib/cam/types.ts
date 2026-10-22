@@ -36,8 +36,10 @@ export interface CAMParameters {
   springPass?: boolean;
   /** First-level entry descends along the path instead of a vertical plunge. Default false (legacy behavior). */
   rampEntry?: boolean;
-  /** Pocket clearing pattern: 'raster' zigzag (default, legacy) or 'offset' contour-parallel rings (concave outlines and islands included via region offsetting). */
-  pocketStrategy?: 'raster' | 'offset';
+  /** Pocket clearing pattern: 'raster' zigzag (default, legacy), 'offset' contour-parallel rings (concave outlines and islands included via region offsetting), or 'adaptive' trochoidal clearing (medial trochoid chain + engagement-limited offset bands grown inside-out; see cam/trochoid.ts). */
+  pocketStrategy?: 'raster' | 'offset' | 'adaptive';
+  /** Adaptive clearing only: target tool engagement angle in degrees — the cutter-circumference arc engaged in uncut material per bite, mapped from the radial step via φ = 2·asin(ae/D). Clamped to [5, 60]; default 30 (≈26% D stepover). */
+  adaptiveEngagementDeg?: number;
   /** Pocket entry: descend along a validated helical loop instead of the linear ramp / vertical plunge. Default false (legacy). */
   helixEntry?: boolean;
   /** Pocket wall finish: one extra loop along the wall-side boundary at each level after clearing it. Default false. */

@@ -14,10 +14,33 @@ describe('CAM toolpath generators (contour/drill/face)', () => {
     expect(tp.operation).toBe('contour');
     expect(tp.cuttingMoves.length).toBeGreaterThan(0);
     expect(generateGCode(tp)).toContain('G1');
-    // The top-view silhouette of a box is its 4-corner XZ rectangle (offset
-    // outward by the cutter radius — still exactly 4 distinct plan points).
-    const distinctXZ = new Set(tp.cuttingMoves.map((p) => `${p.x.toFixed(3)},${p.z.toFixed(3)}`));
-    expect(distinctXZ.size).toBe(4);
+    // The top-view silhouette of a box is its 4-corner XZ rectangle, offset
+    // outward by the cutter radius with ROUND joins: straight runs on the
+    // (20+2r) square plus a quarter arc of radius r at each corner. The
+    // plan footprint is therefore far more than 4 distinct points, and its
+    // total travel is the square's perimeter plus one full 2π·r of corners.
+    const r = 3;
+    let travel = 0;
+    for (let i = 1; i < tp.points.length; i++) {
+      const a = tp.points[i - 1]!;
+      const b = tp.points[i]!;
+      if (!b.rapid) travel += Math.hypot(b.x - a.x, b.z - a.z);
+    }
+    // One revolution per depth level (doc 2 over 5 mm → 3 levels); each
+    // revolution is 4 straight runs of 20 plus the 4 quarter arcs.
+    const levels = [...new Set(tp.cuttingMoves.map((p) => p.y))];
+    expect(levels.length).toBe(3);
+    expect(travel / levels.length).toBeCloseTo(4 * 20 + 2 * Math.PI * r, 1);
+    // Each corner sweeps an arc of radius exactly r about a box corner.
+    const cornerPts = tp.cuttingMoves.filter((p) => {
+      const du = Math.abs(p.x) - 10;
+      const dv = Math.abs(p.z) - 10;
+      return du > 0 && dv > 0;
+    });
+    expect(cornerPts.length).toBeGreaterThanOrEqual(4);
+    for (const p of cornerPts) {
+      expect(Math.abs(Math.hypot(Math.abs(p.x) - 10, Math.abs(p.z) - 10) - r)).toBeLessThan(2e-3);
+    }
   });
 
   it('generateDrillToolpath visits each hole', () => {

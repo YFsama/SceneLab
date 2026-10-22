@@ -4,6 +4,78 @@ All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
 ## [Unreleased]
 
+### 几何内核 — SMLib 精确几何服务 P3（Rust 侧增援算子落地）
+
+NVIDIA USD BRep（SMLib，Apache 2.0）以 Tauri 原生服务接入：`sm_status`/
+`sm_primitive`/`sm_boolean` 三命令，精确解析图元（box/cylinder/sphere/
+cone/torus）+ BRep 层精确布尔 + **每面解析溯源**的细分输出（FaceSource
+五种 tag 直接来自内核曲面，非拟合）。多 Agent 轮含一次进程僵死后的
+残骸补完（最难的面溯源 shim 幸存）。
+
+- **C++ shim（`src-tauri/vendor/smmesh.cpp`，456 行）**：17 个
+  extern "C" 导出全带异常护栏（-99 约定）；关键发现——**SMLib 把
+  圆柱表示为 semiAngle=0 的 `SmCone`**，`GetType()` 报 `SmCone_TYPE`，
+  统一走 `GetCanonical()+IsCylinder()` 分支（apex=−botR/tan(semi)
+  解析求出）；布尔吞 B 的 "Deleted on success" 语义与 free 配对经
+  头文件逐字核实；另修残骸 2 bug（box 放置、SM_SUCCESS=1000 归一）。
+- **Rust 服务（`src-tauri/src/sm/`，~1500 行）**：libloading 顺序
+  加载三 DLL、`OnceLock<Mutex>` 串行化（内核单线程）、ShimSlice
+  RAII、无 DLL 优雅降级（构建不炸、available:false）；build.rs 三
+  模式（编译/预编译/禁用）+ 编译前清旧 dll 防静默陈旧。
+- **cargo 金测 25/25（双模式）**：体积对解析值精确或 rel<1e-6
+  （双盒 union=1500.000000000000）；tag 参数 <1e-9（含尖锥退化顶圆
+  金测）；500 次循环泄漏压测平坦；`scripts/fetch-sm-lib.ps1` 官方
+  包下载（7zr 解压，二进制零入 git）。
+- **前端客户端 `smClient`（纯 lib 层，未接 UI）**：类型化 invoke、
+  SmBody→SolidBody 转换（source 校验复用 sanitize 语义）、六类错误
+  归类、可用性缓存；27/27 测试。
+- 已知限制（todo 记录）：布尔**新建**面无解析 tag（内核行为）、
+  extract 只走外环（内孔环丢）、面序对齐假设、sm_status 版本为
+  shim 串。
+
+### CAM — Adaptive/Trochoidal 摆线粗加工 v1（第 3 种开粗策略）
+
+按 docs/cnc-algorithms.md 调研方案（参考刀路偏移法 + 角落局部
+trochoid）实现 `pocketStrategy: 'adaptive'`；`cam/trochoid.ts` 纯函数
+规划器（568 行）+ 7 金样。UI 中英完整接线（策略下拉 + 啮合角 5–60°）。
+
+- **无过切由构造保证**：轨道半径 b ≤ 侵蚀深度 d（clipper round-join
+  即真实形态学等值线），7 金样 0 过切格、逐点距壁 ≥ r−0.045。
+- **啮合受控**：间距预补偿 ae+β(本环)−β(下环)，CORNER_SAFETY 0.64；
+  2π·b_min 滑窗新切面积估计器（含阳性对照：越壁 0.4mm→370 格、
+  全槽→180°、光栅折返→106° 如实计费）；金样实测 26–35°（≤36 上限）。
+- **弧占比 75–91%**（>60% 验收线），fitArcs 后 G2/G3 输出；中线向
+  外（留壁精修最后走）；再入分量谱系识别 + 首链轨道螺旋下刀
+  （**审查 P1 修复**：dust 跳过层曾使分裂分量首链裸插 virgin 材料
+  ——红 71.4° → 绿 26.2°，新增裸插检测器带阳性对照 + 哑铃/双袋
+  金样）；窄域 <2(r+b_min) 诚实退化直线槽铣；L 形 5 层 103–121ms；
+  逐点确定性。
+- 链接上限 3·ae + 精修环不吃链接；深层首入刀多圈渐进降深（每圈
+  ≤ min(2πb·tan15°, (doc+1)/32)）。
+
+### 几何内核 — 分类器与 CAM 打磨（遗留修复轮）
+
+- **斜轴解析分类打通**（真根因：圆拟合验证不容忍镶嵌壁弦点，弦高
+  > 0.1%·r 容差——轴对齐能过纯属侥幸；非"分组断链"）：严格 Kåsa
+  先行零漂移 + 最小包围圆（Welzl 固定种子+Math.imul）+ 局部弦高
+  容忍兜底；斜钻 ⌀5 孔恢复 cylinder tag（axis/radius 精确）。
+- **锥/球弦容忍补齐**：锥（2% 轴向间隙聚簇 + 环平面内 Kåsa 拟合
+  ——rim 污染会把质心连线拉偏 ~12°；法向守卫面积加权 5%，真实
+  污染实测 ~1e-12 但全有/全无守卫会误杀）；球（外接参考半径 +
+  组级最粗面片弦高）。斜钻圆锥 apex/halfAngle <1e-4。
+- **createRevolve 修复**（三连）：扫掠绕向朝内（体积 −390 被绝对值
+  掩盖）+ manifold-3d@3.5.1 无 `invert()` 方法（TypeError 被 catch
+  吞、误报 empty-exact-result）→ 源头规范 profile 朝向（半平面基
+  从首个离轴点推导，修审查 P2 轴上首点盲区）+ 纯 JS 翻绕向 + 轴上
+  退化带跳过/极点扇三角化（消除 32 面共用的退化自环）。**残留**：
+  revolve ∩ 全包含盒返回空（union/difference/部分重叠正常）——疑
+  manifold-3d 边缘行为，todo 立项。
+- **岛屿口袋螺旋下刀**：多候选名义点（种子环 4 分位 → 分量内切圆
+  心 24×24 网格），tube 出螺旋下刀（扫盘 ⊆ 环形区），无岛行为不变。
+- **轮廓补偿切 round join**（对圆刀几何精确；miter 3.5 上限曾过切
+  轮辋外）：arcTolerance 0.005，盒轮廓四角各 1×90° G2（半径=刀偏
+  置）；10 处断言按新几何重导出。
+
 ### 几何 — 解析面承载层 P2a（FaceSource 联合扩展）
 
 `Face.source` 从 cylinder 单成员扩展为 5 成员解析面联合：`plane`（无
