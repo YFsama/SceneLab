@@ -8,14 +8,24 @@ import {
   runSmPrimitive,
   runSmBoolean,
   createSmPrimitive,
+  createAnalyticPrimitive,
+  isSmAnalyticKind,
   smBoolean,
   smBodyToSolidBody,
   __setSmInvokerForTests,
   __resetSmClientForTests,
 } from './smClient';
-import type { SmBody, SmPrimitiveReq, SmStatus } from './smClient';
-import { computeVolume } from './brep';
-import { smStatus as smStatusViaIndex, createSmPrimitive as createViaIndex } from './index';
+import type { SmBody, SmPrimitiveKind, SmPrimitiveReq, SmStatus } from './smClient';
+import type { SolidBody } from './types';
+import { computeVolume, computeBoundingBox, DEFAULT_CHORD_TOLERANCE } from './brep';
+import {
+  createBox, createCylinder, createSphere, createCone, createTorus,
+} from './brep';
+import {
+  smStatus as smStatusViaIndex,
+  createSmPrimitive as createViaIndex,
+  createAnalyticPrimitive as createAnalyticViaIndex,
+} from './index';
 
 /** 10 mm cube centred at the origin, Y-up, consistently wound CCW-outward. */
 function cubeBody(): SmBody {
@@ -420,6 +430,333 @@ describe('createSmPrimitive / smBoolean convenience', () => {
     expect(r).not.toBeNull();
     expect(r!.brepVolume).toBe(500);
     expect(r!.body.faces).toHaveLength(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createAnalyticPrimitive — the UI facade (P3 v1.5)
+// ---------------------------------------------------------------------------
+
+/** Mesh generator honouring the SMLib anchoring contract exactly as the Rust
+ *  golden tests pin it: box/sphere/torus centred on `center`, cylinder/cone
+ *  standing on their base circle at `center`, Y-up. Doubles as the oracle for
+ *  the bbox-parity tests below — if the facade's center mapping is wrong the
+ *  bboxes diverge. */
+function anchoredMockBody(req: { kind: string; params: Record<string, unknown> }): SmBody {
+  // Strict tuple types throughout: the project compiles tests with
+  // noUncheckedIndexedAccess, so `number[]` destructuring would be
+  // number|undefined; the wire contract is a [x,y,z] triple anyway.
+  const c = (req.params.center as [number, number, number] | undefined) ?? [0, 0, 0];
+  const [cx, cy, cz] = c;
+  // Wire FaceSource spells Vec3 fields as {x,y,z} objects.
+  const vec = (x: number, y: number, z: number) => ({ x, y, z });
+  const N = 16;
+  const ring = (y: number, r: number): [number, number, number][] =>
+    Array.from({ length: N }, (_, i) => {
+      const a = (i / N) * Math.PI * 2;
+      return [cx + Math.cos(a) * r, y, cz + Math.sin(a) * r] as [number, number, number];
+    });
+
+  if (req.kind === 'box') {
+    const [sx, sy, sz] = req.params.size as [number, number, number];
+    const [hx, hy, hz] = [sx / 2, sy / 2, sz / 2];
+    const x0 = cx - hx, x1 = cx + hx, y0 = cy - hy, y1 = cy + hy, z0 = cz - hz, z1 = cz + hz;
+    return {
+      vertices: [
+        [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1],
+        [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1],
+      ],
+      faces: [
+        { vertices: [0, 1, 2, 3], normal: [0, -1, 0] },
+        { vertices: [4, 7, 6, 5], normal: [0, 1, 0] },
+        { vertices: [0, 4, 5, 1], normal: [0, 0, -1] },
+        { vertices: [3, 2, 6, 7], normal: [0, 0, 1] },
+        { vertices: [0, 3, 7, 4], normal: [-1, 0, 0] },
+        { vertices: [1, 5, 6, 2], normal: [1, 0, 0] },
+      ],
+    };
+  }
+
+  if (req.kind === 'cylinder') {
+    const r = req.params.radius as number;
+    const h = req.params.height as number;
+    const bot = ring(cy, r);
+    const top = ring(cy + h, r);
+    const vertices = [...bot, ...top];
+    const faces: SmBody['faces'] = [
+      { vertices: [...Array(N).keys()].reverse(), normal: [0, -1, 0] },
+      { vertices: Array.from({ length: N }, (_, i) => N + i), normal: [0, 1, 0] },
+    ];
+    for (let i = 0; i < N; i++) {
+      const j = (i + 1) % N;
+      const a = ((i + 0.5) / N) * Math.PI * 2;
+      faces.push({
+        vertices: [i, j, N + j, N + i],
+        normal: [Math.cos(a), 0, Math.sin(a)],
+        source: { kind: 'cylinder', origin: vec(cx, cy, cz), axis: vec(0, 1, 0), radius: r },
+      });
+    }
+    return { vertices, faces };
+  }
+
+  if (req.kind === 'sphere') {
+    const r = req.params.radius as number;
+    // Octahedron through the 6 axis endpoints — extremes are exact.
+    const vertices: [number, number, number][] = [
+      [cx + r, cy, cz], [cx - r, cy, cz],
+      [cx, cy + r, cz], [cx, cy - r, cz],
+      [cx, cy, cz + r], [cx, cy, cz - r],
+    ];
+    const faces: SmBody['faces'] = [];
+    for (const tri of [[0, 2, 4], [4, 2, 1], [1, 2, 5], [5, 2, 0], [3, 4, 2], [3, 2, 1], [3, 1, 5], [3, 5, 0]] as const) {
+      const n = tri.map((i) => vertices[i]!).reduce(
+        (s, v) => [s[0] + v[0] / 3 - cx, s[1] + v[1] / 3 - cy, s[2] + v[2] / 3 - cz],
+        [0, 0, 0] as [number, number, number],
+      );
+      const len = Math.hypot(...n);
+      faces.push({
+        vertices: [...tri],
+        normal: [n[0]! / len, n[1]! / len, n[2]! / len],
+        source: { kind: 'sphere', center: vec(cx, cy, cz), radius: r },
+      });
+    }
+    return { vertices, faces };
+  }
+
+  if (req.kind === 'cone') {
+    const rb = req.params.bottomRadius as number;
+    const rt = req.params.topRadius as number;
+    const h = req.params.height as number;
+    const pointed = rt < 1e-9;
+    const bot = ring(cy, rb);
+    const vertices: [number, number, number][] = [...bot];
+    const faces: SmBody['faces'] = [
+      { vertices: [...Array(N).keys()].reverse(), normal: [0, -1, 0] },
+    ];
+    if (pointed) {
+      vertices.push([cx, cy + h, cz]);
+      const apexIdx = N;
+      for (let i = 0; i < N; i++) {
+        faces.push({
+          vertices: [i, (i + 1) % N, apexIdx],
+          normal: [0, 0, 0], // Newell fallback exercises the converter path
+          source: { kind: 'cone', apex: vec(cx, cy + h, cz), axis: vec(0, -1, 0), halfAngle: Math.atan2(rb, h) },
+        });
+      }
+    } else {
+      const top = ring(cy + h, rt);
+      vertices.push(...top);
+      faces.push({ vertices: Array.from({ length: N }, (_, i) => N + i), normal: [0, 1, 0] });
+      const apexY = cy + (h * rb) / (rb - rt);
+      for (let i = 0; i < N; i++) {
+        const j = (i + 1) % N;
+        faces.push({
+          vertices: [i, j, N + j, N + i],
+          normal: [0, 0, 0],
+          source: { kind: 'cone', apex: vec(cx, apexY, cz), axis: vec(0, -1, 0), halfAngle: Math.atan2(rb - rt, h) },
+        });
+      }
+    }
+    return { vertices, faces };
+  }
+
+  // torus
+  const R = req.params.majorRadius as number;
+  const r = req.params.minorRadius as number;
+  // SIDES must be a multiple of 4 so the y extremes (v = 90°/270°) are
+  // sampled exactly — the bbox-parity oracle needs ±minorRadius, not a
+  // chord-tol approximation of them (the real kernel is finer than that).
+  const SEG = 12, SIDES = 12;
+  const vertices: [number, number, number][] = [];
+  for (let i = 0; i < SEG; i++) {
+    const u = (i / SEG) * Math.PI * 2;
+    for (let j = 0; j < SIDES; j++) {
+      const v = (j / SIDES) * Math.PI * 2;
+      vertices.push([
+        cx + (R + r * Math.cos(v)) * Math.cos(u),
+        cy + r * Math.sin(v),
+        cz + (R + r * Math.cos(v)) * Math.sin(u),
+      ]);
+    }
+  }
+  const faces: SmBody['faces'] = [];
+  for (let i = 0; i < SEG; i++) {
+    for (let j = 0; j < SIDES; j++) {
+      const ni = (i + 1) % SEG;
+      const nj = (j + 1) % SIDES;
+      faces.push({
+        vertices: [i * SIDES + j, ni * SIDES + j, ni * SIDES + nj, i * SIDES + nj],
+        normal: [0, 0, 0],
+        source: { kind: 'torus', center: vec(cx, cy, cz), axis: vec(0, 1, 0), majorRadius: R, minorRadius: r },
+      });
+    }
+  }
+  return { vertices, faces };
+}
+
+/** Kernel fake that ANSWERS FROM THE REQUEST: sm_primitive returns a mesh
+ *  anchored per the SMLib contract (see anchoredMockBody). */
+function anchoredKernelInvoker() {
+  return vi.fn(async (cmd: string, args?: Record<string, unknown>): Promise<unknown> => {
+    if (cmd === 'sm_status') return { available: true, version: 'smmesh-test' };
+    if (cmd === 'sm_primitive') {
+      const req = (args as { req: { kind: string; params: Record<string, unknown> } }).req;
+      return { ok: true, body: anchoredMockBody(req), brepVolumeMm3: 1 };
+    }
+    throw new Error(`unexpected command ${cmd}`);
+  });
+}
+
+describe('createAnalyticPrimitive (UI facade)', () => {
+  it('maps the dialog field keys onto kernel params, incl. the box center shift', async () => {
+    const invoker = anchoredKernelInvoker();
+    __setSmInvokerForTests(invoker);
+
+    await createAnalyticPrimitive('box', { w: 20, h: 20, d: 20 });
+    // brep boxes sit on y=0; the kernel centres them — the facade must shift.
+    expect(invoker.mock.calls.at(-1)).toEqual(['sm_primitive', {
+      req: {
+        kind: 'box',
+        params: { size: [20, 20, 20], center: [0, 10, 0] },
+        tessellation: { chordToleranceMm: DEFAULT_CHORD_TOLERANCE },
+      },
+    }]);
+
+    await createAnalyticPrimitive('cylinder', { r: 10, h: 20 });
+    expect(invoker.mock.calls.at(-1)![1]).toEqual({
+      req: { kind: 'cylinder', params: { radius: 10, height: 20 }, tessellation: { chordToleranceMm: DEFAULT_CHORD_TOLERANCE } },
+    });
+
+    await createAnalyticPrimitive('sphere', { r: 10 });
+    expect(invoker.mock.calls.at(-1)![1]).toEqual({
+      req: { kind: 'sphere', params: { radius: 10 }, tessellation: { chordToleranceMm: DEFAULT_CHORD_TOLERANCE } },
+    });
+
+    await createAnalyticPrimitive('cone', { rb: 10, rt: 0, h: 20 });
+    expect(invoker.mock.calls.at(-1)![1]).toEqual({
+      req: {
+        kind: 'cone',
+        params: { bottomRadius: 10, topRadius: 0, height: 20 },
+        tessellation: { chordToleranceMm: DEFAULT_CHORD_TOLERANCE },
+      },
+    });
+
+    await createAnalyticPrimitive('torus', { R: 10, r: 3 });
+    expect(invoker.mock.calls.at(-1)![1]).toEqual({
+      req: {
+        kind: 'torus',
+        params: { majorRadius: 10, minorRadius: 3 },
+        tessellation: { chordToleranceMm: DEFAULT_CHORD_TOLERANCE },
+      },
+    });
+  });
+
+  it('returns a tagged kernel body: cylinder walls, torus faces (first wired producer)', async () => {
+    __setSmInvokerForTests(anchoredKernelInvoker());
+
+    const cyl = await createAnalyticPrimitive('cylinder', { r: 10, h: 20 });
+    expect(cyl).not.toBeNull();
+    expect(cyl!.id).toMatch(/^body_sm_\d+$/);
+    expect(cyl!.name).toBe('SM Cylinder');
+    const walls = cyl!.faces.filter((f) => f.source?.kind === 'cylinder');
+    expect(walls.length).toBeGreaterThanOrEqual(1);
+    for (const f of walls) {
+      expect(f.source).toEqual({
+        kind: 'cylinder',
+        origin: { x: 0, y: 0, z: 0 },
+        axis: { x: 0, y: 1, z: 0 },
+        radius: 10,
+      });
+    }
+    // caps stay plane-ish (untagged here) — at least the wall carries provenance
+    expect(cyl!.faces.length).toBeGreaterThan(walls.length);
+
+    const tor = await createAnalyticPrimitive('torus', { R: 10, r: 3 });
+    expect(tor).not.toBeNull();
+    expect(tor!.faces.length).toBeGreaterThan(0);
+    for (const f of tor!.faces) {
+      expect(f.source).toEqual({
+        kind: 'torus',
+        center: { x: 0, y: 0, z: 0 },
+        axis: { x: 0, y: 1, z: 0 },
+        majorRadius: 10,
+        minorRadius: 3,
+      });
+    }
+  });
+
+  it('bbox parity: the kernel body occupies exactly the brep body\'s box (per dimension, chord-level tolerance)', async () => {
+    __setSmInvokerForTests(anchoredKernelInvoker());
+    const tol = DEFAULT_CHORD_TOLERANCE;
+    const cases: Array<[string, SmPrimitiveKind, Record<string, number>, () => SolidBody]> = [
+      ['box', 'box', { w: 20, h: 20, d: 20 }, () => createBox(20, 20, 20)],
+      ['cylinder', 'cylinder', { r: 10, h: 20 }, () => createCylinder(10, 20)],
+      ['sphere', 'sphere', { r: 10 }, () => createSphere(10)],
+      ['pointed cone', 'cone', { rb: 10, rt: 0, h: 20 }, () => createCone(10, 0, 20)],
+      ['frustum cone', 'cone', { rb: 10, rt: 5, h: 20 }, () => createCone(10, 5, 20)],
+      ['torus', 'torus', { R: 10, r: 3 }, () => createTorus(10, 3)],
+    ];
+    for (const [label, kind, params, brepBuild] of cases) {
+      const sm = await createAnalyticPrimitive(kind, params);
+      expect(sm, label).not.toBeNull();
+      const a = computeBoundingBox(sm!);
+      const b = computeBoundingBox(brepBuild());
+      for (const dim of ['x', 'y', 'z'] as const) {
+        expect(Math.abs(a.min[dim] - b.min[dim]), `${label} min.${dim}`).toBeLessThanOrEqual(tol);
+        expect(Math.abs(a.max[dim] - b.max[dim]), `${label} max.${dim}`).toBeLessThanOrEqual(tol);
+      }
+    }
+  });
+
+  it('returns null (→ brep fallback) for every failure class', async () => {
+    const invoker = anchoredKernelInvoker();
+    __setSmInvokerForTests(invoker);
+
+    // Non-analytic kind: refused before ANY invoke (not even sm_status).
+    expect(await createAnalyticPrimitive('wedge' as never, { w: 1, h: 1, d: 1 })).toBeNull();
+    expect(await createAnalyticPrimitive('prism' as never, {})).toBeNull();
+    expect(invoker).not.toHaveBeenCalled();
+
+    // Invalid/missing params: refused client-side, no sm_primitive round trip.
+    const bad: Array<[string, Parameters<typeof createAnalyticPrimitive>[1]]> = [
+      ['box missing h', { w: 10, d: 10 }],
+      ['box zero w', { w: 0, h: 10, d: 10 }],
+      ['box NaN d', { w: 10, h: 10, d: Number.NaN }],
+      ['cylinder negative r', { r: -1, h: 10 }],
+      ['sphere zero r', { r: 0 }],
+      ['cone both radii 0', { rb: 0, rt: 0, h: 10 }],
+      ['cone negative rt', { rb: 10, rt: -1, h: 10 }],
+      ['torus minor > major', { R: 3, r: 10 }],
+      ['torus missing R', { r: 3 }],
+    ];
+    for (const [label, params] of bad) {
+      const kind = label.split(' ')[0] as Parameters<typeof createAnalyticPrimitive>[0];
+      expect(await createAnalyticPrimitive(kind, params), label).toBeNull();
+    }
+    expect(invoker.mock.calls.filter(([cmd]) => cmd === 'sm_primitive')).toHaveLength(0);
+
+    // Backend decline.
+    __resetSmClientForTests();
+    __setSmInvokerForTests(kernelInvoker({ primitive: { ok: false, error: 'kernel said no' } }));
+    expect(await createAnalyticPrimitive('box', { w: 10, h: 10, d: 10 })).toBeNull();
+
+    // Kernel unavailable (no invoker: jsdom transport rejects, cached).
+    __resetSmClientForTests();
+    expect(await createAnalyticPrimitive('sphere', { r: 10 })).toBeNull();
+  });
+
+  it('isSmAnalyticKind splits the 9 UI kinds', () => {
+    for (const k of ['box', 'cylinder', 'sphere', 'cone', 'torus']) {
+      expect(isSmAnalyticKind(k), k).toBe(true);
+    }
+    for (const k of ['wedge', 'prism', 'tube', 'coil']) {
+      expect(isSmAnalyticKind(k), k).toBe(false);
+    }
+    expect(isSmAnalyticKind('hypercube')).toBe(false);
+  });
+
+  it('facade is re-exported from the geometry index', () => {
+    expect(typeof createAnalyticViaIndex).toBe('function');
   });
 });
 

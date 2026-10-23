@@ -512,6 +512,11 @@ export function createRevolve(params: RevolveParams): SolidBody {
   };
 }
 
+/** Axis-aligned box, anchored like every brep primitive: the XZ-footprint is
+ *  CENTERED on the origin and the body spans y ∈ [0, height] (profile in the
+ *  y=0 plane extruded along +Y). A translate-by-(-h/2) style offset is the
+ *  caller's job when a centered box is wanted — or use
+ *  `createBoundingBoxBody(body, margin)` for guaranteed containment. */
 export function createBox(width: number, height: number, depth: number): SolidBody {
   if (![width, height, depth].every((d) => Number.isFinite(d) && d > 0)) {
     throw new Error('Box dimensions must be positive');

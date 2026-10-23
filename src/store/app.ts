@@ -1728,6 +1728,14 @@ export const useStore = create<AppState>((set, get) => {
     get().markOnboardingStep('insert');
   },
   addPrimitive: (kind) => {
+    // Quick insert stays on the synchronous brep constructors ON PURPOSE (P3
+    // v1.5 decision): this path is fire-and-forget from the welcome card and
+    // the command palette, callers expect the body to exist the moment the
+    // call returns, and ~17 test call sites assert state synchronously —
+    // awaiting the SMLib IPC round trip would make every caller async for no
+    // functional gain. Trade-off: dialog goes SMLib (exact geometry + analytic
+    // face tags via createAnalyticPrimitive in PrimitiveDialog), quick insert
+    // goes brep. Revisit if quick-insert ever needs provenance-aware ops.
     // Sensible default dimensions (mm) so a single click/call yields a usable part.
     const body = ((): SolidBody => {
       switch (kind) {

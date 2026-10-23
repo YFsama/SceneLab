@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { warmUpBooleanEngine, booleanOpManifold } from './booleanManifold';
-import { createBox, createCone, createCylinder, createSphere, createRevolve, computeVolume, checkManifold } from './brep';
+import { createBox, createCone, createCylinder, createSphere, createRevolve, computeVolume, checkManifold, createBoundingBoxBody } from './brep';
 import { translateBody, rotateBody } from './operations';
 import { booleanOp, lastBooleanFallbackReason } from './boolean';
 import type { Face, FaceSource, SolidBody } from './types';
@@ -593,9 +593,6 @@ describe('revolve winding with on-axis first profile point', () => {
     expect(cm.nonManifoldEdges).toBe(0);
     // Union and difference run the EXACT path (no fallback reason) and the
     // wall recovers its analytic tag from the rebuilt output.
-    // (Known residual, tracked in todo.md: intersect of a revolve with a
-    // fully containing box still returns empty — union/difference/partial
-    // intersects work; primitive cylinders in the same containment work.)
     const uni = booleanOpManifold(body, box, 'union');
     expect(uni).not.toBeNull();
     expect(lastBooleanFallbackReason()).toBeNull();
@@ -606,5 +603,19 @@ describe('revolve winding with on-axis first profile point', () => {
     expect(tagged.length).toBeGreaterThanOrEqual(8);
     const src = tagged[0]!.src;
     if (src.kind === 'cylinder') expect(src.radius).toBeCloseTo(5, 3);
+    // Full containment intersect works too. (The box above deliberately does
+    // NOT contain this body — createBox is XZ-centred with y ∈ [0, h], so
+    // translated by (−10,−10,−10) it only touches the revolve at z = 0 and an
+    // empty intersect would be geometrically CORRECT. That anchor mixup spent
+    // a whole investigation; see todo.md. A true container proves the point.)
+    const container = createBoundingBoxBody(body, 5);
+    const self = booleanOpManifold(body, container, 'intersect');
+    expect(self).not.toBeNull();
+    expect(lastBooleanFallbackReason()).toBeNull();
+    // ⌀10 h2 cylinder: the intersected wall keeps its analytic tag.
+    const selfTagged = facesTagged(self!, 'cylinder');
+    expect(selfTagged.length).toBeGreaterThanOrEqual(8);
+    const selfSrc = selfTagged[0]!.src;
+    if (selfSrc.kind === 'cylinder') expect(selfSrc.radius).toBeCloseTo(5, 3);
   });
 });

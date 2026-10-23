@@ -4,6 +4,29 @@ All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
 ## [Unreleased]
 
+### SMLib — 图元接线 UI + 泄漏 soak + intersect 之谜告破（P3 v1.5）
+
+- **图元对话框接 SMLib**：5 种解析图元（box/cylinder/sphere/cone/torus）
+  在内核可用时经 `createAnalyticPrimitive` 门面产出**精确解析 tag 体**
+  （torus 首次拥有生产者；box 面带 plane tag），不可用/失败回落 brep
+  **逐字节等价**；对话框显示 "SMLib 精确" 徽标（中英）；wedge/prism/
+  tube/coil 与快捷插入（addPrimitive）保持 brep（17 处同步测试调用点
+  + undo 时序风险，取舍注释在 store）。锚定一致性：box 门面发
+  center=[0,h/2,0] 对齐 brep y∈[0,h]，bbox parity 6 组测试 ≤0.005mm。
+  审查修复三连：tsc 53 错（mock 元组类型）、torus R<r 回落 throw 致
+  对话框永久 busy（跨字段校验 + promise catch + 回归测试红绿）、busy
+  窗口 Escape 后 IPC 返回仍插入体（alive flag 守卫 + Cancel 一致
+  disabled + 时序测试）。
+- **泄漏长 soak**：`sm_soak_long`（#[ignore]，SM_SOAK_CYCLES 可选默
+  认 2000）：实跑 2000 循环 delta ~780KB（≈390B/cycle，预算 2KB/cycle
+  +8MB）——pass #37 的"500 次判噪声"结论被彻底坐实为**无泄漏**。
+- **revolve ∩ 包含盒空结果 = 非缺陷**（调查告破）：测试构造的"包含
+  盒"因 createBox 锚定（XZ 居中、y∈[0,h]）实际只与 revolve 体在
+  z=0 相切，空交集几何正确；"原生圆柱正常"是 Y 轴柱恰好真重叠的误
+  导对照（四分之一柱 39.27 体积与观察精确吻合）；manifold-3d 在 40+
+  探针组合全部正确。金测试补真包含（createBoundingBoxBody）intersect
+  断言（tag 完整恢复）；锚定约定写入 createBox/createCylinder JSDoc。
+
 ### 几何内核 — SMLib 精确几何服务 P3（Rust 侧增援算子落地）
 
 NVIDIA USD BRep（SMLib，Apache 2.0）以 Tauri 原生服务接入：`sm_status`/

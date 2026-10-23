@@ -80,7 +80,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 - [ ] **锥分类器保守区**：被切割成多行顶点的锥壁、45° 临界二面角光滑合并组不打标；尖锥 STEP 走弦边界不成 CIRCLE 管形（记录为已知限制）
 - [ ] 球面分类窄窗：短圆柱带（L≲1.2r）在圆柱拟合病态时可错标 sphere（法向门 0.85 挡不住；**整环**带负例已钉，**弧形**带（覆盖<300° 单行壁）负例未钉——探针实测 h=5/r=10 错标 R=10.31、h=12 错标 R=11.66，为既有行为非回归）；horn torus 顶点恰落轴时 STEP same_sense 退化（无生产者，理论）
 - [x] ~~斜轴解析分类端到端不通~~（2026-10-14 pass#37 修复：真根因是圆拟合验证不容忍镶嵌壁弦点（弦高>0.1%·r 容差）而非分组断链；严格 Kåsa 先行零漂移 + 最小包围圆+局部弦高容忍兜底；斜钻金测钉死 axis/radius/单共享 tag。锥/球弦容忍已于同日补齐（fitRingChordTolerant 聚簇+平面内拟合、球外接参考+组级面片弦高；斜钻锥 tag <1e-4 金测））
-- [x] ~~createRevolve 输出过不了 exact 布尔~~（2026-10-14 pass#37 修复：扫掠绕向朝内（体积 −390 被绝对值掩盖）+ manifold-3d@3.5.1 无 invert() 方法（TypeError 被 catch 吞）；源头规范 profile 朝向 + 纯 JS 翻绕向 + 轴上退化带跳过/极点扇三角化。**残留**：revolve 体与全包含盒的 intersect 仍返回空（union/difference/部分重叠 intersect 正常、原生圆柱同场景正常）——疑似 manifold-3d 边缘行为，待深挖）
+- [x] ~~createRevolve 输出过不了 exact 布尔~~（2026-10-14 pass#37 修复：扫掠绕向朝内（体积 −390 被绝对值掩盖）+ manifold-3d@3.5.1 无 invert() 方法（TypeError 被 catch 吞）；源头规范 profile 朝向 + 纯 JS 翻绕向 + 轴上退化带跳过/极点扇三角化。~~残留 intersect 之谜已破：非缺陷~~——2026-10-22 调查定性：测试构造的"包含盒"实为 XZ 居中/y∈[0,h] 锚定，translate 后与 revolve 体仅在 z=0 相切，空交集是几何正确结果（"原生圆柱正常"是 Y 轴柱恰好真重叠的误导对照）；manifold-3d 在 40+ 探针组合全部正确，真包含（createBoundingBoxBody）intersect 正常并已补金测断言；createBox/createCylinder 锚定约定已写入 JSDoc）
 - [ ] **凹边精确圆角**：选到 reflex 边时精确路径整体拒绝→覆盖层回退（减材刀具无法加材）；需要加材侧补偿或真 rolling-ball
 - [ ] **非凸抽壳 Worker 化**：同步 res-40 体素内部体 ~0.2s（签名约束为同步）
 - [ ] **隐藏线消除**（工程图审计 B5，L）：深度分类投影段 + 虚线隐藏样式——圆柱/剖切的线汤可读性
@@ -126,7 +126,7 @@ An Autodesk Fusion 360–like parametric CAD tool where AI is a first-class citi
 ### E. 基础设施 / 流程
 
 - [x] ~~SMLib Rust 侧服务 P3 v1~~（2026-10-22 Unreleased：src-tauri/src/sm 三命令（status/primitive/boolean）+ vendor/smmesh.cpp 面溯源 shim + fetch 脚本 + smClient 前端客户端；cargo 25/25 双模式、体积对解析值精确、tag<1e-9、无 DLL 降级。**纯 lib 层未接 UI**）
-- [ ] SMLib 服务跟进：①UI/特征树接线（图元创建走 SMLib 精确 tag、布尔回退链插入 SMLib 档）②2000+ 循环长 soak 泄漏复测（500 次 delta 0.3–1MB 判噪声，未彻底排除 <2KB/cycle 缓存增长）③extract 内孔环（多环面）④布尔新建面的 tag 生成（现无，内核行为）⑤sm_status 内核真实版本号
+- [ ] SMLib 服务跟进：~~①图元创建接线~~（2026-10-22 Unreleased：PrimitiveDialog 5 解析图元走门面，torus 首个生产者，回落逐字节等价）~~②2000 循环 soak~~（实跑 2000 循环 ≈390B/cycle，无泄漏坐实）；剩：布尔回退链插入 SMLib 档（需任意 mesh 输入，当前 IPC 仅图元）、extract 内孔环（多环面）、布尔新建面的 tag 生成（现无，内核行为）、sm_status 内核真实版本号、快捷插入路径接门面（需 store 异步化）
 
 - [ ] **NSIS 安装器实机验证**（pass #32）：currentUser/SimpChinese+English/语言选择器——v0.26.0 CI 已成功产出 `x64-setup.exe`（构建管线走通），剩下载实机确认安装界面与每用户安装行为；附带修复 release.yml 便携版上传硬编码 0.1.0 文件名的遗留 bug（曾致 v0.26.0 首次出包失败，a0f88ab）
 - [ ] **工程图导出分辨率随窗口**（pass #32 行为升级）：DrawingCanvas 背衬跟随容器（原固定 800 逻辑分辨率）——小窗导出可低于旧分辨率；如需稳定输出可加导出最小分辨率钳制

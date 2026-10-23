@@ -1507,6 +1507,68 @@ mod tests {
         });
     }
 
+    /// Long soak variant of golden_no_leak_over_500_cycles for leak-hunting
+    /// sessions: same double-box union + tessellate + extract + release loop,
+    /// but the cycle count comes from the optional SM_SOAK_CYCLES env var
+    /// (default 2000; invalid or non-positive values fall back to 2000 with a
+    /// note) and the budget scales with it — steady-state growth must stay
+    /// under 2 KB per cycle, plus an 8 MB one-off allowance for lazy kernel
+    /// allocations that land inside the measured window after the warmup.
+    #[test]
+    #[ignore = "long soak; env SM_SOAK_CYCLES is optional (default 2000); run with: cargo test -- --ignored"]
+    #[cfg(windows)]
+    fn sm_soak_long() {
+        with_kernel(|| {
+            let cycles: usize = match std::env::var("SM_SOAK_CYCLES") {
+                Ok(raw) => match raw.trim().parse::<usize>() {
+                    Ok(c) if c > 0 => c,
+                    _ => {
+                        eprintln!(
+                            "SM_SOAK_CYCLES={raw:?} is not a positive integer -- using the default 2000"
+                        );
+                        2000
+                    }
+                },
+                Err(_) => 2000,
+            };
+            let warmup = 50usize;
+            let mut ws_before = 0usize;
+            for i in 0..warmup + cycles {
+                if i == warmup {
+                    ws_before = working_set_bytes();
+                }
+                let req = SmBooleanReq {
+                    a: prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None),
+                    b: prim(
+                        SmKind::Box,
+                        params(&[("size", json!([10, 10, 10])), ("center", json!([5, 0, 0]))]),
+                        None,
+                    ),
+                    op: SmOp::Union,
+                    tessellation: Some(SmTessellationReq {
+                        chord_tolerance_mm: Some(0.05),
+                        angle_tolerance_deg: None,
+                        max_edge_length_mm: None,
+                    }),
+                };
+                let wire = boolean_impl(&req);
+                assert!(wire.ok, "cycle {i} failed: {:?}", wire.error);
+            }
+            let ws_after = working_set_bytes();
+            let delta: i64 = ws_after as i64 - ws_before as i64;
+            let budget: i64 = cycles as i64 * 2 * 1024 + 8 * 1024 * 1024;
+            eprintln!(
+                "long soak: {cycles} cycles, working set {} -> {} bytes (delta {delta} B, budget {budget} B)",
+                ws_before,
+                ws_after,
+            );
+            assert!(
+                delta < budget,
+                "working set grew {delta} B over {cycles} cycles (budget {budget} B, 2 KB/cycle + 8 MB) -- leak?"
+            );
+        });
+    }
+
     #[repr(C)]
     struct ProcessMemoryCounters {
         cb: u32,

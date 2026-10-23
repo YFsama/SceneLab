@@ -17,7 +17,7 @@
 // `__resetManifoldEngineForTests` / `__setExactStepLoaderForTests` seam
 // precedent) instead of mocking @tauri-apps modules.
 import type { Face, FaceSource, SolidBody, Vec3 } from './types';
-import { buildEdgesFromFaces } from './brep';
+import { buildEdgesFromFaces, DEFAULT_CHORD_TOLERANCE } from './brep';
 import { callNative } from '../runtime';
 
 // ---------------------------------------------------------------------------
@@ -475,6 +475,125 @@ export async function smBoolean(
 ): Promise<{ body: SolidBody; brepVolume: number } | null> {
   const r = await runSmBoolean({ a, b, op, tessellation });
   return r.ok ? { body: r.body, brepVolume: r.brepVolumeMm3 } : null;
+}
+
+// ---------------------------------------------------------------------------
+// Analytic-primitive facade (P3 v1.5 UI wiring surface)
+// ---------------------------------------------------------------------------
+
+/**
+ * Is `kind` (a PrimitiveKind in the UI's 9-kind space) one the kernel builds
+ * exactly? Narrowing guard so dialog/store call sites can branch without
+ * duplicating the kind list.
+ */
+export function isSmAnalyticKind(kind: string): kind is SmPrimitiveKind {
+  return (SM_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * UI-facing facade over createSmPrimitive for the 5 analytic kinds.
+ *
+ * Input contract: `params` uses the PrimitiveDialog's field keys — box
+ * {w,h,d}, cylinder {r,h}, sphere {r}, cone {rb,rt,h}, torus {R,r} — all plain
+ * numbers; the mapping onto kernel params (size/majorRadius/...) and the
+ * anchoring correction live HERE so callers stay one-liners.
+ *
+ * Anchoring parity with brep.ts (pinned by the bbox tests in smClient.test.ts):
+ * the kernel centers box/sphere/torus on `center` and stands cylinder/cone on
+ * their base circle there, while brep's createBox anchors the BOTTOM face at
+ * y=0 (createCylinder/createCone already stand at y=0, createSphere and
+ * createTorus are origin-centred). The only correction needed is therefore the
+ * box center shift [0, h/2, 0]; a user toggling SMLib on/off must never see
+ * the body jump.
+ *
+ * Tessellation: chordToleranceMm = DEFAULT_CHORD_TOLERANCE (0.005 mm), the
+ * same deviation budget brep's adaptiveSegments spends on cylinders/cones, so
+ * the kernel mesh is at least as faithful as the brep mesh. (brep's sphere=16
+ * segments and torus=32×16 are coarser than that budget; the kernel comes out
+ * denser but strictly closer to the true surface — visually indistinguishable
+ * at scene scale. Planar faces are exact regardless of the tolerance.)
+ *
+ * Returns null on ANY failure — kernel unavailable, non-analytic kind,
+ * invalid/missing params (including torus minor>major, which the brep
+ * constructor rejects too) — so the caller falls back to its synchronous brep
+ * constructor and reproduces today's behaviour byte-for-byte. Never rejects.
+ */
+export async function createAnalyticPrimitive(
+  kind: SmPrimitiveKind,
+  params: Record<string, number>,
+): Promise<SolidBody | null> {
+  const num = (v: number | undefined): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+  const pos = (v: number | undefined): number | null => {
+    const n = num(v);
+    return n !== null && n > 0 ? n : null;
+  };
+  const nonNeg = (v: number | undefined): number | null => {
+    const n = num(v);
+    return n !== null && n >= 0 ? n : null;
+  };
+
+  // Client-side validation: anything the KERNEL would reject (plus params it
+  // cannot represent) returns null BEFORE the availability gate/round-trip, so
+  // the brep fallback (whose own validation then decides, exactly as today) is
+  // instant. Note brep accepts a few shapes the kernel cannot — cone rb=0
+  // (inverted frustum) and torus minor>major reach brep through this null and
+  // keep their historical behaviour there.
+  let req: SmPrimitiveReq;
+  switch (kind) {
+    case 'box': {
+      const w = pos(params.w);
+      const h = pos(params.h);
+      const d = pos(params.d);
+      if (w === null || h === null || d === null) return null;
+      req = { kind, params: { size: [w, h, d], center: [0, h / 2, 0] } };
+      break;
+    }
+    case 'cylinder': {
+      const r = pos(params.r);
+      const h = pos(params.h);
+      if (r === null || h === null) return null;
+      req = { kind, params: { radius: r, height: h } };
+      break;
+    }
+    case 'sphere': {
+      const r = pos(params.r);
+      if (r === null) return null;
+      req = { kind, params: { radius: r } };
+      break;
+    }
+    case 'cone': {
+      // Kernel: bottomRadius > 0, topRadius >= 0 (0 = pointed). brep's
+      // createCone additionally accepts rb=0 (rt>0); pos() sends those to the
+      // brep fallback instead of a doomed kernel round-trip.
+      const rb = pos(params.rb);
+      const rt = nonNeg(params.rt);
+      const h = pos(params.h);
+      if (rb === null || rt === null || h === null) return null;
+      req = { kind, params: { bottomRadius: rb, topRadius: rt, height: h } };
+      break;
+    }
+    case 'torus': {
+      const R = pos(params.R);
+      const r = pos(params.r);
+      if (R === null || r === null || r > R) return null;
+      req = { kind, params: { majorRadius: R, minorRadius: r } };
+      break;
+    }
+    default:
+      return null; // non-analytic kind — caller's brep path owns it
+  }
+  try {
+    const r = await runSmPrimitive({
+      ...req,
+      // See the tessellation note above: brep's chord budget, applied
+      // uniformly (harmless for the box's planar faces).
+      tessellation: { chordToleranceMm: DEFAULT_CHORD_TOLERANCE },
+    });
+    return r.ok ? r.body : null;
+  } catch {
+    return null; // defensive: runSmPrimitive never rejects, the UI must not either
+  }
 }
 
 // ---------------------------------------------------------------------------

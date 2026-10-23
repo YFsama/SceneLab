@@ -13,6 +13,7 @@ export type { ConvexHull } from './convexHull';
 export { minDistanceBetweenBodies, isPointInsideBody, bodiesInterfere, interferenceVolume, computeSceneMassProperties } from './measure';
 export type { SceneMassProperties } from './measure';
 export { applyFillet, applyChamfer, applyShell, applyLinearArray, applyGridArray, applyCircularArray, applyMirror, flipBodyNormals, scaleBody, scaleBodyToTarget, resizeBody, rotateBody, weldVertices, mergeBodies, translateBody, centerBody, convexHullBody, placeBodyInFrame } from './operations';
-// SMLib native-service client (P3 v1: pure lib surface, not wired into the UI yet).
-export { smStatus, isSmAvailable, runSmPrimitive, runSmBoolean, createSmPrimitive, smBoolean, smBodyToSolidBody } from './smClient';
+// SMLib native-service client (P3 v1.5: the 5 analytic kinds are wired into
+// PrimitiveDialog via the createAnalyticPrimitive facade).
+export { smStatus, isSmAvailable, isSmAnalyticKind, createAnalyticPrimitive, runSmPrimitive, runSmBoolean, createSmPrimitive, smBoolean, smBodyToSolidBody } from './smClient';
 export type { SmPrimitiveKind, SmBooleanOp, SmPrimitiveParams, SmTessellation, SmPrimitiveReq, SmBooleanReq, SmStatus, SmBody, SmBodyResult, SmOpResult, SmFailureReason, SmInvoker } from './smClient';
