@@ -2,7 +2,12 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
-## [Unreleased]
+## [0.30.0] — 2026-10-22
+
+**SMLib 版：NVIDIA 开源 CAD 内核（Apache 2.0）原生接入 + 自适应摆线
+粗加工 + 解析 CAM 圆弧。** 四轮多 Agent 开发（pass #36–#38 + 本版收
+尾），测试 2883 → 3069（+25 Rust cargo）。逐字节回落保证：SMLib 不在
+场时一切行为与 v0.29.0 等价。
 
 ### SMLib — 图元接线 UI + 泄漏 soak + intersect 之谜告破（P3 v1.5）
 

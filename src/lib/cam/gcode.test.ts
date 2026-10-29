@@ -264,9 +264,13 @@ describe('drill cycle variants — 3 cycles × 2 profiles', () => {
       params: { ...PARAMS, peckDepth: 2 },
       points: drillCycleTp().points,
     });
+    // Each generateGCode call stamps its own wall-clock instant in the
+    // header; comparing two calls across a millisecond tick made this test
+    // flake. The stripStamp helper (see below) normalizes that line away.
+    const stripStamp = (s: string): string => s.split('\n').filter((l) => !l.startsWith('; Generated:')).join('\n');
     for (const profile of ['grbl', 'linuxcnc'] as const) {
-      expect(generateGCode(drillCycleTp({ drillCycle: 'peck' }), profile))
-        .toBe(generateGCode(legacy, profile));
+      expect(stripStamp(generateGCode(drillCycleTp({ drillCycle: 'peck' }), profile)))
+        .toBe(stripStamp(generateGCode(legacy, profile)));
     }
   });
 
