@@ -37,6 +37,11 @@ export default defineConfig({
         },
       },
     },
+    // The three vendor/io chunks above are deliberate manual splits (see the
+    // manualChunks rationale) and land at 500–640 kB; the default 500 kB
+    // warning threshold is noise for a CAD app that ships its geometry stack
+    // in the bundle. 700 kB flags real regressions, not the design.
+    chunkSizeWarningLimit: 700,
   },
   // Tauri uses a fixed dev port and should not have Vite clear the terminal.
   clearScreen: false,

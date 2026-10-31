@@ -2,6 +2,77 @@
 
 All notable changes to SceneLab are documented here. Dates are YYYY-MM-DD.
 
+## [0.31.0] — 2026-10-31
+
+**依赖全量升级 + e2e 修复 + Tailwind 4 迁移。** npm audit 14 漏洞
+（含 2 个 tinypool critical RCE）→ **0**；e2e 21 失败 → **30/30 全
+绿**；3069 单测 / tsc / eslint / cargo clippy / build 全部通过。
+
+### 应用修复 — PrimitiveDialog 的 StrictMode aliveRef 陷阱（e2e 根因）
+
+- **症状**：右键插入 Box 后对话框永久 busy 锁死，体不进树；21 个
+  e2e 全线失败（测量/打孔/克隆拖拽等都依赖先有体）。
+- **根因**：`useRef(true)` + 仅在 effect cleanup 里置 false —— React
+  StrictMode 开发模式的挂载双跑会让 cleanup 先执行一次，
+  `aliveRef.current` 从一开始就是 false，SMLib 异步路径的 commit 全部
+  被"已取消"守卫丢弃（promise 本身 24ms 就正常 settle）。
+- **修复**：effect 体内重新武装 `aliveRef.current = true`。此 bug 与
+  依赖升级无关（旧依赖同样失败），v0.30.0 SMLib 异步化引入。
+
+### e2e 基建 — dev server 稳定性 + 端口
+
+- **vite dev server OOM**：6 并发 Chromium（SwiftShader WebGL）负载
+  下 Node 以 `Zone Allocation failed` 崩溃 → 全 suite 级联
+  ERR_CONNECTION_REFUSED。workers 上限 3（CI 仍 2），全套 ~27s 稳定
+  全绿。
+- **默认端口 5174 → 5273**：Docker Desktop 后端代理
+  （com.docker.backend.exe）长期占坑 5174，webServer 探测 502 直接
+  起不来。
+- Playwright 1.64（新 Chromium 构建已装）。
+
+### 依赖升级（npm + Rust）
+
+- **three 0.170 → 0.186**（+@types/three）：tsc/3069 测试/e2e 全过；
+  `PCFSoftShadowMap` 在 r186 被移除实现，显式改用 `PCFShadowMap`
+  （此前运行时告警 + 静默回退）。
+- **vitest 3.2 → 5.0**（+jsdom 30）：消掉 tinypool 2 个 critical RCE
+  与内嵌 vite 7 漏洞链；测试 33s → ~20s。`pool: vmThreads`（收集全
+  崩）与 happy-dom（慢 5 倍 + 4 个 DOM 兼容失败）两条提速路已实测排
+  除，结论写在 vitest.config.ts 注释里。
+- **Tailwind 3.4 → 4.3**：CSS-first 配置（`@theme inline` 同名映射
+  运行时变量，data-theme 三主题热切换不变）；v4 默认 border 色改为
+  currentColor，base 层显式回设 panel-border；**顺带修复 56 处从未
+  定义过的死类**（text-error/text-success/text-warning/bg-error 等
+  在 v3 配置里根本不存在，一直静默无效）。
+- **lucide-react 0.460 → 1.64**：v1 移除品牌图标，AboutDialog 的
+  Github 改内联 SVG（simple-icons CC0 路径）。
+- **hersheytext 移除**：零导入死依赖（字体数据早已内置为
+  hersheyFonts.json），其 cheerio 0.22 链（lodash.pick 原型污染 +
+  nth-check ReDoS）整条消除；textPath.ts 注释补再生成方法。
+- 其余 semver 内全量更新：react 19.3.1、zustand 5.0.16、
+  manifold-3d 3.5.4、three-mesh-bvh 0.9.17、vite 8.3.5、
+  @types/node 26（对齐 Node 26 运行时）、eslint 10.13、
+  typescript-eslint 8.72.1 等。
+- **Rust**：cargo update（tauri 2.11.2 → 2.12.5 等）+ `dirs` 5 → 7
+  （与传递副本去重，仅用 data_dir()，API 稳定）；clippy
+  `neg_cmp_op_on_partial_ord` 告警修复（Newell 法线守卫语义不变）。
+- **TypeScript 7 评估：暂缓**（typescript-eslint peer 上限
+  `<6.1.0`，且实测 TS7 npm 包不再暴露 JS 编译器 API ——
+  `ts.createSourceFile === undefined`，纯原生二进制；6.0.3 已是
+  typescript-eslint 支持的顶格版本，待其发布 tsgo 支持后再升）。
+- **minimatch override → ^11.0.1**：当日新发布的 globparts 放大
+  DoS 通告（GHSA-g3hv-75wg-m249），父依赖（eslint 系）锁 ^10 无法
+  semver 修复；override 后 eslint/vitest 全正常。
+
+### 构建清理
+
+- `INEFFECTIVE_DYNAMIC_IMPORT` 消除：capture.ts 已是 28 行无渲染器
+  依赖的函数注册表（且被 ViewportCanvas 静态导入），registry.ts 的
+  懒加载只剩告警噪音 → 改静态导入。
+- `chunkSizeWarningLimit: 700`：vendor/io 三大 chunk 是设计内手动拆
+  分（见 vite.config 注释），500KB 默认阈值只产生噪音。
+- npm audit：14（2 critical / 9 high）→ **0**。
+
 ## [0.30.0] — 2026-10-22
 
 **SMLib 版：NVIDIA 开源 CAD 内核（Apache 2.0）原生接入 + 自适应摆线

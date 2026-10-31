@@ -8,6 +8,7 @@ import { loadSampleProject } from '../library/loadSample';
 import { translations } from '../i18n';
 import { showToast } from '../toast';
 import { framingBodies } from '../render/fitView';
+import { captureFreshCanvas } from '../render/capture';
 import { downloadFile, exportOBJ, exportSTLBinary, export3MFPackage } from '../io';
 import { importMeshFile } from '../io/importFiles';
 import { openDiagnostics } from '../errorLog';
@@ -597,22 +598,22 @@ export function initBuiltinCommands(): void {
     labelKey: 'export.png',
     category: 'Export',
     run: () => {
-      // Lazy import keeps the capture service (renderer dependency) out of
-      // the registry's module graph for every command run.
-      void import('../render/capture').then(({ captureFreshCanvas }) => {
-        const canvas = captureFreshCanvas();
-        if (!canvas) { showToast(tr('toast.noViewport'), 'warning'); return; }
-        canvas.toBlob((blob) => {
-          if (!blob) return;
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${useStore.getState().projectName}.png`;
-          a.click();
-          URL.revokeObjectURL(url);
-          showToast(tr('toast.pngExported'), 'success');
-        }, 'image/png');
-      });
+      // Static import: capture.ts is a 28-line function registry (no renderer
+      // dependency — ViewportCanvas registers the renderer-backed fn at mount)
+      // and is statically imported by ViewportCanvas anyway, so a dynamic
+      // import here only triggered rolldown's INEFFECTIVE_DYNAMIC_IMPORT.
+      const canvas = captureFreshCanvas();
+      if (!canvas) { showToast(tr('toast.noViewport'), 'warning'); return; }
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${useStore.getState().projectName}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(tr('toast.pngExported'), 'success');
+      }, 'image/png');
     },
   });
   registerCommand({

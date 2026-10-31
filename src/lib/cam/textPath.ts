@@ -23,8 +23,9 @@
 
 // Curated subset (4 fonts, ~51 KB raw vs 334 KB full table): keeps the io
 // chunk lean and avoids a 327 KB JSON.parse on the startup path. Regenerate
-// with node from node_modules/hersheytext/hersheytext.min.json if the font
-// list ever changes.
+// with `npm i -D hersheytext@2 && node` from node_modules/hersheytext/
+// hersheytext.min.json (the package itself is no longer a dependency — its
+// JS entry pulls in cheerio + node:fs, only the font data is needed).
 import hersheyFontJson from './hersheyFonts.json?raw';
 
 /** One point on the planning plane (millimetres), matching EngravePoint. */

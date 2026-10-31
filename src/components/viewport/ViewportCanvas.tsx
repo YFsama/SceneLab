@@ -809,7 +809,9 @@ export function ViewportCanvas() {
     // Soft ground shadows — toggled per-material at runtime (light + ground),
     // so switching never forces every material to recompile.
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // three r186 removed the PCFSoftShadowMap implementation (warns + falls
+    // back to PCF); PCFShadowMap is the intended replacement.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     // CAD scenes are mostly static: only re-render the shadow map when bodies,
     // visibility or the light actually change (mesh-rebuild effect, drag
     // preview, shadow toggle) instead of on every rendered frame.

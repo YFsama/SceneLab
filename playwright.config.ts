@@ -2,11 +2,14 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * E2E tests run against the Vite dev server. Chromium-only keeps the
- * matrix lean; the app targets evergreen browsers anyway. The port is
- * overridable via E2E_PORT for hosts where something unkillable (e.g.
- * Docker Desktop's proxy) squats on the default.
+ * matrix lean; the app targets evergreen browsers anyway.
  */
-const E2E_PORT = process.env.E2E_PORT ?? '5174';
+// 5273: a deliberate off-by-one from Vite's 5173/5174 defaults — Docker
+// Desktop's backend proxy (com.docker.backend.exe) squats on ports its
+// containers have used, and 5174 is a frequent casualty, which makes the
+// webServer probe fail with "not able to start". Still overridable via
+// E2E_PORT for hosts where something unkillable squats here too.
+const E2E_PORT = process.env.E2E_PORT ?? '5273';
 const E2E_URL = `http://127.0.0.1:${E2E_PORT}`;
 
 export default defineConfig({
@@ -14,7 +17,12 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  // 3 local workers: each Chromium renders WebGL via SwiftShader (CPU), and at
+  // the default worker count (CPU cores) the concurrent module-transform load
+  // has OOM-killed the dev server mid-suite ("Zone Allocation failed"), which
+  // cascades into ERR_CONNECTION_REFUSED for every remaining test. 3 workers
+  // keep the full suite green in ~27s; CI stays at 2.
+  workers: process.env.CI ? 2 : 3,
   reporter: process.env.CI ? 'github' : 'list',
   timeout: 30_000,
   use: {

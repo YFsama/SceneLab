@@ -157,7 +157,13 @@ function Form({ kind, spec, t, onClose }: { kind: PrimitiveKind; spec: Spec; t: 
   // or pendingPrimitive switching kind via the key remount), a late IPC answer
   // must be DISCARDED, not committed to the store.
   const aliveRef = useRef(true);
-  useEffect(() => () => { aliveRef.current = false; }, []);
+  useEffect(() => {
+    // StrictMode's dev double-mount runs the cleanup once right after mount;
+    // re-arm here or every async commit gets discarded and the dialog
+    // busy-locks forever (the aliveRef.current=false trap).
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
   // Kernel availability is a cached async snapshot; warm it on mount so the
   // "SMLib exact" badge appears on the first open of the session too.
   const [smExact, setSmExact] = useState(isSmAvailable());

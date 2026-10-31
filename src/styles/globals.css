@@ -1,6 +1,36 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Tailwind v4 CSS-first config (replaces tailwind.config.js). The three
+   data-theme palettes below define runtime CSS variables; `@theme inline`
+   exposes them to the utility generator WITHOUT emitting its own :root
+   declarations, so every generated utility embeds the var() reference and
+   re-paints when [data-theme] switches. error/warning/success were used in
+   56 class spots but never defined in the v3 JS config — they are real
+   tokens now, which fixes previously dead classes (text-error etc.). */
+@theme inline {
+  --color-surface: var(--color-surface);
+  --color-surface-hover: var(--color-surface-hover);
+  --color-surface-active: var(--color-surface-active);
+  --color-panel: var(--color-panel);
+  --color-panel-border: var(--color-panel-border);
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+  --color-grid: var(--color-grid);
+  --color-error: var(--color-error);
+  --color-warning: var(--color-warning);
+  --color-success: var(--color-success);
+}
+
+@layer base {
+  /* v4 changed the default border color to currentColor; this app's bare
+     `border` usages (v3: neutral gray-200) want the panel border tone. */
+  *, ::before, ::after, ::backdrop, ::file-selector-button {
+    border-color: var(--color-panel-border);
+  }
+}
 
 /* Dark theme (default) — WCAG 2.1 AA compliant */
 :root,

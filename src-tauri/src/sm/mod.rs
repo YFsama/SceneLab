@@ -452,7 +452,9 @@ fn newell_normal(ring: &[[f64; 3]]) -> Option<[f64; 3]> {
         nz += (p[0] - q[0]) * (p[1] + q[1]);
     }
     let len = (nx * nx + ny * ny + nz * nz).sqrt();
-    if !(len > 1e-12) || !len.is_finite() {
+    // is_finite first: rejects NaN and inf (a degenerate or overflowed Newell
+    // sum), then the magnitude floor rejects near-zero normals.
+    if !len.is_finite() || len <= 1e-12 {
         return None;
     }
     Some([nx / len, ny / len, nz / len])
