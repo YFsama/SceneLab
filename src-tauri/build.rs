@@ -35,8 +35,8 @@ fn build_smmesh() {
 
     println!("cargo:rustc-env=SM_LIB_DIR_DEFAULT={}", lib_dir.display());
 
-    let has_kernel = lib_dir.join("lib").join("SMLib.dll").is_file()
-        || lib_dir.join("SMLib.dll").is_file();
+    let has_kernel =
+        lib_dir.join("lib").join("SMLib.dll").is_file() || lib_dir.join("SMLib.dll").is_file();
     let prebuilt_shim = lib_dir.join("smmesh.dll");
 
     if !has_kernel {

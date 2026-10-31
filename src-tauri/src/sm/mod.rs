@@ -52,7 +52,11 @@ pub struct Vec3Wire {
 
 impl Vec3Wire {
     fn new(v: [f64; 3]) -> Self {
-        Self { x: v[0], y: v[1], z: v[2] }
+        Self {
+            x: v[0],
+            y: v[1],
+            z: v[2],
+        }
     }
 }
 
@@ -62,10 +66,7 @@ impl Vec3Wire {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum FaceSourceWire {
     #[serde(rename_all = "camelCase")]
-    Plane {
-        point: Vec3Wire,
-        normal: Vec3Wire,
-    },
+    Plane { point: Vec3Wire, normal: Vec3Wire },
     #[serde(rename_all = "camelCase")]
     Cylinder {
         origin: Vec3Wire,
@@ -79,10 +80,7 @@ pub enum FaceSourceWire {
         half_angle: f64,
     },
     #[serde(rename_all = "camelCase")]
-    Sphere {
-        center: Vec3Wire,
-        radius: f64,
-    },
+    Sphere { center: Vec3Wire, radius: f64 },
     #[serde(rename_all = "camelCase")]
     Torus {
         center: Vec3Wire,
@@ -598,7 +596,10 @@ unsafe fn create_brep(engine: &SmEngine, req: &SmPrimitiveReq) -> Result<*mut c_
         }
     };
     if ptr.is_null() {
-        return Err(format!("kernel failed to create {} primitive", kind_name(&req.kind)));
+        return Err(format!(
+            "kernel failed to create {} primitive",
+            kind_name(&req.kind)
+        ));
     }
     Ok(ptr)
 }
@@ -658,15 +659,27 @@ unsafe fn finish_body(
         return Err(format!("smmesh_extract failed with status {st}"));
     }
 
-    let points_slice = ShimSlice { ptr: pts, len: n_pts.max(0) as usize * 3, free: engine.free_buffer };
-    let faces_slice = ShimSlice { ptr: faces, len: face_ints.max(0) as usize, free: engine.free_buffer };
+    let points_slice = ShimSlice {
+        ptr: pts,
+        len: n_pts.max(0) as usize * 3,
+        free: engine.free_buffer,
+    };
+    let faces_slice = ShimSlice {
+        ptr: faces,
+        len: face_ints.max(0) as usize,
+        free: engine.free_buffer,
+    };
     let flat_points = points_slice.to_vec();
     let flat_faces = faces_slice.to_vec();
 
     let n_points = n_pts.max(0) as usize;
     let mut vertices: Vec<[f64; 3]> = Vec::with_capacity(n_points);
     for i in 0..n_points {
-        vertices.push([flat_points[i * 3], flat_points[i * 3 + 1], flat_points[i * 3 + 2]]);
+        vertices.push([
+            flat_points[i * 3],
+            flat_points[i * 3 + 1],
+            flat_points[i * 3 + 2],
+        ]);
     }
 
     // Parse the [count, idx...] runs. Run k corresponds to the k-th face of
@@ -701,13 +714,18 @@ unsafe fn finish_body(
         if run_index < face_total {
             let mut kind: c_int = 0;
             let mut params = [0.0f64; 12];
-            let st = (engine.face_surface)(poly, run_index as c_int, &mut kind, params.as_mut_ptr());
+            let st =
+                (engine.face_surface)(poly, run_index as c_int, &mut kind, params.as_mut_ptr());
             if st == 0 {
                 source = face_source_wire(kind, &params);
             }
         }
 
-        wire_faces.push(SmFaceWire { vertices: ring_idx, normal, source });
+        wire_faces.push(SmFaceWire {
+            vertices: ring_idx,
+            normal,
+            source,
+        });
         run_index += 1;
     }
 
@@ -716,7 +734,13 @@ unsafe fn finish_body(
     if vertices.is_empty() || wire_faces.is_empty() {
         return Err("tessellation produced an empty mesh".into());
     }
-    Ok((SmBodyWire { vertices, faces: wire_faces }, volume))
+    Ok((
+        SmBodyWire {
+            vertices,
+            faces: wire_faces,
+        },
+        volume,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -732,8 +756,16 @@ pub fn status_impl() -> SmStatusWire {
             Ok(String::from_utf8_lossy(bytes).into_owned())
         }
     }) {
-        Ok(version) => SmStatusWire { available: true, version: Some(version), error: None },
-        Err(error) => SmStatusWire { available: false, version: None, error: Some(error) },
+        Ok(version) => SmStatusWire {
+            available: true,
+            version: Some(version),
+            error: None,
+        },
+        Err(error) => SmStatusWire {
+            available: false,
+            version: None,
+            error: Some(error),
+        },
     }
 }
 
@@ -774,7 +806,10 @@ pub fn boolean_impl(req: &SmBooleanReq) -> SmResultWire {
             if st != 0 {
                 (engine.free_brep)(b);
                 (engine.free_brep)(a);
-                return Err(format!("boolean {:?} failed with kernel status {st}", req.op));
+                return Err(format!(
+                    "boolean {:?} failed with kernel status {st}",
+                    req.op
+                ));
             }
             // b was consumed by the kernel; a is now the result.
             let result = finish_body(engine, a, req.tessellation.as_ref());
@@ -831,12 +866,12 @@ mod tests {
         }
     }
 
-    fn prim(
-        kind: SmKind,
-        params: SmParamsReq,
-        tess: Option<SmTessellationReq>,
-    ) -> SmPrimitiveReq {
-        SmPrimitiveReq { kind, params, tessellation: tess }
+    fn prim(kind: SmKind, params: SmParamsReq, tess: Option<SmTessellationReq>) -> SmPrimitiveReq {
+        SmPrimitiveReq {
+            kind,
+            params,
+            tessellation: tess,
+        }
     }
 
     fn params(pairs: &[(&str, serde_json::Value)]) -> SmParamsReq {
@@ -917,7 +952,10 @@ mod tests {
         let json = serde_json::to_value(&wire).unwrap();
         assert_eq!(json["ok"], true);
         assert_eq!(json["brepVolumeMm3"], 123.5);
-        assert_eq!(json["body"]["vertices"][0], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(
+            json["body"]["vertices"][0],
+            serde_json::json!([0.0, 0.0, 0.0])
+        );
         let face = &json["body"]["faces"][0];
         assert_eq!(face["vertices"], serde_json::json!([0, 0, 0]));
         assert_eq!(face["normal"], serde_json::json!([0.0, 1.0, 0.0]));
@@ -945,7 +983,10 @@ mod tests {
                 axis: Vec3Wire::new([0.0, 1.0, 0.0]),
                 radius: 5.0,
             },
-            FaceSourceWire::Sphere { center: Vec3Wire::new([0.0; 3]), radius: 5.0 },
+            FaceSourceWire::Sphere {
+                center: Vec3Wire::new([0.0; 3]),
+                radius: 5.0,
+            },
             FaceSourceWire::Torus {
                 center: Vec3Wire::new([0.0; 3]),
                 axis: Vec3Wire::new([0.0, 1.0, 0.0]),
@@ -971,14 +1012,21 @@ mod tests {
         }
         // plane point uses the {x,y,z} object form
         let plane = serde_json::to_value(&sources[0]).unwrap();
-        assert_eq!(plane["point"], serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0}));
+        assert_eq!(
+            plane["point"],
+            serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0})
+        );
     }
 
     #[test]
     fn status_matches_dll_presence() {
         let st = status_impl();
         if dlls_present() {
-            assert!(st.available, "DLLs present but status unavailable: {:?}", st.error);
+            assert!(
+                st.available,
+                "DLLs present but status unavailable: {:?}",
+                st.error
+            );
             assert!(st.version.as_deref().unwrap_or("").starts_with("smmesh"));
         } else {
             assert!(!st.available);
@@ -989,12 +1037,32 @@ mod tests {
     #[test]
     fn param_validation_rejects_bad_requests() {
         let cases: Vec<(SmKind, SmParamsReq, &str)> = vec![
-            (SmKind::Box, params(&[("size", json!([10, 10]))]), "size len 2"),
-            (SmKind::Box, params(&[("size", json!([10, 0, 10]))]), "zero extent"),
+            (
+                SmKind::Box,
+                params(&[("size", json!([10, 10]))]),
+                "size len 2",
+            ),
+            (
+                SmKind::Box,
+                params(&[("size", json!([10, 0, 10]))]),
+                "zero extent",
+            ),
             (SmKind::Box, SmParamsReq::default(), "missing size"),
-            (SmKind::Cylinder, params(&[("radius", json!(5))]), "missing height"),
-            (SmKind::Cylinder, params(&[("radius", json!(-5)), ("height", json!(5))]), "negative radius"),
-            (SmKind::Sphere, params(&[("radius", json!(0))]), "zero radius"),
+            (
+                SmKind::Cylinder,
+                params(&[("radius", json!(5))]),
+                "missing height",
+            ),
+            (
+                SmKind::Cylinder,
+                params(&[("radius", json!(-5)), ("height", json!(5))]),
+                "negative radius",
+            ),
+            (
+                SmKind::Sphere,
+                params(&[("radius", json!(0))]),
+                "zero radius",
+            ),
             (
                 SmKind::Cone,
                 params(&[("bottomRadius", json!(10)), ("height", json!(5))]),
@@ -1002,7 +1070,11 @@ mod tests {
             ),
             (
                 SmKind::Cone,
-                params(&[("bottomRadius", json!(10)), ("topRadius", json!(-1)), ("height", json!(5))]),
+                params(&[
+                    ("bottomRadius", json!(10)),
+                    ("topRadius", json!(-1)),
+                    ("height", json!(5)),
+                ]),
                 "negative topRadius",
             ),
             (
@@ -1010,7 +1082,11 @@ mod tests {
                 params(&[("majorRadius", json!(5)), ("minorRadius", json!(0))]),
                 "zero minorRadius",
             ),
-            (SmKind::Box, params(&[("size", json!([10, 10, 10])), ("center", json!([1, 2]))]), "bad center"),
+            (
+                SmKind::Box,
+                params(&[("size", json!([10, 10, 10])), ("center", json!([1, 2]))]),
+                "bad center",
+            ),
         ];
         let present = dlls_present();
         for (kind, p, label) in cases {
@@ -1044,7 +1120,11 @@ mod tests {
     #[test]
     fn golden_box_volume_and_plane_tags() {
         with_kernel(|| {
-            let wire = primitive_impl(&prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None));
+            let wire = primitive_impl(&prim(
+                SmKind::Box,
+                params(&[("size", json!([10, 10, 10]))]),
+                None,
+            ));
             assert!(wire.ok, "{:?}", wire.error);
             let volume = wire.brep_volume_mm3.unwrap();
             assert_close(volume, 1000.0, 1e-6, "box volume");
@@ -1081,11 +1161,13 @@ mod tests {
                 }
             }
             // specifically: a top face with normal +y and point y = 5
-            let top = body.faces.iter().any(|f| matches!(
-                &f.source,
-                Some(FaceSourceWire::Plane { point, normal })
-                    if (normal.y - 1.0).abs() < 1e-9 && (point.y - 5.0).abs() < 1e-9
-            ));
+            let top = body.faces.iter().any(|f| {
+                matches!(
+                    &f.source,
+                    Some(FaceSourceWire::Plane { point, normal })
+                        if (normal.y - 1.0).abs() < 1e-9 && (point.y - 5.0).abs() < 1e-9
+                )
+            });
             assert!(top, "box must have a +y plane face at y=5");
         });
     }
@@ -1099,7 +1181,12 @@ mod tests {
                 None,
             ));
             assert!(wire.ok, "{:?}", wire.error);
-            assert_close(wire.brep_volume_mm3.unwrap(), 250.0 * std::f64::consts::PI, 1e-6, "cyl volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                250.0 * std::f64::consts::PI,
+                1e-6,
+                "cyl volume",
+            );
             let body = wire.body.unwrap();
             // The wall is tessellated into many strips; every strip carries a
             // cylinder tag with identical analytic parameters.
@@ -1108,33 +1195,59 @@ mod tests {
             let mut caps_neg = 0;
             for f in &body.faces {
                 match f.source.as_ref().expect("cyl faces tagged") {
-                    FaceSourceWire::Cylinder { origin, axis, radius } => {
+                    FaceSourceWire::Cylinder {
+                        origin,
+                        axis,
+                        radius,
+                    } => {
                         walls += 1;
                         // axis is exactly +y (or -y): contract placement
                         let a = axis.as_array();
                         assert!(
-                            (a[0].abs() < 1e-9) && (a[2].abs() < 1e-9) && ((a[1] - 1.0).abs() < 1e-9 || (a[1] + 1.0).abs() < 1e-9),
+                            (a[0].abs() < 1e-9)
+                                && (a[2].abs() < 1e-9)
+                                && ((a[1] - 1.0).abs() < 1e-9 || (a[1] + 1.0).abs() < 1e-9),
                             "cyl axis {a:?}"
                         );
                         assert_close(*radius, 5.0, 1e-9, "cyl radius");
                         let o = origin.as_array();
-                        assert!(o[0].abs() < 1e-9 && o[2].abs() < 1e-9, "origin on the y axis");
+                        assert!(
+                            o[0].abs() < 1e-9 && o[2].abs() < 1e-9,
+                            "origin on the y axis"
+                        );
                     }
                     FaceSourceWire::Plane { normal, .. } => {
                         let n = normal.as_array();
-                        if (n[1] - 1.0).abs() < 1e-9 { caps_pos += 1; }
-                        else if (n[1] + 1.0).abs() < 1e-9 { caps_neg += 1; }
-                        else { panic!("cyl cap normal +-y expected, got {n:?}"); }
+                        if (n[1] - 1.0).abs() < 1e-9 {
+                            caps_pos += 1;
+                        } else if (n[1] + 1.0).abs() < 1e-9 {
+                            caps_neg += 1;
+                        } else {
+                            panic!("cyl cap normal +-y expected, got {n:?}");
+                        }
                     }
                     other => panic!("unexpected tag {other:?}"),
                 }
             }
             assert!(walls >= 1, "at least one cylindrical wall strip");
-            assert!(caps_pos >= 1 && caps_neg >= 1, "both y caps present (pos {caps_pos}, neg {caps_neg})");
+            assert!(
+                caps_pos >= 1 && caps_neg >= 1,
+                "both y caps present (pos {caps_pos}, neg {caps_neg})"
+            );
             // base on y=0, top at y=10
             let ys: Vec<f64> = body.vertices.iter().map(|v| v[1]).collect();
-            assert_close(ys.iter().cloned().fold(f64::INFINITY, f64::min), 0.0, 1e-9, "base y");
-            assert_close(ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max), 10.0, 1e-9, "top y");
+            assert_close(
+                ys.iter().cloned().fold(f64::INFINITY, f64::min),
+                0.0,
+                1e-9,
+                "base y",
+            );
+            assert_close(
+                ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                10.0,
+                1e-9,
+                "top y",
+            );
         });
     }
 
@@ -1144,7 +1257,12 @@ mod tests {
             let wire = primitive_impl(&prim(SmKind::Sphere, params(&[("radius", json!(5))]), None));
             assert!(wire.ok, "{:?}", wire.error);
             let expected = 4.0 / 3.0 * 125.0 * std::f64::consts::PI;
-            assert_close(wire.brep_volume_mm3.unwrap(), expected, 1e-6, "sphere volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                expected,
+                1e-6,
+                "sphere volume",
+            );
             let body = wire.body.unwrap();
             assert!(!body.faces.is_empty());
             for f in &body.faces {
@@ -1178,11 +1296,21 @@ mod tests {
                 None,
             ));
             assert!(wire.ok, "{:?}", wire.error);
-            assert_close(wire.brep_volume_mm3.unwrap(), 875.0 * std::f64::consts::PI, 1e-6, "frustum volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                875.0 * std::f64::consts::PI,
+                1e-6,
+                "frustum volume",
+            );
             let body = wire.body.unwrap();
             let mut cone_faces = 0;
             for f in &body.faces {
-                if let Some(FaceSourceWire::Cone { apex, axis, half_angle }) = f.source.as_ref() {
+                if let Some(FaceSourceWire::Cone {
+                    apex,
+                    axis,
+                    half_angle,
+                }) = f.source.as_ref()
+                {
                     cone_faces += 1;
                     // apex where the radius vanishes: y = h*R/(R-r) = 30
                     assert_vec3(*apex, [0.0, 30.0, 0.0], "cone apex");
@@ -1224,16 +1352,31 @@ mod tests {
                 None,
             ));
             assert!(wire.ok, "{:?}", wire.error);
-            assert_close(wire.brep_volume_mm3.unwrap(), 500.0 * std::f64::consts::PI, 1e-6, "pointed cone volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                500.0 * std::f64::consts::PI,
+                1e-6,
+                "pointed cone volume",
+            );
             let body = wire.body.unwrap();
             let mut cone_faces = 0;
             for f in &body.faces {
-                if let Some(FaceSourceWire::Cone { apex, axis, half_angle }) = f.source.as_ref() {
+                if let Some(FaceSourceWire::Cone {
+                    apex,
+                    axis,
+                    half_angle,
+                }) = f.source.as_ref()
+                {
                     cone_faces += 1;
                     // tip at y = h = 15; axis points from the apex INTO the band (-y)
                     assert_vec3(*apex, [0.0, 15.0, 0.0], "pointed cone apex (= tip)");
                     assert_vec3(*axis, [0.0, -1.0, 0.0], "pointed cone axis (into band)");
-                    assert_close(*half_angle, (10.0f64 / 15.0).atan(), 1e-9, "pointed cone halfAngle");
+                    assert_close(
+                        *half_angle,
+                        (10.0f64 / 15.0).atan(),
+                        1e-9,
+                        "pointed cone halfAngle",
+                    );
                 }
             }
             assert!(cone_faces >= 1, "pointed cone wall carries cone tags");
@@ -1263,17 +1406,29 @@ mod tests {
             ));
             assert!(wire.ok, "{:?}", wire.error);
             let expected = 2.0 * std::f64::consts::PI.powi(2) * 5.0 * 4.0;
-            assert_close(wire.brep_volume_mm3.unwrap(), expected, 1e-6, "torus volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                expected,
+                1e-6,
+                "torus volume",
+            );
             let body = wire.body.unwrap();
             assert!(!body.faces.is_empty());
             for f in &body.faces {
                 match f.source.as_ref().expect("torus faces tagged") {
-                    FaceSourceWire::Torus { center, axis, major_radius, minor_radius } => {
+                    FaceSourceWire::Torus {
+                        center,
+                        axis,
+                        major_radius,
+                        minor_radius,
+                    } => {
                         assert_vec3(*center, [0.0; 3], "torus center");
                         // axis exactly +-y (unit, on the contract symmetry axis)
                         let a = axis.as_array();
                         assert!(
-                            (a[0].abs() < 1e-9) && (a[2].abs() < 1e-9) && ((a[1] - 1.0).abs() < 1e-9 || (a[1] + 1.0).abs() < 1e-9),
+                            (a[0].abs() < 1e-9)
+                                && (a[2].abs() < 1e-9)
+                                && ((a[1] - 1.0).abs() < 1e-9 || (a[1] + 1.0).abs() < 1e-9),
                             "torus axis {a:?}"
                         );
                         assert_close(*major_radius, 5.0, 1e-9, "major radius");
@@ -1304,16 +1459,20 @@ mod tests {
             assert_close(wire.brep_volume_mm3.unwrap(), 1500.0, 1e-6, "union volume");
             let body = wire.body.unwrap();
             // The untouched outer faces survive with plane tags: x=-5 and x=10.
-            let minus_x = body.faces.iter().any(|f| matches!(
-                &f.source,
-                Some(FaceSourceWire::Plane { point, normal })
-                    if (normal.x + 1.0).abs() < 1e-9 && (point.x + 5.0).abs() < 1e-9
-            ));
-            let plus_x = body.faces.iter().any(|f| matches!(
-                &f.source,
-                Some(FaceSourceWire::Plane { point, normal })
-                    if (normal.x - 1.0).abs() < 1e-9 && (point.x - 10.0).abs() < 1e-9
-            ));
+            let minus_x = body.faces.iter().any(|f| {
+                matches!(
+                    &f.source,
+                    Some(FaceSourceWire::Plane { point, normal })
+                        if (normal.x + 1.0).abs() < 1e-9 && (point.x + 5.0).abs() < 1e-9
+                )
+            });
+            let plus_x = body.faces.iter().any(|f| {
+                matches!(
+                    &f.source,
+                    Some(FaceSourceWire::Plane { point, normal })
+                        if (normal.x - 1.0).abs() < 1e-9 && (point.x - 10.0).abs() < 1e-9
+                )
+            });
             assert!(minus_x, "union keeps the x=-5 outer face tag");
             assert!(plus_x, "union keeps the x=+10 outer face tag");
         });
@@ -1327,7 +1486,11 @@ mod tests {
                 a: prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None),
                 b: prim(
                     SmKind::Cylinder,
-                    params(&[("radius", json!(2)), ("height", json!(12)), ("center", json!([0, -6, 0]))]),
+                    params(&[
+                        ("radius", json!(2)),
+                        ("height", json!(12)),
+                        ("center", json!([0, -6, 0])),
+                    ]),
                     None,
                 ),
                 op: SmOp::Difference,
@@ -1336,7 +1499,12 @@ mod tests {
             let wire = boolean_impl(&req);
             assert!(wire.ok, "{:?}", wire.error);
             let expected = 1000.0 - 40.0 * std::f64::consts::PI;
-            assert_close(wire.brep_volume_mm3.unwrap(), expected, 1e-6, "difference volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                expected,
+                1e-6,
+                "difference volume",
+            );
             let body = wire.body.unwrap();
             // Provenance finding: faces CREATED by a boolean lose their
             // analytic tag (GetOriginalFace -> null) while untouched faces
@@ -1348,12 +1516,17 @@ mod tests {
                 let n = f.normal;
                 n[1].abs() < 1e-9 && (n[0] * n[0] + n[2] * n[2]).sqrt() > 0.99
             });
-            assert!(radial_wall, "the drill hole wall is present (radial normals)");
-            let untouched = body.faces.iter().any(|f| matches!(
-                &f.source,
-                Some(FaceSourceWire::Plane { point, normal })
-                    if (normal.x - 1.0).abs() < 1e-9 && (point.x - 5.0).abs() < 1e-9
-            ));
+            assert!(
+                radial_wall,
+                "the drill hole wall is present (radial normals)"
+            );
+            let untouched = body.faces.iter().any(|f| {
+                matches!(
+                    &f.source,
+                    Some(FaceSourceWire::Plane { point, normal })
+                        if (normal.x - 1.0).abs() < 1e-9 && (point.x - 5.0).abs() < 1e-9
+                )
+            });
             assert!(untouched, "untouched +x box wall keeps its plane tag");
         });
     }
@@ -1373,7 +1546,12 @@ mod tests {
             };
             let wire = boolean_impl(&req);
             assert!(wire.ok, "{:?}", wire.error);
-            assert_close(wire.brep_volume_mm3.unwrap(), 500.0, 1e-6, "intersection volume");
+            assert_close(
+                wire.brep_volume_mm3.unwrap(),
+                500.0,
+                1e-6,
+                "intersection volume",
+            );
         });
     }
 
@@ -1398,7 +1576,10 @@ mod tests {
                 n_fine != n_coarse,
                 "tessellation params must change the mesh ({n_coarse} vs {n_fine})"
             );
-            assert!(n_fine > n_coarse, "finer tolerance should tessellate denser ({n_coarse} -> {n_fine})");
+            assert!(
+                n_fine > n_coarse,
+                "finer tolerance should tessellate denser ({n_coarse} -> {n_fine})"
+            );
         });
     }
 
@@ -1406,8 +1587,16 @@ mod tests {
     fn golden_disjoint_boolean_fails_cleanly() {
         with_kernel(|| {
             let req = SmBooleanReq {
-                a: prim(SmKind::Sphere, params(&[("radius", json!(2)), ("center", json!([-50, 0, 0]))]), None),
-                b: prim(SmKind::Sphere, params(&[("radius", json!(2)), ("center", json!([50, 0, 0]))]), None),
+                a: prim(
+                    SmKind::Sphere,
+                    params(&[("radius", json!(2)), ("center", json!([-50, 0, 0]))]),
+                    None,
+                ),
+                b: prim(
+                    SmKind::Sphere,
+                    params(&[("radius", json!(2)), ("center", json!([50, 0, 0]))]),
+                    None,
+                ),
                 op: SmOp::Intersect,
                 tessellation: None,
             };
@@ -1415,9 +1604,18 @@ mod tests {
             assert!(!wire.ok, "disjoint intersection has empty result");
             assert!(wire.error.is_some());
             // The engine must still be healthy afterwards (no leaked lock/panic).
-            let after = primitive_impl(&prim(SmKind::Box, params(&[("size", json!([2, 2, 2]))]), None));
+            let after = primitive_impl(&prim(
+                SmKind::Box,
+                params(&[("size", json!([2, 2, 2]))]),
+                None,
+            ));
             assert!(after.ok, "engine must survive a failed boolean");
-            assert_close(after.brep_volume_mm3.unwrap(), 8.0, 1e-6, "post-failure box");
+            assert_close(
+                after.brep_volume_mm3.unwrap(),
+                8.0,
+                1e-6,
+                "post-failure box",
+            );
         });
     }
 
@@ -1425,12 +1623,54 @@ mod tests {
     fn golden_dump_numbers() {
         with_kernel(|| {
             let cases: Vec<(&str, SmPrimitiveReq)> = vec![
-                ("pointed cone R10 h15", prim(SmKind::Cone, params(&[("bottomRadius", json!(10)), ("topRadius", json!(0)), ("height", json!(15))]), None)),
-                ("box10", prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None)),
-                ("cyl r5 h10", prim(SmKind::Cylinder, params(&[("radius", json!(5)), ("height", json!(10))]), None)),
-                ("sphere r5", prim(SmKind::Sphere, params(&[("radius", json!(5))]), None)),
-                ("frustum R10r5 h15", prim(SmKind::Cone, params(&[("bottomRadius", json!(10)), ("topRadius", json!(5)), ("height", json!(15))]), None)),
-                ("torus R5 r2", prim(SmKind::Torus, params(&[("majorRadius", json!(5)), ("minorRadius", json!(2))]), None)),
+                (
+                    "pointed cone R10 h15",
+                    prim(
+                        SmKind::Cone,
+                        params(&[
+                            ("bottomRadius", json!(10)),
+                            ("topRadius", json!(0)),
+                            ("height", json!(15)),
+                        ]),
+                        None,
+                    ),
+                ),
+                (
+                    "box10",
+                    prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None),
+                ),
+                (
+                    "cyl r5 h10",
+                    prim(
+                        SmKind::Cylinder,
+                        params(&[("radius", json!(5)), ("height", json!(10))]),
+                        None,
+                    ),
+                ),
+                (
+                    "sphere r5",
+                    prim(SmKind::Sphere, params(&[("radius", json!(5))]), None),
+                ),
+                (
+                    "frustum R10r5 h15",
+                    prim(
+                        SmKind::Cone,
+                        params(&[
+                            ("bottomRadius", json!(10)),
+                            ("topRadius", json!(5)),
+                            ("height", json!(15)),
+                        ]),
+                        None,
+                    ),
+                ),
+                (
+                    "torus R5 r2",
+                    prim(
+                        SmKind::Torus,
+                        params(&[("majorRadius", json!(5)), ("minorRadius", json!(2))]),
+                        None,
+                    ),
+                ),
             ];
             for (label, req) in &cases {
                 let w = primitive_impl(req);
@@ -1444,18 +1684,37 @@ mod tests {
             }
             let unions = SmBooleanReq {
                 a: prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None),
-                b: prim(SmKind::Box, params(&[("size", json!([10, 10, 10])), ("center", json!([5, 0, 0]))]), None),
+                b: prim(
+                    SmKind::Box,
+                    params(&[("size", json!([10, 10, 10])), ("center", json!([5, 0, 0]))]),
+                    None,
+                ),
                 op: SmOp::Union,
                 tessellation: None,
             };
-            let inter = SmBooleanReq { op: SmOp::Intersect, ..unions.clone() };
+            let inter = SmBooleanReq {
+                op: SmOp::Intersect,
+                ..unions.clone()
+            };
             let diff = SmBooleanReq {
                 a: prim(SmKind::Box, params(&[("size", json!([10, 10, 10]))]), None),
-                b: prim(SmKind::Cylinder, params(&[("radius", json!(2)), ("height", json!(12)), ("center", json!([0, -6, 0]))]), None),
+                b: prim(
+                    SmKind::Cylinder,
+                    params(&[
+                        ("radius", json!(2)),
+                        ("height", json!(12)),
+                        ("center", json!([0, -6, 0])),
+                    ]),
+                    None,
+                ),
                 op: SmOp::Difference,
                 tessellation: None,
             };
-            for (label, req) in [("union", unions), ("intersect", inter), ("difference", diff)] {
+            for (label, req) in [
+                ("union", unions),
+                ("intersect", inter),
+                ("difference", diff),
+            ] {
                 let w = boolean_impl(&req);
                 eprintln!("[gold] {label}: vol={:.12}", w.brep_volume_mm3.unwrap());
             }
@@ -1498,9 +1757,7 @@ mod tests {
             let delta: i64 = ws_after as i64 - ws_before as i64;
             eprintln!(
                 "leak loop: {} cycles, working set {} -> {} bytes (delta {delta} B)",
-                cycles,
-                ws_before,
-                ws_after
+                cycles, ws_before, ws_after
             );
             assert!(
                 delta < 32 * 1024 * 1024,
