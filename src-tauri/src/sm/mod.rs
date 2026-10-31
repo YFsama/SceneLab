@@ -1828,6 +1828,9 @@ mod tests {
         });
     }
 
+    // Only read via K32GetProcessMemoryInfo in the windows-only tests; without
+    // the gate this struct is dead code on Linux and fails clippy -D warnings.
+    #[cfg(windows)]
     #[repr(C)]
     struct ProcessMemoryCounters {
         cb: u32,
